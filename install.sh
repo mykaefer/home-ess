@@ -123,6 +123,7 @@ create_service_account() {
 clone_application() {
   info "Lade homeESS von GitHub"
   GIT_TERMINAL_PROMPT=0 git clone --depth 1 "${REPOSITORY_URL}" "${INSTALL_DIR}"
+  rm -rf "${INSTALL_DIR}/test"
   chown -R root:root "${INSTALL_DIR}"
   chmod -R u=rwX,go=rX "${INSTALL_DIR}"
 }
