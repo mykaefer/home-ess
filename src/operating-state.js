@@ -19,6 +19,20 @@ let autarkDaysPreviousYear = '';
 let autarkDaysPreviousYearTopic = '';
 let unsubscribeMqtt = null;
 let ignoreExternalUntil = 0;
+const levelListeners = new Set();
+
+// Abonnieren von Betriebslevel-Änderungen. Gibt eine Unsubscribe-Funktion zurück.
+function onOperatingLevelChanged(callback) {
+  if (typeof callback !== 'function') return () => {};
+  levelListeners.add(callback);
+  return () => levelListeners.delete(callback);
+}
+
+function notifyLevelChanged() {
+  for (const callback of levelListeners) {
+    try { callback(operatingLevel); } catch (_) {}
+  }
+}
 
 function init(db) {
   return new Promise((resolve) => {
@@ -92,7 +106,9 @@ async function setOperatingLevel(db, level) {
   const next = Math.min(5, Math.max(1, Math.round(Number(level) || 1)));
   if (next === operatingLevel) return getState();
   operatingLevel = next;
-  return persist(db);
+  const result = await persist(db);
+  notifyLevelChanged();
+  return result;
 }
 
 async function setEmergencyMode(db, active) {
@@ -224,5 +240,5 @@ module.exports = {
   setAutarkDaysPreviousYearTopic, setAutarkDaysPreviousYearCount,
   publishAutarkDays, AUTARK_DAYS_STATE_ID,
   AUTARK_DAYS_PREVIOUS_YEAR_STATE_ID,
-  suppressExternalSync,
+  suppressExternalSync, onOperatingLevelChanged,
 };

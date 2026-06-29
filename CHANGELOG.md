@@ -3,6 +3,27 @@
 Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [0.7.2] — 2026-06-29
+
+### Hinzugefügt
+
+- Zentraler **Betriebslevel-Handler / Lastmanagement** (`src/operating-level/handler.js`):
+  beobachtet dauerhaft das globale Betriebslevel. Verbraucher registrieren sich mit
+  einer **Priorität** (= Betriebslevel, ab dem sie laufen dürfen, `erlaubt ⇔ Level ≥
+  Priorität`) und re-registrieren sich bei Prioritätsänderung. Jedes Einschalten wird
+  über `requestTurnOn`/`isAllowed` vom Handler **bestätigt**; sinkt das Level, werden
+  nicht mehr erlaubte Verbraucher über ihren `onMustTurnOff`-Callback **sofort**
+  abgeschaltet. `operating-state.js` meldet Levelwechsel über `onOperatingLevelChanged`.
+- **Filter- und Solarpumpe** der Poolsteuerung als erste Verbraucher an das Lastmanagement
+  angebunden (`pool.solar`, `pool.filter`): Registrierung sobald das Kommando-Topic im
+  Automatik-Modus gesetzt ist (effektive Priorität inkl. Solarprobelauf der Filterpumpe).
+  Automatik-Einschaltungen laufen über ein Level-Gate (kein Flackern); ein Levelabfall
+  zwischen zwei Ticks schaltet die Pumpe sofort ab. Der **Hand-Modus (An/Aus) übersteuert
+  das Betriebslevel bewusst** und bleibt ungegated.
+- Entwickler-Leitfaden [LEVEL_HANDLING.md](LEVEL_HANDLING.md): allgemeingültige
+  Schritt-für-Schritt-Anleitung zur Anbindung künftiger Verbraucher (Priorität,
+  Modi An/Aus/Automatik, Registrierung, Gate, Sofort-Abschaltung).
+
 ## [0.7.1] — 2026-06-29
 
 ### Hinzugefügt

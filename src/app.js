@@ -30,6 +30,7 @@ const prognosisRoutes = require('./routes/prognosis');
 const { initModules } = require('./modules');
 const gridControlAutomation = require('./grid-control/automation');
 const operatingState = require('./operating-state');
+const operatingLevelHandler = require('./operating-level/handler');
 const { recordConsumptionSample } = require('./prognosis/forecast');
 const { readBatterieData } = require('./batterie/config');
 const { buildEnvironmentSnapshot } = require('./mqtt/config');
@@ -88,10 +89,12 @@ function createApp() {
   outputEngine.init(db).catch(() => {});
   Promise.all([modulesReady, operatingReady])
     .then(() => {
+      operatingLevelHandler.init();
       gridControlAutomation.init(db);
       return prognosisBehavior.init(db);
     })
     .catch(() => {
+      operatingLevelHandler.init();
       gridControlAutomation.init(db);
       prognosisBehavior.init(db).catch(() => {});
     });

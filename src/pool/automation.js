@@ -6,8 +6,12 @@ const { loadPoolConfig, readPoolValue } = require('./config');
 const { assessHeaderSkyState } = require('../photovoltaik/aggregation');
 const { listPvPlants } = require('../photovoltaik/plants');
 const { isEnabled } = require('../modules');
+const levelHandler = require('../operating-level/handler');
 
 const HOLD_MS = 2 * 60 * 1000; // 2 Minuten Mindesthaltedauer nach Schaltung
+
+// Verbraucher-IDs beim zentralen Betriebslevel-Handler.
+const POOL_CONSUMER = { solar: 'pool.solar', filter: 'pool.filter' };
 
 // In-Memory-Zustand (nach Neustart zurückgesetzt – für Poolpumpe akzeptabel)
 const solar = {
@@ -60,8 +64,51 @@ function send(topic, on) {
   mqttClient.publish(topic, on ? '1' : '0');
 }
 
+function commandTopic(which, cfg) {
+  return which === 'filter' ? cfg.filterPumpCommandTopic : cfg.solarPumpCommandTopic;
+}
+
+// Einschalten im Automatikpfad nur nach Freigabe durch das Betriebslevel.
+// priority = effektive Priorität der zugrunde liegenden Aufgabe (Solar-/Filterdienst).
+// Liefert den tatsächlich geschalteten Zustand (false, wenn das Level das Einschalten sperrt).
+function gatedSend(topic, on, priority) {
+  const effective = !!on && levelHandler.isAllowed(priority);
+  send(topic, effective);
+  return effective;
+}
+
+// Sofort-Abschaltung auf Anforderung des Betriebslevel-Handlers (Level gesunken).
+function forceOff(which, cfg) {
+  const topic = commandTopic(which, cfg);
+  if (!topic) return;
+  send(topic, false);
+  if (which === 'filter') {
+    filter.output = 'off';
+  } else {
+    solar.output = 'off';
+    solar.changedAt = Date.now();
+  }
+}
+
+// Registrierung beim Betriebslevel-Handler pflegen: nur im Automatik-Modus mit gesetztem Topic.
+// Hand-Modus übersteuert das Level bewusst und bleibt daher unregistriert.
+function syncRegistration(which, cfg) {
+  const id = POOL_CONSUMER[which];
+  if (commandTopic(which, cfg) && getPumpMode(which) === 'auto') {
+    levelHandler.register(id, getEffectivePriority(which, cfg), {
+      onMustTurnOff: () => forceOff(which, cfg),
+    });
+  } else {
+    levelHandler.unregister(id);
+  }
+}
+
 async function tick(db) {
-  if (!isEnabled('pool')) return;
+  if (!isEnabled('pool')) {
+    levelHandler.unregister(POOL_CONSUMER.solar);
+    levelHandler.unregister(POOL_CONSUMER.filter);
+    return;
+  }
 
   const cfg = await new Promise((resolve) => loadPoolConfig(db, resolve));
   const cache = mqttClient.getCache();
@@ -130,8 +177,8 @@ async function tick(db) {
             parseOn(readPoolValue(cache, cfg.filterPumpStatusTopic));
           if (filterAlreadyRunning) {
             solar.tempCycleStart = now;
-          } else {
-            send(tempCommandTopic, true);
+          } else if (gatedSend(tempCommandTopic, true, cfg.solarPumpPriority)) {
+            // Probelauf zählt als Solardienst und wird über die Solar-Priorität freigegeben.
             if (useFilterForSampling) {
               filter.output = 'on';
             } else {
@@ -160,8 +207,8 @@ async function tick(db) {
       if (solar.output !== desired) {
         const holdOk = solar.changedAt === 0 || now - solar.changedAt >= HOLD_MS;
         if (holdOk) {
-          send(cfg.solarPumpCommandTopic, desired === 'on');
-          solar.output = desired;
+          const on = gatedSend(cfg.solarPumpCommandTopic, desired === 'on', cfg.solarPumpPriority);
+          solar.output = on ? 'on' : 'off';
           solar.changedAt = now;
         }
       }
@@ -206,10 +253,15 @@ async function tick(db) {
     }
 
     if (filter.output !== desired) {
-      send(cfg.filterPumpCommandTopic, desired === 'on');
-      filter.output = desired;
+      const on = gatedSend(cfg.filterPumpCommandTopic, desired === 'on', cfg.filterPumpPriority);
+      filter.output = on ? 'on' : 'off';
     }
   }
+
+  // Registrierung beim Betriebslevel-Handler auf den aktuellen Stand bringen
+  // (Topics gesetzt, Modus, effektive Priorität inkl. Solarprobelauf der Filterpumpe).
+  syncRegistration('solar', cfg);
+  syncRegistration('filter', cfg);
 }
 
 // Manueller Modus pro Pumpe: 'auto' | 'on' | 'off'

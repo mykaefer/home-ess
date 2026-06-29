@@ -6,6 +6,7 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
 
 > Architektur & Entwickler-Einstieg: siehe [PROJECT_CONTEXT.md](PROJECT_CONTEXT.md).
 > ioBroker-MQTT-Regelwerk: siehe [MQTT.md](MQTT.md).
+> Neue Verbraucher ans Lastmanagement anbinden: siehe [LEVEL_HANDLING.md](LEVEL_HANDLING.md).
 
 ## Features (aktuell)
 
@@ -113,6 +114,14 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
   - Filterautomatik: bis zu 3 Zeitfenster, Follow-Solar, Akku-Override
     (liest Batterie-SoC aus dem zentralen Cache).
   - KPI-Kacheln für Wassertemperatur, Pumpen, pH, Chlor (je nach Konfiguration).
+  - Beide Pumpen sind als **Verbraucher am Betriebslevel-Handler** angemeldet: im
+    Automatik-Modus schalten sie nur ein, wenn das Betriebslevel ihre Priorität
+    freigibt, und schalten bei Levelabfall sofort ab. Hand An/Aus übersteuert das
+    Level bewusst.
+- ⚖️ **Betriebslevel / Lastmanagement** — ein zentraler Handler setzt registrierte
+  Verbraucher nach **Priorität** (= Betriebslevel, ab dem sie laufen dürfen) gegen das
+  prognosegeführte Betriebslevel durch. Erste Verbraucher: Filter-/Solarpumpe.
+  Anleitung für neue Verbraucher: siehe [LEVEL_HANDLING.md](LEVEL_HANDLING.md).
 - 📤 **Output** — beliebige berechnete Werte an ioBroker-Ziel-Topics zurückgeben;
   geschlossene Regelschleife mit aktivem Readback alle 30 Sekunden. Fehlende oder
   abweichende Bestätigungen werden erneut geschrieben und je Output angezeigt.
@@ -212,6 +221,7 @@ src/
   pool/            Pool-Config + Pump-Automation (solar/filter)
   grid-control/    Schaltlogik + verifizierte Regelschleife + Audit-Log (optional)
   operating-state.js  Globaler Zustand (Betriebslevel, Notstrom, Autark-Latch)
+  operating-level/    Betriebslevel-Handler / Lastmanagement (handler.js)
   output/          Wert-Katalog (PV, Prognose, Strom, Batterie, Pool, Sonne),
                    Output-CRUD, Publish-Engine
   dashboard/       Widget- und Gruppen-CRUD

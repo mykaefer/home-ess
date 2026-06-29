@@ -10,9 +10,10 @@
 Basis für ein **Energy Storage System (ESS)**. Der Server abonniert
 MQTT-Topics (Quelle: ioBroker-Broker), hält die eingehenden Werte in einem
 Cache und soll daraus ableiten, **wie Lasten geschaltet werden** (Regel-Engine,
-deren Betriebslevel bereits prognosegeführt werden; die Zuordnung konkreter
-Verbraucher zu den Leveln ist noch nicht implementiert). Bedienoberfläche ist ein Web-Dashboard mit
-vorgeschaltetem Login.
+deren Betriebslevel prognosegeführt werden; ein zentraler **Betriebslevel-Handler**
+(`operating-level/handler.js`) setzt registrierte Verbraucher nach Priorität durch —
+erste Verbraucher sind Filter- und Solarpumpe der Poolsteuerung). Bedienoberfläche
+ist ein Web-Dashboard mit vorgeschaltetem Login.
 
 **Aktueller Funktionsstand:**
 - Login (Passwort) mit **„Passwort merken"**-Checkbox.
@@ -212,7 +213,10 @@ vorgeschaltetem Login.
     - Polling `/pool/status` alle 5 s (Pool-Topics außerhalb der normalen
       State-Definitionen, via Ad-hoc-Subscription-System in `client.js`).
     - `getEffectivePriority(which, cfg)` liefert während Filter-Probeläufen die
-      Solarpumpen-Priorität — Schnittstelle für das künftige Last-Management.
+      Solarpumpen-Priorität. Beide Pumpen sind als Verbraucher am zentralen
+      **Betriebslevel-Handler** registriert (siehe „Betriebslevel / Lastmanagement"
+      und [LEVEL_HANDLING.md](LEVEL_HANDLING.md)): Einschalten nur nach Freigabe,
+      Zwangsabschaltung bei Levelabfall — im Automatik-Modus, nicht bei Hand An/Aus.
 - **Wert-Katalog** (`output/internal-values.js`): berechnete und gemessene Werte
   für Outputs und Dashboard-Widgets. Enthält PV, Stromverbrauch, Sonnenintensität,
   **PV-Prognose** (erwarteter Tagesertrag heute/morgen/+2/+3 sowie heute bisher /
@@ -256,7 +260,12 @@ src/
   db.js                   SQLite öffnen, Schema, Seed, Migrationen
   app.js                  Express-App zusammenbauen + periodische Jobs
   operating-state.js      Globaler Zustand (operatingLevel 1–5, emergencyMode,
-                          Tages-Latch autark), persistent in `operating_state`
+                          Tages-Latch autark), persistent in `operating_state`;
+                          `onOperatingLevelChanged`-Abo bei Levelwechsel
+  operating-level/
+    handler.js            Betriebslevel-Handler / Lastmanagement: register/
+                          unregister, requestTurnOn/isAllowed, onMustTurnOff bei
+                          Levelabfall (siehe LEVEL_HANDLING.md)
   modules/
     index.js              Modul-Registry + In-Memory-Enabled-State
   auth/
@@ -293,7 +302,8 @@ src/
     config.js             Topics laden/speichern, rowToConfig, subscribePoolTopics,
                           readPoolValue
     automation.js         Pump-Automation (solar/filter), Modus-Buttons,
-                          getEffectivePriority, getPumpMode/setPumpMode
+                          getEffectivePriority, getPumpMode/setPumpMode;
+                          Registrierung + Level-Gate beim Betriebslevel-Handler
   grid-control/
     config.js             Topics/Schwellen laden/speichern, State-Definitionen,
                           readGridControlBrokerValues
@@ -409,15 +419,26 @@ Abgerufen über `readPoolValue(cache, topic)`. Die Output-Regelschleife verwende
 pro Ziel-State einen gemeinsamen `output.readback:<topic>`-Cache-Key und fordert
 den Istwert zusätzlich alle 30 Sekunden aktiv an.
 
-## Prioritäten / Last-Management (Vorbereitung)
+## Betriebslevel / Lastmanagement
 
-Jeder Aktor hat eine konfigurierbare Priorität 1–5 (1 = höchste). Aktuell
-rein informativer Wert. Schnittstelle für das künftige Last-Management:
-`poolAutomation.getEffectivePriority(which, cfg)` — gibt während eines
-Filter-Probelaufs (Filterpumpe übernimmt Solarprobelauf) die
-Solarpumpen-Priorität für die Filterpumpe zurück. Neue Module sollen eine
-analoge `getActors(cfg)`-Funktion exportieren, die ein zentrales Modul
-(`src/load-management/priority.js`, noch nicht existiert) aggregiert.
+Zentraler **Betriebslevel-Handler** in `src/operating-level/handler.js`. Vollständige
+Anleitung zum Anbinden neuer Verbraucher: [LEVEL_HANDLING.md](LEVEL_HANDLING.md).
+
+- **Priorität (1–5) = Freigabe-Level:** `erlaubt ⇔ aktuelles Betriebslevel ≥ Priorität`
+  (Priorität 4 ⇒ erlaubt bei Level 4/5, gesperrt bei 1–3).
+- **API:** `register(id, priority, { onMustTurnOff })` (Re-Registrierung überschreibt die
+  Priorität), `unregister(id)`, `requestTurnOn(id)` (Einschalt-Freigabe), `isAllowed(priority)`,
+  `currentOperatingLevel()`. Der Handler abonniert `operatingState.onOperatingLevelChanged`
+  und ruft bei Levelabfall `onMustTurnOff()` jedes nicht mehr erlaubten Verbrauchers auf.
+- **Drei Modi pro Verbraucher** (`an`/`aus`/`automatik`): nur **`automatik`** läuft über das
+  Gate (registriert, Einschalten nur nach Freigabe, Zwangsabschaltung). **`an`/`aus`**
+  übersteuern das Level bewusst und sind **nicht** registriert.
+- **Erste Verbraucher:** Filter- und Solarpumpe (`pool.solar`, `pool.filter`) in
+  `pool/automation.js`. `getEffectivePriority(which, cfg)` liefert während eines
+  Filter-Probelaufs die Solarpumpen-Priorität für die Filterpumpe.
+- Init in `app.js` (`operatingLevelHandler.init()`) nach geladenem Betriebszustand, vor
+  `prognosisBehavior.init`. Neue Verbraucher registrieren sich aus ihrer eigenen
+  Steuerschleife heraus, sobald sie aktiv sind.
 
 ## Wichtige Entscheidungen / Eigenheiten
 
@@ -442,8 +463,10 @@ analoge `getActors(cfg)`-Funktion exportieren, die ein zentrales Modul
 
 ## Nächste sinnvolle Schritte (Roadmap)
 
-1. **Last-Management / Regel-Engine:** zentrales Modul das Aktoren nach Priorität
-   schaltet, wenn Batterie-SoC unter/über Schwellwerte fällt. Basis: `getEffectivePriority`.
+1. **Last-Management / Regel-Engine (Basis umgesetzt):** zentraler
+   Betriebslevel-Handler (`operating-level/handler.js`) schaltet registrierte Verbraucher
+   nach Priorität gegen das prognosegeführte Betriebslevel — erste Verbraucher: Filter-/
+   Solarpumpe. Offen: weitere Verbraucher anbinden (Leitfaden: [LEVEL_HANDLING.md](LEVEL_HANDLING.md)).
 2. **Watchdog/Reconnect-Härtung** gemäß MQTT.md (stille Subscriptions erkennen).
 3. **Session-Cleanup:** abgelaufene `sessions`-Zeilen periodisch löschen.
 4. **Drag&Drop für Touch** (aktuell native HTML5-DnD, nur Maus/Desktop).
