@@ -49,6 +49,7 @@ function localCalendar(cache, timezone, now = new Date()) {
     ...parts,
     dateKey: `${parts.year}-${pad(parts.month)}-${pad(parts.day)}`,
     weekKey: weekKey(parts),
+    monthKey: `${parts.year}-${pad(parts.month)}`,
     yearKey: String(parts.year),
   };
 }

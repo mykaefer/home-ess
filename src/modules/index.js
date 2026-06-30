@@ -17,6 +17,12 @@ const REGISTRY = [
     path: '/grid-control',
     description: 'Netz- und Überschusseinspeisungs-Steuerung nach SoC, Batteriespannung und Wechselrichter-Temperaturwarnung.',
   },
+  {
+    key: 'wallbox',
+    label: 'Wallbox',
+    path: '/wallbox',
+    description: 'Verwaltung mehrerer PKW-Wallboxen mit vorausschauender Überschuss-Ladung und Lademodi (Privat / Beruflich / Immer voll).',
+  },
 ];
 
 let _enabledKeys = new Set();

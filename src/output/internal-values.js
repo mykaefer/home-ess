@@ -20,6 +20,9 @@ const {
   batteryStatus, updateBatteryDailyState,
 } = require('../batterie/config');
 const { loadPoolConfig, readPoolValue } = require('../pool/config');
+const { listWallboxes } = require('../wallbox/boxes');
+const { readWallboxValues } = require('../wallbox/aggregation');
+const wallboxAutomation = require('../wallbox/automation');
 const { isEnabled } = require('../modules');
 const { getState: getGridControlState } = require('../grid-control/automation');
 const operatingState = require('../operating-state');
@@ -37,6 +40,7 @@ const VALUE_CATEGORIES = [
   'Prognose',
   'Netzsteuerung',
   'Pool',
+  'Wallbox',
   'Betrieb',
   'Sonstiges',
 ];
@@ -49,6 +53,7 @@ const CATEGORY_BY_PREFIX = [
   ['prognose.', 'Prognose'],
   ['grid.', 'Netzsteuerung'],
   ['pool.', 'Pool'],
+  ['wallbox.', 'Wallbox'],
   ['operating.', 'Betrieb'],
 ];
 
@@ -384,8 +389,8 @@ async function listInternalValues(db, cache) {
     prognosis.minimumReached ? prognosis.minimumReached.dayOffset : null
   ));
   entries.push(energyEntry('prognose.verbrauchTag', 'Prognose Verbrauch heute gesamt', consumptionModel.today + prognosisToday.loadKwh));
-  entries.push(energyEntry('prognose.verbrauchDurchschnitt', 'Prognose Verbrauch durchschnittlich pro Tag', consumptionModel.dailyTarget));
-  entries.push(energyEntry('prognose.verbrauchHochrechnungLetzteStunde', 'Prognose Verbrauch Tageshochrechnung aus letzter Stunde', recentDailyProjection));
+  entries.push(energyEntry('prognose.verbrauchDurchschnitt', 'Prognose Hausverbrauch durchschnittlich pro Tag', consumptionModel.dailyTarget));
+  entries.push(energyEntry('prognose.verbrauchHochrechnungLetzteStunde', 'Prognose Hausverbrauch Tageshochrechnung aus letzter Stunde', recentDailyProjection));
   entries.push(energyEntry('prognose.verbrauchBisSonnenaufgang', 'Prognose Verbrauch bis Sonnenaufgang', consumptionToSunrise));
   entries.push(energyEntry('prognose.verbrauchBisSonnenaufgangLetzteStunde', 'Prognose Verbrauch bis Sonnenaufgang aus letzter Stunde', recentConsumptionToSunrise));
   entries.push(energyEntry('prognose.verbrauchRest', 'Prognose Verbrauch heute noch', prognosisToday.loadKwh));
@@ -421,6 +426,24 @@ async function listInternalValues(db, cache) {
   entries.push(decimalEntry('prognose.klimaKwhProGrad', 'Prognose Klimatisierung Mehrverbrauch pro Grad', coolingModel.kwhPerDegree, 'kWh/°C'));
   entries.push(energyEntry('prognose.klimaMehrverbrauchHeute', 'Prognose Klimatisierung Mehrverbrauch heute', prognosisToday.coolingKwh));
   entries.push(energyEntry('prognose.klimaMehrverbrauchMorgen', 'Prognose Klimatisierung Mehrverbrauch morgen', prognosisTomorrow ? prognosisTomorrow.coolingKwh : null));
+  entries.push(energyEntry('prognose.wallboxVerbrauchHeute', 'Prognose Wallbox-Verbrauch heute noch', prognosisToday.wallboxKwh));
+  entries.push(energyEntry('prognose.wallboxVerbrauchMorgen', 'Prognose Wallbox-Verbrauch morgen', prognosisTomorrow ? prognosisTomorrow.wallboxKwh : null));
+  for (const box of (consumptionModel.wallboxModel && consumptionModel.wallboxModel.boxes) || []) {
+    const todayBox = (prognosisToday.wallboxes || []).find((entry) => entry.id === box.id);
+    const tomorrowBox = prognosisTomorrow
+      ? (prognosisTomorrow.wallboxes || []).find((entry) => entry.id === box.id)
+      : null;
+    entries.push(energyEntry(
+      `prognose.wallbox.${box.id}.heute`,
+      `Prognose Wallbox ${box.name} – Verbrauch heute noch`,
+      todayBox ? todayBox.energyKwh : null
+    ));
+    entries.push(energyEntry(
+      `prognose.wallbox.${box.id}.morgen`,
+      `Prognose Wallbox ${box.name} – Verbrauch morgen`,
+      tomorrowBox ? tomorrowBox.energyKwh : null
+    ));
+  }
 
   // Pool (nur wenn Modul aktiv)
   if (poolCfg) {
@@ -429,6 +452,30 @@ async function listInternalValues(db, cache) {
     if (poolCfg.filterPumpStatusTopic) entries.push(pumpEntry    ('pool.filterPumpe',      'Pool Filterpumpe',      readPoolValue(cache, poolCfg.filterPumpStatusTopic)));
     if (poolCfg.phTopic)             entries.push(phEntry        ('pool.ph',               'Pool pH-Wert',          readPoolValue(cache, poolCfg.phTopic)));
     if (poolCfg.chlorTopic)          entries.push(phEntry        ('pool.chlor',            'Pool Chlor (mg/l)',     readPoolValue(cache, poolCfg.chlorTopic)));
+  }
+
+  // Wallbox (nur wenn Modul aktiv): je Box Leistung, SoC, Plugged, Modus und
+  // historische Energien (Tag/Woche/Monat/Jahr/Vorjahr).
+  if (isEnabled('wallbox')) {
+    const wbBoxes = await listWallboxes(db);
+    const wbValues = await readWallboxValues(db, cache, wbBoxes);
+    for (const wb of wbValues) {
+      entries.push(powerEntry(`wallbox.${wb.id}.power`, `Wallbox ${wb.name} – Leistung`, wb.powerW));
+      entries.push(percentEntry(`wallbox.${wb.id}.soc`, `Wallbox ${wb.name} – Fahrzeug-SoC`, wb.soc));
+      entries.push(boolEntry(`wallbox.${wb.id}.plugged`, `Wallbox ${wb.name} – angesteckt`, wb.plugged === true));
+      entries.push(numberEntry(`wallbox.${wb.id}.modus`, `Wallbox ${wb.name} – Lademodus (1 Privat, 2 Beruflich, 3 Immer voll)`, wb.mode));
+      entries.push(energyEntry(`wallbox.${wb.id}.today`, `Wallbox ${wb.name} – Verbrauch heute`, wb.energy.today));
+      entries.push(energyEntry(`wallbox.${wb.id}.week`, `Wallbox ${wb.name} – Verbrauch Woche`, wb.energy.week));
+      entries.push(energyEntry(`wallbox.${wb.id}.month`, `Wallbox ${wb.name} – Verbrauch Monat`, wb.energy.month));
+      entries.push(energyEntry(`wallbox.${wb.id}.year`, `Wallbox ${wb.name} – Verbrauch Jahr`, wb.energy.year));
+      entries.push(energyEntry(`wallbox.${wb.id}.previousYear`, `Wallbox ${wb.name} – Verbrauch Vorjahr`, wb.energy.previousYear));
+      // Voraussichtlicher nächster Ladebeginn (nur wenn gerade nicht geladen wird):
+      // Restzeit in Sekunden plus Uhrzeit der erwarteten Stunde.
+      const nextCharge = wallboxAutomation.getNextCharge(wb.id);
+      const secondsToCharge = nextCharge ? Math.max(0, Math.round((nextCharge.at - Date.now()) / 1000)) : null;
+      entries.push(numberEntry(`wallbox.${wb.id}.naechsterLadebeginnSekunden`, `Wallbox ${wb.name} – nächster Ladebeginn in Sekunden`, secondsToCharge));
+      entries.push(timeEntry(`wallbox.${wb.id}.naechsterLadebeginn`, `Wallbox ${wb.name} – nächster Ladebeginn Uhrzeit`, nextCharge ? nextCharge.hour : null));
+    }
   }
 
   if (isEnabled('grid-control')) {

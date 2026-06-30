@@ -26,8 +26,11 @@ const liveRoutes = require('./routes/live');
 const modulesRoutes = require('./routes/modules');
 const poolRoutes = require('./routes/pool');
 const gridControlRoutes = require('./routes/grid-control');
+const wallboxRoutes = require('./routes/wallbox');
+const { buildWallboxSnapshot, totalWallboxPowerWatt } = require('./wallbox/aggregation');
+const { listWallboxes } = require('./wallbox/boxes');
 const prognosisRoutes = require('./routes/prognosis');
-const { initModules } = require('./modules');
+const { initModules, isEnabled } = require('./modules');
 const gridControlAutomation = require('./grid-control/automation');
 const operatingState = require('./operating-state');
 const operatingLevelHandler = require('./operating-level/handler');
@@ -61,6 +64,7 @@ function createApp() {
   app.use(modulesRoutes(db));
   app.use(poolRoutes(db));
   app.use(gridControlRoutes(db));
+  app.use(wallboxRoutes(db));
 
   const operatingReady = operatingState.init(db).then(() => {
     operatingState.startMqttSync(db);
@@ -99,14 +103,19 @@ function createApp() {
       prognosisBehavior.init(db).catch(() => {});
     });
 
-  const updateConsumption = () => {
+  const updateConsumption = async () => {
     const cache = mqttClient.getCache();
-    buildStromverbrauchSnapshot(db, cache)
-      .then((snapshot) => recordConsumptionSample(db, snapshot.raw.today.summe, cache, {
+    try {
+      const boxes = isEnabled('wallbox') ? await listWallboxes(db) : [];
+      const snapshot = await buildStromverbrauchSnapshot(db, cache);
+      await recordConsumptionSample(db, snapshot.raw.today.summe, cache, {
         batteryPower: readBatterieData(cache).power,
+        wallboxPower: totalWallboxPowerWatt(cache, boxes),
         outdoorTemperature: buildEnvironmentSnapshot(cache).temperature.value,
-      }))
-      .catch(() => {});
+      });
+    } catch (_) {
+      // Der nächste Minutentakt versucht es erneut.
+    }
   };
   updateConsumption();
   setInterval(updateConsumption, 60000);
@@ -115,6 +124,14 @@ function createApp() {
       .then((plants) => touchPhotovoltaikAggregation(db, mqttClient.getCache(), plants))
       .catch(() => {});
   }, 60000);
+
+  // Wallbox-Zähler/Summen je Box fortschreiben (Tag/Woche/Monat/Jahr + Vorjahr,
+  // bzw. Power-Integration ohne Zähler-Topic). Nur aktiv, wenn Boxen angelegt sind.
+  const updateWallbox = () => {
+    buildWallboxSnapshot(db, mqttClient.getCache()).catch(() => {});
+  };
+  updateWallbox();
+  setInterval(updateWallbox, 60000);
 
   // Sonnenintensität als Zeitreihe erfassen (für 10-Minuten-/Tages-/Vortagsmittel).
   recordSample(db, mqttClient.getCache()).catch(() => {});

@@ -2,7 +2,11 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { updateExtremeWindows, updateLoadSwitch, hasPhaseFailure, allPhasesPresent } = require('../src/grid-control/automation');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const automation = require('../src/grid-control/automation');
+const { updateExtremeWindows, updateLoadSwitch, updateLoadSwitchDelayed, hasPhaseFailure, allPhasesPresent } = automation;
 const { normalizeGridControlInput } = require('../src/grid-control/config');
 const sqlite3 = require('sqlite3').verbose();
 const mqttClient = require('../src/mqtt/client');
@@ -49,6 +53,110 @@ test('load switches on by any phase and off only below all three return threshol
   assert.equal(updateLoadSwitch([4100, 1000, 1000], on, off, false), true);
   assert.equal(updateLoadSwitch([2500, 3200, 2500], on, off, true), true);
   assert.equal(updateLoadSwitch([2500, 2500, 2500], on, off, true), false);
+});
+
+test('load off-delay requires continuously low load and resets on a short rise', () => {
+  const on = [4000, 4000, 4000];
+  const off = [3000, 3000, 3000];
+  let result = updateLoadSwitchDelayed([2500, 2500, 2500], on, off, true, 0, 30000, 100000);
+  assert.deepEqual(result, { active: true, offSince: 100000 });
+  result = updateLoadSwitchDelayed([2500, 2500, 2500], on, off, result.active, result.offSince, 30000, 129999);
+  assert.equal(result.active, true);
+  result = updateLoadSwitchDelayed([2500, 3100, 2500], on, off, result.active, result.offSince, 30000, 130000);
+  assert.deepEqual(result, { active: true, offSince: 0 });
+  result = updateLoadSwitchDelayed([2500, 2500, 2500], on, off, result.active, result.offSince, 30000, 140000);
+  assert.deepEqual(result, { active: true, offSince: 140000 });
+  result = updateLoadSwitchDelayed([2500, 2500, 2500], on, off, result.active, result.offSince, 30000, 170000);
+  assert.deepEqual(result, { active: false, offSince: 0 });
+});
+
+test('load off-delay is configurable from zero to one hour', () => {
+  assert.equal(normalizeGridControlInput({ loadOffDelaySeconds: -1 }).loadOffDelaySeconds, 0);
+  assert.equal(normalizeGridControlInput({ loadOffDelaySeconds: 45 }).loadOffDelaySeconds, 45);
+  assert.equal(normalizeGridControlInput({ loadOffDelaySeconds: 9999 }).loadOffDelaySeconds, 3600);
+});
+
+test('running load off-delay survives a HomeESS database reopen', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'homeess-grid-delay-'));
+  const dbPath = path.join(dir, 'state.db');
+  const open = () => new sqlite3.Database(dbPath);
+  const exec = (db, sql) => new Promise((resolve, reject) => db.exec(sql, (err) => err ? reject(err) : resolve()));
+  const run = (db, sql, params = []) => new Promise((resolve, reject) => db.run(sql, params, (err) => err ? reject(err) : resolve()));
+  const close = (db) => new Promise((resolve) => db.close(resolve));
+  let db = open();
+
+  try {
+    await exec(db, `
+      CREATE TABLE modules (key TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 0);
+      CREATE TABLE operating_state (id INTEGER PRIMARY KEY, operating_level INTEGER, emergency_mode INTEGER);
+      INSERT INTO operating_state VALUES (1, 2, 0);
+      CREATE TABLE batterie_config (
+        id INTEGER PRIMARY KEY, soc_topic TEXT, power_topic TEXT, voltage_topic TEXT,
+        temperatur_topic TEXT, min_soc_topic TEXT, min_soc INTEGER, battery_type TEXT,
+        cell_count INTEGER, lower_voltage REAL, upper_voltage REAL
+      );
+      INSERT INTO batterie_config VALUES (1, '', '', '', '', '', 20, 'lifepo4', 16, 44.8, 55.2);
+      CREATE TABLE grid_control_config (
+        id INTEGER PRIMARY KEY, grid_command_topic TEXT, feed_in_command_topic TEXT,
+        temperature_warning_topic TEXT, temperature_warning_value TEXT,
+        warning_text_topic TEXT, warning_active_topic TEXT, soc_enabled INTEGER,
+        voltage_enabled INTEGER, temperature_enabled INTEGER, feed_in_allowed INTEGER,
+        soc_lower_offset INTEGER, soc_upper_offset INTEGER, soc_hysteresis INTEGER,
+        voltage_hysteresis REAL, grid_frequency_l1_topic TEXT,
+        grid_frequency_l2_topic TEXT, grid_frequency_l3_topic TEXT,
+        grid_detection_seconds INTEGER, load_enabled INTEGER, load_off_delay_seconds INTEGER,
+        load_on_l1 REAL, load_on_l2 REAL, load_on_l3 REAL,
+        load_off_l1 REAL, load_off_l2 REAL, load_off_l3 REAL
+      );
+      INSERT INTO grid_control_config VALUES
+        (1, 'grid.command', '', '', '1', '', '', 0, 0, 0, 0, 0, 5, 2, 0.5,
+         '', '', '', 30, 1, 30, 4000, 4000, 4000, 3000, 3000, 3000);
+      CREATE TABLE grid_control_runtime (
+        id INTEGER PRIMARY KEY, load_active INTEGER, load_off_since INTEGER, initialized INTEGER
+      );
+      INSERT INTO grid_control_runtime VALUES (1, 1, ${Date.now()}, 1);
+    `);
+    await operatingState.init(db);
+    await modulesState.setEnabled(db, 'grid-control', true);
+
+    const cache = mqttClient.getCache();
+    cache.clear();
+    cache.set('mqtt.clockDate', { value: '2026-06-30', receivedAt: Date.now() });
+    cache.set('gridcontrol.gridCommand', { value: 1, receivedAt: Date.now() });
+    cache.set('stromverbrauch_eigenverbrauch_l1', { value: 2500, receivedAt: Date.now() });
+    cache.set('stromverbrauch_eigenverbrauch_l2', { value: 2500, receivedAt: Date.now() });
+    cache.set('stromverbrauch_eigenverbrauch_l3', { value: 2500, receivedAt: Date.now() });
+    const originalPublish = mqttClient.publish;
+    const originalGetStatus = mqttClient.getStatus;
+    mqttClient.publish = () => true;
+    mqttClient.getStatus = () => ({ connected: true });
+
+    try {
+      await automation.runNow(db);
+      assert.equal(automation.getState().gridByLoad, true);
+      await close(db);
+
+      db = open();
+      await operatingState.init(db);
+      await modulesState.setEnabled(db, 'grid-control', true);
+      await automation.runNow(db);
+      assert.equal(automation.getState().gridByLoad, true, 'Neustart darf nicht sofort abschalten');
+
+      await run(db, 'UPDATE grid_control_runtime SET load_off_since = ? WHERE id = 1', [Date.now() - 31000]);
+      await close(db);
+      db = open();
+      await operatingState.init(db);
+      await modulesState.setEnabled(db, 'grid-control', true);
+      await automation.runNow(db);
+      assert.equal(automation.getState().gridByLoad, false, 'nach Ablauf darf abgeschaltet werden');
+    } finally {
+      mqttClient.publish = originalPublish;
+      mqttClient.getStatus = originalGetStatus;
+    }
+  } finally {
+    if (db) await close(db).catch(() => {});
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('emergency mode stays latched until grid frequency returns', async () => {

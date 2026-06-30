@@ -3,6 +3,68 @@
 Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [0.8.1] — 2026-06-30
+
+### Geändert
+
+- **Gemeinsamer Lade-Vorausplan** für Wallbox-Automatik und Systemprognose: aktiver
+  Modus, Priorität, Fahrzeug-SoC, Akkugröße, Mindestladung und Arbeitstage bestimmen
+  den konkreten Bedarf. Pflichtladungen werden fest als Last berücksichtigt; flexible
+  Wallboxen teilen sich den verbleibenden PV-Überschuss priorisiert und können ihn nicht
+  mehr parallel doppelt verplanen. Die gelernte Historie dient als Fallback für noch
+  unbekannte zukünftige Ladevorgänge.
+
+## [0.8.0] — 2026-06-30
+
+### Hinzugefügt
+
+- Optionales Modul **Wallbox** (`/wallbox`, aktivierbar unter `/module`) zur Verwaltung
+  mehrerer PKW-Wallboxen — einzeln anlegbar wie die PV-Anlagen (`src/wallbox/boxes.js`,
+  Tabellen `wallboxes`/`wallbox_counter_state`/`wallbox_summary_state`).
+  - Je Box ein Pflicht-**Steuer-Topic** (an/aus) sowie optional **Status** (sonst dient
+    das Steuer-Topic als Ist-Stand), **Leistung** (W/kW wählbar), fortlaufender
+    **Zähler** (Wh/kWh wählbar), **Soll-Leistung**, **„Fahrzeug angesteckt"** (true/false)
+    und **Fahrzeug-SoC** (%); dazu **Maximalleistung** und **Fahrzeug-Akkugröße**.
+  - **Verbrauchszählung** je Box für Tag/Woche/Monat/Jahr inkl. Vorjahr mit Jahres-/
+    Monatswechsel (`src/wallbox/aggregation.js`). Ohne Zähler-Topic wird der Verbrauch
+    aus der Leistung integriert; fehlt das SoC-Topic, wird der Ladezustand aus der seit
+    Einstecken geladenen Energie und der Akkugröße geschätzt.
+  - **Drei Lademodi mit je eigener Priorität** (`src/wallbox/planner.js`):
+    **Privat** lädt bis zum Mindest-Ladestand, darüber nur PV-Überschuss (verfügbarer
+    Überschuss = Netzeinspeisung + Batterie-Ladeleistung, solange der Hausakku über dem
+    Mindest-SoC liegt); **Beruflich** stellt das Auto an gewählten Wochentagen
+    vorausschauend voll bereit (tagsüber Überschuss, abends Garantieladung) und fällt an
+    freien Tagen auf die Privatregel zurück; **Immer voll** lädt durchgehend. Mit
+    Soll-Leistungs-Topic wird gegen den Überschuss fein moduliert, sonst An/Aus an einer
+    Schwelle. Optionaler **Modus-Sync** über ein eigenes Topic (bidirektional).
+  - Jede Wallbox ist **Verbraucher am Betriebslevel-Handler** (Priorität des aktiven
+    Modus): Einschalten nur nach Freigabe, Zwangsabschaltung bei Levelabfall
+    (`src/wallbox/automation.js`, 30-s-Tick). Mindesthaltedauer gegen Flattern.
+  - Eigene Wertekatalog-Kategorie **Wallbox** (Leistung, Fahrzeug-SoC, angesteckt,
+    Lademodus, Verbrauch Tag/Woche/Monat/Jahr/Vorjahr je Box) für Outputs und Dashboard.
+  - **Sonderfall-Behandlung** (`src/wallbox/planner.js` `decideWallboxAction`):
+    - *Ladestart-Neustart*: hängt die Ist-Leistung trotz Ladebefehl nach einer je Box
+      konfigurierbaren **Vorgabezeit** (`stall_timeout_seconds`, Default 120 s) noch unter
+      der **Leerlaufschwelle** (`stall_power_w`, Default 200 W), wird einmal für eine
+      Minute aus- und wieder eingeschaltet (gedeckelte Versuche). **Nur bei tatsächlich
+      eingestecktem Auto** (`plugged === true`); ohne bestätigtes Anstecken kein Aus/Ein-Takten.
+    - *Manuell EIN am Broker* → einmalige Volladung, sofern die Priorität des aktiven
+      Modus das aktuelle Betriebslevel freigibt.
+    - *Manuell AUS am Broker* → bleibt aus, bis am Folgetag die **PV-Leistung erstmals die
+      Wallbox-Maximalleistung übersteigt**; danach greift wieder der gewählte Plan.
+    - *„Angesteckt"-Signal nicht als Sperre*: da es per Mobilfunk vom Fahrzeug kommt und
+      veraltet sein kann, wird auch bei scheinbar nicht angestecktem Auto eingeschaltet,
+      wenn der Plan laden möchte (ein echtes Fehlen fängt die Stall-Erkennung ab).
+  - **Voraussichtlicher nächster Ladebeginn**: wird gerade nicht geladen, wird aus der
+    stündlichen PV-/Verbrauchsprognose (Überschuss-Reihe) der nächste Ladebeginn
+    geschätzt (`predictNextChargeStart`); berücksichtigt Überschuss-Schwelle, die
+    Beruflich-Garantieladung sowie die Sperre nach manuellem Ausschalten. Im Wertekatalog
+    je Box als **Restzeit in Sekunden** (`wallbox.<id>.naechsterLadebeginnSekunden`) und
+    **Uhrzeit** (`wallbox.<id>.naechsterLadebeginn`); auf der Wallbox-Seite ausgewiesen.
+  - **Getrenntes Prognose-Lernen je Wallbox**: Tages- und Stundenhistorien bilden
+    erwartete Ladeenergie und typische Ladezeit je Wochentag. Wallboxleistung
+    wird aus dem allgemeinen Hausverbrauch entfernt und in der Energieprognose
+    je Box separat wieder eingeplant; Werte für heute/morgen stehen im Katalog.
 ## [0.7.2] — 2026-06-29
 
 ### Hinzugefügt
@@ -163,6 +225,11 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
   Ausklappen das übrige Layout nicht mehr verschiebt.
 
 ### Behoben
+
+- Prognose-Verbrauchslernen gegen verspätete Resets externer Tageszähler
+  abgesichert: Ein neuer lokaler Lerntag startet immer bei 0 kWh; der erste
+  kumulierte Wert dient nur als Differenz-Basis. Dadurch kann der Vortagesstand
+  nach Mitternacht nicht mehr als heutiger Verbrauch übernommen werden.
 
 - Stromverbrauchs-Tageswechsel nutzt jetzt MQTT-Datum beziehungsweise die
   konfigurierte lokale Zeitzone statt der UTC-Serverzeit; damit erfolgt der

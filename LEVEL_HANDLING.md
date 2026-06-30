@@ -3,8 +3,10 @@
 Dieses Dokument beschreibt, wie ein neuer schaltbarer Verbraucher in homeESS an den
 zentralen **Betriebslevel-Handler** (Lastmanagement) angebunden wird. Es ist als
 Schritt-für-Schritt-Referenz gedacht, damit dafür nicht jedes Mal das gesamte Projekt
-analysiert werden muss. Referenz-Implementierung sind Filter- und Solarpumpe in
-[`src/pool/automation.js`](src/pool/automation.js).
+analysiert werden muss. Referenz-Implementierungen sind Filter- und Solarpumpe in
+[`src/pool/automation.js`](src/pool/automation.js) sowie die Wallboxen in
+[`src/wallbox/automation.js`](src/wallbox/automation.js) (Priorität je Lademodus,
+mehrere Instanzen, Registrierung/Abmeldung beim Hinzufügen/Löschen einer Box).
 
 ---
 

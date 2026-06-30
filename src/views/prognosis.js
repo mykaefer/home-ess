@@ -43,10 +43,15 @@ function renderDays(days = []) {
       : day.surplusKwh > 0.05
         ? `<span class="forecast-chip forecast-chip--good">${formatEnergy(day.surplusKwh)} Überschuss</span>`
         : '<span class="forecast-chip forecast-chip--neutral">ausgeglichen</span>';
+    const wallboxes = (day.wallboxes || [])
+      .filter((box) => Number(box.energyKwh) > 0.005)
+      .map((box) => `${box.name}: ${formatEnergy(box.energyKwh)}`)
+      .join(' · ');
     return `<article class="forecast-day">
       <div class="forecast-day-head"><strong>${escapeHtml(day.label)}</strong>${result}</div>
       <div class="forecast-bar-row"><span>PV</span><div class="forecast-bar-track"><i class="forecast-bar forecast-bar--pv" style="width:${pvWidth.toFixed(1)}%"></i></div><b>${formatEnergy(day.pvKwh)}</b></div>
       <div class="forecast-bar-row"><span>Bedarf</span><div class="forecast-bar-track"><i class="forecast-bar forecast-bar--load" style="width:${loadWidth.toFixed(1)}%"></i></div><b>${formatEnergy(day.loadKwh)}</b></div>
+      ${wallboxes ? `<div class="forecast-day-foot">davon Wallbox: ${escapeHtml(wallboxes)}</div>` : ''}
       <div class="forecast-day-foot">Batterie am Tagesende <strong>${formatPercent(day.batterySocEnd)}</strong>${day.batteryFull ? ' · wird voraussichtlich voll' : ''}</div>
     </article>`;
   }).join('');
@@ -81,6 +86,11 @@ function renderPrognosis({ prognosis, message = '', error = '' } = {}) {
   const coolingText = coolingModel.enabled
     ? `${coolingModel.sampleCount} Hitzetage · ${Number(coolingModel.kwhPerDegree).toFixed(2).replace('.', ',')} kWh/°C`
     : `lernt noch · ${coolingModel.sampleCount || 0}/2 Hitzetage`;
+  const wallboxFacts = ((model.wallboxModel && model.wallboxModel.boxes) || []).map((box) => {
+    const expected = box.dailyByWeekday[currentWeekday] || 0;
+    const samples = box.samplesByWeekday[currentWeekday] || 0;
+    return `<div><dt>Wallbox ${escapeHtml(box.name)} (${escapeHtml(WEEKDAY_NAMES[currentWeekday])})</dt><dd>${formatEnergy(expected)} · ${samples} Lerntage</dd></div>`;
+  }).join('');
   const body = `        <div class="forecast-page-head">
           <h1>Prognose</h1>
           <form action="/prognose/behavior" method="POST" class="forecast-behavior-form">
@@ -132,8 +142,10 @@ function renderPrognosis({ prognosis, message = '', error = '' } = {}) {
               <div><dt>Klimatisierungsmodell</dt><dd>${escapeHtml(coolingText)}</dd></div>
               <div><dt>Kühlbedarf heute noch</dt><dd>${formatEnergy(today.coolingKwh)}</dd></div>
               <div><dt>Tageskalibrierung</dt><dd>${escapeHtml(calibrationText)}</dd></div>
-              <div><dt>Prognose Tagesverbrauch</dt><dd>${formatEnergy(model.expectedToday + (today.coolingKwh || 0))}</dd></div>
-              <div><dt>Verbrauch heute ohne Akku</dt><dd>${formatEnergy(model.today)}</dd></div>
+              <div><dt>Prognose Hausverbrauch</dt><dd>${formatEnergy(model.expectedToday + (today.coolingKwh || 0))}</dd></div>
+              <div><dt>Wallboxbedarf heute noch</dt><dd>${formatEnergy(today.wallboxKwh)}</dd></div>
+              ${wallboxFacts}
+              <div><dt>Hausverbrauch heute ohne Akku/Wallbox</dt><dd>${formatEnergy(model.today)}</dd></div>
             </dl>
             <p class="muted forecast-note">Das Jahresmittel stabilisiert den Start. Mit jedem vollständigen Tag erhält der gleitende Mittelwert mehr Gewicht; das Stundenprofil lernt, wann im Haus typischerweise Energie gebraucht wird.</p>
           </section>

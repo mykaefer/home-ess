@@ -186,7 +186,8 @@ function openDatabase() {
         discharge_efficiency REAL NOT NULL DEFAULT 95,
         history_days INTEGER NOT NULL DEFAULT 28,
         behavior_model TEXT NOT NULL DEFAULT 'grid_parallel',
-        behavior_active INTEGER NOT NULL DEFAULT 0
+        behavior_active INTEGER NOT NULL DEFAULT 0,
+        wallbox_learning_version INTEGER NOT NULL DEFAULT 1
       )`
     );
     db.run(
@@ -232,6 +233,7 @@ function openDatabase() {
         grid_frequency_l3_topic TEXT NOT NULL DEFAULT '',
         grid_detection_seconds INTEGER NOT NULL DEFAULT 30,
         load_enabled INTEGER NOT NULL DEFAULT 0,
+        load_off_delay_seconds INTEGER NOT NULL DEFAULT 30,
         load_on_l1 REAL,
         load_on_l2 REAL,
         load_on_l3 REAL,
@@ -240,6 +242,15 @@ function openDatabase() {
         load_off_l3 REAL
       )`
     );
+    db.run(
+      `CREATE TABLE IF NOT EXISTS grid_control_runtime (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        load_active INTEGER NOT NULL DEFAULT 0,
+        load_off_since INTEGER NOT NULL DEFAULT 0,
+        initialized INTEGER NOT NULL DEFAULT 0
+      )`
+    );
+    db.run('INSERT OR IGNORE INTO grid_control_runtime (id) VALUES (1)');
     db.run(
       `CREATE TABLE IF NOT EXISTS operating_state (
         id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -290,6 +301,84 @@ function openDatabase() {
         filter_battery_soc_topic TEXT NOT NULL DEFAULT ''
       )`
     );
+    // Optionales Modul Wallbox: je Wallbox eine Zeile. Topics steuern/messen die
+    // Box, die Prioritäten gelten je Lademodus (1=Privat, 2=Beruflich, 3=Immer voll).
+    db.run(
+      `CREATE TABLE IF NOT EXISTS wallboxes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        max_power_w REAL NOT NULL DEFAULT 11000,
+        battery_capacity_kwh REAL NOT NULL DEFAULT 50,
+        command_topic TEXT NOT NULL DEFAULT '',
+        status_topic TEXT NOT NULL DEFAULT '',
+        power_topic TEXT NOT NULL DEFAULT '',
+        power_unit TEXT NOT NULL DEFAULT 'W',
+        counter_topic TEXT NOT NULL DEFAULT '',
+        counter_unit TEXT NOT NULL DEFAULT 'kWh',
+        setpoint_topic TEXT NOT NULL DEFAULT '',
+        plugged_topic TEXT NOT NULL DEFAULT '',
+        soc_topic TEXT NOT NULL DEFAULT '',
+        mode_sync_topic TEXT NOT NULL DEFAULT '',
+        mode INTEGER NOT NULL DEFAULT 1,
+        priority_private INTEGER NOT NULL DEFAULT 5,
+        priority_business INTEGER NOT NULL DEFAULT 3,
+        priority_full INTEGER NOT NULL DEFAULT 4,
+        min_charge_percent INTEGER NOT NULL DEFAULT 30,
+        business_days TEXT NOT NULL DEFAULT '',
+        stall_timeout_seconds INTEGER NOT NULL DEFAULT 120,
+        stall_power_w REAL NOT NULL DEFAULT 200
+      )`
+    );
+    // Zähler-Roh-/Tageswert je Box (analog stromverbrauch_counter_state). Fehlt das
+    // Zähler-Topic, wird day_total stattdessen aus der Leistung integriert.
+    db.run(
+      `CREATE TABLE IF NOT EXISTS wallbox_counter_state (
+        wallbox_id INTEGER PRIMARY KEY,
+        last_raw_value REAL,
+        day_total REAL NOT NULL DEFAULT 0,
+        last_day_key TEXT NOT NULL DEFAULT '',
+        plugged_energy_start REAL,
+        last_power_ts INTEGER,
+        FOREIGN KEY (wallbox_id) REFERENCES wallboxes(id) ON DELETE CASCADE
+      )`
+    );
+    // Historische Summen je Box inkl. Monat (analog stromverbrauch_aggregation).
+    db.run(
+      `CREATE TABLE IF NOT EXISTS wallbox_summary_state (
+        wallbox_id INTEGER PRIMARY KEY,
+        week_offset REAL NOT NULL DEFAULT 0,
+        month_offset REAL NOT NULL DEFAULT 0,
+        year_offset REAL NOT NULL DEFAULT 0,
+        previous_year_total REAL NOT NULL DEFAULT 0,
+        last_rollover_date TEXT NOT NULL DEFAULT '',
+        week_key TEXT NOT NULL DEFAULT '',
+        month_key TEXT NOT NULL DEFAULT '',
+        year_key TEXT NOT NULL DEFAULT '',
+        FOREIGN KEY (wallbox_id) REFERENCES wallboxes(id) ON DELETE CASCADE
+      )`
+    );
+    db.run(
+      `CREATE TABLE IF NOT EXISTS wallbox_daily_consumption (
+        wallbox_id INTEGER NOT NULL,
+        day_key TEXT NOT NULL,
+        consumption_kwh REAL NOT NULL DEFAULT 0,
+        completed INTEGER NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (wallbox_id, day_key),
+        FOREIGN KEY (wallbox_id) REFERENCES wallboxes(id) ON DELETE CASCADE
+      )`
+    );
+    db.run(
+      `CREATE TABLE IF NOT EXISTS wallbox_hourly_consumption (
+        wallbox_id INTEGER NOT NULL,
+        day_key TEXT NOT NULL,
+        hour INTEGER NOT NULL,
+        consumption_kwh REAL NOT NULL DEFAULT 0,
+        PRIMARY KEY (wallbox_id, day_key, hour),
+        FOREIGN KEY (wallbox_id) REFERENCES wallboxes(id) ON DELETE CASCADE
+      )`
+    );
+    db.run('CREATE INDEX IF NOT EXISTS idx_wallbox_daily_day ON wallbox_daily_consumption (day_key, completed)');
 
     seedUser(db);
     seedMqttConfig(db);
@@ -315,6 +404,7 @@ function openDatabase() {
     seedOperatingState(db);
     seedPoolConfig(db);
     migratePoolConfig(db);
+    migrateWallboxes(db);
   });
 
   return db;
@@ -359,6 +449,16 @@ function migratePrognosisConfig(db) {
     }
     if (!existing.has('behavior_active')) {
       db.run('ALTER TABLE prognosis_config ADD COLUMN behavior_active INTEGER NOT NULL DEFAULT 0');
+    }
+    if (!existing.has('wallbox_learning_version')) {
+      db.run(
+        'ALTER TABLE prognosis_config ADD COLUMN wallbox_learning_version INTEGER NOT NULL DEFAULT 0',
+        () => db.run('DELETE FROM prognosis_hourly_consumption', () =>
+          db.run('DELETE FROM prognosis_daily_consumption', () =>
+            db.run('UPDATE prognosis_config SET wallbox_learning_version = 1 WHERE id = 1')
+          )
+        )
+      );
     }
   });
 }
@@ -657,6 +757,7 @@ function migrateGridControlConfig(db) {
       { name: 'grid_frequency_l3_topic', sql: "ALTER TABLE grid_control_config ADD COLUMN grid_frequency_l3_topic TEXT NOT NULL DEFAULT ''" },
       { name: 'grid_detection_seconds', sql: 'ALTER TABLE grid_control_config ADD COLUMN grid_detection_seconds INTEGER NOT NULL DEFAULT 30' },
       { name: 'load_enabled', sql: 'ALTER TABLE grid_control_config ADD COLUMN load_enabled INTEGER NOT NULL DEFAULT 0' },
+      { name: 'load_off_delay_seconds', sql: 'ALTER TABLE grid_control_config ADD COLUMN load_off_delay_seconds INTEGER NOT NULL DEFAULT 30' },
       { name: 'load_on_l1', sql: 'ALTER TABLE grid_control_config ADD COLUMN load_on_l1 REAL' },
       { name: 'load_on_l2', sql: 'ALTER TABLE grid_control_config ADD COLUMN load_on_l2 REAL' },
       { name: 'load_on_l3', sql: 'ALTER TABLE grid_control_config ADD COLUMN load_on_l3 REAL' },
@@ -678,6 +779,21 @@ function migrateGridControlConfig(db) {
       }
     };
     addNext(0);
+  });
+}
+
+// Wallboxen erhielten nachträglich konfigurierbare Stall-Erkennung (Zeitfenster und
+// Leerlauf-Leistungsschwelle für den Ladestart-Neustart).
+function migrateWallboxes(db) {
+  db.all('PRAGMA table_info(wallboxes)', (err, rows) => {
+    if (err || !Array.isArray(rows) || rows.length === 0) return;
+    const existing = new Set(rows.map((r) => r.name));
+    if (!existing.has('stall_timeout_seconds')) {
+      db.run('ALTER TABLE wallboxes ADD COLUMN stall_timeout_seconds INTEGER NOT NULL DEFAULT 120');
+    }
+    if (!existing.has('stall_power_w')) {
+      db.run('ALTER TABLE wallboxes ADD COLUMN stall_power_w REAL NOT NULL DEFAULT 200');
+    }
   });
 }
 

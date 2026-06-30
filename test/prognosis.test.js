@@ -49,6 +49,7 @@ test('Verbrauchsprofil wird auf genau einen Tag normiert', () => {
 test('Batterieladung wird entfernt und Entladung dem Hausverbrauch zugerechnet', () => {
   assert.equal(adjustedConsumptionDelta(0.1, 100, 60 * 60 * 1000), 0);
   assert.equal(adjustedConsumptionDelta(0, -100, 60 * 60 * 1000), 0.1);
+  assert.equal(adjustedConsumptionDelta(1, 0, 60 * 60 * 1000, 500), 0.5);
 });
 
 test('bereinigte Verbrauchssamples werden stündlich und täglich persistiert', async () => {
@@ -73,6 +74,33 @@ test('bereinigte Verbrauchssamples werden stündlich und täglich persistiert', 
   const row = await dbGet(db, 'SELECT consumption_kwh, raw_consumption_kwh FROM prognosis_daily_consumption');
   assert.equal(row.raw_consumption_kwh, 0.1);
   assert.equal(row.consumption_kwh, 0.1);
+  await new Promise((resolve) => db.close(resolve));
+});
+
+test('verspäteter Tageszähler-Reset übernimmt den Vortag nicht in den neuen Lerntag', async () => {
+  const db = new sqlite3.Database(':memory:');
+  await dbRun(db, `CREATE TABLE mqtt_config (
+    id INTEGER PRIMARY KEY, host TEXT, port INTEGER, username TEXT, password TEXT,
+    latitude REAL, longitude REAL, timezone TEXT, dst_enabled INTEGER,
+    outdoor_temperature_topic TEXT, clock_time_topic TEXT, clock_date_topic TEXT
+  )`);
+  await dbRun(db, "INSERT INTO mqtt_config VALUES (1, '', 1883, '', '', NULL, NULL, 'Europe/Berlin', 1, '', '', '')");
+  await dbRun(db, `CREATE TABLE prognosis_daily_consumption (
+    day_key TEXT PRIMARY KEY, consumption_kwh REAL, raw_consumption_kwh REAL, max_temperature REAL,
+    completed INTEGER, updated_at INTEGER
+  )`);
+  await dbRun(db, `CREATE TABLE prognosis_hourly_consumption (
+    day_key TEXT, hour INTEGER, consumption_kwh REAL, PRIMARY KEY(day_key, hour)
+  )`);
+
+  const midnight = new Date('2026-06-29T22:00:00Z'); // 00:00 Europe/Berlin
+  await recordConsumptionSample(db, 30.7, new Map(), { batteryPower: 0 }, midnight);
+  await recordConsumptionSample(db, 0.1, new Map(), { batteryPower: 0 }, new Date(midnight.getTime() + 60000));
+  await recordConsumptionSample(db, 0.2, new Map(), { batteryPower: 0 }, new Date(midnight.getTime() + 120000));
+
+  const row = await dbGet(db, 'SELECT consumption_kwh, raw_consumption_kwh FROM prognosis_daily_consumption');
+  assert.ok(Math.abs(row.consumption_kwh - 0.1) < 1e-12);
+  assert.equal(row.raw_consumption_kwh, 0.2);
   await new Promise((resolve) => db.close(resolve));
 });
 

@@ -118,9 +118,36 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
     Automatik-Modus schalten sie nur ein, wenn das Betriebslevel ihre Priorität
     freigibt, und schalten bei Levelabfall sofort ab. Hand An/Aus übersteuert das
     Level bewusst.
+- 🚗 **Wallbox** (optionales Modul, aktivierbar unter `/module`):
+  - Mehrere Wallboxen einzeln anlegbar (wie die PV-Anlagen). Je Box ein
+    Pflicht-**Steuer-Topic** sowie optional Status, Leistung (W/kW), fortlaufender
+    Zähler (Wh/kWh), Soll-Leistung, „Fahrzeug angesteckt" und Fahrzeug-SoC (%);
+    zusätzlich Maximalleistung und Fahrzeug-Akkugröße.
+  - **Verbrauchszählung** je Box für Tag/Woche/Monat/Jahr inkl. Vorjahr; ohne
+    Zähler-Topic aus der Leistung abgeleitet. Fehlt das SoC-Topic, wird der
+    Ladezustand aus der seit Einstecken geladenen Energie geschätzt.
+  - **Drei Lademodi** (Privat / Beruflich / Immer voll) mit je eigener Priorität:
+    Privat lädt bis zum Mindest-Ladestand, darüber nur PV-Überschuss; Beruflich
+    stellt das Auto an gewählten Wochentagen vorausschauend voll bereit; Immer
+    voll lädt durchgehend. Mit Soll-Leistungs-Topic wird gegen den Überschuss
+    fein moduliert. Optionaler **Modus-Sync** über ein eigenes Topic.
+  - Als **Verbraucher am Betriebslevel-Handler** angemeldet (Priorität des aktiven
+    Modus): Einschalten nur nach Freigabe, Zwangsabschaltung bei Levelabfall.
+  - **Sonderfälle**: hängt der Ladestart trotz Befehl unter der Leerlaufschwelle, wird
+    nach einer konfigurierbaren Vorgabezeit kurz aus-/eingeschaltet; manuelles Einschalten
+    am Broker löst eine einmalige Volladung aus; manuelles Ausschalten hält bis zum
+    Folgetag (PV-Leistung erstmals über Wallbox-Leistung) an; das unzuverlässige
+    „angesteckt"-Signal sperrt das Laden nicht.
+  - Die Prognose führt je Wallbox getrennte Tages- und Stundenstatistiken nach
+    Wochentag. Gemessene Ladeenergie wird aus dem allgemeinen Hausverbrauch
+    herausgerechnet und anschließend als eigener Wallboxbedarf eingeplant. Der
+    Vorausplan nutzt dabei denselben aktiven Lademodus wie die Automatik sowie
+    Fahrzeug-SoC, Akkugröße, Mindestladung und Arbeitstage. Pflichtladungen werden
+    fest berücksichtigt; mehrere flexible Wallboxen teilen sich den erwarteten
+    PV-Überschuss nach Priorität, statt ihn mehrfach zu verplanen.
 - ⚖️ **Betriebslevel / Lastmanagement** — ein zentraler Handler setzt registrierte
   Verbraucher nach **Priorität** (= Betriebslevel, ab dem sie laufen dürfen) gegen das
-  prognosegeführte Betriebslevel durch. Erste Verbraucher: Filter-/Solarpumpe.
+  prognosegeführte Betriebslevel durch. Erste Verbraucher: Filter-/Solarpumpe, Wallbox.
   Anleitung für neue Verbraucher: siehe [LEVEL_HANDLING.md](LEVEL_HANDLING.md).
 - 📤 **Output** — beliebige berechnete Werte an ioBroker-Ziel-Topics zurückgeben;
   geschlossene Regelschleife mit aktivem Readback alle 30 Sekunden. Fehlende oder
@@ -220,6 +247,8 @@ src/
   prognosis/       Verbrauchslernen, Batterie-Simulation + Modellkonfiguration
   pool/            Pool-Config + Pump-Automation (solar/filter)
   grid-control/    Schaltlogik + verifizierte Regelschleife + Audit-Log (optional)
+  wallbox/         Wallbox-CRUD (boxes.js), Zähler/SoC-Aggregation, Lademodus-
+                   Planer (planner.js), Steuerschleife (automation.js) (optional)
   operating-state.js  Globaler Zustand (Betriebslevel, Notstrom, Autark-Latch)
   operating-level/    Betriebslevel-Handler / Lastmanagement (handler.js)
   output/          Wert-Katalog (PV, Prognose, Strom, Batterie, Pool, Sonne),
@@ -242,7 +271,8 @@ SQLite unter `data/app.db` (gitignored). Wichtige Tabellen:
 `batterie_config`, `battery_daily_state`, `prognosis_config`, `prognosis_daily_consumption`,
 `prognosis_hourly_consumption`,
 `modules`, `pool_config`, `grid_control_config`, `operating_state`,
-`grid_control_log`, `outputs`, `dashboard_groups`, `dashboard_widgets`.
+`grid_control_log`, `wallboxes`/`wallbox_counter_state`/`wallbox_summary_state`,
+`outputs`, `dashboard_groups`, `dashboard_widgets`.
 
 Passwörter werden als scrypt-Hash gespeichert.
 

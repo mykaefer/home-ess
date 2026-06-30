@@ -14,6 +14,7 @@ const {
   buildBatterieStateDefinitions,
 } = require('../batterie/config');
 const { loadGridControlConfig, buildGridControlStateDefinitions } = require('../grid-control/config');
+const { listWallboxes, buildWallboxStateDefinitions } = require('../wallbox/boxes');
 const { isEnabled } = require('../modules');
 const { AUTARK_DAYS_STATE_ID, AUTARK_DAYS_PREVIOUS_YEAR_STATE_ID } = require('../operating-state');
 
@@ -46,6 +47,9 @@ async function loadAllStateDefinitions(db) {
   if (isEnabled('grid-control')) {
     const gridControlConfig = await new Promise((resolve) => loadGridControlConfig(db, resolve));
     definitions.push(...buildGridControlStateDefinitions(gridControlConfig));
+  }
+  if (isEnabled('wallbox')) {
+    definitions.push(...buildWallboxStateDefinitions(await listWallboxes(db)));
   }
   return definitions;
 }

@@ -31,6 +31,7 @@ const state = {
   gridPublished: null, feedInPublished: null,
   gridConfirmed: null, feedInConfirmed: null,
   gridZeroSince: 0,
+  loadOffSince: 0,
   gridFrequencies: [null, null, null],
   inverterLoads: [null, null, null],
 };
@@ -144,6 +145,70 @@ function updateLoadSwitch(loads, onThresholds, offThresholds, previous) {
   return !allBelow;
 }
 
+// Ausschaltverzögerung für die Wechselrichterlast. Die Verzögerung beginnt erst,
+// wenn alle Phasen unter ihrer Rückschwelle liegen. Schon eine Phase oberhalb
+// ihrer Rückschwelle verwirft den laufenden Timer; dadurch führen kurze
+// Lastabfälle nicht zu einem Aus-/Einschaltzyklus.
+function updateLoadSwitchDelayed(loads, onThresholds, offThresholds, previous, offSince, delayMs, now) {
+  const overload = loads.some((load, index) => load != null && onThresholds[index] != null && load > onThresholds[index]);
+  if (overload) return { active: true, offSince: 0 };
+  if (!previous) return { active: false, offSince: 0 };
+
+  const allBelow = loads.every((load, index) => load != null && offThresholds[index] != null && load < offThresholds[index]);
+  if (!allBelow) return { active: true, offSince: 0 };
+  if (delayMs <= 0) return { active: false, offSince: 0 };
+
+  const startedAt = offSince || now;
+  if (now - startedAt >= delayMs) return { active: false, offSince: 0 };
+  return { active: true, offSince: startedAt };
+}
+
+let runtimeDb = null;
+let runtimeLoaded = false;
+let runtimeInitialized = false;
+
+function loadRuntimeState(db) {
+  if (runtimeDb === db && runtimeLoaded) return Promise.resolve();
+  if (runtimeDb !== db) {
+    runtimeDb = db;
+    runtimeLoaded = false;
+    runtimeInitialized = false;
+    state.load = false;
+    state.loadOffSince = 0;
+  }
+  return new Promise((resolve) => {
+    db.get('SELECT load_active, load_off_since, initialized FROM grid_control_runtime WHERE id = 1', (err, row) => {
+      if (!err && row) {
+        runtimeInitialized = !!row.initialized;
+        state.load = runtimeInitialized && !!row.load_active;
+        state.loadOffSince = runtimeInitialized ? Number(row.load_off_since) || 0 : 0;
+      }
+      // Alte bzw. bewusst minimale Test-Schemata besitzen die Runtime-Tabelle
+      // nicht. Die Regelung funktioniert dort weiterhin, nur ohne Persistenz.
+      runtimeLoaded = true;
+      resolve();
+    });
+  });
+}
+
+function saveRuntimeState(db) {
+  return new Promise((resolve) => {
+    db.run(
+      `INSERT INTO grid_control_runtime (id, load_active, load_off_since, initialized)
+       VALUES (1, ?, ?, 1)
+       ON CONFLICT(id) DO UPDATE SET
+         load_active=excluded.load_active,
+         load_off_since=excluded.load_off_since,
+         initialized=1`,
+      [state.load ? 1 : 0, state.loadOffSince || 0],
+      (err) => {
+        if (!err) runtimeInitialized = true;
+        resolve();
+      }
+    );
+  });
+}
+
 function hasPhaseFailure(frequencies) {
   return frequencies.some((frequency) => frequency === 0);
 }
@@ -250,6 +315,7 @@ async function tick(db) {
   const [cfg, batteryCfg] = await Promise.all([
     load(loadGridControlConfig, db), load(loadBatterieConfig, db),
   ]);
+  await loadRuntimeState(db);
   const cache = mqttClient.getCache();
   const now = Date.now();
   const connected = mqttClient.getStatus().connected;
@@ -285,14 +351,35 @@ async function tick(db) {
   state.voltageLow = voltageWindows.low;
   state.voltageHigh = voltageWindows.high;
   state.temperature = !!(cfg.temperatureEnabled && warningValue != null && comparable(warningValue) === comparable(cfg.temperatureWarningValue));
-  state.load = cfg.loadEnabled
-    ? updateLoadSwitch(
+  const previousLoad = state.load;
+  const previousLoadOffSince = state.loadOffSince;
+  const brokerGridValue = cache.get(STATE_IDS.gridCommand)?.value;
+  if (cfg.loadEnabled) {
+    // Bei einer noch nicht initialisierten Runtime (erstes Upgrade) übernimmt
+    // eine aktive Broker-Rückmeldung den Schaltzustand. Damit startet bei einem
+    // Neustart nicht versehentlich sofort ein Ausschaltbefehl.
+    if (!runtimeInitialized && comparable(brokerGridValue) === '1') {
+      state.load = true;
+    }
+    const delayedLoad = updateLoadSwitchDelayed(
       loads,
       [parseNumber(cfg.loadOnL1), parseNumber(cfg.loadOnL2), parseNumber(cfg.loadOnL3)],
       [parseNumber(cfg.loadOffL1), parseNumber(cfg.loadOffL2), parseNumber(cfg.loadOffL3)],
-      state.load
-    )
-    : false;
+      state.load,
+      state.loadOffSince,
+      Number(cfg.loadOffDelaySeconds) * 1000,
+      now
+    );
+    state.load = delayedLoad.active;
+    state.loadOffSince = delayedLoad.offSince;
+  } else {
+    state.load = false;
+    state.loadOffSince = 0;
+  }
+  const canInitializeRuntime = runtimeInitialized || brokerGridValue != null || state.load;
+  if (canInitializeRuntime && (!runtimeInitialized || state.load !== previousLoad || state.loadOffSince !== previousLoadOffSince)) {
+    await saveRuntimeState(db);
+  }
 
   if (!cfg.socEnabled || socWindows.available) {
     await operatingState.updateAutarkForDay(db, currentDayKey(cache), state.socLow);
@@ -351,7 +438,13 @@ async function tick(db) {
   // Geschlossene Regelschleife: Soll-Werte gegen die tatsächliche Broker-Rückmeldung
   // abgleichen und bei Abweichung erneut schreiben (statt fire-and-forget).
   const ctx = { cache, connected, cfg, now, hasMeasurement };
-  state.gridConfirmed = reconcileCommand('grid', cfg.gridCommandTopic, STATE_IDS.gridCommand, state.gridActual, { ...ctx, label: 'Netzschaltung' });
+  // Beim allerersten Start nach dem Upgrade ist noch kein persistierter
+  // Lastzustand vorhanden. Bis die Broker-Rückmeldung eintrifft (oder eine
+  // Überlast einschaltet), senden wir daher keinen vorschnellen Aus-Befehl.
+  const gridHasMeasurement = hasMeasurement && !(
+    cfg.loadEnabled && !runtimeInitialized && brokerGridValue == null && !state.gridActual
+  );
+  state.gridConfirmed = reconcileCommand('grid', cfg.gridCommandTopic, STATE_IDS.gridCommand, state.gridActual, { ...ctx, hasMeasurement: gridHasMeasurement, label: 'Netzschaltung' });
   state.feedInConfirmed = reconcileCommand('feedIn', cfg.feedInCommandTopic, STATE_IDS.feedInCommand, state.feedInActual, { ...ctx, label: 'Überschusseinspeisung' });
   // Für die hasMeasurement-Heuristik: sobald ein Netz-Topic konfiguriert ist und
   // wir hier ankommen, gilt die Steuerung als aktiv.
@@ -417,4 +510,4 @@ function init(db) {
   runNow(db).catch(() => {});
 }
 
-module.exports = { init, runNow, getState, updateExtremeWindows, updateLoadSwitch, hasPhaseFailure, allPhasesPresent, currentDayKey };
+module.exports = { init, runNow, getState, updateExtremeWindows, updateLoadSwitch, updateLoadSwitchDelayed, hasPhaseFailure, allPhasesPresent, currentDayKey };

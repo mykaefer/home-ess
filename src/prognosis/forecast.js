@@ -9,6 +9,8 @@ const operatingState = require('../operating-state');
 const { loadMqttConfig } = require('../mqtt/config');
 const { localCalendar } = require('../local-time');
 const { solarGeometryAt } = require('../photovoltaik/aggregation');
+const { buildWallboxModel, planWallboxSchedule, wallboxForecastForDay } = require('./wallbox-model');
+const { isEnabled } = require('../modules');
 
 // BDEW-nahe, geglättete Haushaltsform als Kaltstart. Sobald genügend echte
 // Stundenwerte vorliegen, wird sie stufenlos durch das persönliche Profil ersetzt.
@@ -103,7 +105,13 @@ function projectedConsumptionForHours(model, forecast, hours) {
     const isToday = key === dateKey(model.local.date);
     const base = Math.max(0, target * profile[parts.time.hours] * (isToday ? model.intradayFactor : 1));
     const cooling = buildCoolingForecastForDay(forecast, key, model.coolingModel).hourly[parts.time.hours] || 0;
-    total += (base + cooling) * duration;
+    let wallbox = wallboxForecastForDay(model.wallboxModel, key, isToday ? 0 : 1).hourly[parts.time.hours] || 0;
+    // Der aktuelle Stunden-Slot enthält bereits nur die verbleibende Energie.
+    // Für die Viertelstundenintegration wieder in eine Stundenrate umrechnen.
+    if (isToday && parts.time.hours === model.local.time.hours) {
+      wallbox /= Math.max(0.001, 1 - model.local.time.minutes / 60);
+    }
+    total += (base + cooling + wallbox) * duration;
   }
   return total;
 }
@@ -170,13 +178,14 @@ function baseConsumptionForRow(row, coolingModel) {
   return coolingModel.baselinesByWeekday[weekdayForDateKey(row.day_key)] || value;
 }
 
-function adjustedConsumptionDelta(rawDelta, batteryPower, durationMs) {
+function adjustedConsumptionDelta(rawDelta, batteryPower, durationMs, wallboxPower = 0) {
   const raw = Math.max(0, num(rawDelta) || 0);
   const power = num(batteryPower) || 0;
   const duration = Math.max(0, Number(durationMs) || 0);
   // Batterie-Leistung: positiv = laden, negativ = entladen.
   // Gesamtverbrauch enthält Laden und unterschlägt Entladen → signiert abziehen.
-  return Math.max(0, raw - power * duration / 3600000000);
+  const wallbox = Math.max(0, num(wallboxPower) || 0);
+  return Math.max(0, raw - (power + wallbox) * duration / 3600000000);
 }
 
 async function recordConsumptionSample(db, totalKwh, cache, options = {}, now = new Date()) {
@@ -193,7 +202,12 @@ async function recordConsumptionSample(db, totalKwh, cache, options = {}, now = 
        FROM prognosis_daily_consumption WHERE day_key = ?`,
     [key]
   );
-  let adjustedTotal = total;
+  // Ein neuer lokaler Tag beginnt im Lernmodell immer bei 0. Das erste gelesene
+  // Tagestotal ist ausschließlich die Differenz-Basis. Externe Tageszähler
+  // springen häufig erst einige Sekunden/Minuten nach unserer lokalen
+  // Mitternacht zurück; würde ihr alter Stand hier als heutiger Verbrauch
+  // übernommen, enthielte der neue Tag den kompletten Vortag.
+  let adjustedTotal = 0;
   const measuredTemperature = num(options.outdoorTemperature);
   let maxTemperature = measuredTemperature;
 
@@ -212,8 +226,11 @@ async function recordConsumptionSample(db, totalKwh, cache, options = {}, now = 
     const previousAdjusted = num(previous.consumption_kwh) || 0;
     const batteryPower = num(options.batteryPower) || 0;
     const validInterval = rawDelta >= 0 && rawDelta < 2 && age > 0 && age <= 5 * 60 * 1000;
+    // Ein negativer Delta ist der verspätete Reset eines Quellzählers. Dabei
+    // wird raw_consumption_kwh unten auf den neuen Stand basiert, der bereits
+    // integrierte heutige Verbrauch bleibt jedoch unverändert.
     const adjustedDelta = validInterval
-      ? adjustedConsumptionDelta(rawDelta, batteryPower, age)
+      ? adjustedConsumptionDelta(rawDelta, batteryPower, age, options.wallboxPower)
       : Math.max(0, rawDelta);
     adjustedTotal = previousAdjusted + adjustedDelta;
     if (validInterval && adjustedDelta > 0 && adjustedDelta < 2) {
@@ -259,6 +276,9 @@ async function buildConsumptionModel(db, strom, config, cache, forecast = null) 
     time: { hours: calendar.hours, minutes: calendar.minutes, seconds: calendar.seconds },
   };
   const key = dateKey(local.date);
+  const wallboxModel = isEnabled('wallbox')
+    ? await buildWallboxModel(db, key, config.historyDays, local.time.hours, local.time.minutes, cache)
+    : { boxes: [], todayRemainingByHour: Array(24).fill(0), yearKwh: 0, previousYearKwh: 0 };
   const previousHour = shiftLocalParts(local, -60);
   const recentHourRows = await dbAll(
     db,
@@ -287,10 +307,12 @@ async function buildConsumptionModel(db, strom, config, cache, forecast = null) 
   );
   const year = num(strom.breakdown.year.summe);
   const previousYear = num(strom.breakdown.previousYear.summe);
+  const houseYear = year == null ? null : Math.max(0, year - wallboxModel.yearKwh);
+  const housePreviousYear = previousYear == null ? null : Math.max(0, previousYear - wallboxModel.previousYearKwh);
   const completedDays = elapsedDayCount(local.date);
-  const annualAverage = completedDays > 0 && year != null
-    ? Math.max(0, year - rawToday) / completedDays
-    : (previousYear != null && previousYear > 0 ? previousYear / 365 : null);
+  const annualAverage = completedDays > 0 && houseYear != null
+    ? Math.max(0, houseYear - today) / completedDays
+    : (housePreviousYear != null && housePreviousYear > 0 ? housePreviousYear / 365 : null);
 
   const dailyRows = await dbAll(db,
     `SELECT day_key, consumption_kwh, max_temperature FROM prognosis_daily_consumption
@@ -419,6 +441,11 @@ async function buildConsumptionModel(db, strom, config, cache, forecast = null) 
     return dailyTarget * intradayFactor * share;
   });
 
+  planWallboxSchedule(wallboxModel, buildWallboxPlanningSlots({
+    forecast, local, remainingByHour, profilesByWeekday, dailyTargetsByWeekday,
+    profile: currentProfile, dailyTarget, coolingModel,
+  }));
+
   let recentHourKwh = null;
   if (currentHourEnergy != null && previousHourEnergy != null) {
     recentHourKwh = currentHourEnergy + previousHourEnergy * (1 - currentHourFraction);
@@ -432,7 +459,7 @@ async function buildConsumptionModel(db, strom, config, cache, forecast = null) 
   const hoursToSunrise = hoursUntilNextSunrise(mqttConfig, local);
   const consumptionToSunrise = projectedConsumptionForHours({
     local, dailyTarget, profile: currentProfile, profilesByWeekday, dailyTargetsByWeekday,
-    intradayFactor, coolingModel,
+    intradayFactor, coolingModel, wallboxModel,
   }, forecast, hoursToSunrise);
 
   return {
@@ -442,6 +469,7 @@ async function buildConsumptionModel(db, strom, config, cache, forecast = null) 
     intradayFactor, profile: currentProfile, profilesByWeekday, dailyTargetsByWeekday,
     weekdayProfileDays: weekdayProfileDays.map((days) => days.size), weekdayDailyCounts,
     currentWeekday, coolingModel, coolingElapsedToday,
+    wallboxModel,
     remainingByHour, recentHourKwh, hoursToSunrise, consumptionToSunrise,
     historyDays: dailyRows.length,
   };
@@ -489,6 +517,58 @@ function buildCoolingForecastForDay(forecast, dayKeyValue, coolingModel = {}) {
   };
 }
 
+function buildWallboxPlanningSlots({
+  forecast, local, remainingByHour, profilesByWeekday,
+  dailyTargetsByWeekday, profile, dailyTarget, coolingModel,
+}) {
+  if (!forecast || !Array.isArray(forecast.days)) return [];
+  const currentHour = Number(local.time.hours) || 0;
+  const currentMinute = Number(local.time.minutes) || 0;
+  const nowDecimal = currentHour + currentMinute / 60;
+  const nowMs = Date.now();
+  const slots = [];
+
+  forecast.days.slice(0, 4).forEach((day, dayIndex) => {
+    const wd = weekdayForDateKey(day.dateKey);
+    const dayProfile = profilesByWeekday[wd] || profile;
+    const dayTarget = dailyTargetsByWeekday[wd] ?? dailyTarget;
+    const cooling = buildCoolingForecastForDay(forecast, day.dateKey, coolingModel).hourly;
+    const rawPv = Array.from({ length: 24 }, (_, hour) => {
+      if (dayIndex === 0 && hour < currentHour) return 0;
+      const duration = dayIndex === 0 && hour === currentHour ? 1 - currentMinute / 60 : 1;
+      return forecastPvForHour(forecast, day.dateKey, hour) * duration;
+    });
+    const rawTotal = rawPv.reduce((sum, value) => sum + value, 0);
+    const targetTotal = dayIndex === 0
+      ? Math.max(0, num(forecast.todayRemainingKwh) || 0)
+      : Math.max(0, num(day.totalKwh) || 0);
+    const pvScale = rawTotal > 0 ? targetTotal / rawTotal : 0;
+
+    for (let hour = 0; hour < 24; hour += 1) {
+      if (dayIndex === 0 && hour < currentHour) continue;
+      const durationHours = dayIndex === 0 && hour === currentHour
+        ? Math.max(0, 1 - currentMinute / 60)
+        : 1;
+      const base = dayIndex === 0
+        ? remainingByHour[hour]
+        : Math.max(0, dayTarget * (dayProfile[hour] || 0));
+      const coolingKwh = Math.max(0, cooling[hour] || 0) * durationHours;
+      slots.push({
+        dateKey: day.dateKey,
+        dayIndex,
+        hour,
+        durationHours,
+        startMs: dayIndex === 0 && hour === currentHour
+          ? nowMs
+          : nowMs + ((dayIndex * 24 + hour) - nowDecimal) * 3600000,
+        pvKwh: rawPv[hour] * pvScale,
+        houseKwh: Math.max(0, base || 0) + coolingKwh,
+      });
+    }
+  });
+  return slots;
+}
+
 function simulateDays({ forecast, model, config, batteryConfig, batteryData }) {
   const minSoc = clamp(num(batteryData.minSoc) ?? num(batteryConfig.minSoc) ?? 20, 0, 100);
   const soc = clamp(num(batteryData.soc) ?? minSoc, 0, 100);
@@ -519,6 +599,8 @@ function simulateDays({ forecast, model, config, batteryConfig, batteryData }) {
     let loadKwh = 0;
     let pvKwh = 0;
     let coolingKwh = 0;
+    let houseLoadKwh = 0;
+    let wallboxKwh = 0;
     let reachedFull = false;
     let chargeStartSoc = null;
     let chargeStartHour = null;
@@ -530,6 +612,7 @@ function simulateDays({ forecast, model, config, batteryConfig, batteryData }) {
       ? model.dailyTargetsByWeekday[weekday]
       : model.dailyTarget;
     const coolingForecast = buildCoolingForecastForDay(forecast, pvDay.dateKey, model.coolingModel);
+    const wallboxForecast = wallboxForecastForDay(model.wallboxModel, pvDay.dateKey, dayIndex);
     const maxTemperature = coolingForecast.maxTemperature;
     const coolingHourly = coolingForecast.hourly.map((value, hour) => {
       if (dayIndex === 0 && hour < currentHour) return 0;
@@ -548,12 +631,16 @@ function simulateDays({ forecast, model, config, batteryConfig, batteryData }) {
     const pvScale = rawPvTotal > 0 ? targetPvTotal / rawPvTotal : 0;
     for (let hour = 0; hour < 24; hour += 1) {
       if (dayIndex === 0 && hour < currentHour) continue;
-      let load = dayIndex === 0 ? model.remainingByHour[hour] : dayTarget * dayProfile[hour];
-      load += coolingHourly[hour];
+      let houseLoad = dayIndex === 0 ? model.remainingByHour[hour] : dayTarget * dayProfile[hour];
+      houseLoad += coolingHourly[hour];
+      const wallboxLoad = wallboxForecast.hourly[hour] || 0;
+      let load = houseLoad + wallboxLoad;
       let pv = pvHourly[hour] * pvScale;
       load = Math.max(0, load || 0);
       pv = Math.max(0, pv || 0);
       loadKwh += load;
+      houseLoadKwh += houseLoad;
+      wallboxKwh += wallboxLoad;
       coolingKwh += coolingHourly[hour];
       pvKwh += pv;
       const direct = Math.min(load, pv);
@@ -622,6 +709,9 @@ function simulateDays({ forecast, model, config, batteryConfig, batteryData }) {
       weekday,
       consumptionProfileDays: model.weekdayProfileDays ? model.weekdayProfileDays[weekday] : 0,
       coolingKwh,
+      houseLoadKwh,
+      wallboxKwh,
+      wallboxes: wallboxForecast.perBox,
       maxTemperature,
     };
   });
@@ -676,5 +766,5 @@ async function computePrognosis(db, cache, { allowFetch = false } = {}) {
 module.exports = {
   computePrognosis, recordConsumptionSample, buildConsumptionModel,
   normalizedProfile, adjustedConsumptionDelta, buildCoolingModel, simulateDays,
-  hoursUntilNextSunrise, projectedConsumptionForHours,
+  hoursUntilNextSunrise, projectedConsumptionForHours, buildWallboxPlanningSlots,
 };

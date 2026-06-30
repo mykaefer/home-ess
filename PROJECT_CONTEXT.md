@@ -125,6 +125,10 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   in „Autarke Tage Vorjahr“ verschoben und der aktuelle Stand zurückgesetzt.
   Der Vorjahresstand hat ein separates optionales MQTT-Abgleich-Topic nach
   demselben Muster.
+  Beim Beginn eines neuen lokalen Lerntags wird der erste kumulierte
+  Verbrauchswert nur als Delta-Basis gespeichert; `consumption_kwh` startet bei
+  0. Damit kann ein extern erst nach Mitternacht zurückspringender Tageszähler
+  den Vortageswert nicht in den neuen Lerntag übertragen.
   Die Batteriesimulation sucht ab dem Folgetag den ersten Zeitslot mit
   `PV > Verbrauch` und freier Akkukapazität. Bleibt der Folgetag ohne Ladebeginn,
   wird über alle weiteren sichtbaren Open-Meteo-Tage kumuliert. Heutiger
@@ -217,6 +221,54 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
       **Betriebslevel-Handler** registriert (siehe „Betriebslevel / Lastmanagement"
       und [LEVEL_HANDLING.md](LEVEL_HANDLING.md)): Einschalten nur nach Freigabe,
       Zwangsabschaltung bei Levelabfall — im Automatik-Modus, nicht bei Hand An/Aus.
+  - **Wallbox** (`/wallbox`): verwaltet mehrere PKW-Wallboxen, einzeln anlegbar wie die
+    PV-Anlagen (`wallbox/boxes.js`, Tabellen `wallboxes`/`wallbox_counter_state`/
+    `wallbox_summary_state`). Je Box ein Pflicht-**Steuer-Topic** sowie optional Status
+    (sonst Steuer-Topic als Ist-Stand), Leistung (W/kW), fortlaufender Zähler (Wh/kWh),
+    Soll-Leistung, „Fahrzeug angesteckt" (true/false), Fahrzeug-SoC (%) und ein
+    bidirektionales **Modus-Sync-Topic**; dazu Maximalleistung und Fahrzeug-Akkugröße.
+    - *Verbrauch* je Box Tag/Woche/Monat/Jahr + Vorjahr (`wallbox/aggregation.js`,
+      `buildWallboxSnapshot` im 60-s-Job, Vorbild `stromverbrauch/aggregation.js`); ohne
+      Zähler-Topic aus der Leistung integriert. **SoC-Schätzung** aus der seit Einstecken
+      geladenen Energie ÷ Akkugröße, wenn kein SoC-Topic gesetzt ist.
+    - *Prognose-Lernen*: `wallbox_daily_consumption` und
+      `wallbox_hourly_consumption` führen je Box getrennte Wochentags- und
+      Stundenprofile. Die aktuelle Wallboxleistung wird vor dem Lernen aus dem
+      Hausverbrauch entfernt; `prognosis/wallbox-model.js` fügt den erwarteten
+      Ladebedarf je Box in der Batteriesimulation separat wieder hinzu. Der gemeinsame
+      Vorausplan wertet aktiven Modus, Verbraucherpriorität, Live-/geschätzten Fahrzeug-SoC,
+      Akkugröße, Mindestladung und Arbeitstage aus. Pflichtladungen (Mindest-SoC,
+      Beruflich-Garantie, Immer voll) sind feste Lasten; flexible Ladungen werden
+      nacheinander auf den verbleibenden PV-Überschuss verteilt. Die gelernte Historie
+      bleibt Fallback für noch unbekannte künftige Ladevorgänge.
+    - *Drei Lademodi mit je eigener Priorität* (`wallbox/planner.js`): **Privat** lädt bis
+      zum Mindest-Ladestand, darüber nur Überschuss (verfügbarer Überschuss =
+      Netzeinspeisung + Batterie-Ladeleistung, solange Haus-SoC > Mindest-SoC);
+      **Beruflich** stellt das Auto an gewählten Wochentagen vorausschauend voll bereit
+      (tagsüber Überschuss, ab 18 Uhr Garantieladung), freie Tage → Privatregel;
+      **Immer voll** lädt durchgehend. Mit Soll-Leistungs-Topic Feinmodulation gegen den
+      Überschuss, sonst An/Aus an einer Schwelle.
+    - Steuerschleife `wallbox/automation.js` (30-s-Tick + serielle Kette, Init aus
+      `routes/wallbox.js`). Jede Box ist **Verbraucher am Betriebslevel-Handler** mit der
+      Priorität des aktiven Modus (Einschalten nur nach Freigabe, Zwangsabschaltung,
+      Mindesthaltedauer). Die vorausschauende Bewertung nutzt die System-Prognose
+      (`computePrognosis`); die Mehrtagessicht wirkt zusätzlich über das prognosegeführte
+      Betriebslevel auf die Modus-Priorität.
+    - *Sonderfälle* in `decideWallboxAction` (planner.js, testbar): **Ladestart-Neustart**
+      (hängt die Ist-Leistung trotz Befehl nach `stall_timeout_seconds` unter
+      `stall_power_w`, 1 Minute aus/ein, gedeckelte Versuche — **nur bei `plugged === true`**,
+      damit ohne eingestecktes Auto kein Aus/Ein-Takten entsteht); **manuell EIN am Broker** →
+      einmalige Volladung (sofern Priorität/Level es zulassen); **manuell AUS am Broker** →
+      aus bis Folgetag mit PV-Leistung > Wallbox-Maximalleistung; das **„angesteckt"-Signal
+      sperrt nicht** (Mobilfunk-Signal, möglich falsch-negativ — bei Ladewunsch wird trotzdem
+      eingeschaltet). Manuelle Schaltungen werden über den Broker-Status-Readback gegen den
+      zuletzt gesendeten Befehl erkannt (Settle-Fenster gegen Eigen-Echo).
+    - *Nächster Ladebeginn*: wird gerade nicht geladen, übernimmt die Automatik den
+      Ladebeginn aus dem gemeinsamen Mehr-Wallbox-Vorausplan. `predictNextChargeStart`
+      bleibt Fallback und behandelt insbesondere die manuelle Sperre. Die Steuerschleife legt
+      den absoluten Zeitpunkt je Box ab (`getNextCharge`); der Wertekatalog rechnet daraus
+      zur Lesezeit die **Restzeit in Sekunden** (`wallbox.<id>.naechsterLadebeginnSekunden`)
+      sowie die **Uhrzeit** (`wallbox.<id>.naechsterLadebeginn`); die Wallbox-Seite zeigt es an.
 - **Wert-Katalog** (`output/internal-values.js`): berechnete und gemessene Werte
   für Outputs und Dashboard-Widgets. Enthält PV, Stromverbrauch, Sonnenintensität,
   **PV-Prognose** (erwarteter Tagesertrag heute/morgen/+2/+3 sowie heute bisher /
@@ -310,8 +362,15 @@ src/
     automation.js         Schaltlogik + geschlossene Regelschleife (Verifikation
                           gegen Broker-Readback), Notstrom, Audit-Logging
     log.js                Audit-Log (`grid_control_log`): append/read, Pagination
+  wallbox/
+    boxes.js              CRUD + Validierung + buildWallboxStateDefinitions (Vorbild plants.js)
+    aggregation.js        Zähler/Summen Tag/Woche/Monat/Jahr+Vorjahr, Power-Integration,
+                          SoC-Schätzung, readWallboxValues (read-only), buildWallboxSnapshot
+    planner.js            Lademodus-Logik (Privat/Beruflich/Immer voll) — reine Funktion
+    automation.js         Steuerschleife: Tick, Level-Handler-Registrierung, Modus-Sync,
+                          Überschussberechnung, Schalten via mqttClient.publish
   output/
-    internal-values.js    Katalog (PV, Strom, Batterie, Pool, Sonne)
+    internal-values.js    Katalog (PV, Strom, Batterie, Pool, Wallbox, Sonne)
     outputs.js            Output-CRUD
     engine.js             Publish-Engine (diff, debounced)
   dashboard/
@@ -330,6 +389,8 @@ src/
                           + POST /pool/pump/:which/:mode
     grid-control.js       GET /grid-control + POST /grid-control/config
                           + GET /grid-control/status + GET /grid-control/log
+    wallbox.js            GET /wallbox + Box-CRUD + POST /wallbox/box/:id/mode/:mode
+                          + GET /wallbox/data
   views/
     components.js         escapeHtml, statusText
     value-catalog.js      Zentrale Wertekatalog-Routine (Liste + Client-Script)
@@ -345,6 +406,7 @@ src/
     pool.js               Pool — KPI-Kacheln + Pumpen-Buttons + Config
     grid-control.js       Grid-Control — Zustände, Config, Bestätigungs-Badges,
                           Protokoll-Panel (live Seite 1, paginiert)
+    wallbox.js            Wallbox — Boxenliste (KPI je Box), Modus-Buttons, Config-Dialog
 public/styles.css         Einziges statisches Asset
 data/app.db               SQLite (gitignored)
 MQTT.md                   Referenz: ioBroker-MQTT-Regeln
@@ -398,6 +460,19 @@ MQTT.md                   Referenz: ioBroker-MQTT-Regeln
   autark_days_previous_year_count/year/topic)`
 - `grid_control_log(id, ts, category 'info'|'action'|'critical', message,
   values_text)` — Audit-Log, automatisch auf 2000 Einträge beschnitten.
+- `wallboxes(id, name, max_power_w, battery_capacity_kwh, command_topic,
+  status_topic, power_topic, power_unit 'W'|'kW', counter_topic, counter_unit 'Wh'|'kWh',
+  setpoint_topic, plugged_topic, soc_topic, mode_sync_topic, mode 1|2|3,
+  priority_private/business/full 1–5, min_charge_percent, business_days CSV Mo..So,
+  stall_timeout_seconds, stall_power_w)` — je Wallbox eine Zeile (optionales Modul);
+  die beiden Stall-Spalten steuern den Ladestart-Neustart.
+- `wallbox_counter_state(wallbox_id, last_raw_value, day_total, last_day_key,
+  plugged_energy_start, last_power_ts)` — Zähler-/Power-Integrationsstand + SoC-Schätzbasis.
+- `wallbox_summary_state(wallbox_id, week/month/year_offset, previous_year_total,
+  last_rollover_date, week/month/year_key)` — historische Summen inkl. Monat + Jahreswechsel.
+- `wallbox_daily_consumption(wallbox_id, day_key, consumption_kwh, completed, updated_at)`
+- `wallbox_hourly_consumption(wallbox_id, day_key, hour, consumption_kwh)` —
+  getrennte Lernhistorie für Wochentagsbedarf und Ladezeit je Box.
 
 > **Wert-Katalog** (`output/internal-values.js`): Outputs **und** Dashboard-Widgets
 > beziehen ihre Werte aus demselben Katalog. Enthält PV (Leistungen, Erträge,
@@ -405,8 +480,8 @@ MQTT.md                   Referenz: ioBroker-MQTT-Regeln
 > Sonnenintensität, **PV-Prognose** (Tagesertrag heute/morgen/+2/+3 sowie heute
 > bisher / noch erwartet), **Systemprognose** (38 Werte), **Batterie** (Messwerte,
 > Energie/Restzeit und abgeleitete Zustände), **Betriebszustand**, **Grid-Control**
-> sowie **Pool** (wenn das jeweilige Modul aktiv ist). Jeder Eintrag hat `id`,
-> `label`, `value`, `display`.
+> sowie **Pool** und **Wallbox** (wenn das jeweilige Modul aktiv ist). Jeder Eintrag
+> hat `id`, `label`, `value`, `display`.
 
 ## MQTT Ad-hoc-Subscriptions (Pool und Output-Readback)
 
@@ -433,7 +508,8 @@ Anleitung zum Anbinden neuer Verbraucher: [LEVEL_HANDLING.md](LEVEL_HANDLING.md)
 - **Drei Modi pro Verbraucher** (`an`/`aus`/`automatik`): nur **`automatik`** läuft über das
   Gate (registriert, Einschalten nur nach Freigabe, Zwangsabschaltung). **`an`/`aus`**
   übersteuern das Level bewusst und sind **nicht** registriert.
-- **Erste Verbraucher:** Filter- und Solarpumpe (`pool.solar`, `pool.filter`) in
+- **Verbraucher:** Filter- und Solarpumpe (`pool.solar`, `pool.filter`) sowie je
+  Wallbox `wallbox.<id>` (Priorität des aktiven Lademodus) in
   `pool/automation.js`. `getEffectivePriority(which, cfg)` liefert während eines
   Filter-Probelaufs die Solarpumpen-Priorität für die Filterpumpe.
 - Init in `app.js` (`operatingLevelHandler.init()`) nach geladenem Betriebszustand, vor
