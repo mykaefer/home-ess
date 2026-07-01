@@ -86,21 +86,26 @@ Bei `select` zusätzlich `options: ["a", "b"]` oder
 
 Manche Adapter haben **viele, vom Nutzer zu pflegende** States (z. B. Modbus-
 Register). Statt eine eigene UI zu bauen, deklariert der Adapter im Manifest einen
-`stateEditor`; homeESS rendert daraus automatisch eine **Verwaltungs-Unterseite**
-(Tabelle + Formular zum Anlegen/Bearbeiten/Löschen) und – mit `presets: true` – ein
-**Preset-Panel** (Laden mit Auswahl, „als Preset speichern", Upload vom PC).
+`stateEditor`; homeESS rendert daraus automatisch eine **Verwaltungs-Unterseite**:
+Die angelegten States erscheinen – falls `categoryField` gesetzt – nach Kategorie
+gruppiert und **einklappbar**; Anlegen/Bearbeiten läuft über einen **Dialog**. Mit
+`presets: true` gibt es zusätzlich eine **eigene Preset-Seite** (Laden mit Auswahl,
+„als Preset speichern", Upload vom PC), erreichbar über den Button „Presets".
 
 ```json
 "stateEditor": {
   "storageKey": "registers",   // instance.settings[storageKey] = Array der Zeilen
   "keyField": "address",        // eindeutiger Schlüssel + State-Adresse
+  "keyFields": ["unitId", "address"], // optional: zusammengesetzter Schlüssel (mit '/' verbunden)
   "nameField": "name",
+  "categoryField": "category",  // optional: Spalte, nach der die States gruppiert werden
   "label": "Register",
   "presets": true,              // Preset-Verzeichnis presets/ aktivieren
   "columns": [
-    { "key": "address", "label": "State-Adresse", "type": "text", "required": true },
-    { "key": "name",    "label": "Name",          "type": "text", "required": true },
-    { "key": "register","label": "Register",      "type": "number" }
+    { "key": "address",  "label": "State-Adresse", "type": "text",   "required": true },
+    { "key": "name",     "label": "Name",          "type": "text",   "required": true },
+    { "key": "category", "label": "Kategorie",     "type": "text" },
+    { "key": "register", "label": "Register",      "type": "number" }
     /* … weitere Spalten (text/number/checkbox/select) … */
   ]
 }

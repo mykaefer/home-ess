@@ -1,5 +1,14 @@
 # Changelog
 
+- Modbus-/State-Editor-Adapter: Das Speichern der Instanz-Einstellungen löscht
+  **nicht mehr die angelegten Register** – nicht im Settings-Schema enthaltene
+  Werte (v. a. der State-Editor-Speicher) bleiben erhalten. Die States-Seite wurde
+  übersichtlicher: angelegte States sind nach **Kategorie gruppiert und
+  einklappbar**, Anlegen/Bearbeiten läuft über einen **Dialog**, und die **Presets**
+  haben eine eigene Seite (neue Manifest-Option `categoryField`). Beim Laden eines
+  Presets sind die Einträge nach **Kategorie gruppiert und eingeklappt**, per
+  **Suchfeld** filterbar, standardmäßig **alles abgewählt**, und die Buttons
+  „Übernehmen/Abbrechen" stehen oben.
 - Wallbox-Steuerung robuster gemacht: Der erste MQTT-Status nach einem Neustart
   wird nur als Ausgangswert übernommen und nicht als manuelle Schaltänderung.
   Auf jeder Wallbox-Karte zeigt ein Umschalter den aktuellen Steuerzustand

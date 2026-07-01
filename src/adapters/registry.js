@@ -59,11 +59,15 @@ function normalizeStateEditor(raw) {
   if (!keyFields.length) keyFields = [raw.keyField && has(raw.keyField) ? String(raw.keyField) : columns[0].key];
   const keyField = keyFields[0];
   const nameField = raw.nameField && has(raw.nameField) ? String(raw.nameField) : keyField;
+  // Optionales Kategorie-Feld: gruppiert die angelegten States auf der Verwaltungs-
+  // und Preset-Seite (einklappbarer Baum). Nur gültig, wenn es eine Spalte ist.
+  const categoryField = raw.categoryField && has(String(raw.categoryField)) ? String(raw.categoryField) : null;
   return {
     storageKey: raw.storageKey ? String(raw.storageKey) : 'states',
     keyField,
     keyFields,
     nameField,
+    categoryField,
     label: raw.label ? String(raw.label) : 'States',
     columns,
     presets: !!raw.presets,

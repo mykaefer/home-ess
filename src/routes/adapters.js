@@ -8,7 +8,7 @@ const host = require('../adapters/host');
 const presetsRepo = require('../adapters/presets');
 const stateEditor = require('../adapters/state-editor');
 const { renderAdapters, renderAdapterInstance } = require('../views/adapters');
-const { renderAdapterStates, renderPresetSelection } = require('../views/adapter-states');
+const { renderAdapterStates, renderAdapterPresets, renderPresetSelection } = require('../views/adapter-states');
 
 function adapterRoutes(db) {
   const router = express.Router();
@@ -101,7 +101,9 @@ function adapterRoutes(db) {
       if (!instance) return res.status(404).send('Instanz nicht gefunden.');
       const manifest = registry.getManifest(instance.adapterId);
       if (!manifest) return res.status(404).send('Adapter nicht gefunden.');
-      const settings = {};
+      // Bestehende Settings als Basis behalten – sonst gingen nicht im settings-Schema
+      // enthaltene Werte (v. a. der State-Editor-Speicher wie modbus-Register) verloren.
+      const settings = { ...instance.settings };
       for (const field of manifest.settings) {
         if (field.type === 'checkbox') {
           settings[field.key] = req.body[field.key] === '1' || req.body[field.key] === 'on';
@@ -145,8 +147,13 @@ function adapterRoutes(db) {
 
   function sendStatesPage(res, ctx, extra = {}) {
     const rows = stateEditor.getRows(ctx.instance, ctx.editor);
+    res.send(renderAdapterStates({ adapter: ctx.manifest, instance: ctx.instance, editor: ctx.editor, rows, ...extra }));
+  }
+
+  function sendPresetsPage(res, ctx, extra = {}) {
+    const rows = stateEditor.getRows(ctx.instance, ctx.editor);
     const presets = ctx.editor.presets ? presetsRepo.listPresets(ctx.manifest, ctx.editor) : [];
-    res.send(renderAdapterStates({ adapter: ctx.manifest, instance: ctx.instance, editor: ctx.editor, rows, presets, ...extra }));
+    res.send(renderAdapterPresets({ adapter: ctx.manifest, instance: ctx.instance, editor: ctx.editor, presets, hasRows: rows.length > 0, ...extra }));
   }
 
   const persistRows = async (ctx, rows) => {
@@ -164,14 +171,16 @@ function adapterRoutes(db) {
     const ctx = await loadEditorContext(req.params.id).catch(() => null);
     if (!ctx) return res.status(404).send('Kein State-Editor für diesen Adapter.');
     const row = stateEditor.normalizeRow(req.body, ctx.editor);
-    const errors = stateEditor.validateRow(row, ctx.editor);
-    if (errors.length) return sendStatesPage(res, ctx, { error: errors.join(' ') });
-    const key = stateEditor.rowKey(row, ctx.editor);
     const original = String(req.body.originalKey || '').trim();
+    // Bei Fehlern den Dialog vorbefüllt wieder aufmachen, statt die Eingaben zu verwerfen.
+    const reopen = (error) => sendStatesPage(res, ctx, { dialogOpen: true, dialogError: error, dialogValues: row, dialogOriginalKey: original });
+    const errors = stateEditor.validateRow(row, ctx.editor);
+    if (errors.length) return reopen(errors.join(' '));
+    const key = stateEditor.rowKey(row, ctx.editor);
     const rows = stateEditor.getRows(ctx.instance, ctx.editor);
     // Duplikat-Adresse verhindern (außer man bearbeitet genau diesen Eintrag).
     if (rows.some((r) => stateEditor.rowKey(r, ctx.editor) === key && key !== original)) {
-      return sendStatesPage(res, ctx, { error: `Adresse „${key}" existiert bereits.` });
+      return reopen(`Adresse „${key}" existiert bereits.`);
     }
     const next = original
       ? rows.map((r) => (stateEditor.rowKey(r, ctx.editor) === original ? row : r))
@@ -192,19 +201,30 @@ function adapterRoutes(db) {
     sendStatesPage(res, ctx, { message: 'State gelöscht.' });
   });
 
-  // ── Presets ───────────────────────────────────────────────────────────────────
+  // ── Presets (eigene Seite) ──────────────────────────────────────────────────────
+
+  router.get('/adapter/instance/:id/presets', requireAuth, async (req, res) => {
+    const ctx = await loadEditorContext(req.params.id).catch(() => null);
+    if (!ctx || !ctx.editor.presets) return res.status(404).send('Keine Presets verfügbar.');
+    sendPresetsPage(res, ctx);
+  });
 
   router.get('/adapter/instance/:id/presets/:file', requireAuth, async (req, res) => {
     const ctx = await loadEditorContext(req.params.id).catch(() => null);
     if (!ctx || !ctx.editor.presets) return res.status(404).send('Keine Presets verfügbar.');
     const data = presetsRepo.readPreset(ctx.manifest, req.params.file);
     const result = data && presetsRepo.validatePresetData(data, ctx.editor);
-    if (!result || !result.ok) return sendStatesPage(res, ctx, { error: (result && result.error) || 'Preset nicht lesbar.' });
-    const existing = new Set(stateEditor.getRows(ctx.instance, ctx.editor).map((r) => stateEditor.rowKey(r, ctx.editor)));
-    const detailCols = ctx.editor.columns.filter((c) => c.key !== ctx.editor.keyField && c.key !== ctx.editor.nameField);
+    if (!result || !result.ok) return sendPresetsPage(res, ctx, { error: (result && result.error) || 'Preset nicht lesbar.' });
+    const editor = ctx.editor;
+    const existing = new Set(stateEditor.getRows(ctx.instance, editor).map((r) => stateEditor.rowKey(r, editor)));
+    const keyFields = editor.keyFields && editor.keyFields.length ? editor.keyFields : [editor.keyField];
+    const catField = editor.categoryField && editor.columns.some((c) => c.key === editor.categoryField) ? editor.categoryField : null;
+    const skip = new Set([...keyFields, editor.nameField, catField]);
+    const detailCols = editor.columns.filter((c) => !skip.has(c.key));
     const entries = result.rows.map((e) => ({
       key: e.key,
       name: e.name,
+      category: catField ? (e.row[catField] == null || e.row[catField] === '' ? 'Allgemein' : String(e.row[catField])) : '',
       exists: existing.has(e.key),
       detail: detailCols.map((c) => `${c.label}: ${e.row[c.key] === '' || e.row[c.key] == null ? '–' : e.row[c.key]}`).join(' · '),
     }));
@@ -216,7 +236,7 @@ function adapterRoutes(db) {
     if (!ctx || !ctx.editor.presets) return res.status(404).send('Keine Presets verfügbar.');
     const data = presetsRepo.readPreset(ctx.manifest, req.params.file);
     const result = data && presetsRepo.validatePresetData(data, ctx.editor);
-    if (!result || !result.ok) return sendStatesPage(res, ctx, { error: (result && result.error) || 'Preset nicht lesbar.' });
+    if (!result || !result.ok) return sendPresetsPage(res, ctx, { error: (result && result.error) || 'Preset nicht lesbar.' });
     let selected = req.body.keys || [];
     if (!Array.isArray(selected)) selected = [selected];
     const selectedSet = new Set(selected.map(String));
@@ -245,13 +265,13 @@ function adapterRoutes(db) {
     const ctx = await loadEditorContext(req.params.id).catch(() => null);
     if (!ctx || !ctx.editor.presets) return res.status(404).send('Keine Presets verfügbar.');
     const rows = stateEditor.getRows(ctx.instance, ctx.editor);
-    if (!rows.length) return sendStatesPage(res, ctx, { error: 'Keine States zum Speichern vorhanden.' });
+    if (!rows.length) return sendPresetsPage(res, ctx, { error: 'Keine States zum Speichern vorhanden.' });
     const preset = presetsRepo.buildPreset(rows, ctx.editor, { name: String(req.body.name || '').trim() || 'Eigenes Preset' });
     try {
       const file = presetsRepo.savePreset(ctx.manifest, req.body.name, preset);
-      sendStatesPage(res, ctx, { message: `Als Preset „${file}" gespeichert.` });
+      sendPresetsPage(res, ctx, { message: `Als Preset „${file}" gespeichert.` });
     } catch (_) {
-      sendStatesPage(res, ctx, { error: 'Preset konnte nicht gespeichert werden.' });
+      sendPresetsPage(res, ctx, { error: 'Preset konnte nicht gespeichert werden.' });
     }
   });
 

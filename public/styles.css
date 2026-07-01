@@ -2304,6 +2304,44 @@ h2 .cmd-confirm { font-size: 13px; vertical-align: middle; }
     font-weight: 600;
 }
 
+/* Angelegte States: einklappbare Kategorie-Gruppen */
+.state-cat {
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    margin-top: 10px;
+    overflow: hidden;
+}
+.state-cat > summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    cursor: pointer;
+    background: #f9fafb;
+    font-weight: 600;
+    list-style: none;
+    user-select: none;
+}
+.state-cat > summary::-webkit-details-marker { display: none; }
+.state-cat > summary::before {
+    content: '▸';
+    color: #9ca3af;
+    font-size: 12px;
+    transition: transform 0.15s ease;
+}
+.state-cat[open] > summary::before { transform: rotate(90deg); }
+.state-cat-name { flex: 1; }
+.state-cat-count {
+    color: #6b7280;
+    font-size: 12px;
+    background: #e5e7eb;
+    border-radius: 999px;
+    padding: 1px 8px;
+}
+.state-cat > .states-edit-table { border-top: 1px solid #e5e7eb; }
+.state-cat > .states-edit-table th,
+.state-cat > .states-edit-table td { padding-left: 12px; }
+
 /* States-Seite: Baum */
 .states-tree { display: flex; flex-direction: column; gap: 14px; }
 .states-inst {

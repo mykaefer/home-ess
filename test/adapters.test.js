@@ -298,8 +298,9 @@ test('Registry liest stateEditor-Schema (über Temp-Adapter)', () => {
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'adapter.json'), JSON.stringify({
     id: 'withedit', prefix: 'we', main: 'index.js',
-    stateEditor: { storageKey: 'registers', keyField: 'address', presets: true, columns: [
+    stateEditor: { storageKey: 'registers', keyField: 'address', categoryField: 'category', nixField: 'x', presets: true, columns: [
       { key: 'address', label: 'Adresse', type: 'text', required: true },
+      { key: 'category', label: 'Kategorie', type: 'text' },
       { key: 'register', label: 'Register', type: 'number' },
     ] },
   }));
@@ -308,8 +309,45 @@ test('Registry liest stateEditor-Schema (über Temp-Adapter)', () => {
   const m = registry.getManifest('withedit');
   assert.ok(m.stateEditor);
   assert.equal(m.stateEditor.keyField, 'address');
-  assert.equal(m.stateEditor.columns.length, 2);
+  assert.equal(m.stateEditor.columns.length, 3);
   assert.equal(m.stateEditor.presets, true);
+  assert.equal(m.stateEditor.categoryField, 'category'); // gültiges Kategorie-Feld übernommen
+});
+
+test('Einstellungen speichern behält den State-Editor-Speicher (Register)', async () => {
+  const express = require('express');
+  const http = require('http');
+  const adapterRoutes = require('../src/routes/adapters');
+
+  const db = await freshDb();
+  // Adapter mit Settings-Schema (host) – Register liegen unter dem Nicht-Schema-Key.
+  writeAdapter('mbx', 'mbx', { settings: [{ key: 'host', type: 'text', default: '' }] });
+  registry.loadRegistry();
+  const id = await instancesRepo.createInstance(db, 'mbx', 'inst1');
+  await instancesRepo.updateSettings(db, id, { host: 'alt', registers: [{ address: 'b/soc', name: 'SoC' }] });
+
+  const app = express();
+  app.use(express.urlencoded({ extended: false }));
+  app.use((req, _res, next) => { req.session = { user: 'test' }; next(); }); // Auth stubben
+  app.use(adapterRoutes(db));
+  const server = http.createServer(app).listen(0);
+  await new Promise((r) => server.once('listening', r));
+  const port = server.address().port;
+
+  await new Promise((resolve, reject) => {
+    const data = 'host=neu';
+    const req = http.request({ method: 'POST', port, path: `/adapter/instance/${id}/settings`,
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(data) } },
+      (res) => { res.resume(); res.on('end', resolve); });
+    req.on('error', reject);
+    req.end(data);
+  });
+  server.close();
+
+  const inst = await instancesRepo.getInstance(db, id);
+  assert.equal(inst.settings.host, 'neu', 'Schema-Feld aktualisiert');
+  assert.deepEqual(inst.settings.registers, [{ address: 'b/soc', name: 'SoC' }], 'Register bleiben erhalten');
+  db.close();
 });
 
 test.after(() => {

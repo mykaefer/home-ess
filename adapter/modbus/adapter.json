@@ -2,7 +2,7 @@
   "id": "modbus",
   "name": "Modbus TCP",
   "prefix": "modbus",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Verbindet homeESS mit Modbus-TCP-Geräten. Pro Instanz wird ein Server konfiguriert; die abzufragenden Register werden als States angelegt – manuell oder aus Presets (siehe PRESET.md).",
   "multiInstance": true,
   "main": "index.js",
@@ -15,6 +15,7 @@
     "storageKey": "registers",
     "keyFields": ["unitId", "address"],
     "nameField": "name",
+    "categoryField": "category",
     "label": "Register",
     "presets": true,
     "columns": [
