@@ -110,6 +110,20 @@ function ingestFromInstance(instanceName, address, value, receivedAt) {
   bus.ingest(targetKeys, value, { topic: canonical, receivedAt: receivedAt || Date.now() });
 }
 
+function ingestBatchFromInstance(instanceName, values, receivedAt) {
+  const scheme = schemeForInstance(instanceName);
+  const items = [];
+  for (const entry of values || []) {
+    if (!entry || entry.address == null) continue;
+    const canonical = buildSchemeTopic(scheme, instanceName, String(entry.address));
+    const keys = routes.get(canonical);
+    const targetKeys = keys ? Array.from(keys) : [];
+    if (!targetKeys.includes(canonical)) targetKeys.push(canonical);
+    items.push({ cacheKeys: targetKeys, value: entry.value });
+  }
+  bus.ingestBatch(items, { topic: `${scheme}://${instanceName}`, receivedAt: receivedAt || Date.now() });
+}
+
 // Das Schema (prefix) einer Instanz – wird vom Host gepflegt; hier nur als
 // Rückgriff, falls nicht gesetzt, der erste registrierte Scheme.
 const instanceSchemes = new Map(); // instanceName -> scheme
@@ -134,6 +148,7 @@ module.exports = {
   write,
   requestValue,
   ingestFromInstance,
+  ingestBatchFromInstance,
   setInstanceScheme,
   removeInstanceScheme,
   schemeForInstance,

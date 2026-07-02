@@ -3,6 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { decode, encode, registerCount, regsToBuffer } = require('../adapter/modbus/decode');
+const { buildPollGroups } = require('../adapter/modbus/index');
 
 test('registerCount je Datentyp', () => {
   assert.equal(registerCount({ dataType: 'uint16' }), 1);
@@ -52,4 +53,19 @@ test('encode/decode Roundtrip', () => {
   // mit Skalierung
   const reg = { dataType: 'uint16', scale: 0.1, offset: 0 };
   assert.equal(decode(encode(23.5, reg), reg), 23.5);
+});
+
+test('Modbus-Polling gruppiert nur zusammenhängende Register gleicher Klasse', () => {
+  const regs = [
+    { unitId: 1, register: 10, registerType: 'holding', dataType: 'uint16', pollIntervalMs: 1000 },
+    { unitId: 1, register: 11, registerType: 'holding', dataType: 'float32', pollIntervalMs: 1000 },
+    { unitId: 1, register: 13, registerType: 'holding', dataType: 'uint16', pollIntervalMs: 5000 },
+    { unitId: 2, register: 20, registerType: 'input', dataType: 'uint16', pollIntervalMs: 1000 },
+  ];
+  const groups = buildPollGroups(regs);
+  assert.equal(groups.length, 3);
+  const combined = groups.find((group) => group.start === 10);
+  assert.equal(combined.count, 3);
+  assert.equal(combined.items.length, 2);
+  assert.deepEqual(combined.items.map((item) => item.offset), [0, 1]);
 });

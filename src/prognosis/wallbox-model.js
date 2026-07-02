@@ -208,7 +208,18 @@ function planWallboxSchedule(model, slots = [], storage = null) {
     const energyToMinimum = soc == null ? 0
       : capacity * Math.max(0, (Number(box.minChargePercent) || 0) - soc) / 100;
 
-    dateKeys.forEach((key, dayIndex) => {
+    const currentPrivateVehicle = box.mode === 1 && energyToFull != null && box.plugged !== false;
+    if (currentPrivateVehicle) {
+      // Der aktuelle Fahrzeugbedarf endet nicht am Tageswechsel. Mindestladung
+      // ist verbindlich; der restliche Bedarf darf über den gesamten sichtbaren
+      // Horizont ausschließlich echten Überschuss nach Hausakku nutzen.
+      const mandatoryTarget = Math.min(energyToFull, energyToMinimum);
+      const mandatoryLeft = mandatoryTarget > 0
+        ? addPlannedEnergy(box, slots, mandatoryTarget, false)
+        : 0;
+      const mandatoryDelivered = mandatoryTarget - mandatoryLeft;
+      addPlannedEnergy(box, slots, Math.max(0, energyToFull - mandatoryDelivered), true);
+    } else dateKeys.forEach((key, dayIndex) => {
       const daySlots = slotsByDate.get(key) || [];
       const learned = dayIndex === 0
         ? Math.max(0, Number(box.todayRemainingKwh) || 0)

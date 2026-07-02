@@ -11,6 +11,7 @@ const childProcess = require('child_process');
 const registry = require('./registry');
 const router = require('./router');
 const instancesRepo = require('./instances');
+const metrics = require('../runtime-metrics');
 
 const RUNTIME_PATH = path.join(__dirname, 'runtime.js');
 const RESTART_BASE_MS = 1000;
@@ -75,7 +76,13 @@ function handleMessage(entry, msg) {
       console.log(`[adapter ${entry.manifest.prefix}://${name}] bereit`);
       break;
     case 'value':
+      metrics.counter('adapter.valueMessages');
       router.ingestFromInstance(name, String(msg.address), msg.value);
+      break;
+    case 'values':
+      metrics.counter('adapter.batchMessages');
+      metrics.counter('adapter.batchValues', Array.isArray(msg.values) ? msg.values.length : 0);
+      router.ingestBatchFromInstance(name, Array.isArray(msg.values) ? msg.values : []);
       break;
     case 'states':
       persistStates(entry.instance.id, Array.isArray(msg.list) ? msg.list : []);

@@ -21,6 +21,8 @@ const DEFAULTS = {
   socTopic: '', powerTopic: '', voltageTopic: '', temperaturTopic: '', minSocTopic: '',
   minSoc: 20, capacityAh: 200, batteryType: 'lifepo4', cellCount: 16, lowerVoltage: 44.8, upperVoltage: 55.2,
 };
+let configCacheDb = null;
+let configCache = null;
 
 function clamp(value, min, max, fallback) {
   const text = String(value == null ? '' : value).trim().replace(',', '.');
@@ -30,9 +32,12 @@ function clamp(value, min, max, fallback) {
 }
 
 function loadBatterieConfig(db, callback) {
+  if (configCacheDb === db && configCache) {
+    queueMicrotask(() => callback({ ...configCache }));
+    return;
+  }
   db.get('SELECT * FROM batterie_config WHERE id = 1', (err, row) => {
-    if (err || !row) return callback({ ...DEFAULTS });
-    callback({
+    const cfg = err || !row ? { ...DEFAULTS } : {
       socTopic: row.soc_topic || '',
       powerTopic: row.power_topic || '',
       voltageTopic: row.voltage_topic || '',
@@ -44,7 +49,10 @@ function loadBatterieConfig(db, callback) {
       cellCount: row.cell_count == null ? DEFAULTS.cellCount : row.cell_count,
       lowerVoltage: row.lower_voltage == null ? DEFAULTS.lowerVoltage : row.lower_voltage,
       upperVoltage: row.upper_voltage == null ? DEFAULTS.upperVoltage : row.upper_voltage,
-    });
+    };
+    configCacheDb = db;
+    configCache = cfg;
+    callback({ ...cfg });
   });
 }
 
@@ -81,7 +89,10 @@ function saveBatterieConfig(db, input, callback) {
        lower_voltage=excluded.lower_voltage, upper_voltage=excluded.upper_voltage`,
     [cfg.socTopic, cfg.powerTopic, cfg.voltageTopic, cfg.temperaturTopic, cfg.minSocTopic,
       cfg.minSoc, cfg.capacityAh, cfg.batteryType, cfg.cellCount, cfg.lowerVoltage, cfg.upperVoltage],
-    (err) => callback(err, cfg)
+    (err) => {
+      if (!err) { configCacheDb = db; configCache = cfg; }
+      callback(err, cfg);
+    }
   );
 }
 

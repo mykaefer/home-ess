@@ -3,6 +3,61 @@
 Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [0.10.4] — 2026-07-02
+
+### Hinzugefügt
+
+- **Pool-Energiemodell:** Bei aktivierter Poolsteuerung werden die Leistungen von
+  Solar- und Filterpumpe robust aus realen Schaltflanken gelernt, ihre tatsächliche
+  Energie persistent erfasst und aus dem gelernten Hausbedarf entfernt. Die
+  Prognose plant Solarstunden aus der PV-Prognose sowie Filter-Zeitfenster,
+  Follow-Solar und Akku-Override als eigene Last ein. Maximaltemperatur und
+  Probeläufe werden bewusst nicht vorausgesagt, rückwirkend aber bereinigt.
+- **Leichtgewichtige Laufzeitdiagnose:** `HOMEESS_PERF_DEBUG=1` protokolliert
+  minütlich Laufzeiten, Aufruf-, Cache- und Coalescing-Zähler, SQLite-Aktivität
+  sowie Event-Loop-Lag.
+- Adapter können mehrere gleichzeitig gelesene Werte über
+  **`host.publishStates()`** gesammelt melden; Frischezeitstempel bleiben je State
+  erhalten, während reaktive Verbraucher nur ein Änderungsereignis erhalten.
+
+### Geändert
+
+- **Prognosebasis fachlich getrennt:** Der physische Eigenverbrauch wird aus
+  Netzbezug und PV-Ertrag gebildet. Akku, Wallbox, Klimatisierung und Pool werden
+  für das Haushaltsmodell herausgerechnet und anschließend jeweils passend zur
+  aktuellen Situation separat simuliert.
+- Noch ungelernte Wochentage verwenden nach ausreichendem Tagesfortschritt den
+  bereinigten heutigen Verlauf, davor den jüngsten bereinigten Mittelwert und nur
+  bei einer Neuinstallation ohne Lerndaten das bereinigte Jahresmittel.
+- Der Wallbox-Vorausplan wird für jeden Aufrufer frisch aus einem unveränderlichen
+  Basismodell und dem aktuellen Batterie- und Fahrzeugzustand erzeugt. Im
+  Privatmodus wird der verbleibende Pflichtbedarf über den sichtbaren Horizont
+  fortgeführt; flexible Ladung erhält nur echten Überschuss nach dem Hausakku.
+- Im Netzparallelbetrieb gibt Level 4 Verbraucher frei, wenn der Bedarf bis zum
+  nächsten Ladebeginn sicher aus dem Akku gedeckt ist. Level 3 steht für einen
+  tatsächlich erwarteten Netzbedarf vor diesem Zeitpunkt; Level 2 für knappe
+  Reserve und Level 1 erst für unterschrittenen Mindest-SoC.
+- Grid-Control verdichtet relevante Wert-Bursts auf einen laufenden und höchstens
+  einen folgenden Lauf; der unabhängige 2-Sekunden-Sicherheitstakt bleibt erhalten.
+- Wertekatalog, Output-Auswertung, PV-Prognose und Verbrauchsmodell teilen kurz
+  gültige beziehungsweise laufende Berechnungen. Periodische Jobs verhindern
+  Selbstüberlappung; häufig gelesene Konfigurationen werden gezielt invalidiert.
+- Der Modbus-Adapter liest zusammenhängende Register gleicher Unit-ID, Registerart
+  und Pollrate blockweise, verhindert überlappende Polls und holt verpasste Ticks
+  nicht nach. Konfigurierte Intervalle, Adressen und Schreibpfade bleiben gleich.
+
+### Behoben
+
+- Ein fehlerhafter oder überalterter Verbrauchssprung kann keinen Tageswert um
+  Größenordnungen mehr aufblasen. Minutenintervalle werden plausibilisiert und
+  Tages-/Stundenstände selbstheilend konsistent gehalten.
+- Wallbox-Ladungen verschwinden nicht mehr abhängig von Cache-Reihenfolge aus der
+  Prognose und werden umgekehrt nicht mehrfach als Statistik- und Live-Plan
+  angesetzt.
+- Akku-Ladung erhöht den gemessenen Eigenverbrauch weiterhin physikalisch,
+  Akku-Entladung mindert ihn; beide Richtungen werden beim Lernen des reinen
+  Hausbedarfs korrekt über die signierte Batterieleistung bereinigt.
+
 ## [0.10.3] — 2026-07-02
 
 ### Hinzugefügt

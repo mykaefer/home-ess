@@ -42,6 +42,8 @@ const { readBatterieData } = require('./batterie/config');
 const { updateBatteryEnergy } = require('./batterie/energy');
 const { buildEnvironmentSnapshot } = require('./mqtt/config');
 const prognosisBehavior = require('./prognosis/behavior');
+const jobs = require('./job-scheduler');
+const { updatePoolEnergyModel } = require('./pool/energy-model');
 
 // Baut die Express-App zusammen: DB öffnen, Middleware, Routen registrieren,
 // MQTT-Verbindung mit gespeicherter Konfiguration starten.
@@ -121,59 +123,65 @@ function createApp() {
     try {
       const boxes = isEnabled('wallbox') ? await listWallboxes(db) : [];
       const snapshot = await buildStromverbrauchSnapshot(db, cache);
-      await recordConsumptionSample(db, snapshot.raw.today.summe, cache, {
+      const rawCounters = snapshot.raw.rawCounters || {};
+      const hasCounterReading = ['import', 'export'].some((direction) =>
+        Object.values(rawCounters[direction] || {}).some((value) => value != null));
+      // Beim Start läuft der erste Job eventuell vor den retained MQTT-Werten.
+      // Eine aus lauter fehlenden Quellen berechnete Null darf den kumulierten
+      // Tagesstand nicht neu basieren.
+      if (!hasCounterReading && !(Number(snapshot.raw.today.eigenverbrauch) > 0)) return;
+      const poolEnergy = await updatePoolEnergyModel(db, cache, snapshot.raw.eigenverbrauchPower);
+      // Eigenverbrauch ist hier die physikalische Hausbilanz PV + Netzsaldo.
+      // `summe` addiert die separat dargestellte Netzkomponente ein zweites Mal
+      // und ist deshalb keine geeignete kumulierte Quelle für das Lernmodell.
+      await recordConsumptionSample(db, snapshot.raw.today.eigenverbrauch, cache, {
         batteryPower: readBatterieData(cache).power,
         wallboxPower: totalWallboxPowerWatt(cache, boxes),
+        poolPower: poolEnergy.currentPowerW,
         outdoorTemperature: buildEnvironmentSnapshot(cache).temperature.value,
       });
     } catch (_) {
       // Der nächste Minutentakt versucht es erneut.
     }
   };
-  updateConsumption();
-  setInterval(updateConsumption, 60000);
-  setInterval(() => {
+  jobs.runExclusive('consumption', updateConsumption).catch(() => {});
+  jobs.schedule('consumption', 60000, updateConsumption);
+  jobs.schedule('pvAggregation', 60000, () =>
     listPvPlants(db)
       .then((plants) => touchPhotovoltaikAggregation(db, mqttClient.getCache(), plants))
-      .catch(() => {});
-  }, 60000);
+  );
 
   // Wallbox-Zähler/Summen je Box fortschreiben (Tag/Woche/Monat/Jahr + Vorjahr,
   // bzw. Power-Integration ohne Zähler-Topic). Nur aktiv, wenn Boxen angelegt sind.
   const updateWallbox = () => {
-    buildWallboxSnapshot(db, mqttClient.getCache()).catch(() => {});
+    return buildWallboxSnapshot(db, mqttClient.getCache()).catch(() => {});
   };
-  updateWallbox();
-  setInterval(updateWallbox, 60000);
+  jobs.runExclusive('wallboxAggregation', updateWallbox).catch(() => {});
+  jobs.schedule('wallboxAggregation', 60000, updateWallbox);
 
   // Akku-Lade-/Entladeenergie fortschreiben (für die Bereinigung der
   // Jahres-Prognosebasis um die Netto-Akkuladung).
   const updateBattery = () => {
-    updateBatteryEnergy(db, mqttClient.getCache()).catch(() => {});
+    return updateBatteryEnergy(db, mqttClient.getCache()).catch(() => {});
   };
-  updateBattery();
-  setInterval(updateBattery, 60000);
+  jobs.runExclusive('batteryEnergy', updateBattery).catch(() => {});
+  jobs.schedule('batteryEnergy', 60000, updateBattery);
 
   // Sonnenintensität als Zeitreihe erfassen (für 10-Minuten-/Tages-/Vortagsmittel).
-  recordSample(db, mqttClient.getCache()).catch(() => {});
-  setInterval(() => {
-    recordSample(db, mqttClient.getCache()).catch(() => {});
-  }, 60000);
+  jobs.runExclusive('sunIntensity', () => recordSample(db, mqttClient.getCache())).catch(() => {});
+  jobs.schedule('sunIntensity', 60000, () => recordSample(db, mqttClient.getCache()));
 
   // Wetterprognose (Open-Meteo) für die PV-Prognose vorhalten: beim Start einmal
   // füllen und alle 30 Minuten aktualisieren. Fehler still — die Seite bleibt nutzbar.
-  refreshWeather(db).catch(() => {});
-  setInterval(() => {
-    refreshWeather(db).catch(() => {});
-  }, 30 * 60 * 1000);
+  jobs.runExclusive('weather', () => refreshWeather(db)).catch(() => {});
+  jobs.schedule('weather', 30 * 60 * 1000, () => refreshWeather(db));
 
   // Selbstkalibrierung: an Klarhimmel-Momenten den tageszeit-abhängigen
   // Kalibrierfaktor je Anlage sanft nachziehen (Gates inkl. Wetter/SoC im Modul).
-  setInterval(() => {
+  jobs.schedule('pvCalibration', 60000, () =>
     listPvPlants(db)
       .then((plants) => recordCalibration(db, mqttClient.getCache(), plants))
-      .catch(() => {});
-  }, 60000);
+  );
 
   return { app, db };
 }

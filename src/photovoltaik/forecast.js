@@ -14,6 +14,11 @@ const {
   formatEnergy,
 } = require('./aggregation');
 const { bucketForParts, effectiveFactor, loadFactors, localDateTime } = require('./calibration');
+const metrics = require('../runtime-metrics');
+
+const FORECAST_CACHE_MS = 30000;
+let forecastCache = null;
+let forecastInFlight = null;
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
@@ -222,6 +227,20 @@ function dayLabel(index, dateKey) {
 // (gecachten) Netzwerkabruf; sonst wird nur der vorhandene Cache gelesen, damit
 // der Seitenaufbau nicht blockiert.
 async function computePvForecast(db, plants, { allowFetch = false, cache = null } = {}) {
+  const signature = (plants || []).map((plant) => [
+    plant.id, plant.kwPeak, plant.orientation, plant.tilt, plant.efficiency,
+    plant.cellType, plant.converterType, plant.autoCalibrate,
+  ].join(':')).join('|');
+  if (!allowFetch && forecastCache && forecastCache.db === db &&
+      forecastCache.signature === signature && Date.now() - forecastCache.at < FORECAST_CACHE_MS) {
+    metrics.counter('pvForecast.cacheHit');
+    return forecastCache.value;
+  }
+  if (!allowFetch && forecastInFlight && forecastInFlight.db === db && forecastInFlight.signature === signature) {
+    metrics.counter('pvForecast.shared');
+    return forecastInFlight.promise;
+  }
+  const promise = metrics.measure('pvForecast.compute', async () => {
   const config = await loadMqttSettings(db);
   const latitude = parseNumber(config.latitude);
   const longitude = parseNumber(config.longitude);
@@ -232,8 +251,19 @@ async function computePvForecast(db, plants, { allowFetch = false, cache = null 
     : wetter.getCachedForecast(latitude, longitude);
 
   const factorsMap = await loadFactors(db);
-  return buildForecast(weather, plants, config, factorsMap, localNowParts(cache));
+    return buildForecast(weather, plants, config, factorsMap, localNowParts(cache));
+  });
+  if (!allowFetch) forecastInFlight = { db, signature, promise };
+  try {
+    const value = await promise;
+    if (!allowFetch) forecastCache = { db, signature, at: Date.now(), value };
+    return value;
+  } finally {
+    if (!allowFetch && forecastInFlight && forecastInFlight.promise === promise) forecastInFlight = null;
+  }
 }
+
+function invalidateForecastCache() { forecastCache = null; }
 
 // Wetter-Cache aktiv aktualisieren (periodischer Job / Startup-Prime).
 async function refreshWeather(db) {
@@ -242,6 +272,7 @@ async function refreshWeather(db) {
   const longitude = parseNumber(config.longitude);
   if (latitude == null || longitude == null) return;
   await wetter.fetchForecast(latitude, longitude, { force: true });
+  invalidateForecastCache();
 }
 
-module.exports = { computePvForecast, refreshWeather, buildForecast };
+module.exports = { computePvForecast, refreshWeather, invalidateForecastCache, buildForecast };

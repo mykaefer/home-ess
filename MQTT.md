@@ -14,6 +14,12 @@ Dieses Dokument beschreibt alle bekannten Eigenheiten des ioBroker-MQTT-Brokers 
 
 4. **`clean: true`.** MQTT.js sollte mit `clean: true` verbunden werden. Persistent sessions führen zu Zustellung alter Nachrichten bei Reconnect und verschleiern fehlerhafte Subscriptions.
 
+5. **Bursts intern bündeln, Werte nicht verwerfen.** Mehrere zusammengehörige
+   Adapterwerte werden im homeESS-Wertebus als Batch übernommen. Jeder State
+   behält Wert und Frischezeitpunkt; abhängige Regelungen erhalten für den Batch
+   ein gemeinsames Ereignis. MQTT-Topics, Retained-Verhalten und Pollintervalle
+   bleiben davon unverändert.
+
 ---
 
 ## Topic-Formate in ioBroker

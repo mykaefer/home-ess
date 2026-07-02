@@ -5,6 +5,7 @@ const operatingState = require('../operating-state');
 const { computePrognosis } = require('./forecast');
 const { isEnabled } = require('../modules');
 const { loadGridControlConfig } = require('../grid-control/config');
+const metrics = require('../runtime-metrics');
 
 function number(value, fallback = 0) {
   if (value == null || value === '') return fallback;
@@ -52,13 +53,10 @@ function gridParallelLevel(metrics, context) {
   if (metrics.minimumBeforeCharge || assessmentSoc <= minSoc + 5) {
     return { level: 2, reason: 'Reserve bis zum nächsten Ladebeginn fast aufgebraucht' };
   }
-  if (assessmentSoc <= minSoc + 20 || gridBeforeCharge > 0.05) {
-    return { level: 3, reason: 'Reserve bis zum nächsten Ladebeginn könnte knapp werden' };
+  if (gridBeforeCharge > 0.05) {
+    return { level: 3, reason: 'Netzbedarf vor dem nächsten Ladebeginn erwartet' };
   }
-  if (currentSoc >= 80 || number(today.batterySocEnd) >= 80) {
-    return { level: 4, reason: 'Hoher Akkustand ohne sicheren Überschuss' };
-  }
-  return { level: 3, reason: 'Normalbetrieb mit Netz als Reserve' };
+  return { level: 4, reason: 'Bedarf bis zum nächsten Ladebeginn sicher gedeckt' };
 }
 
 function offGridLevel(metrics) {
@@ -149,13 +147,25 @@ function scheduleRun(db) {
   }, 1000);
 }
 
+function isRelevantEvent(event) {
+  const keys = event && Array.isArray(event.changedKeys) ? event.changedKeys : [];
+  return keys.some((raw) => {
+    const key = String(raw);
+    return key === 'batterie.soc' || key === 'batterie.minSoc' ||
+      key.startsWith('stromverbrauch_') || key.startsWith('wallbox:');
+  });
+}
+
 function init(db) {
-  if (!unsubscribe) unsubscribe = mqttClient.onValuesChanged(() => scheduleRun(db));
-  if (!timer) timer = setInterval(() => runSerialized(db).catch(() => {}), 30000);
+  if (!unsubscribe) unsubscribe = mqttClient.onValuesChanged((event) => {
+    if (isRelevantEvent(event)) scheduleRun(db);
+    else metrics.counter('prognosis.irrelevantEvents');
+  });
+  if (!timer) timer = setInterval(() => metrics.measure('prognosis.behavior', () => runSerialized(db)).catch(() => {}), 30000);
   return runSerialized(db);
 }
 
 module.exports = {
   evaluateBehaviorLevel, getBehaviorRecommendation, applyBehaviorLevel,
-  loadBehaviorContext, runNow, init, forecastMetrics,
+  loadBehaviorContext, runNow, init, forecastMetrics, isRelevantEvent,
 };

@@ -6,6 +6,7 @@ const sqlite3 = require('sqlite3').verbose();
 const {
   buildWallboxModel, planWallboxSchedule, wallboxForecastForDay,
 } = require('../src/prognosis/wallbox-model');
+const { materializeConsumptionModel } = require('../src/prognosis/forecast');
 
 function run(db, sql, params = []) {
   return new Promise((resolve, reject) => db.run(sql, params, (err) => err ? reject(err) : resolve()));
@@ -107,4 +108,54 @@ test('Privat-Ladeplan nutzt nur Überschuss, der nicht mehr in den Hausakku pass
     capacityKwh: 10, minSoc: 20, soc: 100, chargeEfficiency: 1, dischargeEfficiency: 1,
   });
   assert.equal(fullBatteryModel.boxes[0].plannedFlexibleEnergyByDate['2026-06-30'], 6);
+});
+
+test('Privat-Restbedarf wird über den Tageswechsel in morgigen Überschuss getragen', () => {
+  const box = {
+    id: 1, name: 'Privat', mode: 1, priority: 5, maxPowerW: 3000,
+    batteryCapacityKwh: 28, minChargePercent: 30, businessDays: [], soc: 50, plugged: true,
+    dailyByWeekday: Array(7).fill(0),
+    profilesByWeekday: Array.from({ length: 7 }, () => Array(24).fill(1 / 24)),
+    samplesByWeekday: Array(7).fill(0), todayRemainingKwh: 0,
+  };
+  const slots = [
+    { dateKey: '2026-07-02', dayIndex: 0, hour: 16, durationHours: 1, startMs: 1, pvKwh: 1, houseKwh: 1 },
+    { dateKey: '2026-07-03', dayIndex: 1, hour: 11, durationHours: 1, startMs: 2, pvKwh: 8, houseKwh: 1 },
+    { dateKey: '2026-07-03', dayIndex: 1, hour: 12, durationHours: 1, startMs: 3, pvKwh: 8, houseKwh: 1 },
+  ];
+  const model = { boxes: [box] };
+  planWallboxSchedule(model, slots, {
+    capacityKwh: 10, minSoc: 20, soc: 100, chargeEfficiency: 1, dischargeEfficiency: 1,
+  });
+  assert.equal(model.boxes[0].plannedEnergyByDate['2026-07-02'], 0);
+  assert.equal(model.boxes[0].plannedEnergyByDate['2026-07-03'], 6);
+  assert.equal(model.boxes[0].nextCharge.dateKey, '2026-07-03');
+});
+
+test('gecachtes Basismodell bleibt zwischen unterschiedlichen Akku-Kontexten unverändert', () => {
+  const box = {
+    id: 1, name: 'Privat', mode: 1, priority: 5, maxPowerW: 3000,
+    batteryCapacityKwh: 50, minChargePercent: 40, businessDays: [], soc: 50,
+    dailyByWeekday: Array(7).fill(0),
+    profilesByWeekday: Array.from({ length: 7 }, () => Array(24).fill(1 / 24)),
+    samplesByWeekday: Array(7).fill(0), todayRemainingKwh: 6,
+  };
+  const base = {
+    wallboxModel: { boxes: [box] },
+    _wallboxPlanningSlots: [8, 9].map((hour) => ({
+      dateKey: '2026-06-30', dayIndex: 0, hour, durationHours: 1,
+      startMs: Date.UTC(2026, 5, 30, hour), pvKwh: 4, houseKwh: 1,
+    })),
+    hoursToSunrise: null,
+  };
+  const emptyHouseBattery = materializeConsumptionModel(base, {
+    capacityKwh: 10, minSoc: 20, soc: 20, chargeEfficiency: 1, dischargeEfficiency: 1,
+  }, null);
+  const fullHouseBattery = materializeConsumptionModel(base, {
+    capacityKwh: 10, minSoc: 20, soc: 100, chargeEfficiency: 1, dischargeEfficiency: 1,
+  }, null);
+  assert.equal(emptyHouseBattery.wallboxModel.boxes[0].plannedFlexibleEnergyByDate['2026-06-30'], 0);
+  assert.equal(fullHouseBattery.wallboxModel.boxes[0].plannedFlexibleEnergyByDate['2026-06-30'], 6);
+  assert.equal(base.wallboxModel.planned, undefined);
+  assert.equal(base._wallboxPlanningSlots[0].surplusRemainingKwh, undefined);
 });

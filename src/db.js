@@ -5,6 +5,7 @@ const path = require('path');
 const sqlite3 = require('sqlite3').verbose();
 const config = require('./config');
 const { hashPassword, isHashed } = require('./auth/password');
+const metrics = require('./runtime-metrics');
 
 // Öffnet (und initialisiert beim ersten Start) die SQLite-Datenbank.
 // Schema, Seed-Daten und Migrationen sind hier gebündelt, damit der Rest der
@@ -16,6 +17,12 @@ function openDatabase() {
   }
 
   const db = new sqlite3.Database(config.DB_PATH);
+  if (metrics.enabled) {
+    db.on('profile', (_sql, durationMs) => {
+      metrics.counter('sqlite.queries');
+      metrics.counter('sqlite.ms', Number(durationMs) || 0);
+    });
+  }
 
   db.serialize(() => {
     db.run(
@@ -326,6 +333,25 @@ function openDatabase() {
         filter_battery_enabled INTEGER NOT NULL DEFAULT 0,
         filter_battery_soc INTEGER NOT NULL DEFAULT 80,
         filter_battery_soc_topic TEXT NOT NULL DEFAULT ''
+      )`
+    );
+    db.run(
+      `CREATE TABLE IF NOT EXISTS pool_energy_state (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        solar_power_w REAL NOT NULL DEFAULT 0,
+        filter_power_w REAL NOT NULL DEFAULT 0,
+        solar_samples TEXT NOT NULL DEFAULT '[]',
+        filter_samples TEXT NOT NULL DEFAULT '[]',
+        last_house_power_w REAL,
+        last_solar_on INTEGER NOT NULL DEFAULT 0,
+        last_filter_on INTEGER NOT NULL DEFAULT 0,
+        last_sample_ts INTEGER,
+        day_kwh REAL NOT NULL DEFAULT 0,
+        year_kwh REAL NOT NULL DEFAULT 0,
+        previous_year_kwh REAL NOT NULL DEFAULT 0,
+        day_key TEXT NOT NULL DEFAULT '',
+        year_key TEXT NOT NULL DEFAULT '',
+        updated_at INTEGER
       )`
     );
     // Optionales Modul Wallbox: je Wallbox eine Zeile. Topics steuern/messen die

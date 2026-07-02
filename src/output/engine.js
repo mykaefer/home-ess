@@ -8,6 +8,7 @@ const mqttClient = require('../mqtt/client');
 const { normalizeMqttTopic, isCommandTopic } = require('../mqtt/topics');
 const { listOutputs } = require('./outputs');
 const { listInternalValues } = require('./internal-values');
+const metrics = require('../runtime-metrics');
 
 const DEBOUNCE_MS = 1000;
 const VERIFY_MS = 30000;
@@ -63,11 +64,14 @@ function mayRetry(outputId, desired, now) {
 }
 
 async function evaluate() {
-  if (!database || evaluating) return;
+  if (!database || evaluating) {
+    if (evaluating) metrics.counter('output.coalesced');
+    return;
+  }
   evaluating = true;
   try {
     if (!outputs.length) return;
-    const values = await listInternalValues(database, mqttClient.getCache());
+    const values = await metrics.measure('output.catalog', () => listInternalValues(database, mqttClient.getCache()));
     const byId = new Map(values.map((entry) => [entry.id, entry]));
     const cache = mqttClient.getCache();
     const connected = mqttClient.getStatus().connected;
@@ -108,8 +112,52 @@ function scheduleEvaluate() {
   if (debounceTimer) return;
   debounceTimer = setTimeout(() => {
     debounceTimer = null;
-    evaluate().catch(() => {});
+    metrics.measure('output.evaluate', evaluate).catch(() => {});
   }, DEBOUNCE_MS);
+}
+
+function evaluateReadbacks(changedKeys) {
+  const cache = mqttClient.getCache();
+  const connected = mqttClient.getStatus().connected;
+  const now = Date.now();
+  let needsCatalog = false;
+  for (const cacheKey of changedKeys) {
+    const readback = cache.get(cacheKey);
+    const requestedAt = verificationRequestedAt.get(cacheKey) || 0;
+    const fresh = readback && Number(readback.receivedAt || 0) >= requestedAt;
+    for (const output of outputs) {
+      if (readbackKey(output.targetTopic) !== cacheKey) continue;
+      const previous = statuses.get(output.id);
+      if (!previous || previous.desired == null) {
+        needsCatalog = true;
+        continue;
+      }
+      const actual = readback ? readback.value : null;
+      if (fresh && valuesEqual(actual, previous.desired)) {
+        statuses.set(output.id, { state: 'confirmed', desired: previous.desired, actual, checkedAt: now });
+        continue;
+      }
+      statuses.set(output.id, {
+        state: connected ? (fresh ? 'mismatch' : 'waiting') : 'disconnected',
+        desired: previous.desired, actual, checkedAt: now,
+      });
+      if (connected && mayRetry(output.id, previous.desired, now) &&
+          mqttClient.publish(output.targetTopic, previous.desired)) {
+        lastAttempts.set(output.id, { value: previous.desired, at: now });
+      }
+    }
+  }
+  if (needsCatalog) scheduleEvaluate();
+}
+
+function handleValuesChanged(event) {
+  const keys = event && Array.isArray(event.changedKeys) ? event.changedKeys.map(String) : [];
+  if (keys.length && keys.every((key) => key.startsWith('output.readback:'))) {
+    metrics.counter('output.readbackFastPath');
+    evaluateReadbacks(keys);
+    return;
+  }
+  scheduleEvaluate();
 }
 
 // Ob ein Readback aktuell aktiv per /get abgefragt werden muss. Der Prüfschritt
@@ -152,7 +200,7 @@ function scheduleVerification(cacheKey, now = Date.now()) {
 // wodurch der ursprüngliche zufällige Phasenversatz erhalten bleibt.
 function verifyTick() {
   const now = Date.now();
-  let requested = false;
+  const requestedKeys = [];
   for (const cacheKey of registeredReadbacks.keys()) {
     const dueAt = verificationDueAt.get(cacheKey);
     if (dueAt == null) {
@@ -164,16 +212,16 @@ function verifyTick() {
     if (!readbackNeedsVerification(cacheKey, now)) continue;
     if (mqttClient.requestAdHocValue(cacheKey)) {
       verificationRequestedAt.set(cacheKey, now);
-      requested = true;
+      requestedKeys.push(cacheKey);
     }
   }
-  if (!requested) return;
+  if (!requestedKeys.length) return;
   if (verifyEvaluateTimer) clearTimeout(verifyEvaluateTimer);
   // Kurzes Fenster für die Broker-Antwort; eingehende Werte lösen zusätzlich
   // selbst eine entprellte Auswertung aus.
   verifyEvaluateTimer = setTimeout(() => {
     verifyEvaluateTimer = null;
-    evaluate().catch(() => {});
+    evaluateReadbacks(requestedKeys);
   }, 1000);
 }
 
@@ -210,7 +258,7 @@ async function reload() {
 async function init(db) {
   database = db;
   await reload();
-  if (!unsubscribe) unsubscribe = mqttClient.onValuesChanged(scheduleEvaluate);
+  if (!unsubscribe) unsubscribe = mqttClient.onValuesChanged(handleValuesChanged);
   if (!verifyTimer) verifyTimer = setInterval(verifyTick, VERIFY_TICK_MS);
   evaluate().catch(() => {});
 }
@@ -219,4 +267,4 @@ function getStatus(outputId) {
   return statuses.get(Number(outputId)) || { state: 'waiting', desired: null, actual: null, checkedAt: null };
 }
 
-module.exports = { init, reload, evaluate, verifyTick, readbackNeedsVerification, readbackKey, getStatus, valuesEqual };
+module.exports = { init, reload, evaluate, evaluateReadbacks, handleValuesChanged, verifyTick, readbackNeedsVerification, readbackKey, getStatus, valuesEqual };

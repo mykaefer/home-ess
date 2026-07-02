@@ -175,6 +175,7 @@ Das an die Factory übergebene `host`-Objekt:
 |---------|-------|
 | `host.setStates(list)` | Deklariert/aktualisiert den **State-Katalog** der Instanz. `list` siehe unten. Mehrfach aufrufbar (ersetzt den Katalog). |
 | `host.publishState(address, value)` | Meldet den **aktuellen Wert** einer Adresse. Erscheint im Bus unter `prefix://instanz/adresse`. |
+| `host.publishStates(values)` | Meldet mehrere Werte gemeinsam als `[{ address, value }]`. Frische und Werte werden je State aktualisiert, abhängige Regeln erhalten aber nur ein gemeinsames Änderungsereignis. |
 | `host.setConnected(bool, detail?)` | Meldet den **Verbindungszustand** zum Gerät/Dienst (Anzeige auf der Adapter-Seite). `detail` ist ein optionaler Tooltip-Text. |
 | `host.getConfig()` | Liefert die aktuellen **Instanz-Einstellungen** (Objekt). |
 | `host.log(...args)` | Info-Log in die homeESS-Konsole (mit Adapter-/Instanz-Präfix). |
@@ -204,6 +205,9 @@ Das an die Factory übergebene `host`-Objekt:
   der States-Seite und im State-Picker erscheinen. Werte ohne deklarierten State
   landen zwar im Bus, sind aber nicht auffindbar.
 - Werte dürfen Zahl, Boolean oder String sein.
+- Werte aus demselben Geräte-Read möglichst gemeinsam mit `host.publishStates()`
+  melden. Das ändert weder Topics noch Einzelwerte, vermeidet aber unnötigen
+  Regelungs-Fan-out. `publishState()` bleibt für Einzelwerte vollständig gültig.
 
 ## Topics & Routing
 

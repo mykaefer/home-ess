@@ -12,6 +12,7 @@ const {
   EIGENVERBRAUCH_L3_STATE_ID,
 } = require('../stromverbrauch/config');
 const { localCalendar } = require('../local-time');
+const metrics = require('../runtime-metrics');
 
 // Frische-Fenster für sicherheitskritische Messwerte: Nach einem
 // Verbindungsabbruch bleiben alte Werte im Cache stehen. Einträge, die älter als
@@ -511,17 +512,51 @@ function getState() {
 
 let timer = null;
 let unsubscribe = null;
-let chain = Promise.resolve();
+let running = false;
+let rerunRequested = false;
+let activeRun = Promise.resolve();
+
+const RELEVANT_STATE_IDS = new Set([
+  'batterie.soc', 'batterie.voltage',
+  STATE_IDS.gridCommand, STATE_IDS.feedInCommand, STATE_IDS.temperatureWarning,
+  STATE_IDS.gridFrequencyL1, STATE_IDS.gridFrequencyL2, STATE_IDS.gridFrequencyL3,
+  EIGENVERBRAUCH_L1_STATE_ID, EIGENVERBRAUCH_L2_STATE_ID, EIGENVERBRAUCH_L3_STATE_ID,
+]);
+
+function isRelevantEvent(event) {
+  const keys = event && Array.isArray(event.changedKeys) ? event.changedKeys : [];
+  return keys.some((key) => RELEVANT_STATE_IDS.has(String(key)));
+}
+
+// Direkte Aufrufe (Routen/Tests) bleiben awaitbar. Bursts während eines laufenden
+// Ticks werden auf genau einen Folgetick verdichtet, statt eine lange Promise-
+// Kette aufzubauen.
 function runNow(db) {
-  const run = chain.then(() => tick(db));
-  chain = run.catch(() => {});
-  return run;
+  if (running) {
+    rerunRequested = true;
+    metrics.counter('grid.coalesced');
+    return activeRun;
+  }
+  running = true;
+  activeRun = (async () => {
+    let result;
+    do {
+      rerunRequested = false;
+      result = await metrics.measure('grid.tick', () => tick(db));
+    } while (rerunRequested);
+    return result;
+  })().finally(() => { running = false; });
+  return activeRun;
 }
 function init(db) {
   gridControlLog.initLog(db).catch(() => {});
-  if (!unsubscribe) unsubscribe = mqttClient.onValuesChanged(() => runNow(db).catch(() => {}));
+  if (!unsubscribe) unsubscribe = mqttClient.onValuesChanged((event) => {
+    metrics.counter('bus.events');
+    if (isRelevantEvent(event)) runNow(db).catch(() => {});
+    else metrics.counter('grid.irrelevantEvents');
+  });
   if (!timer) timer = setInterval(() => runNow(db).catch(() => {}), 2000);
   runNow(db).catch(() => {});
 }
 
-module.exports = { init, runNow, getState, updateExtremeWindows, updateLoadSwitch, updateLoadSwitchDelayed, hasPhaseFailure, allPhasesPresent, currentDayKey };
+module.exports = { init, runNow, getState, isRelevantEvent, updateExtremeWindows, updateLoadSwitch, updateLoadSwitchDelayed, hasPhaseFailure, allPhasesPresent, currentDayKey };

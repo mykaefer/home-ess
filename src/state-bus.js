@@ -51,6 +51,23 @@ function ingest(cacheKeys, value, meta = {}) {
   return changedKeys;
 }
 
+// Mehrere unterschiedliche Werte als einen gemeinsamen Burst übernehmen. Das
+// aktualisiert die Frische jedes Keys, erzeugt aber höchstens ein Bus-Event.
+function ingestBatch(items, meta = {}) {
+  const receivedAt = meta.receivedAt || Date.now();
+  const changedKeys = [];
+  for (const item of items || []) {
+    const keys = Array.isArray(item.cacheKeys) ? item.cacheKeys : [item.cacheKeys];
+    for (const key of keys) {
+      if (key == null) continue;
+      if (isChanged(valueCache.get(key), item.value)) changedKeys.push(key);
+      valueCache.set(key, { value: item.value, receivedAt });
+    }
+  }
+  if (changedKeys.length) events.emit('values', { topic: meta.topic, changedKeys, receivedAt });
+  return changedKeys;
+}
+
 function getCache() {
   return valueCache;
 }
@@ -64,4 +81,4 @@ function onValuesChanged(listener) {
   return () => events.off('values', listener);
 }
 
-module.exports = { set, ingest, getCache, remove, onValuesChanged };
+module.exports = { set, ingest, ingestBatch, getCache, remove, onValuesChanged };

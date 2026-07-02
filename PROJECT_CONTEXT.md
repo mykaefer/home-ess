@@ -117,9 +117,11 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
 - **Systemprognose** (`/prognose`, `prognosis/forecast.js`): simuliert heute +
   drei Folgetage stündlich aus PV-Wetterprognose, Verbrauch und Batterie. Die
   nutzbare Batterie endet am Mindest-SoC; Lade- und Entladewirkungsgrad werden
-  getrennt gerechnet. Der Verbrauch startet mit dem bisherigen Jahresmittel und
-  mischt schrittweise einen exponentiell gewichteten Mittelwert der letzten
-  konfigurierbaren Tage ein. Ein Haushalts-Standardstundenprofil wird innerhalb
+  getrennt gerechnet. Ungelernte Wochentage starten aus dem bereits beobachteten,
+  bereinigten heutigen Verlauf; in sehr frühen Tagesstunden folgen der jüngste
+  bereinigte Mittelwert und erst zuletzt das Jahresmittel. Diese Basis enthält
+  weder Wallbox, Netto-Akkuladung noch den separat modellierten Klimaanteil. Ein
+  Haushalts-Standardstundenprofil wird innerhalb
   von 14 vollständigen Lerntagen durch das eigene Lastprofil ersetzt; der heutige
   Verlauf kalibriert die Restprognose begrenzt nach. 60-s-Sampling persistiert
   Tagesstände in `prognosis_daily_consumption` und Zählerdifferenzen stündlich in
@@ -151,17 +153,19 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   letzter Stunde, Gesamtbedarf inklusive Akkufüllung, verfügbare, fehlende und
   freie Energie. Der Sonnenaufgang folgt der Standortgeometrie; ohne Koordinaten
   dient 06:00 Uhr als definierter Ersatz.
-  Verbrauchssampling speichert neben dem Rohwert den um Batterieenergie
-  bereinigten Hausverbrauch: `DeltaVerbrauch − BatterieLeistung × Zeit`, wobei
+  Verbrauchssampling speichert neben dem physischen Eigenverbrauch aus
+  **Netzbezug + PV-Ertrag** den um Batterieenergie, Wallbox und Pool bereinigten
+  Hausverbrauch: `DeltaVerbrauch − BatterieLeistung × Zeit`, wobei
   positive Batterieleistung Laden und negative Entladen bedeutet. Lässt sich ein
   Intervall nicht als plausibel einstufen (z. B. veralteter Zeitstempel nach
-  einem Neustart oder ein Sprung im Quellzähler), wird der Rohsprung auf höchstens
-  50 kWh je Ereignis begrenzt, damit ein einzelner Ausreißer nicht als
-  Tagesverbrauch stehen bleibt und die Prognose der Folgetage verzerrt. Die
+  einem Neustart oder ein Sprung im Quellzähler), wird das Intervall verworfen;
+  auch plausible Minutensamples sind auf 2 kWh begrenzt. Damit kann kein einzelner
+  Ausreißer als Tagesverbrauch stehen bleiben und die Prognose der Folgetage
+  verzerren. Die
   Jahresbasis (`annualAverage`) zieht zusätzlich zur Wallbox-Energie die per
   Leistungsintegration erfasste **Netto-Akkuladung** ab (`battery_energy_state`,
   Tag/Woche/Monat/Jahr + Vorjahr, `batterie/energy.js`, 60-s-Job): Der
-  Eigenverbrauch (PV + Netzbezug − Einspeisung) enthält die Hausakku-Ladung
+  Eigenverbrauch (PV + Netzbezug) enthält die Hausakku-Ladung
   physikalisch mit, ohne Bereinigung verschiebt sie den prognostizierten
   Tagesbedarf nach oben. Aus den bereinigten Stundenwerten entstehen sieben getrennte, weich
   gelernte Wochentagsprofile samt wochentagsabhängigem Tagesniveau; bei wenig
@@ -180,7 +184,9 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   30 Sekunden sowie unmittelbar beim Aktivieren und besitzt exklusiv
   alle Level 1–5. Unter Mindest-SoC setzt es Level 1 auch bei deaktiviertem
   Verhaltensmodell. Im Autarkbetrieb erfordert Level 5 SoC > 98 % plus Überschuss;
-  im Netzparallelbetrieb gilt die obere Grid-Control-SoC-Schwelle als voll, bei
+  Im Netzparallelbetrieb bedeutet Level 4 sichere Deckung bis zum nächsten
+  Ladebeginn; Level 3 setzt einen davor tatsächlich erwarteten Netzbedarf voraus.
+  Dort gilt die obere Grid-Control-SoC-Schwelle als voll, bei
   deaktiviertem Grid-Control ersatzweise 90 %. Grid-Control verwaltet nur noch
   das Ein- und Ausschalten des persistenten Notstromzustands.
 - **Grid-Control** (`/grid-control`, optional): Netz- und Einspeisungssteuerung
@@ -245,6 +251,13 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
       startet sofort eine neue Probe.
     - *Filterautomatik*: bis zu 3 Zeitfenster, Follow-Solar, Akku-Override
       (liest `batterie.soc` aus dem zentralen Cache — kein eigenes Topic).
+    - **Pool-Energiemodell** (`pool/energy-model.js`): lernt Solar-/Filterpumpenleistung
+      robust aus realen Schaltflanken (Median), integriert tatsächliche Laufzeiten
+      persistent und entfernt sie beim 60-s-Sampling aus dem Grund-Hausverbrauch.
+      Die Prognose setzt die Solarpumpe aus den erwarteten PV-Stunden und die
+      Filterpumpe aus Zeitfenstern/Follow-Solar beziehungsweise simuliertem
+      Akku-Override als eigene Last an. Temperaturabschaltung und Probeläufe
+      werden prospektiv nicht angenommen, rückwirkend aber vollständig abgezogen.
     - Polling `/pool/status` alle 5 s (Pool-Topics außerhalb der normalen
       State-Definitionen, via Ad-hoc-Subscription-System in `client.js`).
     - `getEffectivePriority(which, cfg)` liefert während Filter-Probeläufen die
@@ -685,6 +698,25 @@ Anleitung zum Anbinden neuer Verbraucher: [LEVEL_HANDLING.md](LEVEL_HANDLING.md)
 - Für häufige Auswertung: **schreibfreie** Provider `readStromverbrauchValues` /
   `readPhotovoltaikValues` / `readBatterieData`. Neue „Live"-Verbraucher **immer**
   diese read-only Varianten nutzen.
+
+## Laufzeit- und CPU-Verhalten
+
+- Adapter können zusammen gelesene Werte per `host.publishStates()` als Batch
+  melden. Der State-Bus aktualisiert dabei alle Frischezeitstempel, erzeugt aber
+  nur ein gemeinsames Änderungsereignis. Der Modbus-Adapter gruppiert dafür
+  zusammenhängende Register gleicher Unit, Registerart und Pollrate.
+- Grid-Control verdichtet relevante Wert-Bursts auf höchstens einen laufenden und
+  einen folgenden Tick; fachfremde Events werden ignoriert. Der 2-s-Sicherheitstakt
+  bleibt davon unabhängig bestehen.
+- Output-Readbacks besitzen einen günstigen Bestätigungspfad ohne erneuten Aufbau
+  des gesamten Wertekatalogs. Wertekatalog, PV-Prognose und Verbrauchsmodell teilen
+  parallele bzw. kurz gültige Berechnungen.
+- Das gecachte Verbrauchsmodell enthält keinen mutierten Wallbox-Ladeplan. Jeder
+  Aufrufer materialisiert daraus einen frischen Plan mit aktuellem Hausakku-SoC,
+  Kapazität, Wirkungsgraden und der gewählten Wallbox-Strategie.
+- Periodische Jobs laufen über `job-scheduler.js` ohne Selbstüberlappung.
+- `HOMEESS_PERF_DEBUG=1` aktiviert einen minütlichen `[perf]`-Datensatz mit
+  Laufzeiten, Aufruf-/Cache-/Coalescing-Zählern, SQLite-Profil und Event-Loop-Lag.
 
 ## Service-Verwaltung (systemd)
 

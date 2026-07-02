@@ -123,9 +123,16 @@ const COLUMNS = `id, name, max_power_w, battery_capacity_kwh, command_topic, sta
   soc_topic, mode_sync_topic, mode, priority_private, priority_business, priority_full,
   min_charge_percent, business_days, stall_timeout_seconds, stall_power_w`;
 
+const wallboxListCache = new WeakMap();
+function invalidateWallboxes(db) { if (db) wallboxListCache.delete(db); }
+
 async function listWallboxes(db) {
+  const cached = wallboxListCache.get(db);
+  if (cached) return cached;
   const rows = await dbAll(db, `SELECT ${COLUMNS} FROM wallboxes ORDER BY id ASC`);
-  return rows.map(normalizeRow);
+  const boxes = rows.map(normalizeRow);
+  wallboxListCache.set(db, boxes);
+  return boxes;
 }
 
 async function getWallbox(db, id) {
@@ -215,6 +222,7 @@ async function createWallbox(db, rawInput) {
     `INSERT INTO wallbox_summary_state (wallbox_id) VALUES (?)`,
     [result.lastID]
   );
+  invalidateWallboxes(db);
   return getWallbox(db, result.lastID);
 }
 
@@ -244,6 +252,7 @@ async function updateWallbox(db, id, rawInput) {
       input.stallTimeoutSeconds, input.stallPowerW, id,
     ]
   );
+  invalidateWallboxes(db);
   return getWallbox(db, id);
 }
 
@@ -253,11 +262,13 @@ async function deleteWallbox(db, id) {
   await dbRun(db, 'DELETE FROM wallbox_counter_state WHERE wallbox_id = ?', [id]);
   await dbRun(db, 'DELETE FROM wallbox_summary_state WHERE wallbox_id = ?', [id]);
   await dbRun(db, 'DELETE FROM wallboxes WHERE id = ?', [id]);
+  invalidateWallboxes(db);
 }
 
 async function setWallboxMode(db, id, mode) {
   const value = [1, 2, 3].includes(Number(mode)) ? Number(mode) : 1;
   await dbRun(db, 'UPDATE wallboxes SET mode = ? WHERE id = ?', [value, id]);
+  invalidateWallboxes(db);
   return value;
 }
 
@@ -290,7 +301,7 @@ function buildWallboxStateDefinitions(boxes) {
 
 module.exports = {
   CHARGE_MODES, POWER_UNITS, COUNTER_UNITS, WEEKDAYS,
-  listWallboxes, getWallbox, createWallbox, updateWallbox, deleteWallbox, setWallboxMode,
+  listWallboxes, invalidateWallboxes, getWallbox, createWallbox, updateWallbox, deleteWallbox, setWallboxMode,
   normalizeInput, buildWallboxStateDefinitions, cacheKey,
   parseNumber, businessDaysToArray,
 };

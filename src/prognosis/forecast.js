@@ -7,12 +7,14 @@ const { loadBatterieConfig, readBatterieData, batteryCapacityKwh } = require('..
 const { readBatteryEnergyValues } = require('../batterie/energy');
 const { loadPrognosisConfig } = require('./config');
 const operatingState = require('../operating-state');
+const metrics = require('../runtime-metrics');
 const { loadMqttConfig } = require('../mqtt/config');
 const { localCalendar } = require('../local-time');
 const { solarGeometryAt } = require('../photovoltaik/aggregation');
 const { buildWallboxModel, planWallboxSchedule, wallboxForecastForDay } = require('./wallbox-model');
 const { isEnabled } = require('../modules');
 const { recordDailyMetric } = require('../history/daily-metrics');
+const { loadPoolEnergyModel, poolLoadForHour } = require('../pool/energy-model');
 
 // BDEW-nahe, geglättete Haushaltsform als Kaltstart. Sobald genügend echte
 // Stundenwerte vorliegen, wird sie stufenlos durch das persönliche Profil ersetzt.
@@ -32,7 +34,7 @@ const COOLING_MIN_SAMPLES = 2;
 // übernehmen. Der Tageswert wird nur aufaddiert, ein solcher Ausreißer bliebe
 // also für den ganzen Tag bestehen und würde als "gelernter" Verbrauch in die
 // Prognose folgender Tage einfließen.
-const MAX_FALLBACK_DELTA_KWH = 50;
+const MAX_SAMPLE_DELTA_KWH = 2;
 
 function dbAll(db, sql, params = []) {
   return new Promise((resolve, reject) => db.all(sql, params, (err, rows) => (err ? reject(err) : resolve(rows || []))));
@@ -121,7 +123,8 @@ function projectedConsumptionForHours(model, forecast, hours) {
     if (isToday && parts.time.hours === model.local.time.hours) {
       wallbox /= Math.max(0.001, 1 - model.local.time.minutes / 60);
     }
-    total += (base + cooling + wallbox) * duration;
+    const pool = poolLoadForHour(model.poolModel, forecast, key, parts.time.hours, 1, null).totalKwh;
+    total += (base + cooling + wallbox + pool) * duration;
   }
   return total;
 }
@@ -192,14 +195,20 @@ function baseConsumptionForRow(row, coolingModel) {
   return coolingModel.baselinesByWeekday[weekdayForDateKey(row.day_key)] || value;
 }
 
-function adjustedConsumptionDelta(rawDelta, batteryPower, durationMs, wallboxPower = 0) {
+function adjustedConsumptionDelta(rawDelta, batteryPower, durationMs, wallboxPower = 0, poolPower = 0) {
   const raw = Math.max(0, num(rawDelta) || 0);
   const power = num(batteryPower) || 0;
   const duration = Math.max(0, Number(durationMs) || 0);
   // Batterie-Leistung: positiv = laden, negativ = entladen.
   // Gesamtverbrauch enthält Laden und unterschlägt Entladen → signiert abziehen.
   const wallbox = Math.max(0, num(wallboxPower) || 0);
-  return Math.max(0, raw - (power + wallbox) * duration / 3600000000);
+  const pool = Math.max(0, num(poolPower) || 0);
+  return Math.max(0, raw - (power + wallbox + pool) * duration / 3600000000);
+}
+
+function selectUnlearnedDailyTarget({ today, elapsedShare, recentAverage, annualAverage }) {
+  const projectedToday = elapsedShare >= 0.1 && today >= 1 ? today / elapsedShare : null;
+  return projectedToday || recentAverage || annualAverage || 0;
 }
 
 async function recordConsumptionSample(db, totalKwh, cache, options = {}, now = new Date()) {
@@ -237,17 +246,34 @@ async function recordConsumptionSample(db, totalKwh, cache, options = {}, now = 
     const rawBefore = num(previous.raw_consumption_kwh) ?? num(previous.consumption_kwh) ?? 0;
     const rawDelta = total - rawBefore;
     const age = timestamp - Number(previous.updated_at || 0);
-    const previousAdjusted = num(previous.consumption_kwh) || 0;
+    let previousAdjusted = num(previous.consumption_kwh) || 0;
+    // Tages- und Stundenwert werden aus denselben plausibilisierten Deltas
+    // aufgebaut. Alte Versionen konnten große Korrekturausreißer ausschließlich
+    // in den Tageswert schreiben. Einen solchen belegbaren Drift reparieren wir
+    // beim nächsten Sample aus der Summe der plausiblen Stundenwerte.
+    const hourly = await dbGet(
+      db,
+      'SELECT COALESCE(SUM(consumption_kwh), 0) AS total FROM prognosis_hourly_consumption WHERE day_key = ?',
+      [key]
+    );
+    const hourlyTotal = num(hourly && hourly.total) || 0;
+    if (previousAdjusted - hourlyTotal > MAX_SAMPLE_DELTA_KWH) previousAdjusted = hourlyTotal;
     const batteryPower = num(options.batteryPower) || 0;
     const validInterval = rawDelta >= 0 && rawDelta < 2 && age > 0 && age <= 5 * 60 * 1000;
     // Ein negativer Delta ist der verspätete Reset eines Quellzählers. Dabei
     // wird raw_consumption_kwh unten auf den neuen Stand basiert, der bereits
     // integrierte heutige Verbrauch bleibt jedoch unverändert.
-    const adjustedDelta = validInterval
-      ? adjustedConsumptionDelta(rawDelta, batteryPower, age, options.wallboxPower)
-      : Math.min(Math.max(0, rawDelta), MAX_FALLBACK_DELTA_KWH);
+    const candidateDelta = validInterval
+      ? adjustedConsumptionDelta(rawDelta, batteryPower, age, options.wallboxPower, options.poolPower)
+      : 0;
+    // Auch bei einem formal gültigen Rohintervall kann ein fehlerhafter oder
+    // falsch skalierter Leistungswert die Akku-Korrektur explodieren lassen.
+    // In diesem Fall bleibt der begrenzte Rohfortschritt die sicherere Näherung.
+    const adjustedDelta = candidateDelta <= MAX_SAMPLE_DELTA_KWH
+      ? candidateDelta
+      : Math.min(Math.max(0, rawDelta), MAX_SAMPLE_DELTA_KWH);
     adjustedTotal = previousAdjusted + adjustedDelta;
-    if (validInterval && adjustedDelta > 0 && adjustedDelta < 2) {
+    if (adjustedDelta > 0 && adjustedDelta <= MAX_SAMPLE_DELTA_KWH) {
       await dbRun(
         db,
         `INSERT INTO prognosis_hourly_consumption (day_key, hour, consumption_kwh)
@@ -305,6 +331,7 @@ async function recordConsumptionSample(db, totalKwh, cache, options = {}, now = 
   await dbRun(db, 'UPDATE prognosis_daily_consumption SET completed = 1 WHERE day_key <> ? AND completed = 0', [key]);
   await dbRun(db, 'DELETE FROM prognosis_daily_consumption WHERE day_key < date(?, \'-400 days\')', [key]);
   await dbRun(db, 'DELETE FROM prognosis_hourly_consumption WHERE day_key < date(?, \'-90 days\')', [key]);
+  invalidateConsumptionModel(db);
 }
 
 function elapsedDayCount(localDate) {
@@ -313,7 +340,7 @@ function elapsedDayCount(localDate) {
   return Math.max(0, Math.round((current - start) / 86400000));
 }
 
-async function buildConsumptionModel(db, strom, config, cache, forecast = null, storage = null) {
+async function buildConsumptionModelUncached(db, strom, config, cache, forecast = null, storage = null) {
   const mqttConfig = await new Promise((resolve) => loadMqttConfig(db, resolve));
   const calendar = localCalendar(cache, mqttConfig.timezone, new Date());
   const local = {
@@ -324,6 +351,7 @@ async function buildConsumptionModel(db, strom, config, cache, forecast = null, 
   const wallboxModel = isEnabled('wallbox')
     ? await buildWallboxModel(db, key, config.historyDays, local.time.hours, local.time.minutes, cache)
     : { boxes: [], todayRemainingByHour: Array(24).fill(0), yearKwh: 0, previousYearKwh: 0 };
+  const poolModel = await loadPoolEnergyModel(db);
   const previousHour = shiftLocalParts(local, -60);
   const recentHourRows = await dbAll(
     db,
@@ -345,22 +373,33 @@ async function buildConsumptionModel(db, strom, config, cache, forecast = null, 
     'SELECT consumption_kwh FROM prognosis_daily_consumption WHERE day_key = ?',
     [key]
   );
-  const rawToday = Math.max(0, num(strom.breakdown.today.summe) || 0);
+  const rawToday = Math.max(0, num(strom.breakdown.today.eigenverbrauch) || 0);
   const today = Math.max(
     0,
     num(todayRow && todayRow.consumption_kwh) ?? rawToday
   );
   const batteryEnergy = await readBatteryEnergyValues(db);
-  const year = num(strom.breakdown.year.summe);
-  const previousYear = num(strom.breakdown.previousYear.summe);
+  const year = num(strom.breakdown.year.eigenverbrauch);
+  const previousYear = num(strom.breakdown.previousYear.eigenverbrauch);
+  const climateTotals = await dbAll(
+    db,
+    `SELECT substr(day_key, 1, 4) AS year_key, COALESCE(SUM(value), 0) AS total
+       FROM daily_metric_history
+      WHERE metric = 'klima' AND substr(day_key, 1, 4) IN (?, ?)
+      GROUP BY substr(day_key, 1, 4)`,
+    [String(local.date.year), String(local.date.year - 1)]
+  ).catch(() => []);
+  const climateByYear = new Map(climateTotals.map((row) => [String(row.year_key), num(row.total) || 0]));
   // Eigenverbrauch (PV+Import-Export) enthält auch die Akku- und Wallbox-
   // Ladung mit; beide werden hier abgezogen, damit die Jahresbasis dieselbe
   // "reine" Hausverbrauchsgröße abbildet wie der tagesweise angepasste Wert
   // (siehe adjustedConsumptionDelta).
   const houseYear = year == null ? null
-    : Math.max(0, year - wallboxModel.yearKwh - batteryEnergy.year.netCharge);
+    : Math.max(0, year - wallboxModel.yearKwh - poolModel.yearKwh - batteryEnergy.year.netCharge -
+      (climateByYear.get(String(local.date.year)) || 0));
   const housePreviousYear = previousYear == null ? null
-    : Math.max(0, previousYear - wallboxModel.previousYearKwh - batteryEnergy.previousYear.netCharge);
+    : Math.max(0, previousYear - wallboxModel.previousYearKwh - poolModel.previousYearKwh - batteryEnergy.previousYear.netCharge -
+      (climateByYear.get(String(local.date.year - 1)) || 0));
   const completedDays = elapsedDayCount(local.date);
   const annualAverage = completedDays > 0 && houseYear != null
     ? Math.max(0, houseYear - today) / completedDays
@@ -441,7 +480,27 @@ async function buildConsumptionModel(db, strom, config, cache, forecast = null, 
     );
   });
 
-  const dailyTargetsByWeekday = Array(7).fill(dailyTarget || 0);
+  const currentWeekday = weekdayForDateKey(key);
+  const currentProfile = profilesByWeekday[currentWeekday] || profile;
+  const hour = clamp(Number(local.time.hours) || 0, 0, 23);
+  const minute = clamp(Number(local.time.minutes) || 0, 0, 59);
+  const elapsedShare = currentProfile.slice(0, hour).reduce((sum, value) => sum + value, 0) +
+    currentProfile[hour] * minute / 60;
+  const coolingForecastToday = buildCoolingForecastForDay(forecast, key, coolingModel);
+  const coolingElapsedToday = coolingForecastToday.hourly
+    .reduce((sum, value, index) => {
+      if (index < hour) return sum + value;
+      if (index === hour) return sum + value * minute / 60;
+      return sum;
+    }, 0);
+  const baseTodayForCalibration = Math.max(0, today - coolingElapsedToday);
+  // Ungelernte Wochentage starten aus dem bereits beobachteten, um Klima,
+  // Wallbox und Akku bereinigten heutigen Verlauf. Erst wenn der Tag noch zu
+  // jung ist, greifen jüngste Lerntage und zuletzt der bereinigte Jahreswert.
+  const unlearnedDailyTarget = selectUnlearnedDailyTarget({
+    today: baseTodayForCalibration, elapsedShare, recentAverage, annualAverage,
+  });
+  const dailyTargetsByWeekday = Array(7).fill(unlearnedDailyTarget);
   const weekdayDailyCounts = Array(7).fill(0);
   for (let weekday = 0; weekday < 7; weekday += 1) {
     let weekdayWeightTotal = 0;
@@ -459,31 +518,16 @@ async function buildConsumptionModel(db, strom, config, cache, forecast = null, 
     if (weekdayWeightTotal > 0) {
       const weekdayAverage = weekdayWeightedEnergy / weekdayWeightTotal;
       const weekdayLevelWeight = Math.min(0.6, weekdayDailyCounts[weekday] / 6 * 0.6);
-      dailyTargetsByWeekday[weekday] = (dailyTarget || weekdayAverage) * (1 - weekdayLevelWeight) +
+      dailyTargetsByWeekday[weekday] = (unlearnedDailyTarget || weekdayAverage) * (1 - weekdayLevelWeight) +
         weekdayAverage * weekdayLevelWeight;
     }
   }
 
-  const currentWeekday = weekdayForDateKey(key);
-  const currentProfile = profilesByWeekday[currentWeekday] || profile;
-  dailyTarget = dailyTargetsByWeekday[currentWeekday] || dailyTarget;
-
-  const hour = clamp(Number(local.time.hours) || 0, 0, 23);
-  const minute = clamp(Number(local.time.minutes) || 0, 0, 59);
-  const elapsedShare = currentProfile.slice(0, hour).reduce((sum, value) => sum + value, 0) +
-    currentProfile[hour] * minute / 60;
+  dailyTarget = dailyTargetsByWeekday[currentWeekday] || unlearnedDailyTarget;
   if (!(dailyTarget > 0) && elapsedShare > 0.05) dailyTarget = today / elapsedShare;
   if (!(dailyTarget > 0)) dailyTarget = 0;
 
   const expectedSoFar = dailyTarget * elapsedShare;
-  const coolingForecastToday = buildCoolingForecastForDay(forecast, key, coolingModel);
-  const coolingElapsedToday = coolingForecastToday.hourly
-    .reduce((sum, value, index) => {
-      if (index < hour) return sum + value;
-      if (index === hour) return sum + value * minute / 60;
-      return sum;
-    }, 0);
-  const baseTodayForCalibration = Math.max(0, today - coolingElapsedToday);
   const intradayFactor = expectedSoFar > 0.5
     ? clamp(baseTodayForCalibration / expectedSoFar, 0.75, 1.35)
     : 1;
@@ -493,10 +537,10 @@ async function buildConsumptionModel(db, strom, config, cache, forecast = null, 
     return dailyTarget * intradayFactor * share;
   });
 
-  planWallboxSchedule(wallboxModel, buildWallboxPlanningSlots({
+  const wallboxPlanningSlots = buildWallboxPlanningSlots({
     forecast, local, remainingByHour, profilesByWeekday, dailyTargetsByWeekday,
-    profile: currentProfile, dailyTarget, coolingModel,
-  }), storage);
+    profile: currentProfile, dailyTarget, coolingModel, poolModel,
+  });
 
   let recentHourKwh = null;
   if (currentHourEnergy != null && previousHourEnergy != null) {
@@ -509,11 +553,6 @@ async function buildConsumptionModel(db, strom, config, cache, forecast = null, 
   if (recentHourKwh == null) recentHourKwh = dailyTarget * currentProfile[hour];
 
   const hoursToSunrise = hoursUntilNextSunrise(mqttConfig, local);
-  const consumptionToSunrise = projectedConsumptionForHours({
-    local, dailyTarget, profile: currentProfile, profilesByWeekday, dailyTargetsByWeekday,
-    intradayFactor, coolingModel, wallboxModel,
-  }, forecast, hoursToSunrise);
-
   return {
     local, today, rawToday, annualAverage, recentAverage, dailyTarget,
     expectedToday: today + remainingByHour.reduce((sum, value) => sum + value, 0),
@@ -521,10 +560,66 @@ async function buildConsumptionModel(db, strom, config, cache, forecast = null, 
     intradayFactor, profile: currentProfile, profilesByWeekday, dailyTargetsByWeekday,
     weekdayProfileDays: weekdayProfileDays.map((days) => days.size), weekdayDailyCounts,
     currentWeekday, coolingModel, coolingElapsedToday,
-    wallboxModel,
-    remainingByHour, recentHourKwh, hoursToSunrise, consumptionToSunrise,
+    wallboxModel, poolModel,
+    remainingByHour, recentHourKwh, hoursToSunrise, consumptionToSunrise: null,
+    _wallboxPlanningSlots: wallboxPlanningSlots,
     historyDays: dailyRows.length,
   };
+}
+
+const MODEL_CACHE_MS = 30000;
+const modelCache = new WeakMap();
+const modelInFlight = new WeakMap();
+
+function consumptionFingerprint(strom, config, forecast) {
+  const today = strom && strom.breakdown && strom.breakdown.today
+    ? strom.breakdown.today.eigenverbrauch : null;
+  return JSON.stringify([
+    today,
+    config && config.historyDays,
+    config && config.chargeEfficiency,
+    config && config.dischargeEfficiency,
+    forecast && forecast.fetchedAt,
+  ]);
+}
+
+function materializeConsumptionModel(base, storage, forecast) {
+  // Planung mutiert Wallboxen und Slots. Jeder Verbraucher bekommt deshalb
+  // eine eigene Kopie; das gecachte Basismodell bleibt garantiert unverändert.
+  const model = structuredClone(base);
+  planWallboxSchedule(model.wallboxModel, model._wallboxPlanningSlots, storage);
+  delete model._wallboxPlanningSlots;
+  model.consumptionToSunrise = projectedConsumptionForHours(model, forecast, model.hoursToSunrise);
+  return model;
+}
+
+async function buildConsumptionModel(db, strom, config, cache, forecast = null, storage = null) {
+  const fingerprint = consumptionFingerprint(strom, config, forecast);
+  const cached = modelCache.get(db);
+  if (cached && cached.fingerprint === fingerprint && Date.now() - cached.at < MODEL_CACHE_MS) {
+    metrics.counter('consumptionModel.cacheHit');
+    return materializeConsumptionModel(cached.value, storage, forecast);
+  }
+  const pending = modelInFlight.get(db);
+  if (pending && pending.fingerprint === fingerprint) {
+    metrics.counter('consumptionModel.shared');
+    return materializeConsumptionModel(await pending.promise, storage, forecast);
+  }
+  const promise = metrics.measure('consumptionModel.build', () =>
+    buildConsumptionModelUncached(db, strom, config, cache, forecast));
+  modelInFlight.set(db, { fingerprint, promise });
+  try {
+    const value = await promise;
+    modelCache.set(db, { fingerprint, at: Date.now(), value });
+    return materializeConsumptionModel(value, storage, forecast);
+  } finally {
+    const current = modelInFlight.get(db);
+    if (current && current.promise === promise) modelInFlight.delete(db);
+  }
+}
+
+function invalidateConsumptionModel(db) {
+  if (db) modelCache.delete(db);
 }
 
 function forecastPvForHour(forecast, dayKeyValue, hour) {
@@ -571,7 +666,7 @@ function buildCoolingForecastForDay(forecast, dayKeyValue, coolingModel = {}) {
 
 function buildWallboxPlanningSlots({
   forecast, local, remainingByHour, profilesByWeekday,
-  dailyTargetsByWeekday, profile, dailyTarget, coolingModel,
+  dailyTargetsByWeekday, profile, dailyTarget, coolingModel, poolModel,
 }) {
   if (!forecast || !Array.isArray(forecast.days)) return [];
   const currentHour = Number(local.time.hours) || 0;
@@ -605,6 +700,7 @@ function buildWallboxPlanningSlots({
         ? remainingByHour[hour]
         : Math.max(0, dayTarget * (dayProfile[hour] || 0));
       const coolingKwh = Math.max(0, cooling[hour] || 0) * durationHours;
+      const poolKwh = poolLoadForHour(poolModel, forecast, day.dateKey, hour, durationHours, null).totalKwh;
       slots.push({
         dateKey: day.dateKey,
         dayIndex,
@@ -614,7 +710,7 @@ function buildWallboxPlanningSlots({
           ? nowMs
           : nowMs + ((dayIndex * 24 + hour) - nowDecimal) * 3600000,
         pvKwh: rawPv[hour] * pvScale,
-        houseKwh: Math.max(0, base || 0) + coolingKwh,
+        houseKwh: Math.max(0, base || 0) + coolingKwh + poolKwh,
       });
     }
   });
@@ -653,6 +749,9 @@ function simulateDays({ forecast, model, config, batteryConfig, batteryData }) {
     let coolingKwh = 0;
     let houseLoadKwh = 0;
     let wallboxKwh = 0;
+    let poolKwh = 0;
+    let poolSolarKwh = 0;
+    let poolFilterKwh = 0;
     let reachedFull = false;
     let chargeStartSoc = null;
     let chargeStartHour = null;
@@ -686,13 +785,19 @@ function simulateDays({ forecast, model, config, batteryConfig, batteryData }) {
       let houseLoad = dayIndex === 0 ? model.remainingByHour[hour] : dayTarget * dayProfile[hour];
       houseLoad += coolingHourly[hour];
       const wallboxLoad = wallboxForecast.hourly[hour] || 0;
-      let load = houseLoad + wallboxLoad;
+      const currentBatterySoc = capacity > 0 ? minSoc + stored / capacity * 100 : minSoc;
+      const durationHours = dayIndex === 0 && hour === currentHour ? 1 - currentMinute / 60 : 1;
+      const poolLoad = poolLoadForHour(model.poolModel, forecast, pvDay.dateKey, hour, durationHours, currentBatterySoc);
+      let load = houseLoad + wallboxLoad + poolLoad.totalKwh;
       let pv = pvHourly[hour] * pvScale;
       load = Math.max(0, load || 0);
       pv = Math.max(0, pv || 0);
       loadKwh += load;
       houseLoadKwh += houseLoad;
       wallboxKwh += wallboxLoad;
+      poolKwh += poolLoad.totalKwh;
+      poolSolarKwh += poolLoad.solarKwh;
+      poolFilterKwh += poolLoad.filterKwh;
       coolingKwh += coolingHourly[hour];
       pvKwh += pv;
       const direct = Math.min(load, pv);
@@ -763,6 +868,9 @@ function simulateDays({ forecast, model, config, batteryConfig, batteryData }) {
       coolingKwh,
       houseLoadKwh,
       wallboxKwh,
+      poolKwh,
+      poolSolarKwh,
+      poolFilterKwh,
       wallboxes: wallboxForecast.perBox,
       maxTemperature,
     };
@@ -823,6 +931,8 @@ async function computePrognosis(db, cache, { allowFetch = false } = {}) {
 
 module.exports = {
   computePrognosis, recordConsumptionSample, buildConsumptionModel,
+  invalidateConsumptionModel, materializeConsumptionModel,
   normalizedProfile, adjustedConsumptionDelta, buildCoolingModel, simulateDays,
+  selectUnlearnedDailyTarget,
   hoursUntilNextSunrise, projectedConsumptionForHours, buildWallboxPlanningSlots,
 };

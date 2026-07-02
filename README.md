@@ -61,7 +61,7 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
     Zellzahl, Kapazität in Ah und manuell anpassbaren unteren/oberen Spannungsgrenzen.
 - 📈 **Prognose** — Energiebilanz für heute plus drei Tage direkt unterhalb der
   Batterie im Menü. Kombiniert PV-Wetterprognose, nutzbare Batterieladung und ein
-  selbstlernendes Verbrauchsmodell (Jahresmittel, gewichteter 28-Tage-Mittelwert,
+  selbstlernendes Verbrauchsmodell (bereinigter Tagesverlauf, gewichteter 28-Tage-Mittelwert,
   persönliches Stundenprofil und Tageskalibrierung). Netzbedarf, Überschuss,
   Batterie-Endstand, heutiger Autark-Status und die autarken Tage des laufenden
   Jahres stehen auch im Wertekatalog bereit. Der Jahreszähler kann bidirektional
@@ -74,9 +74,11 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
   wird mit Tag und Uhrzeit ausgewiesen; Tagesend-SoC bleibt als Zusatzwert sichtbar.
   Für jeden Wochentag wird eine eigene Verbrauchskurve gelernt. Da der aus
   Netzbezug und PV abgeleitete Gesamtverbrauch auch Akkuladung enthält, wird die
-  signierte Batterieleistung vor dem Lernen herausgerechnet. Auch die Jahresbasis
-  wird um die Netto-Akkuladung und den Wallbox-Verbrauch bereinigt, damit
-  gespeicherte Energie den prognostizierten Tagesbedarf nicht nach oben zieht.
+  signierte Batterieleistung vor dem Lernen herausgerechnet. Wallbox,
+  Klimatisierung und Poolpumpen werden ebenfalls aus dem reinen Hausbedarf
+  entfernt und anschließend separat eingeplant. Ungelernte Wochentage übernehmen
+  nach ausreichendem Tagesfortschritt den bereinigten heutigen Verlauf, davor den
+  jüngsten bereinigten Mittelwert und nur ohne Lerndaten das bereinigte Jahresmittel.
   Oben rechts lässt sich ein Verhaltensmodell aktivieren: **Netzparallelbetrieb**
   bewertet ausschließlich die Versorgung bis zum nächsten Ladebeginn und nutzt
   danach das Netz als Reserve; **Autarkbetrieb** bewertet mehrere Prognosetage
@@ -86,7 +88,9 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
   unterschrittenem Mindest-SoC und auch ohne
   aktiviertes Verhaltensmodell. Im Autarkbetrieb gilt der Akku erst über 98 %
   als voll und Überschuss aktiviert dann Level 5. Im Netzparallelbetrieb stammt
-  die Voll-Schwelle aus der oberen Grid-Control-SoC-Schwelle, bei deaktiviertem
+  Level 4 bedeutet dort, dass der Bedarf bis zum nächsten Ladebeginn sicher
+  gedeckt ist; Level 3 wird erst bei tatsächlich erwartetem Netzbedarf davor
+  gesetzt. Die Voll-Schwelle stammt aus der oberen Grid-Control-SoC-Schwelle, bei deaktiviertem
   Grid-Control werden 90 % verwendet. Das aktivierte Modell setzt den globalen
   Betriebslevel direkt, wird bei MQTT-Änderungen neu bewertet und spätestens
   alle 30 Sekunden unabhängig vom Verbrauchssampling ausgeführt.
@@ -128,6 +132,11 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
     Automatik-Modus schalten sie nur ein, wenn das Betriebslevel ihre Priorität
     freigibt, und schalten bei Levelabfall sofort ab. Hand An/Aus übersteuert das
     Level bewusst.
+  - Ein Energiemodell lernt die Pumpenleistung aus realen Schaltvorgängen, zieht
+    tatsächliche Laufzeiten aus dem gelernten Hausbedarf ab und plant sie separat:
+    Solar aus den erwarteten PV-Stunden, Filter aus Zeitfenstern, Follow-Solar und
+    Akku-Override. Maximaltemperatur und Probeläufe werden nicht vorausgesagt,
+    rückwirkend aber vollständig bereinigt.
 - 🚗 **Wallbox** (optionales Modul, aktivierbar unter `/module`):
   - Mehrere Wallboxen einzeln anlegbar (wie die PV-Anlagen). Je Box ein
     Pflicht-**Steuer-Topic** sowie optional Status, Leistung (W/kW), fortlaufender
@@ -157,8 +166,10 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
     herausgerechnet und anschließend als eigener Wallboxbedarf eingeplant. Der
     Vorausplan nutzt dabei denselben aktiven Lademodus wie die Automatik sowie
     Fahrzeug-SoC, Akkugröße, Mindestladung und Arbeitstage. Pflichtladungen werden
-    fest berücksichtigt; mehrere flexible Wallboxen teilen sich den erwarteten
-    PV-Überschuss nach Priorität, statt ihn mehrfach zu verplanen.
+    fest über alle sichtbaren Tage fortgeführt; mehrere flexible Wallboxen teilen
+    sich nur den nach dem Hausakku verbleibenden PV-Überschuss nach Priorität,
+    statt ihn mehrfach zu verplanen. Ein unveränderliches gecachtes Basismodell
+    wird dabei für jede Prognose mit dem aktuellen Akku-/Fahrzeugzustand neu geplant.
 - ⚖️ **Betriebslevel / Lastmanagement** — ein zentraler Handler setzt registrierte
   Verbraucher nach **Priorität** (= Betriebslevel, ab dem sie laufen dürfen) gegen das
   prognosegeführte Betriebslevel durch. Erste Verbraucher: Filter-/Solarpumpe, Wallbox.
@@ -185,7 +196,9 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
   Schema laufen weiter über den MQTT-Broker). Regelwerk: [ADAPTER.md](ADAPTER.md),
   Vorlage: `adapter/demo`. Mitgeliefert: **Modbus-TCP-Adapter** (`adapter/modbus`)
   mit Register-Verwaltung und **Presets** (Vorlagen zum Anlegen der Live-States,
-  inkl. Upload; Format: `adapter/modbus/PRESET.md`).
+  inkl. Upload; Format: `adapter/modbus/PRESET.md`). Zusammenhängende Register
+  gleicher Unit-ID, Registerart und Pollrate werden blockweise gelesen und als
+  gemeinsamer State-Batch verteilt; Pollintervalle und State-Adressen bleiben gleich.
 - 🗂️ **States** — klappt als Unterpunkt unter **Adapter** auf: Baumansicht aller
   von Adaptern gemeldeten Werte (Instanz → Kategorie → State) mit Live-Werten;
   hinter Topic-Feldern direkt per Auswahldialog übernehmbar. Alle States sind
@@ -322,7 +335,7 @@ src/
   wetter/          Open-Meteo-Abruf (Strahlungsprognose) + In-Memory-Cache
   batterie/        Topic-Konfiguration + State-Definitionen + Cache-Reader
   prognosis/       Verbrauchslernen, Batterie-Simulation + Modellkonfiguration
-  pool/            Pool-Config + Pump-Automation (solar/filter)
+  pool/            Pool-Config + Pump-Automation und separates Energiemodell
   grid-control/    Schaltlogik + verifizierte Regelschleife + Audit-Log (optional)
   wallbox/         Wallbox-CRUD (boxes.js), Zähler/SoC-Aggregation, Lademodus-
                    Planer (planner.js), Steuerschleife (automation.js) (optional)

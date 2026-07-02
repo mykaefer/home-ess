@@ -22,6 +22,9 @@ const DEFAULTS = {
   loadOnL1: '', loadOnL2: '', loadOnL3: '', loadOffL1: '', loadOffL2: '', loadOffL3: '',
 };
 
+let cachedDb = null;
+let cachedConfig = null;
+
 function number(value, min, max, fallback) {
   const text = String(value == null ? '' : value).trim().replace(',', '.');
   if (!text) return fallback;
@@ -61,7 +64,23 @@ function rowToConfig(row = {}) {
 }
 
 function loadGridControlConfig(db, callback) {
-  db.get('SELECT * FROM grid_control_config WHERE id = 1', (err, row) => callback(err || !row ? { ...DEFAULTS } : rowToConfig(row)));
+  if (cachedDb === db && cachedConfig) {
+    queueMicrotask(() => callback({ ...cachedConfig }));
+    return;
+  }
+  db.get('SELECT * FROM grid_control_config WHERE id = 1', (err, row) => {
+    const config = err || !row ? { ...DEFAULTS } : rowToConfig(row);
+    cachedDb = db;
+    cachedConfig = config;
+    callback({ ...config });
+  });
+}
+
+function invalidateGridControlConfig(db = null) {
+  if (!db || cachedDb === db) {
+    cachedDb = null;
+    cachedConfig = null;
+  }
 }
 
 function normalizeGridControlInput(input = {}) {
@@ -120,7 +139,13 @@ function saveGridControlConfig(db, input, callback) {
       cfg.socHysteresis, cfg.voltageHysteresis, cfg.gridFrequencyL1Topic, cfg.gridFrequencyL2Topic,
       cfg.gridFrequencyL3Topic, cfg.gridDetectionSeconds, cfg.loadEnabled ? 1 : 0, cfg.loadOffDelaySeconds,
       cfg.loadOnL1, cfg.loadOnL2, cfg.loadOnL3, cfg.loadOffL1, cfg.loadOffL2, cfg.loadOffL3],
-    (err) => callback(err, cfg)
+    (err) => {
+      if (!err) {
+        cachedDb = db;
+        cachedConfig = cfg;
+      }
+      callback(err, cfg);
+    }
   );
 }
 
@@ -145,4 +170,4 @@ function readGridControlBrokerValues(cache) {
   };
 }
 
-module.exports = { loadGridControlConfig, saveGridControlConfig, normalizeGridControlInput, buildGridControlStateDefinitions, readGridControlBrokerValues, STATE_IDS, DEFAULTS };
+module.exports = { loadGridControlConfig, saveGridControlConfig, invalidateGridControlConfig, normalizeGridControlInput, buildGridControlStateDefinitions, readGridControlBrokerValues, STATE_IDS, DEFAULTS };

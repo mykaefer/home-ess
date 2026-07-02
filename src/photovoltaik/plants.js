@@ -89,7 +89,12 @@ function normalizePlantRow(row = {}) {
   };
 }
 
+const plantListCache = new WeakMap();
+function invalidatePvPlants(db) { if (db) plantListCache.delete(db); }
+
 async function listPvPlants(db) {
+  const cached = plantListCache.get(db);
+  if (cached) return cached;
   const rows = await dbAll(
     db,
     `SELECT id, name, kw_peak, efficiency, orientation, tilt, is_consumer_side, cell_type,
@@ -98,7 +103,9 @@ async function listPvPlants(db) {
      FROM pv_plants
      ORDER BY id ASC`
   );
-  return rows.map(normalizePlantRow);
+  const plants = rows.map(normalizePlantRow);
+  plantListCache.set(db, plants);
+  return plants;
 }
 
 async function getPvPlant(db, id) {
@@ -194,7 +201,7 @@ async function createPvPlant(db, input) {
      VALUES (?, 0, 0, 0, '', '')`,
     [result.lastID]
   );
-
+  invalidatePvPlants(db);
   return getPvPlant(db, result.lastID);
 }
 
@@ -246,7 +253,7 @@ async function updatePvPlant(db, id, input) {
       await dbRun(db, 'DELETE FROM pv_calibration_buckets WHERE plant_id = ?', [id]);
     }
   }
-
+  invalidatePvPlants(db);
   return getPvPlant(db, id);
 }
 
@@ -254,6 +261,7 @@ async function deletePvPlant(db, id) {
   await dbRun(db, 'DELETE FROM pv_aggregation WHERE plant_id = ?', [id]);
   await dbRun(db, 'DELETE FROM pv_calibration_buckets WHERE plant_id = ?', [id]);
   await dbRun(db, 'DELETE FROM pv_plants WHERE id = ?', [id]);
+  invalidatePvPlants(db);
 }
 
 function buildPhotovoltaikStateDefinitions(plants) {
@@ -271,6 +279,7 @@ module.exports = {
   DEFAULT_SUN_CUTOFF_PERCENT,
   CONVERTER_TYPE_OPTIONS,
   listPvPlants,
+  invalidatePvPlants,
   getPvPlant,
   createPvPlant,
   updatePvPlant,

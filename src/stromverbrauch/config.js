@@ -29,8 +29,14 @@ const NETZBEZUG_ZAEHLER_L3_STATE_ID = 'stromverbrauch_netzbezug_zaehler_l3';
 const EINSPEISUNG_ZAEHLER_L1_STATE_ID = 'stromverbrauch_einspeisung_zaehler_l1';
 const EINSPEISUNG_ZAEHLER_L2_STATE_ID = 'stromverbrauch_einspeisung_zaehler_l2';
 const EINSPEISUNG_ZAEHLER_L3_STATE_ID = 'stromverbrauch_einspeisung_zaehler_l3';
+let configCacheDb = null;
+let configCache = null;
 
 function loadStromverbrauchConfig(db, callback) {
+  if (configCacheDb === db && configCache) {
+    queueMicrotask(() => callback({ ...configCache }));
+    return;
+  }
   db.get(
     `SELECT
       eigenverbrauch_l1_topic AS eigenverbrauchL1Topic,
@@ -48,8 +54,7 @@ function loadStromverbrauchConfig(db, callback) {
      FROM stromverbrauch_config
      WHERE id = 1`,
     (err, row) => {
-      if (err || !row) return callback({ ...DEFAULTS });
-      callback({
+      const config = err || !row ? { ...DEFAULTS } : {
         eigenverbrauchL1Topic: row.eigenverbrauchL1Topic || '',
         eigenverbrauchL2Topic: row.eigenverbrauchL2Topic || '',
         eigenverbrauchL3Topic: row.eigenverbrauchL3Topic || '',
@@ -62,7 +67,10 @@ function loadStromverbrauchConfig(db, callback) {
         einspeisungZaehlerL1Topic: row.einspeisungZaehlerL1Topic || '',
         einspeisungZaehlerL2Topic: row.einspeisungZaehlerL2Topic || '',
         einspeisungZaehlerL3Topic: row.einspeisungZaehlerL3Topic || '',
-      });
+      };
+      configCacheDb = db;
+      configCache = config;
+      callback({ ...config });
     }
   );
 }
@@ -104,7 +112,10 @@ function saveStromverbrauchConfig(db, input, callback) {
       config.einspeisungZaehlerL2Topic,
       config.einspeisungZaehlerL3Topic,
     ],
-    (err) => callback(err, config)
+    (err) => {
+      if (!err) { configCacheDb = db; configCache = config; }
+      callback(err, config);
+    }
   );
 }
 

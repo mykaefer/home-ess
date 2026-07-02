@@ -16,6 +16,7 @@ const { computeInstantSunIntensity, readSunIntensityAverages } = require('../pho
 const { readStromverbrauchValues } = require('../stromverbrauch/aggregation');
 const {
   loadBatterieConfig, readBatterieData, batteryRemainingKwh,
+  batteryCapacityKwh,
   batteryUsableStoredKwh, batteryTimeToLimitHours,
   batteryStatus, updateBatteryDailyState,
 } = require('../batterie/config');
@@ -33,6 +34,7 @@ const { buildStatesTree } = require('../adapters/states');
 const { loadMqttConfig } = require('../mqtt/config');
 const { localCalendar } = require('../local-time');
 const { computeYearStats, getDailyMetricValue, statsFromRows, dayKeyOffset } = require('../history/daily-metrics');
+const metrics = require('../runtime-metrics');
 
 // Kategorien entsprechen der Herkunft des Wertes (Seite, von der er stammt) und
 // werden anhand des stabilen id-Präfix zugeordnet. Die Reihenfolge bestimmt die
@@ -218,7 +220,7 @@ const FORECAST_VALUES = [
   { id: 'pv.forecast.day3', index: 3, label: 'PV Prognose Ertrag in 3 Tagen' },
 ];
 
-async function listInternalValues(db, cache) {
+async function buildInternalValues(db, cache) {
   const plants = await listPvPlants(db);
   const batCfg = await new Promise((resolve) => loadBatterieConfig(db, resolve));
   const poolCfg = isEnabled('pool') ? await new Promise((resolve) => loadPoolConfig(db, resolve)) : null;
@@ -368,7 +370,13 @@ async function listInternalValues(db, cache) {
 
   // Systemprognose – nutzt dieselben bereits gelesenen PV-, Verbrauchs- und
   // Batteriedaten wie die Prognoseseite und bleibt dadurch im Output konsistent.
-  const consumptionModel = await buildConsumptionModel(db, strom, prognosisConfig, cache, forecast);
+  const consumptionModel = await buildConsumptionModel(db, strom, prognosisConfig, cache, forecast, {
+    capacityKwh: batteryCapacityKwh(batCfg),
+    minSoc: Number.isFinite(Number(bat.minSoc)) ? Number(bat.minSoc) : Number(batCfg.minSoc),
+    soc: Number.isFinite(Number(bat.soc)) ? Number(bat.soc) : Number(batCfg.minSoc),
+    chargeEfficiency: prognosisConfig.chargeEfficiency / 100,
+    dischargeEfficiency: prognosisConfig.dischargeEfficiency / 100,
+  });
   const gridState = getGridControlState();
   const currentSoc = Number(String(bat.soc == null ? '' : bat.soc).replace(',', '.'));
   const isCurrentlyFull = Number.isFinite(currentSoc) && currentSoc > 98;
@@ -633,4 +641,31 @@ async function listInternalValues(db, cache) {
   return entries;
 }
 
-module.exports = { listInternalValues, categoryForId, secondsUntilNextCharge, VALUE_CATEGORIES };
+const SNAPSHOT_CACHE_MS = 900;
+let snapshotCache = null;
+let snapshotInFlight = null;
+
+async function listInternalValues(db, cache) {
+  if (snapshotCache && snapshotCache.db === db && snapshotCache.cache === cache &&
+      Date.now() - snapshotCache.at < SNAPSHOT_CACHE_MS) {
+    metrics.counter('internalValues.cacheHit');
+    return snapshotCache.values;
+  }
+  if (snapshotInFlight && snapshotInFlight.db === db && snapshotInFlight.cache === cache) {
+    metrics.counter('internalValues.shared');
+    return snapshotInFlight.promise;
+  }
+  const promise = metrics.measure('internalValues.build', () => buildInternalValues(db, cache));
+  snapshotInFlight = { db, cache, promise };
+  try {
+    const values = await promise;
+    snapshotCache = { db, cache, at: Date.now(), values };
+    return values;
+  } finally {
+    if (snapshotInFlight && snapshotInFlight.promise === promise) snapshotInFlight = null;
+  }
+}
+
+function invalidateInternalValues() { snapshotCache = null; }
+
+module.exports = { listInternalValues, invalidateInternalValues, categoryForId, secondsUntilNextCharge, VALUE_CATEGORIES };

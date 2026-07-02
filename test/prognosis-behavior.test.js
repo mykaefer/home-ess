@@ -62,7 +62,20 @@ test('Netzparallelbetrieb senkt nahe Mindeststand auf Level 2', () => {
 test('Netzparallelbetrieb ignoriert Risiken nach dem nächsten Ladebeginn', () => {
   const data = prognosis('grid_parallel', { soc: 60, endSoc: 45, futureEnd: 20 });
   data.simulation.assessmentSoc = 45;
+  assert.equal(evaluateBehaviorLevel(data).level, 4);
+});
+
+test('Netzparallelbetrieb nutzt Level 3 nur bei Netzbedarf vor dem Ladebeginn', () => {
+  const data = prognosis('grid_parallel', { soc: 55, endSoc: 45 });
+  data.simulation.gridBeforeCharge = 0.2;
   assert.equal(evaluateBehaviorLevel(data).level, 3);
+});
+
+test('Netzparallelbetrieb gibt Level 4 bei sicherer Deckung auch unter 80 Prozent SoC', () => {
+  const data = prognosis('grid_parallel', { soc: 55, endSoc: 45, futureEnd: 30 });
+  data.simulation.assessmentSoc = 45;
+  data.simulation.gridBeforeCharge = 0;
+  assert.equal(evaluateBehaviorLevel(data).level, 4);
 });
 
 test('Netzparallelbetrieb setzt Level 1 erst unterhalb Mindest-SoC', () => {

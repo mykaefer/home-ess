@@ -35,6 +35,14 @@ function buildHost() {
       if (address == null) return;
       send({ type: 'value', address: String(address), value });
     },
+    // Mehrere zusammen gelesene Werte in einer IPC-Nachricht melden. Der Parent
+    // aktualisiert alle Frischezeitstempel und feuert nur ein gemeinsames Event.
+    publishStates(values) {
+      if (!Array.isArray(values) || !values.length) return;
+      send({ type: 'values', values: values
+        .filter((entry) => entry && entry.address != null)
+        .map((entry) => ({ address: String(entry.address), value: entry.value })) });
+    },
     // Den State-Katalog (Liste declarierter States) melden/aktualisieren.
     // Eintrag: { address, name?, category?, unit?, writable? }
     setStates(list) {

@@ -16,6 +16,13 @@ mehrere Instanzen, Registrierung/Abmeldung beim Hinzufügen/Löschen einer Box).
    [`src/operating-state.js`](src/operating-state.js) und laufend von der Prognose gesetzt.
    1 = strengster Sparbetrieb, 5 = freier Betrieb (Überschuss).
 
+   Im **Netzparallelbetrieb** bedeuten die Zwischenstufen konkret: Level 1 bei
+   bereits unterschrittenem Mindest-SoC, Level 2 bei knapper Reserve, Level 3 bei
+   prognostiziertem Netzbedarf vor dem nächsten Ladebeginn, Level 4 bei sicherer
+   Deckung bis dahin und Level 5 bei freiem Überschuss. Der **Autarkbetrieb**
+   bewertet dagegen den gesamten sichtbaren Prognosehorizont und kann früher
+   vorsorglich abregeln.
+
 2. **Priorität = Freigabe-Level.** Jeder Verbraucher hat eine Priorität (1–5). Die Priorität
    ist das Betriebslevel, **ab dem** der Verbraucher laufen darf:
 
