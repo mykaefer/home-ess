@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-readonly REPOSITORY_URL="https://github.com/kleinVIEH/home-ess.git"
+readonly REPOSITORY_URL="https://github.com/mykaefer/home-ess.git"
 
 readonly APP_NAME="home-ess"
 readonly APP_USER="homeess"

@@ -230,7 +230,7 @@ Von der leeren Maschine bis zur laufenden Instanz:
 3. **homeESS installieren** (ein Befehl):
 
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/kleinVIEH/home-ess/main/install.sh | sudo bash
+   curl -fsSL https://raw.githubusercontent.com/mykaefer/home-ess/main/install.sh | sudo bash
    ```
 
    > Als `root` kannst du `sudo` weglassen; mit einem normalen Benutzer muss dieser
@@ -244,7 +244,7 @@ Danach ist die Weboberfläche unter `http://<host-ip>:3000` erreichbar
 Auf einem bereits vorbereiteten System genügt der reine Installationsbefehl:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/kleinVIEH/home-ess/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/mykaefer/home-ess/main/install.sh | sudo bash
 ```
 
 Das Skript installiert die System- und Node.js-Abhängigkeiten, klont homeESS
