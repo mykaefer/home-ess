@@ -55,8 +55,19 @@ test('Netzparallelbetrieb liest die Voll-Schwelle aus aktivem Grid-Control', asy
   await new Promise((resolve) => db.close(resolve));
 });
 
-test('Netzparallelbetrieb senkt nahe Mindeststand auf Level 2', () => {
-  assert.equal(evaluateBehaviorLevel(prognosis('grid_parallel', { soc: 30, endSoc: 24, futureEnd: 22 })).level, 2);
+test('Netzparallelbetrieb bildet die rote Ampel als Level 2 ab', () => {
+  const data = prognosis('grid_parallel', { soc: 30, endSoc: 24, futureEnd: 22 });
+  data.simulation.status = 0;
+  assert.equal(evaluateBehaviorLevel(data).level, 2);
+});
+
+test('Netzparallelbetrieb bildet die gelbe Ampel als Level 3 ab', () => {
+  const data = prognosis('grid_parallel', { soc: 40, endSoc: 27, futureEnd: 25 });
+  data.simulation.assessmentSoc = 27;
+  data.simulation.gridBeforeCharge = 0;
+  data.simulation.minimumBeforeCharge = false;
+  data.simulation.status = 1;
+  assert.equal(evaluateBehaviorLevel(data).level, 3);
 });
 
 test('Netzparallelbetrieb ignoriert Risiken nach dem nächsten Ladebeginn', () => {
@@ -65,10 +76,10 @@ test('Netzparallelbetrieb ignoriert Risiken nach dem nächsten Ladebeginn', () =
   assert.equal(evaluateBehaviorLevel(data).level, 4);
 });
 
-test('Netzparallelbetrieb nutzt Level 3 nur bei Netzbedarf vor dem Ladebeginn', () => {
+test('Netzparallelbetrieb bildet Netzbedarf vor dem Ladebeginn als rote Ampel und Level 2 ab', () => {
   const data = prognosis('grid_parallel', { soc: 55, endSoc: 45 });
   data.simulation.gridBeforeCharge = 0.2;
-  assert.equal(evaluateBehaviorLevel(data).level, 3);
+  assert.equal(evaluateBehaviorLevel(data).level, 2);
 });
 
 test('Netzparallelbetrieb gibt Level 4 bei sicherer Deckung auch unter 80 Prozent SoC', () => {

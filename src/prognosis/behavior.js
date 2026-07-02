@@ -34,6 +34,7 @@ function forecastMetrics(prognosis) {
       simulation.nextChargeStart ? simulation.nextChargeStart.soc : (days[0] && days[0].batterySocEnd)
     ),
     gridBeforeCharge: number(simulation.gridBeforeCharge, 0),
+    status: simulation.status == null ? null : number(simulation.status, null),
   };
 }
 
@@ -48,13 +49,19 @@ function gridParallelLevel(metrics, context) {
   if (hasExcess && (currentSoc >= fullThreshold || number(today.batterySocEnd) >= fullThreshold)) {
     return { level: 5, reason: `Überschuss bei vollem Akku (Schwelle ${fullThreshold} %)` };
   }
-  // Netzparallel betrachtet bewusst nur das Fenster bis zum nächsten
-  // Ladebeginn. Risiken späterer Tage übernimmt bei Bedarf das verfügbare Netz.
-  if (metrics.minimumBeforeCharge || assessmentSoc <= minSoc + 5) {
-    return { level: 2, reason: 'Reserve bis zum nächsten Ladebeginn fast aufgebraucht' };
+  // Netzparallel verwendet exakt dieselbe Bewertung wie die sichtbare Ampel.
+  // Fehlt der Status nur in einem älteren/externen Snapshot, wird er mit
+  // denselben Kriterien rekonstruiert.
+  const status = metrics.status == null
+    ? (gridBeforeCharge > 0.05 || metrics.minimumBeforeCharge
+      ? 0
+      : (assessmentSoc < minSoc + 10 ? 1 : 2))
+    : metrics.status;
+  if (status === 0) {
+    return { level: 2, reason: 'Mindeststand oder Netzbedarf vor dem nächsten Ladebeginn erwartet' };
   }
-  if (gridBeforeCharge > 0.05) {
-    return { level: 3, reason: 'Netzbedarf vor dem nächsten Ladebeginn erwartet' };
+  if (status === 1) {
+    return { level: 3, reason: 'Reserve bis zum nächsten Ladebeginn knapp kalkuliert' };
   }
   return { level: 4, reason: 'Bedarf bis zum nächsten Ladebeginn sicher gedeckt' };
 }

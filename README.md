@@ -89,8 +89,9 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
   aktiviertes Verhaltensmodell. Im Autarkbetrieb gilt der Akku erst über 98 %
   als voll und Überschuss aktiviert dann Level 5. Im Netzparallelbetrieb stammt
   Level 4 bedeutet dort, dass der Bedarf bis zum nächsten Ladebeginn sicher
-  gedeckt ist; Level 3 wird erst bei tatsächlich erwartetem Netzbedarf davor
-  gesetzt. Die Voll-Schwelle stammt aus der oberen Grid-Control-SoC-Schwelle, bei deaktiviertem
+  gedeckt ist. Die Ampel ist direkt zugeordnet: Grün setzt Level 4, Gelb Level 3
+  und Rot Level 2; Level 1 greift erst unter Mindest-SoC. Die
+  Voll-Schwelle stammt aus der oberen Grid-Control-SoC-Schwelle, bei deaktiviertem
   Grid-Control werden 90 % verwendet. Das aktivierte Modell setzt den globalen
   Betriebslevel direkt, wird bei MQTT-Änderungen neu bewertet und spätestens
   alle 30 Sekunden unabhängig vom Verbrauchssampling ausgeführt.

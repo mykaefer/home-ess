@@ -17,9 +17,9 @@ mehrere Instanzen, Registrierung/Abmeldung beim Hinzufügen/Löschen einer Box).
    1 = strengster Sparbetrieb, 5 = freier Betrieb (Überschuss).
 
    Im **Netzparallelbetrieb** bedeuten die Zwischenstufen konkret: Level 1 bei
-   bereits unterschrittenem Mindest-SoC, Level 2 bei knapper Reserve, Level 3 bei
-   prognostiziertem Netzbedarf vor dem nächsten Ladebeginn, Level 4 bei sicherer
-   Deckung bis dahin und Level 5 bei freiem Überschuss. Der **Autarkbetrieb**
+   bereits unterschrittenem Mindest-SoC, Level 2 bei roter Ampel, Level 3 bei
+   gelber Ampel, Level 4 bei grüner Ampel und Level 5 bei freiem Überschuss und
+   vollem Akku. Der **Autarkbetrieb**
    bewertet dagegen den gesamten sichtbaren Prognosehorizont und kann früher
    vorsorglich abregeln.
 

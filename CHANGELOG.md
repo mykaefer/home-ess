@@ -3,6 +3,16 @@
 Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [0.10.5] — 2026-07-02
+
+### Behoben
+
+- **Betriebslevel im Netzparallelbetrieb direkt mit der Prognoseampel gekoppelt:**
+  Grün setzt Level 4, Gelb Level 3 und Rot Level 2. Level 1 bleibt dem tatsächlich
+  unterschrittenen Mindest-SoC vorbehalten; Level 5 gilt weiterhin für den vollen
+  Akku mit Überschuss. Damit bleibt das Level bei gelber Ampel weder auf 4 hängen
+  noch fällt es dort vorzeitig auf 2.
+
 ## [0.10.4] — 2026-07-02
 
 ### Hinzugefügt
@@ -34,9 +44,9 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
   Privatmodus wird der verbleibende Pflichtbedarf über den sichtbaren Horizont
   fortgeführt; flexible Ladung erhält nur echten Überschuss nach dem Hausakku.
 - Im Netzparallelbetrieb gibt Level 4 Verbraucher frei, wenn der Bedarf bis zum
-  nächsten Ladebeginn sicher aus dem Akku gedeckt ist. Level 3 steht für einen
-  tatsächlich erwarteten Netzbedarf vor diesem Zeitpunkt; Level 2 für knappe
-  Reserve und Level 1 erst für unterschrittenen Mindest-SoC.
+  nächsten Ladebeginn sicher aus dem Akku gedeckt ist. Die Prognoseampel steuert
+  die Stufen direkt: Grün = Level 4, Gelb = Level 3 und Rot = Level 2; Level 1
+  bleibt dem unterschrittenen Mindest-SoC vorbehalten.
 - Grid-Control verdichtet relevante Wert-Bursts auf einen laufenden und höchstens
   einen folgenden Lauf; der unabhängige 2-Sekunden-Sicherheitstakt bleibt erhalten.
 - Wertekatalog, Output-Auswertung, PV-Prognose und Verbrauchsmodell teilen kurz

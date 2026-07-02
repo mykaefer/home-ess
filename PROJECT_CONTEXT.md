@@ -185,8 +185,9 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   alle Level 1–5. Unter Mindest-SoC setzt es Level 1 auch bei deaktiviertem
   Verhaltensmodell. Im Autarkbetrieb erfordert Level 5 SoC > 98 % plus Überschuss;
   Im Netzparallelbetrieb bedeutet Level 4 sichere Deckung bis zum nächsten
-  Ladebeginn; Level 3 setzt einen davor tatsächlich erwarteten Netzbedarf voraus.
-  Dort gilt die obere Grid-Control-SoC-Schwelle als voll, bei
+  Ladebeginn. Die Prognoseampel ist direkt zugeordnet: Grün = Level 4, Gelb =
+  Level 3, Rot = Level 2; Level 1 greift erst unter Mindest-SoC. Dort gilt die
+  obere Grid-Control-SoC-Schwelle als voll, bei
   deaktiviertem Grid-Control ersatzweise 90 %. Grid-Control verwaltet nur noch
   das Ein- und Ausschalten des persistenten Notstromzustands.
 - **Grid-Control** (`/grid-control`, optional): Netz- und Einspeisungssteuerung
