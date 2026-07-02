@@ -436,6 +436,20 @@ function openDatabase() {
         FOREIGN KEY (instance_id) REFERENCES adapter_instances(id) ON DELETE CASCADE
       )`
     );
+    // Historisierte, abgeschlossene Tageswerte einzelner Kennzahlen (PV-Ertrag,
+    // Netzbezug, Eigenverbrauch, Klimatisierungs-Mehrverbrauch) für die
+    // Jahres-Statistik (Durchschnitt/Minimum/Maximum inkl. Datum) im
+    // Wertekatalog. Wird je Kennzahl beim Tageswechsel der Quelle einmalig
+    // geschrieben und danach nicht mehr verändert.
+    db.run(
+      `CREATE TABLE IF NOT EXISTS daily_metric_history (
+        metric TEXT NOT NULL,
+        day_key TEXT NOT NULL,
+        value REAL NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (metric, day_key)
+      )`
+    );
 
     seedUser(db);
     seedMqttConfig(db);

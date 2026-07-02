@@ -4,6 +4,7 @@ const { loadMqttConfig, buildEnvironmentSnapshot } = require('../mqtt/config');
 const { converterEfficiency } = require('./converters');
 const { loadFactors, currentBucket, getFactor, effectiveFactor } = require('./calibration');
 const { DEFAULT_SUN_CUTOFF_PERCENT } = require('./plants');
+const { recordDailyMetric } = require('../history/daily-metrics');
 
 function parseNumber(value) {
   if (value == null || value === '') return null;
@@ -506,6 +507,10 @@ async function updateSummaryState(db, todayValue, now = new Date()) {
     state.lastTodayValue = safeTodayValue;
     changed = true;
   } else if (state.lastRolloverDate !== dateKey) {
+    // Der gerade zu Ende gegangene Tag ist ab hier abgeschlossen – für die
+    // Jahres-Statistik (Min/Max/Durchschnitt) im Wertekatalog historisieren,
+    // bevor lastTodayValue/lastRolloverDate unten auf den neuen Tag zeigen.
+    await recordDailyMetric(db, 'pv', state.lastRolloverDate, state.lastTodayValue);
     const finishedYearTotal = state.yearOffset + state.lastTodayValue;
     state.weekOffset = state.weekKey === weekKey ? state.weekOffset + state.lastTodayValue : 0;
 
@@ -553,6 +558,8 @@ async function setManualOffset(db, period, manualValue, now = new Date()) {
     state.weekOffset = manualValue;
   } else if (period === 'year') {
     state.yearOffset = manualValue;
+  } else if (period === 'previousYear') {
+    state.previousYearTotal = manualValue;
   } else {
     throw new Error('Unbekannter Zeitraum.');
   }
@@ -808,4 +815,5 @@ module.exports = {
   idealPowerFromIrradiance,
   formatEnergy,
   isSunReference,
+  updateSummaryState,
 };

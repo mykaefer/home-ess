@@ -378,11 +378,15 @@ function requestTopicValue(configuredTopic) {
 ### Verifizierte HomeESS-Outputs
 
 Die allgemeine Output-Engine behandelt ein erfolgreiches `publish()` nicht als
-Erfolg. Jeder Ziel-State wird zusätzlich abonniert und alle 30 Sekunden aktiv
-per `/get` abgefragt. Nur eine nach dieser Anfrage empfangene `ack:true`- oder
-Rohwert-Rückmeldung mit typgleich übereinstimmendem Wert bestätigt den Output.
-Fehlt sie oder weicht sie ab, wird der Sollwert mit mindestens zehn Sekunden
-Abstand erneut geschrieben. Eigene `ack:false`-Echos bleiben ausgeschlossen.
+Erfolg. Jeder Ziel-State wird zusätzlich abonniert und in einem 30-Sekunden-Fenster
+aktiv per `/get` abgefragt — jeder Output jedoch zu einem **zufälligen Zeitpunkt**
+innerhalb des Fensters, damit nicht alle gleichzeitig den Broker belasten. Ein
+bereits bestätigter State wird erst wieder aktiv abgefragt, wenn sein zuletzt
+empfangener Ist-Wert älter als ein Prüffenster ist. Nur eine nach der Anfrage
+empfangene `ack:true`- oder Rohwert-Rückmeldung mit typgleich übereinstimmendem
+Wert bestätigt den Output. Fehlt sie oder weicht sie ab, wird der Sollwert mit
+mindestens zehn Sekunden Abstand erneut geschrieben. Eigene `ack:false`-Echos
+bleiben ausgeschlossen.
 
 Command-Topics (`_SET`, `.SET`, `/SET`) liefern üblicherweise keinen belastbaren
 Istwert und sind deshalb keine zulässigen Ziele für verifizierte Outputs.

@@ -108,6 +108,45 @@ function renderOutput({
       node.className = state === 'confirmed' ? 'cmd-confirm cmd-confirm--ok' : 'cmd-confirm cmd-confirm--bad';
     }
 
+    // Auf-/Zu-Zustand der Kategorien merken: die Namen der offenen Kategorien in
+    // localStorage ablegen; liegt nichts vor, bleibt alles zugeklappt.
+    var OUTPUT_CATS_KEY = 'homeess.output.openCats';
+
+    function saveOutputCatState() {
+      try {
+        var open = [];
+        document.querySelectorAll('.output-cats .value-cat[data-output-cat]').forEach(function (cat) {
+          if (cat.classList.contains('is-open')) open.push(cat.getAttribute('data-output-cat'));
+        });
+        localStorage.setItem(OUTPUT_CATS_KEY, JSON.stringify(open));
+      } catch (_) {
+        // localStorage nicht verfügbar – Zustand wird dann nicht gemerkt.
+      }
+    }
+
+    function applyOutputCatState() {
+      var open = [];
+      try {
+        open = JSON.parse(localStorage.getItem(OUTPUT_CATS_KEY) || '[]');
+      } catch (_) {
+        open = [];
+      }
+      if (!Array.isArray(open)) open = [];
+      document.querySelectorAll('.output-cats .value-cat[data-output-cat]').forEach(function (cat) {
+        var isOpen = open.indexOf(cat.getAttribute('data-output-cat')) !== -1;
+        cat.classList.toggle('is-open', isOpen);
+        var head = cat.querySelector('.value-cat-head');
+        if (head) head.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+      });
+    }
+
+    function outputCatToggle(head) {
+      var cat = head.parentNode;
+      var open = cat.classList.toggle('is-open');
+      head.setAttribute('aria-expanded', open ? 'true' : 'false');
+      saveOutputCatState();
+    }
+
     if (initialDialogMode === 'add') {
       openOutputDialog('add');
       setOutputFormValues(initialDialogValues);
@@ -116,8 +155,19 @@ function renderOutput({
       setOutputFormValues(initialDialogValues);
     }
 
+    // MQTT-Events kommen in Bursts (viele Topics gleichzeitig). Ohne Bremse würde
+    // jedes Event ein /output/data-Fetch auslösen und den Server fluten
+    // (listInternalValues ist teuer). Daher pro Burst nur EIN Nachladen (coalesced).
+    var refreshQueued = false;
+    function queueOutputRefresh() {
+      if (refreshQueued) return;
+      refreshQueued = true;
+      setTimeout(function () { refreshQueued = false; refreshOutputValues(); }, 1000);
+    }
+
+    applyOutputCatState();
     refreshOutputValues();
-    window.addEventListener('homeess:mqtt', refreshOutputValues);
+    window.addEventListener('homeess:mqtt', queueOutputRefresh);
     setInterval(refreshOutputValues, 60000);`;
 
   return renderLayout({ title: 'Output', activePath: '/output', body, script });
@@ -140,8 +190,10 @@ function renderOutputList(outputs) {
         .get(cat)
         .slice()
         .sort((a, b) => String(a.label || a.sourceId).localeCompare(String(b.label || b.sourceId), 'de'));
-      return `            <div class="value-cat is-open">
-              <button type="button" class="value-cat-head" aria-expanded="true" onclick="valueCatalogToggle(this)">
+      // Standardmäßig zugeklappt; der Auf-/Zu-Zustand je Kategorie wird clientseitig
+      // in localStorage gemerkt und beim Laden über applyOutputCatState() angewandt.
+      return `            <div class="value-cat" data-output-cat="${escapeHtml(cat)}">
+              <button type="button" class="value-cat-head" aria-expanded="false" onclick="outputCatToggle(this)">
                 <span class="value-cat-caret" aria-hidden="true">▸</span>
                 <span class="value-cat-name">${escapeHtml(cat)}</span>
                 <span class="value-cat-count">${items.length}</span>

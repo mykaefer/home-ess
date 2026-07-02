@@ -22,6 +22,7 @@ const {
 } = require('../photovoltaik/aggregation');
 const { loadMqttConfig } = require('../mqtt/config');
 const { localCalendar } = require('../local-time');
+const { recordDailyMetric, getDailyMetricValue } = require('../history/daily-metrics');
 
 const IMPORT_COUNTER_KEYS = [
   { id: NETZBEZUG_ZAEHLER_L1_STATE_ID, key: 'import_l1' },
@@ -33,6 +34,19 @@ const EXPORT_COUNTER_KEYS = [
   { id: EINSPEISUNG_ZAEHLER_L1_STATE_ID, key: 'export_l1' },
   { id: EINSPEISUNG_ZAEHLER_L2_STATE_ID, key: 'export_l2' },
   { id: EINSPEISUNG_ZAEHLER_L3_STATE_ID, key: 'export_l3' },
+];
+
+// Zuordnung Konfig-Feld (Zähler-Topic) -> Zähler-Schlüssel. Ändert sich das Topic
+// eines Zählers (z. B. Umstellung auf einen anderen Adapter oder Zählertausch),
+// muss der gemerkte Rohstand verworfen werden, damit der erste Wert des neuen
+// Zählers als neuer Ist-Stand gilt und nicht als Zählersprung gezählt wird.
+const COUNTER_TOPIC_FIELDS = [
+  { field: 'netzbezugZaehlerL1Topic', key: 'import_l1' },
+  { field: 'netzbezugZaehlerL2Topic', key: 'import_l2' },
+  { field: 'netzbezugZaehlerL3Topic', key: 'import_l3' },
+  { field: 'einspeisungZaehlerL1Topic', key: 'export_l1' },
+  { field: 'einspeisungZaehlerL2Topic', key: 'export_l2' },
+  { field: 'einspeisungZaehlerL3Topic', key: 'export_l3' },
 ];
 
 function dbAll(db, sql, params = []) {
@@ -257,6 +271,23 @@ async function updateCounterStates(db, cache, calendar) {
   return { previousDayTotals, dayTotals, rawValues, dayKey };
 }
 
+// Sicherheitsschranke gegen Zählersprünge beim Topic-Wechsel: Für jedes Zähler-
+// Topic, das sich zwischen alter und neuer Konfiguration geändert hat, wird der
+// gemerkte Rohstand verworfen (last_raw_value = NULL). Der erste Wert des neuen
+// Zählers wird dadurch als neuer Ist-Stand übernommen, ohne die Abweichung zum
+// alten Zählerstand als Tageszuwachs zu zählen. Der bisher heute gezählte Wert
+// (day_total) bleibt erhalten. Liefert die zurückgesetzten Zähler-Schlüssel.
+async function resetCountersForChangedTopics(db, previousConfig = {}, newConfig = {}) {
+  const resetKeys = [];
+  for (const { field, key } of COUNTER_TOPIC_FIELDS) {
+    if ((previousConfig[field] || '') !== (newConfig[field] || '')) resetKeys.push(key);
+  }
+  for (const key of resetKeys) {
+    await dbRun(db, 'UPDATE stromverbrauch_counter_state SET last_raw_value = NULL WHERE counter_key = ?', [key]);
+  }
+  return resetKeys;
+}
+
 async function updateSummaryState(db, previousDayTotals, calendar) {
   const state = await loadSummaryState(db);
   const { dateKey: dayKey, weekKey, yearKey } = calendar;
@@ -268,6 +299,25 @@ async function updateSummaryState(db, previousDayTotals, calendar) {
     state.yearKey = yearKey;
     changed = true;
   } else if (state.lastRolloverDate !== dayKey) {
+    // Der gerade zu Ende gegangene Tag (state.lastRolloverDate) ist ab hier
+    // abgeschlossen – Eigenverbrauch/Netzbezug für die Jahres-Statistik im
+    // Wertekatalog historisieren. Der PV-Ertrag desselben Tages steht bereits
+    // in der Historie, da buildPhotovoltaikSnapshot innerhalb dieses Laufs vor
+    // den Zähler-/Summen-Updates ausgeführt wird.
+    const finishedDayPv = await getDailyMetricValue(db, 'pv', state.lastRolloverDate);
+    await recordDailyMetric(
+      db,
+      'strom.eigenverbrauch',
+      state.lastRolloverDate,
+      deriveEigenverbrauch(finishedDayPv, previousDayTotals.import, previousDayTotals.export)
+    );
+    await recordDailyMetric(
+      db,
+      'strom.netzbezug',
+      state.lastRolloverDate,
+      deriveNetzbezug(previousDayTotals.import, previousDayTotals.export)
+    );
+
     const finishedYearImport = state.yearImportOffset + previousDayTotals.import;
     const finishedYearExport = state.yearExportOffset + previousDayTotals.export;
 
@@ -310,6 +360,9 @@ async function setManualOffset(db, period, values, now = new Date()) {
   } else if (period === 'year') {
     state.yearImportOffset = values.netzbezug;
     state.yearExportOffset = values.einspeisung;
+  } else if (period === 'previousYear') {
+    state.previousYearImportTotal = values.netzbezug;
+    state.previousYearExportTotal = values.einspeisung;
   } else {
     throw new Error('Unbekannter Zeitraum.');
   }
@@ -495,4 +548,7 @@ module.exports = {
   readStromverbrauchValues,
   setManualOffset,
   parseNumber,
+  updateSummaryState,
+  updateCounterStates,
+  resetCountersForChangedTopics,
 };

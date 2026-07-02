@@ -11,6 +11,9 @@ const { listInternalValues } = require('./internal-values');
 
 const DEBOUNCE_MS = 1000;
 const VERIFY_MS = 30000;
+// Prüf-Ticker: verteilt die /get-Anfragen der einzelnen Outputs über das
+// Prüffenster, statt alle gleichzeitig alle VERIFY_MS zu senden.
+const VERIFY_TICK_MS = 1000;
 const RETRY_MS = 10000;
 
 let database = null;
@@ -19,6 +22,7 @@ let lastAttempts = new Map(); // outputId -> { value, at }
 let statuses = new Map(); // outputId -> { state, desired, actual, checkedAt }
 let registeredReadbacks = new Map(); // cacheKey -> topic
 let verificationRequestedAt = new Map(); // cacheKey -> Zeitpunkt der letzten /get-Anfrage
+let verificationDueAt = new Map(); // cacheKey -> nächster geplanter /get-Zeitpunkt (zufällig übers Fenster verteilt)
 let unsubscribe = null;
 let debounceTimer = null;
 let verifyTimer = null;
@@ -108,11 +112,62 @@ function scheduleEvaluate() {
   }, DEBOUNCE_MS);
 }
 
-function verifyNow() {
-  const requestedAt = Date.now();
-  for (const cacheKey of registeredReadbacks.keys()) {
-    if (mqttClient.requestAdHocValue(cacheKey)) verificationRequestedAt.set(cacheKey, requestedAt);
+// Ob ein Readback aktuell aktiv per /get abgefragt werden muss. Der Prüfschritt
+// entfällt nur, wenn ALLE zugehörigen Outputs bestätigt sind UND der bestätigte
+// Ist-Wert innerhalb des letzten Prüffensters (VERIFY_MS) empfangen wurde. Ist der
+// angezeigte Wert älter als ein Prüffenster, wird weiterhin aktiv nachgefragt –
+// er könnte inzwischen veraltet sein. now/cache/outputList/statusMap sind
+// parametrisierbar, damit die Entscheidung isoliert testbar ist; im Betrieb
+// greifen die Modul-Zustände.
+function readbackNeedsVerification(
+  cacheKey,
+  now = Date.now(),
+  cache = mqttClient.getCache(),
+  outputList = outputs,
+  statusMap = statuses
+) {
+  let hasReadbackOutput = false;
+  for (const output of outputList) {
+    if (isCommandTopic(output.targetTopic)) continue;
+    if (readbackKey(output.targetTopic) !== cacheKey) continue;
+    hasReadbackOutput = true;
+    const status = statusMap.get(output.id);
+    if (!status || status.state !== 'confirmed') return true;
   }
+  if (!hasReadbackOutput) return false;
+  const readback = cache && cache.get(cacheKey);
+  const receivedAt = readback ? Number(readback.receivedAt || 0) : 0;
+  return now - receivedAt > VERIFY_MS;
+}
+
+// Vergibt einem Readback einen zufälligen Prüfzeitpunkt innerhalb des Prüffensters,
+// damit nicht alle Outputs im selben Moment ein /get senden und den Broker
+// intervallweise stark belasten.
+function scheduleVerification(cacheKey, now = Date.now()) {
+  verificationDueAt.set(cacheKey, now + Math.floor(Math.random() * VERIFY_MS));
+}
+
+// Prüf-Ticker (läuft alle VERIFY_TICK_MS): fragt nur die gerade fälligen und noch
+// nicht bestätigten Readbacks per /get ab und plant den nächsten Slot je Readback,
+// wodurch der ursprüngliche zufällige Phasenversatz erhalten bleibt.
+function verifyTick() {
+  const now = Date.now();
+  let requested = false;
+  for (const cacheKey of registeredReadbacks.keys()) {
+    const dueAt = verificationDueAt.get(cacheKey);
+    if (dueAt == null) {
+      scheduleVerification(cacheKey, now);
+      continue;
+    }
+    if (dueAt > now) continue;
+    verificationDueAt.set(cacheKey, now + VERIFY_MS);
+    if (!readbackNeedsVerification(cacheKey, now)) continue;
+    if (mqttClient.requestAdHocValue(cacheKey)) {
+      verificationRequestedAt.set(cacheKey, now);
+      requested = true;
+    }
+  }
+  if (!requested) return;
   if (verifyEvaluateTimer) clearTimeout(verifyEvaluateTimer);
   // Kurzes Fenster für die Broker-Antwort; eingehende Werte lösen zusätzlich
   // selbst eine entprellte Auswertung aus.
@@ -138,10 +193,17 @@ async function reload() {
   }
   registeredReadbacks = needed;
   verificationRequestedAt = new Map();
+  // Verifikations-Slots pflegen: neue Readbacks zufällig übers Prüffenster
+  // verteilen, entfernte herausnehmen; bestehende behalten ihren Phasenversatz.
+  for (const cacheKey of needed.keys()) {
+    if (!verificationDueAt.has(cacheKey)) scheduleVerification(cacheKey);
+  }
+  for (const cacheKey of [...verificationDueAt.keys()]) {
+    if (!needed.has(cacheKey)) verificationDueAt.delete(cacheKey);
+  }
   outputs = nextOutputs;
   lastAttempts = new Map();
   statuses = new Map();
-  verifyNow();
   return outputs;
 }
 
@@ -149,7 +211,7 @@ async function init(db) {
   database = db;
   await reload();
   if (!unsubscribe) unsubscribe = mqttClient.onValuesChanged(scheduleEvaluate);
-  if (!verifyTimer) verifyTimer = setInterval(verifyNow, VERIFY_MS);
+  if (!verifyTimer) verifyTimer = setInterval(verifyTick, VERIFY_TICK_MS);
   evaluate().catch(() => {});
 }
 
@@ -157,4 +219,4 @@ function getStatus(outputId) {
   return statuses.get(Number(outputId)) || { state: 'waiting', desired: null, actual: null, checkedAt: null };
 }
 
-module.exports = { init, reload, evaluate, verifyNow, getStatus, valuesEqual };
+module.exports = { init, reload, evaluate, verifyTick, readbackNeedsVerification, readbackKey, getStatus, valuesEqual };

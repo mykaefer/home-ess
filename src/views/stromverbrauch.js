@@ -31,12 +31,13 @@ function renderStromverbrauch({
   },
   formMessage = '',
   formError = '',
-  weekMessage = '',
-  weekError = '',
-  yearMessage = '',
-  yearError = '',
+  reconcileMessage = '',
+  reconcileError = '',
 } = {}) {
-  const body = `        <h1>Stromverbrauch</h1>
+  const body = `        <div class="panel-head">
+          <h1>Stromverbrauch</h1>
+          <button type="button" class="secondary-button" onclick="openReconcileDialog()">Wert abgleichen</button>
+        </div>
 
         <div class="energy-overview">
           <div class="energy-overview-head">
@@ -49,10 +50,6 @@ function renderStromverbrauch({
           </div>
           ${renderEnergyRow('Eigenverbrauch', 'eigenverbrauch', metrics.formatted.eigenverbrauchPower, metrics)}
           ${renderEnergyRow('Netzbezug', 'netzbezug', metrics.formatted.netzbezugPower, metrics)}
-          <div class="energy-overview-actions">
-            <button type="button" class="secondary-button" onclick="openValueDialog('weekValueDialog')">Woche setzen</button>
-            <button type="button" class="secondary-button" onclick="openValueDialog('yearValueDialog')">Jahr setzen</button>
-          </div>
         </div>
 
         <div class="strom-layout">
@@ -101,50 +98,72 @@ function renderStromverbrauch({
         <div class="raw-counter-panel">
           <h2>Zuletzt erfasste Zaehler</h2>
           ${renderRawCounterTable(metrics.formatted.rawCounters)}
-          ${statusText(weekError)}
-          ${statusText(weekMessage, 'success')}
-          ${statusText(yearError)}
-          ${statusText(yearMessage, 'success')}
+          ${statusText(reconcileError)}
+          ${statusText(reconcileMessage, 'success')}
         </div>
         </div>
 
-        <dialog id="weekValueDialog" class="value-dialog">
-          <form action="/stromverbrauch/week-offset" method="POST" class="dialog-form">
-            <h3>Wert fuer diese Woche setzen</h3>
-            <p class="muted">Bitte Netzbezug und Einspeisung zum Tagesstart eingeben. Eigenverbrauch wird aus PV-Ertrag plus Netzbezug minus Einspeisung berechnet.</p>
-            <label for="weekNetzbezugStartValue">Netzbezug zum Tagesstart (kWh)</label>
-            <input type="number" step="0.01" id="weekNetzbezugStartValue" name="weekNetzbezugStartValue" required>
-            <label for="weekEinspeisungStartValue">Einspeisung zum Tagesstart (kWh)</label>
-            <input type="number" step="0.01" id="weekEinspeisungStartValue" name="weekEinspeisungStartValue" required>
-            <div class="button-row">
-              <button type="submit">Uebernehmen</button>
-              <button type="button" class="secondary-button" onclick="closeValueDialog('weekValueDialog')">Abbrechen</button>
+        <dialog id="reconcileDialog" class="value-dialog">
+          <form action="/stromverbrauch/reconcile" method="POST" class="dialog-form">
+            <h3>Wert abgleichen</h3>
+            <label for="reconcileTarget">Kennzahl</label>
+            <select id="reconcileTarget" name="target" onchange="updateReconcileFields()">
+              <option value="week" data-fields="sum">Summe Woche (Netzbezug + Einspeisung)</option>
+              <option value="year" data-fields="sum">Summe Jahr (Netzbezug + Einspeisung)</option>
+              <option value="previousYear" data-fields="sum">Summe Vorjahr (Netzbezug + Einspeisung)</option>
+              <option value="netzbezug.min" data-fields="seed">Netzbezug – Minimum dieses Jahr (Wert + Datum)</option>
+              <option value="netzbezug.max" data-fields="seed">Netzbezug – Maximum dieses Jahr (Wert + Datum)</option>
+              <option value="eigenverbrauch.min" data-fields="seed">Eigenverbrauch – Minimum dieses Jahr (Wert + Datum)</option>
+              <option value="eigenverbrauch.max" data-fields="seed">Eigenverbrauch – Maximum dieses Jahr (Wert + Datum)</option>
+            </select>
+            <p class="muted" id="reconcileHintSum">Netzbezug und Einspeisung zum Tagesstart eingeben. Eigenverbrauch wird aus PV-Ertrag plus Netzbezug minus Einspeisung berechnet.</p>
+            <p class="muted" id="reconcileHintSeed" hidden>Startwert und Datum eines Tages im aktuellen Jahr eingeben. Minimum, Maximum, Durchschnitt und Datum ergeben sich daraus automatisch.</p>
+            <div id="reconcileSumFields">
+              <label for="reconcileNetzbezugValue">Netzbezug zum Tagesstart (kWh)</label>
+              <input type="number" step="0.01" id="reconcileNetzbezugValue" name="reconcileNetzbezugValue">
+              <label for="reconcileEinspeisungValue">Einspeisung zum Tagesstart (kWh)</label>
+              <input type="number" step="0.01" id="reconcileEinspeisungValue" name="reconcileEinspeisungValue">
             </div>
-          </form>
-        </dialog>
-
-        <dialog id="yearValueDialog" class="value-dialog">
-          <form action="/stromverbrauch/year-offset" method="POST" class="dialog-form">
-            <h3>Wert fuer dieses Jahr setzen</h3>
-            <p class="muted">Bitte Netzbezug und Einspeisung zum Tagesstart eingeben. Eigenverbrauch wird aus PV-Ertrag plus Netzbezug minus Einspeisung berechnet.</p>
-            <label for="yearNetzbezugStartValue">Netzbezug zum Tagesstart (kWh)</label>
-            <input type="number" step="0.01" id="yearNetzbezugStartValue" name="yearNetzbezugStartValue" required>
-            <label for="yearEinspeisungStartValue">Einspeisung zum Tagesstart (kWh)</label>
-            <input type="number" step="0.01" id="yearEinspeisungStartValue" name="yearEinspeisungStartValue" required>
+            <div id="reconcileSeedFields" hidden>
+              <label for="reconcileValue">Wert (kWh)</label>
+              <input type="number" step="0.01" id="reconcileValue" name="reconcileValue">
+              <label for="reconcileDate">Datum</label>
+              <input type="date" id="reconcileDate" name="reconcileDate">
+            </div>
             <div class="button-row">
               <button type="submit">Uebernehmen</button>
-              <button type="button" class="secondary-button" onclick="closeValueDialog('yearValueDialog')">Abbrechen</button>
+              <button type="button" class="secondary-button" onclick="closeReconcileDialog()">Abbrechen</button>
             </div>
           </form>
         </dialog>`;
 
-  const script = `    function openValueDialog(id) {
-      var dialog = document.getElementById(id);
-      if (dialog && typeof dialog.showModal === 'function') dialog.showModal();
+  const script = `    function updateReconcileFields() {
+      var select = document.getElementById('reconcileTarget');
+      var option = select.options[select.selectedIndex];
+      var isSeed = option && option.getAttribute('data-fields') === 'seed';
+      var sumFields = document.getElementById('reconcileSumFields');
+      var seedFields = document.getElementById('reconcileSeedFields');
+      sumFields.hidden = isSeed;
+      seedFields.hidden = !isSeed;
+      // required nur auf den jeweils sichtbaren Feldern, sonst blockiert ein
+      // verstecktes Pflichtfeld das Absenden.
+      document.getElementById('reconcileNetzbezugValue').required = !isSeed;
+      document.getElementById('reconcileEinspeisungValue').required = !isSeed;
+      document.getElementById('reconcileValue').required = isSeed;
+      document.getElementById('reconcileDate').required = isSeed;
+      document.getElementById('reconcileHintSum').hidden = isSeed;
+      document.getElementById('reconcileHintSeed').hidden = !isSeed;
     }
 
-    function closeValueDialog(id) {
-      var dialog = document.getElementById(id);
+    function openReconcileDialog() {
+      var dialog = document.getElementById('reconcileDialog');
+      if (!dialog) return;
+      updateReconcileFields();
+      if (typeof dialog.showModal === 'function') dialog.showModal();
+    }
+
+    function closeReconcileDialog() {
+      var dialog = document.getElementById('reconcileDialog');
       if (dialog) dialog.close();
     }
 

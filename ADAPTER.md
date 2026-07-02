@@ -21,8 +21,10 @@ Inhalt: [Überblick](#überblick) · [Verzeichnislayout](#verzeichnislayout) ·
   anlegen, einzeln aktivieren/deaktivieren und konfigurieren.
 - Jede **aktive Instanz läuft als eigener Kindprozess** (Isolation, Auto-Restart).
 - Ein Adapter meldet seine **States** (Geräte-Werte). Diese erscheinen auf der
-  **States-Seite** als Baum und lassen sich hinter jedem Topic-Feld per
-  **State-Picker** auswählen.
+  **States-Seite** (im Menü als Unterpunkt von **Adapter**) als Baum und lassen
+  sich hinter jedem Topic-Feld per **State-Picker** auswählen; zusätzlich sind sie
+  automatisch im **Wertekatalog** als Quelle für Outputs und Dashboard-Kacheln
+  verfügbar.
 - States werden über das Schema **`prefix://instanz/adresse`** angesprochen.
   Topics **ohne** Schema laufen weiter über den zentralen MQTT-Broker — das
   bestehende Verhalten bleibt unverändert.
@@ -224,7 +226,8 @@ Adapters wird automatisch und fortlaufend an alle Bezüge dieses Topics verteilt
 
 ## Instanzen & Einstellungen
 
-- Auf der **Adapter-Seite** (Menü, im Fußbereich über „Module") lassen sich pro
+- Auf der **Adapter-Seite** (Hauptnavigation; „States" klappt als Unterpunkt
+  darunter auf) lassen sich pro
   Adapter beliebig viele Instanzen anlegen und **einzeln benennen**. Der Name ist
   die Autorität im Topic: `prefix://<name>/…`.
 - Jede Instanz hat **eigene Einstellungen** (gespeichert je Instanz), greift aber

@@ -21,6 +21,7 @@ const {
 const { clearCalibration } = require('../photovoltaik/calibration');
 const { computePvForecast } = require('../photovoltaik/forecast');
 const { parseNumber } = require('../stromverbrauch/aggregation');
+const { recordDailyMetric, isValidDayKey } = require('../history/daily-metrics');
 const renderPhotovoltaik = require('../views/photovoltaik');
 
 async function renderPage(db, res, options = {}) {
@@ -47,10 +48,8 @@ async function renderPage(db, res, options = {}) {
       converterTypeOptions: CONVERTER_TYPE_OPTIONS,
       formMessage: options.formMessage || '',
       formError: options.formError || '',
-      weekMessage: options.weekMessage || '',
-      weekError: options.weekError || '',
-      yearMessage: options.yearMessage || '',
-      yearError: options.yearError || '',
+      reconcileMessage: options.reconcileMessage || '',
+      reconcileError: options.reconcileError || '',
       dialogMode: options.dialogMode || '',
       dialogError: options.dialogError || '',
       dialogValues: options.dialogValues || (editingPlant ? plantToFormValues(editingPlant) : null),
@@ -203,27 +202,27 @@ function photovoltaikRoutes(db) {
     }
   });
 
-  router.post('/photovoltaik/week-offset', requireAuth, async (req, res, next) => {
+  router.post('/photovoltaik/reconcile', requireAuth, async (req, res, next) => {
     try {
-      const value = parseNumber(req.body.weekStartValue);
+      const target = req.body.target;
+      const value = parseNumber(req.body.reconcileValue);
       if (value == null) {
-        return renderPage(db, res, { weekError: 'Bitte einen gueltigen Wochenwert eingeben.' });
+        return renderPage(db, res, { reconcileError: 'Bitte einen gueltigen Wert eingeben.' });
       }
-      await setManualOffset(db, 'week', value);
-      await renderPage(db, res, { weekMessage: 'Wochenwert zum Tagesstart uebernommen.' });
-    } catch (err) {
-      next(err);
-    }
-  });
-
-  router.post('/photovoltaik/year-offset', requireAuth, async (req, res, next) => {
-    try {
-      const value = parseNumber(req.body.yearStartValue);
-      if (value == null) {
-        return renderPage(db, res, { yearError: 'Bitte einen gueltigen Jahreswert eingeben.' });
+      // Summen (Woche/Jahr/Vorjahr) laufen über die Offset-Zähler; Minimum/Maximum
+      // werden als Startwert für einen konkreten Tag in die Tageshistorie geschrieben,
+      // aus der sich Min/Max/Durchschnitt/Datum automatisch ergeben.
+      if (target === 'week' || target === 'year' || target === 'previousYear') {
+        await setManualOffset(db, target, value);
+      } else if (target === 'min' || target === 'max') {
+        if (!isValidDayKey(req.body.reconcileDate)) {
+          return renderPage(db, res, { reconcileError: 'Bitte ein gueltiges Datum eingeben.' });
+        }
+        await recordDailyMetric(db, 'pv', req.body.reconcileDate, value);
+      } else {
+        return renderPage(db, res, { reconcileError: 'Bitte eine Kennzahl auswaehlen.' });
       }
-      await setManualOffset(db, 'year', value);
-      await renderPage(db, res, { yearMessage: 'Jahreswert zum Tagesstart uebernommen.' });
+      await renderPage(db, res, { reconcileMessage: 'Wert uebernommen.' });
     } catch (err) {
       next(err);
     }

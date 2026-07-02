@@ -3,6 +3,48 @@
 Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [0.10.3] — 2026-07-02
+
+### Hinzugefügt
+
+- **Statistische Jahreswerte im Wertekatalog** für PV-Ertrag, Netzbezug,
+  Eigenverbrauch, E-Auto (alle Wallboxen zusammen) und Klimatisierung: je Kennzahl
+  **gestern**, **Durchschnitt**, **Minimum + Datum**, **Maximum + Datum** sowie die
+  **Jahres-** und **Vorjahressumme**. Grundlage ist die neue Tabelle
+  `daily_metric_history`, die je Kennzahl beim Tageswechsel einen abgeschlossenen
+  Tageswert festhält (400 Tage Aufbewahrung). Der Durchschnitt wird als
+  **Jahressumme ÷ angebrochene Tage** gerechnet (konsistent mit den Summen, statt
+  aus der erst kürzlich beginnenden Tageshistorie). Fehlen noch Werte, zeigt der
+  Katalog **0** statt „—", das Min-/Max-Datum den **1. Januar** des laufenden Jahres.
+- **Adapter-States erscheinen automatisch im Wertekatalog.** Jeder von einer
+  Adapter-Instanz gemeldete State ist – zusätzlich zu den berechneten Werten – als
+  Quelle für Outputs und Dashboard-Kacheln wählbar (Kategorie „Adapter: <Instanz>").
+- **Output-Seite merkt sich den Auf-/Zu-Zustand der Kategorien** (localStorage);
+  ohne gespeicherten Zustand werden alle Kategorien zugeklappt geladen.
+
+### Geändert
+
+- **Menü:** „Adapter" ist jetzt ein normaler Hauptnavigationspunkt; „States"
+  klappt als Unterpunkt darunter auf.
+- **„Wert abgleichen" auf der Photovoltaik- und Stromverbrauchseite.** Die beiden
+  getrennten „Wert setzen"-Buttons (Woche/Jahr) sind einem einzelnen Dialog oben
+  rechts gewichen, in dem sich die Kennzahl auswählen lässt: Woche-, Jahres- und
+  **Vorjahressumme** sowie **Minimum/Maximum** (Wert + Datum, wird als Startwert in
+  die Tageshistorie geschrieben).
+- **Output-Prüfung entlastet den Broker.** Jeder Output bekommt einen zufälligen
+  Prüfzeitpunkt innerhalb des 30-Sekunden-Fensters, statt dass alle gleichzeitig
+  ein `/get` senden. Bereits bestätigte Werte werden nur erneut aktiv geprüft, wenn
+  der bestätigte Ist-Wert älter als ein Prüffenster ist.
+- Die Output-Seite lädt Werte bei MQTT-Bursts nur noch **gebündelt** (max. 1×/s)
+  nach – das behebt die hohe Serverlast bei geöffneter Seite.
+
+### Behoben
+
+- **Zählertausch/Topic-Wechsel wird nicht mehr als Zählersprung gewertet.** Beim
+  Ändern eines Stromzähler-Topics (z. B. Umstellung auf den Modbus-Adapter) wird der
+  gemerkte Rohstand verworfen; der erste Wert des neuen Zählers gilt als Ist-Stand,
+  statt die Differenz zum alten Zählerstand als riesigen Tageszuwachs zu buchen.
+
 ## [0.10.2] — 2026-07-02
 
 ### Hinzugefügt

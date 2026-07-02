@@ -14,16 +14,17 @@ function renderPhotovoltaik({
   converterTypeOptions = [],
   formMessage = '',
   formError = '',
-  weekMessage = '',
-  weekError = '',
-  yearMessage = '',
-  yearError = '',
+  reconcileMessage = '',
+  reconcileError = '',
   dialogMode = '',
   dialogError = '',
   dialogValues = null,
   editingPlantId = null,
 } = {}) {
-  const body = `        <h1>Photovoltaik</h1>
+  const body = `        <div class="panel-head">
+          <h1>Photovoltaik</h1>
+          <button type="button" class="secondary-button" onclick="openReconcileDialog()">Wert abgleichen</button>
+        </div>
 
         <div class="kpi-row">
           <div class="kpi-card kpi-card--pv">
@@ -37,13 +38,11 @@ function renderPhotovoltaik({
           <div class="kpi-card kpi-card--pv">
             <div class="kpi-label">Ertrag diese Woche</div>
             <div class="kpi-value" id="kpi-woche">${escapeHtml(totals.formatted.week)}</div>
-            <button type="button" class="secondary-button kpi-action" onclick="openOffsetDialog('week')">Wert setzen</button>
           </div>
           <div class="kpi-card kpi-card--pv">
             <div class="kpi-label">Ertrag Jahr</div>
             <div class="kpi-value" id="kpi-jahr">${escapeHtml(totals.formatted.year)}</div>
             <div class="kpi-subvalue" id="kpi-vorjahr">Vorjahr: ${escapeHtml(totals.formatted.previousYear)}</div>
-            <button type="button" class="secondary-button kpi-action" onclick="openOffsetDialog('year')">Wert setzen</button>
           </div>
         </div>
 
@@ -59,16 +58,13 @@ function renderPhotovoltaik({
           </div>
           ${statusText(formError)}
           ${statusText(formMessage, 'success')}
-          ${statusText(weekError)}
-          ${statusText(weekMessage, 'success')}
-          ${statusText(yearError)}
-          ${statusText(yearMessage, 'success')}
+          ${statusText(reconcileError)}
+          ${statusText(reconcileMessage, 'success')}
           ${plants.length ? renderPlantList(plants) : '<div class="info-card"><p class="muted">Noch keine PV-Anlage angelegt.</p></div>'}
         </div>
 
         ${renderPlantDialog({ cellTypeOptions, converterTypeOptions, dialogError, dialogValues, dialogMode, editingPlantId })}
-        ${renderOffsetDialog('week', 'Woche setzen', 'Wochenwert zum Tagesstart (kWh)', 'weekStartValue', '/photovoltaik/week-offset')}
-        ${renderOffsetDialog('year', 'Jahr setzen', 'Jahreswert zum Tagesstart (kWh)', 'yearStartValue', '/photovoltaik/year-offset')}
+        ${renderReconcileDialog()}
         ${renderDeleteDialog(plants)}
         ${renderClearCalibrationDialog()}`;
 
@@ -118,14 +114,27 @@ function renderPhotovoltaik({
       if (typeof dialog.showModal === 'function') dialog.showModal();
     }
 
-    function openOffsetDialog(kind) {
-      var dialog = document.getElementById(kind === 'week' ? 'weekOffsetDialog' : 'yearOffsetDialog');
+    function updateReconcileFields() {
+      var select = document.getElementById('reconcileTarget');
+      var option = select.options[select.selectedIndex];
+      var isSeed = option && option.getAttribute('data-fields') === 'seed';
+      var dateRow = document.getElementById('reconcileDateRow');
+      var dateInput = document.getElementById('reconcileDate');
+      dateRow.hidden = !isSeed;
+      dateInput.required = isSeed;
+      document.getElementById('reconcileHintSum').hidden = isSeed;
+      document.getElementById('reconcileHintSeed').hidden = !isSeed;
+    }
+
+    function openReconcileDialog() {
+      var dialog = document.getElementById('reconcileDialog');
       if (!dialog) return;
+      updateReconcileFields();
       if (typeof dialog.showModal === 'function') dialog.showModal();
     }
 
-    function closeOffsetDialog(kind) {
-      var dialog = document.getElementById(kind === 'week' ? 'weekOffsetDialog' : 'yearOffsetDialog');
+    function closeReconcileDialog() {
+      var dialog = document.getElementById('reconcileDialog');
       if (dialog) dialog.close();
     }
 
@@ -563,17 +572,29 @@ function renderClearCalibrationDialog() {
         </dialog>`;
 }
 
-function renderOffsetDialog(kind, title, label, fieldName, actionTemplate) {
-  const dialogId = kind === 'week' ? 'weekOffsetDialog' : 'yearOffsetDialog';
-  return `        <dialog id="${dialogId}" class="value-dialog">
-          <form action="${actionTemplate}" method="POST" class="dialog-form">
-            <h3>${title}</h3>
-            <p class="muted">Bitte den Wert zum Tagesstart eingeben. Der aktuelle Tagesertrag der Anlage wird danach automatisch addiert.</p>
-            <label>${label}</label>
-            <input type="number" step="0.01" name="${fieldName}" required>
+function renderReconcileDialog() {
+  return `        <dialog id="reconcileDialog" class="value-dialog">
+          <form action="/photovoltaik/reconcile" method="POST" class="dialog-form">
+            <h3>Wert abgleichen</h3>
+            <label for="reconcileTarget">Kennzahl</label>
+            <select id="reconcileTarget" name="target" onchange="updateReconcileFields()">
+              <option value="week" data-fields="sum">Ertrag Woche (Summe)</option>
+              <option value="year" data-fields="sum">Ertrag Jahr (Summe)</option>
+              <option value="previousYear" data-fields="sum">Ertrag Vorjahr (Summe)</option>
+              <option value="min" data-fields="seed">Minimum dieses Jahr (Wert + Datum)</option>
+              <option value="max" data-fields="seed">Maximum dieses Jahr (Wert + Datum)</option>
+            </select>
+            <p class="muted" id="reconcileHintSum">Wert zum Tagesstart eingeben. Der aktuelle Tagesertrag wird danach automatisch addiert und fortgeschrieben.</p>
+            <p class="muted" id="reconcileHintSeed" hidden>Startwert und Datum eines Tages im aktuellen Jahr eingeben. Minimum, Maximum, Durchschnitt und Datum ergeben sich daraus automatisch.</p>
+            <label for="reconcileValue">Wert (kWh)</label>
+            <input type="number" step="0.01" id="reconcileValue" name="reconcileValue" required>
+            <div id="reconcileDateRow" hidden>
+              <label for="reconcileDate">Datum</label>
+              <input type="date" id="reconcileDate" name="reconcileDate">
+            </div>
             <div class="button-row">
               <button type="submit">Uebernehmen</button>
-              <button type="button" class="secondary-button" onclick="closeOffsetDialog('${kind}')">Abbrechen</button>
+              <button type="button" class="secondary-button" onclick="closeReconcileDialog()">Abbrechen</button>
             </div>
           </form>
         </dialog>`;

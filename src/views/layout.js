@@ -13,9 +13,13 @@ const NAV_CORE = [
   { path: '/photovoltaik', label: 'Photovoltaik', section: 'main' },
   { path: '/batterie', label: 'Batterie', section: 'main' },
   { path: '/prognose', label: 'Prognose', section: 'main' },
-  { path: '/states', label: 'States', section: 'main' },
+  {
+    path: '/adapter',
+    label: 'Adapter',
+    section: 'main',
+    children: [{ path: '/states', label: 'States' }],
+  },
   { path: '/output', label: 'Output', section: 'main' },
-  { path: '/adapter', label: 'Adapter', section: 'footer' },
   { path: '/module', label: 'Module', section: 'footer' },
   { path: '/settings', label: 'Einstellungen', section: 'footer' },
 ];
@@ -24,13 +28,32 @@ const NAV_CORE = [
 // die Kern-Liste unter dem alten Namen.
 const NAV = NAV_CORE;
 
+function renderNavItem(item, activePath) {
+  const children = item.children || [];
+  const childActive = children.some((child) => child.path === activePath);
+  const active = item.path === activePath || childActive ? ' class="active"' : '';
+  const link = `<a href="${item.path}"${active}>${escapeHtml(item.label)}</a>`;
+  if (!children.length) return link;
+
+  const childLinks = children
+    .map((child) => {
+      const childActiveCls = child.path === activePath ? ' class="active"' : '';
+      return `<a href="${child.path}"${childActiveCls}>${escapeHtml(child.label)}</a>`;
+    })
+    .join('\n            ');
+  const expanded = item.path === activePath || childActive ? ' expanded' : '';
+  return `<div class="nav-group${expanded}">
+          ${link}
+          <div class="nav-subnav">
+            ${childLinks}
+          </div>
+        </div>`;
+}
+
 function renderNavLinks(section, activePath) {
   const extra = section === 'main' ? getEnabledNavItems() : [];
   return [...NAV_CORE.filter((item) => item.section === section), ...extra]
-    .map((item) => {
-      const active = item.path === activePath ? ' class="active"' : '';
-      return `<a href="${item.path}"${active}>${escapeHtml(item.label)}</a>`;
-    })
+    .map((item) => renderNavItem(item, activePath))
     .join('\n          ');
 }
 

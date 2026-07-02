@@ -21,7 +21,7 @@ const {
 } = require('../batterie/config');
 const { loadPoolConfig, readPoolValue } = require('../pool/config');
 const { listWallboxes } = require('../wallbox/boxes');
-const { readWallboxValues } = require('../wallbox/aggregation');
+const { readWallboxValues, readAggregateDailyHistory } = require('../wallbox/aggregation');
 const wallboxAutomation = require('../wallbox/automation');
 const { isEnabled } = require('../modules');
 const { getState: getGridControlState } = require('../grid-control/automation');
@@ -29,6 +29,10 @@ const operatingState = require('../operating-state');
 const { loadPrognosisConfig } = require('../prognosis/config');
 const { buildConsumptionModel, simulateDays } = require('../prognosis/forecast');
 const { getBehaviorRecommendation } = require('../prognosis/behavior');
+const { buildStatesTree } = require('../adapters/states');
+const { loadMqttConfig } = require('../mqtt/config');
+const { localCalendar } = require('../local-time');
+const { computeYearStats, getDailyMetricValue, statsFromRows, dayKeyOffset } = require('../history/daily-metrics');
 
 // Kategorien entsprechen der Herkunft des Wertes (Seite, von der er stammt) und
 // werden anhand des stabilen id-Präfix zugeordnet. Die Reihenfolge bestimmt die
@@ -160,6 +164,35 @@ function decimalEntry(id, label, value, unit = '') {
   };
 }
 
+// Für Statistik-Werte aus der Tageshistorie (gestern/Durchschnitt/Min/Max):
+// solange noch kein abgeschlossener Tag vorliegt, 0 statt "—" anzeigen, damit
+// beim manuellen Abgleich ein eindeutiger Startwert erkennbar ist.
+function orZero(value) {
+  return value == null ? 0 : value;
+}
+
+// Für die Min-/Max-Datumsfelder: fehlt noch ein Datum (keine Historie), auf den
+// 1. Januar des aktuellen Jahres statt "—" setzen.
+function orYearStart(dayKey, yearKey) {
+  return dayKey || `${yearKey}-01-01`;
+}
+
+// Durchschnittlicher Tageswert dieses Jahres = laufende Jahressumme geteilt durch
+// die Zahl der bereits angebrochenen Tage. Bewusst nicht das Mittel der
+// historisierten Einzeltage: die Tageshistorie beginnt erst ab Einführung dieser
+// Funktion und wäre daher nie repräsentativ. So bleibt der Wert konsistent mit den
+// Jahressummen (analog zur ioBroker-Rechnung Jahr ÷ DayCount).
+function avgPerDay(yearValue, dayOfYear) {
+  if (yearValue == null || !(dayOfYear > 0)) return 0;
+  return yearValue / dayOfYear;
+}
+
+function dateEntry(id, label, dayKeyValue) {
+  if (!dayKeyValue) return { id, label, value: null, display: '—' };
+  const [year, month, day] = String(dayKeyValue).split('-');
+  return { id, label, value: dayKeyValue, display: `${day}.${month}.${year}` };
+}
+
 function hoursEntry(id, label, value) {
   const rounded = value == null ? null : roundTo(value, 2);
   return {
@@ -189,6 +222,16 @@ async function listInternalValues(db, cache) {
   const plants = await listPvPlants(db);
   const batCfg = await new Promise((resolve) => loadBatterieConfig(db, resolve));
   const poolCfg = isEnabled('pool') ? await new Promise((resolve) => loadPoolConfig(db, resolve)) : null;
+  const mqttConfig = await new Promise((resolve) => loadMqttConfig(db, resolve));
+  // Für die Jahres-Statistik (gestern/Durchschnitt/Min/Max) aus der Tageshistorie:
+  // dasselbe lokale Kalenderdatum, das auch die Tageswechsel-Erkennung der
+  // Aggregationen verwendet.
+  const calendar = localCalendar(cache, mqttConfig.timezone);
+  const yesterdayKey = dayKeyOffset(calendar.dateKey, -1);
+  // Angebrochene Tage des laufenden Jahres (1 = 1. Januar) für den Tagesdurchschnitt.
+  const dayOfYear = Math.floor(
+    (Date.UTC(calendar.year, calendar.month - 1, calendar.day) - Date.UTC(calendar.year, 0, 1)) / 86400000
+  ) + 1;
 
   const [pv, strom, sunIntensity, sunIntensityNow, forecast, prognosisConfig] = await Promise.all([
     readPhotovoltaikValues(db, cache, plants),
@@ -229,6 +272,17 @@ async function listInternalValues(db, cache) {
   entries.push(energyEntry('pv.year', 'PV Ertrag Jahr', pv.totals.year));
   entries.push(energyEntry('pv.previousYear', 'PV Ertrag Vorjahr', pv.totals.previousYear));
 
+  // Photovoltaik – Jahres-Statistik aus der Tageshistorie (ab Einführung dieser
+  // Funktion; keine rückwirkende Befüllung möglich).
+  const pvYesterday = await getDailyMetricValue(db, 'pv', yesterdayKey);
+  const pvYearStats = await computeYearStats(db, 'pv', calendar.yearKey);
+  entries.push(energyEntry('pv.yesterday', 'PV Ertrag gestern', orZero(pvYesterday)));
+  entries.push(energyEntry('pv.avgYear', 'PV Ertrag Durchschnitt dieses Jahr', avgPerDay(pv.totals.year, dayOfYear)));
+  entries.push(energyEntry('pv.minYear', 'PV Ertrag Minimum dieses Jahr', orZero(pvYearStats.min)));
+  entries.push(dateEntry('pv.minYearDate', 'PV Ertrag Minimum dieses Jahr – Datum', orYearStart(pvYearStats.minDate, calendar.yearKey)));
+  entries.push(energyEntry('pv.maxYear', 'PV Ertrag Maximum dieses Jahr', orZero(pvYearStats.max)));
+  entries.push(dateEntry('pv.maxYearDate', 'PV Ertrag Maximum dieses Jahr – Datum', orYearStart(pvYearStats.maxDate, calendar.yearKey)));
+
   // Photovoltaik – Wetterprognose (Open-Meteo): erwarteter Tagesertrag heute + 3 Tage.
   // Tagesindex ist stabil (0 = heute), unabhängig vom Wochentag-Label der Oberfläche.
   const forecastDays = forecast && Array.isArray(forecast.days) ? forecast.days : [];
@@ -266,6 +320,25 @@ async function listInternalValues(db, cache) {
     entries.push(energyEntry(`strom.bezug.summe.${period.key}`, `Netzbezug Zählersumme ${period.label}`, cs.import));
     entries.push(energyEntry(`strom.einspeisung.summe.${period.key}`, `Einspeisung Zählersumme ${period.label}`, cs.export));
   }
+
+  // Netzbezug/Eigenverbrauch – Jahres-Statistik aus der Tageshistorie (ab
+  // Einführung dieser Funktion; keine rückwirkende Befüllung möglich).
+  const eigenverbrauchYesterday = await getDailyMetricValue(db, 'strom.eigenverbrauch', yesterdayKey);
+  const netzbezugYesterday = await getDailyMetricValue(db, 'strom.netzbezug', yesterdayKey);
+  const eigenverbrauchYearStats = await computeYearStats(db, 'strom.eigenverbrauch', calendar.yearKey);
+  const netzbezugYearStats = await computeYearStats(db, 'strom.netzbezug', calendar.yearKey);
+  entries.push(energyEntry('strom.eigenverbrauch.yesterday', 'Eigenverbrauch gestern', orZero(eigenverbrauchYesterday)));
+  entries.push(energyEntry('strom.eigenverbrauch.avgYear', 'Eigenverbrauch Durchschnitt dieses Jahr', avgPerDay(strom.breakdown.year.eigenverbrauch, dayOfYear)));
+  entries.push(energyEntry('strom.eigenverbrauch.minYear', 'Eigenverbrauch Minimum dieses Jahr', orZero(eigenverbrauchYearStats.min)));
+  entries.push(dateEntry('strom.eigenverbrauch.minYearDate', 'Eigenverbrauch Minimum dieses Jahr – Datum', orYearStart(eigenverbrauchYearStats.minDate, calendar.yearKey)));
+  entries.push(energyEntry('strom.eigenverbrauch.maxYear', 'Eigenverbrauch Maximum dieses Jahr', orZero(eigenverbrauchYearStats.max)));
+  entries.push(dateEntry('strom.eigenverbrauch.maxYearDate', 'Eigenverbrauch Maximum dieses Jahr – Datum', orYearStart(eigenverbrauchYearStats.maxDate, calendar.yearKey)));
+  entries.push(energyEntry('strom.netzbezug.yesterday', 'Netzbezug gestern', orZero(netzbezugYesterday)));
+  entries.push(energyEntry('strom.netzbezug.avgYear', 'Netzbezug Durchschnitt dieses Jahr', avgPerDay(strom.breakdown.year.netzbezug, dayOfYear)));
+  entries.push(energyEntry('strom.netzbezug.minYear', 'Netzbezug Minimum dieses Jahr', orZero(netzbezugYearStats.min)));
+  entries.push(dateEntry('strom.netzbezug.minYearDate', 'Netzbezug Minimum dieses Jahr – Datum', orYearStart(netzbezugYearStats.minDate, calendar.yearKey)));
+  entries.push(energyEntry('strom.netzbezug.maxYear', 'Netzbezug Maximum dieses Jahr', orZero(netzbezugYearStats.max)));
+  entries.push(dateEntry('strom.netzbezug.maxYearDate', 'Netzbezug Maximum dieses Jahr – Datum', orYearStart(netzbezugYearStats.maxDate, calendar.yearKey)));
 
   // Batterie
   const bat = readBatterieData(cache);
@@ -431,6 +504,22 @@ async function listInternalValues(db, cache) {
   entries.push(decimalEntry('prognose.klimaKwhProGrad', 'Prognose Klimatisierung Mehrverbrauch pro Grad', coolingModel.kwhPerDegree, 'kWh/°C'));
   entries.push(energyEntry('prognose.klimaMehrverbrauchHeute', 'Prognose Klimatisierung Mehrverbrauch heute', prognosisToday.coolingKwh));
   entries.push(energyEntry('prognose.klimaMehrverbrauchMorgen', 'Prognose Klimatisierung Mehrverbrauch morgen', prognosisTomorrow ? prognosisTomorrow.coolingKwh : null));
+
+  // Klimatisierung – Jahres-Statistik aus dem historisierten Ist-Schätzwert
+  // (gelerntes Modell × gemessene Hitzegrade des jeweils abgeschlossenen Tages;
+  // keine direkte Messung, ab Einführung dieser Funktion, keine rückwirkende
+  // Befüllung möglich).
+  const klimaYesterday = await getDailyMetricValue(db, 'klima', yesterdayKey);
+  const klimaYearStats = await computeYearStats(db, 'klima', calendar.yearKey);
+  const klimaPreviousYearStats = await computeYearStats(db, 'klima', String(Number(calendar.yearKey) - 1));
+  entries.push(energyEntry('prognose.klimaMehrverbrauchGestern', 'Prognose Klimatisierung Mehrverbrauch gestern (Schätzung)', orZero(klimaYesterday)));
+  entries.push(energyEntry('prognose.klimaMehrverbrauchDurchschnittJahr', 'Prognose Klimatisierung Mehrverbrauch Durchschnitt dieses Jahr', avgPerDay(klimaYearStats.sum, dayOfYear)));
+  entries.push(energyEntry('prognose.klimaMehrverbrauchMinimumJahr', 'Prognose Klimatisierung Mehrverbrauch Minimum dieses Jahr', orZero(klimaYearStats.min)));
+  entries.push(dateEntry('prognose.klimaMehrverbrauchMinimumJahrDatum', 'Prognose Klimatisierung Mehrverbrauch Minimum dieses Jahr – Datum', orYearStart(klimaYearStats.minDate, calendar.yearKey)));
+  entries.push(energyEntry('prognose.klimaMehrverbrauchMaximumJahr', 'Prognose Klimatisierung Mehrverbrauch Maximum dieses Jahr', orZero(klimaYearStats.max)));
+  entries.push(dateEntry('prognose.klimaMehrverbrauchMaximumJahrDatum', 'Prognose Klimatisierung Mehrverbrauch Maximum dieses Jahr – Datum', orYearStart(klimaYearStats.maxDate, calendar.yearKey)));
+  entries.push(energyEntry('prognose.klimaMehrverbrauchSummeJahr', 'Prognose Klimatisierung Mehrverbrauch Summe dieses Jahr', orZero(klimaYearStats.sum)));
+  entries.push(energyEntry('prognose.klimaMehrverbrauchSummeVorjahr', 'Prognose Klimatisierung Mehrverbrauch Summe Vorjahr', orZero(klimaPreviousYearStats.sum)));
   entries.push(energyEntry('prognose.wallboxVerbrauchHeute', 'Prognose Wallbox-Verbrauch heute noch', prognosisToday.wallboxKwh));
   entries.push(energyEntry('prognose.wallboxVerbrauchMorgen', 'Prognose Wallbox-Verbrauch morgen', prognosisTomorrow ? prognosisTomorrow.wallboxKwh : null));
   for (const box of (consumptionModel.wallboxModel && consumptionModel.wallboxModel.boxes) || []) {
@@ -481,6 +570,33 @@ async function listInternalValues(db, cache) {
       entries.push(numberEntry(`wallbox.${wb.id}.naechsterLadebeginnSekunden`, `Wallbox ${wb.name} – nächster Ladebeginn in Sekunden`, secondsToCharge));
       entries.push(timeEntry(`wallbox.${wb.id}.naechsterLadebeginn`, `Wallbox ${wb.name} – nächster Ladebeginn Uhrzeit`, nextCharge ? nextCharge.hour : null));
     }
+
+    // E-Auto gesamt: alle Wallboxen zusammengefasst (heute/Jahr/Vorjahr aus den
+    // laufenden Summen je Box, gestern/Durchschnitt/Min/Max aus der je Tag über
+    // alle Boxen summierten Tageshistorie).
+    if (wbValues.length) {
+      let gesamtToday = 0;
+      let gesamtYear = 0;
+      let gesamtPreviousYear = 0;
+      for (const wb of wbValues) {
+        gesamtToday += wb.energy.today || 0;
+        gesamtYear += wb.energy.year || 0;
+        gesamtPreviousYear += wb.energy.previousYear || 0;
+      }
+      const aggregateDailyRows = await readAggregateDailyHistory(db);
+      const gesamtYesterdayRow = aggregateDailyRows.find((row) => row.day_key === yesterdayKey);
+      const gesamtYearRows = aggregateDailyRows.filter((row) => row.day_key.startsWith(`${calendar.yearKey}-`));
+      const gesamtYearStats = statsFromRows(gesamtYearRows);
+      entries.push(energyEntry('wallbox.gesamt.today', 'E-Auto gesamt – Verbrauch heute', gesamtToday));
+      entries.push(energyEntry('wallbox.gesamt.yesterday', 'E-Auto gesamt – Verbrauch gestern', orZero(gesamtYesterdayRow ? gesamtYesterdayRow.value : null)));
+      entries.push(energyEntry('wallbox.gesamt.avgYear', 'E-Auto gesamt – Durchschnitt dieses Jahr', avgPerDay(gesamtYear, dayOfYear)));
+      entries.push(energyEntry('wallbox.gesamt.minYear', 'E-Auto gesamt – Minimum dieses Jahr', orZero(gesamtYearStats.min)));
+      entries.push(dateEntry('wallbox.gesamt.minYearDate', 'E-Auto gesamt – Minimum dieses Jahr – Datum', orYearStart(gesamtYearStats.minDate, calendar.yearKey)));
+      entries.push(energyEntry('wallbox.gesamt.maxYear', 'E-Auto gesamt – Maximum dieses Jahr', orZero(gesamtYearStats.max)));
+      entries.push(dateEntry('wallbox.gesamt.maxYearDate', 'E-Auto gesamt – Maximum dieses Jahr – Datum', orYearStart(gesamtYearStats.maxDate, calendar.yearKey)));
+      entries.push(energyEntry('wallbox.gesamt.year', 'E-Auto gesamt – Verbrauch Jahr', gesamtYear));
+      entries.push(energyEntry('wallbox.gesamt.previousYear', 'E-Auto gesamt – Verbrauch Vorjahr', gesamtPreviousYear));
+    }
   }
 
   if (isEnabled('grid-control')) {
@@ -493,6 +609,26 @@ async function listInternalValues(db, cache) {
   }
 
   for (const entry of entries) entry.category = categoryForId(entry.id);
+
+  // Adapter-States: alle von Adaptern gemeldeten Roh-Werte erscheinen automatisch
+  // im Wertekatalog (Herkunft = Adapterinstanz), zusätzlich zu den oben berechneten
+  // Werten. Die id bleibt das Scheme-Topic (`prefix://instanz/adresse`), wodurch sie
+  // sich eindeutig von den Katalog-Ids der berechneten Werte unterscheiden.
+  const statesTree = await buildStatesTree(db);
+  for (const instance of statesTree) {
+    for (const cat of instance.categories) {
+      for (const state of cat.states) {
+        entries.push({
+          id: state.topic,
+          label: `${instance.instanceName} – ${state.name}`,
+          value: state.value,
+          display: state.display,
+          category: `Adapter: ${instance.instanceName}`,
+        });
+      }
+    }
+  }
+
   entries.sort((a, b) => a.label.localeCompare(b.label, 'de'));
   return entries;
 }

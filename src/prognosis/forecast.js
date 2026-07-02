@@ -12,6 +12,7 @@ const { localCalendar } = require('../local-time');
 const { solarGeometryAt } = require('../photovoltaik/aggregation');
 const { buildWallboxModel, planWallboxSchedule, wallboxForecastForDay } = require('./wallbox-model');
 const { isEnabled } = require('../modules');
+const { recordDailyMetric } = require('../history/daily-metrics');
 
 // BDEW-nahe, geglättete Haushaltsform als Kaltstart. Sobald genügend echte
 // Stundenwerte vorliegen, wird sie stufenlos durch das persönliche Profil ersetzt.
@@ -270,6 +271,37 @@ async function recordConsumptionSample(db, totalKwh, cache, options = {}, now = 
       completed=0, updated_at=excluded.updated_at`,
     [key, adjustedTotal, total, maxTemperature, timestamp]
   );
+
+  // Tag(e), die mit diesem Sample abgeschlossen werden (normalerweise genau der
+  // Vortag): geschätzten Klimatisierungs-Mehrverbrauch aus dem aktuell gelernten
+  // Modell historisieren, bevor sie unten als completed markiert werden. Ohne
+  // gemessene Ist-Reihe ist dies eine rückwirkende Modellschätzung, keine
+  // direkte Messung.
+  const closingRows = await dbAll(
+    db,
+    `SELECT day_key, consumption_kwh, max_temperature FROM prognosis_daily_consumption
+     WHERE day_key <> ? AND completed = 0`,
+    [key]
+  );
+  if (closingRows.length) {
+    const coolingRows = await dbAll(
+      db,
+      `SELECT day_key, consumption_kwh, max_temperature FROM prognosis_daily_consumption
+       WHERE completed = 1 AND day_key < ? AND max_temperature IS NOT NULL
+       ORDER BY day_key DESC LIMIT 120`,
+      [key]
+    );
+    const coolingModel = buildCoolingModel(coolingRows);
+    for (const row of closingRows) {
+      const consumption = num(row.consumption_kwh);
+      const baseline = coolingModel.climateDayKeys.has(row.day_key)
+        ? coolingModel.baselinesByWeekday[weekdayForDateKey(row.day_key)]
+        : null;
+      const coolingKwh = consumption != null && baseline != null ? Math.max(0, consumption - baseline) : 0;
+      await recordDailyMetric(db, 'klima', row.day_key, coolingKwh);
+    }
+  }
+
   await dbRun(db, 'UPDATE prognosis_daily_consumption SET completed = 1 WHERE day_key <> ? AND completed = 0', [key]);
   await dbRun(db, 'DELETE FROM prognosis_daily_consumption WHERE day_key < date(?, \'-400 days\')', [key]);
   await dbRun(db, 'DELETE FROM prognosis_hourly_consumption WHERE day_key < date(?, \'-90 days\')', [key]);

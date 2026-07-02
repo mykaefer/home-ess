@@ -19,15 +19,21 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
   per **Drag & Drop** (Widgets und Gruppen); Widgets per Drag in Gruppen
   verschiebbar, Widgets/Gruppen bearbeit- und löschbar.
 - ⚡ **Stromverbrauch** — KPI-Kacheln: Eigenverbrauch, Netzbezug, Heute,
-  Woche, Jahr (inkl. Vorjahr), konfigurierbare MQTT-Topics je Phase sowie
-  Tagesstart-Abgleich für Woche/Jahr.
+  Woche, Jahr (inkl. Vorjahr), konfigurierbare MQTT-Topics je Phase. Der Button
+  **„Wert abgleichen"** (oben rechts) setzt zum Tagesstart wahlweise die Wochen-,
+  Jahres- oder **Vorjahressumme** (Netzbezug + Einspeisung) sowie das **Minimum/
+  Maximum** von Netzbezug bzw. Eigenverbrauch (Wert + Datum). Wird ein Zähler-Topic
+  gewechselt (z. B. Zählertausch), gilt der erste neue Rohwert als Ist-Stand und
+  wird nicht als Zählersprung gezählt.
 - ☀️ **Photovoltaik** — PV-Anlagenverwaltung mit MQTT-Topics und Metadaten
   (Zelltyp, **Konverter-/Reglertyp**); je Anlage **aktuelle Leistung groß,
   Idealwert (Clear-Sky-Modell) klein**. Idealwert berücksichtigt Zelltyp- und
   **Konverter-Wirkungsgrad** (temperaturabhängig); Sonnenstand via echter
   **Ortssonnenzeit** (Längengrad, Zeitzone inkl. Sommerzeit, Zeitgleichung).
   **Direkte-Sonne-Erkennung** je Anlage und globales **Himmelssymbol in der
-  Titelzeile** (☀️/☁️/🌙). Ertrag heute/Woche/Jahr inkl. Vorjahr.
+  Titelzeile** (☀️/☁️/🌙). Ertrag heute/Woche/Jahr inkl. Vorjahr; Button
+  **„Wert abgleichen"** (oben rechts) für Wochen-/Jahres-/Vorjahressumme und
+  Minimum/Maximum (Wert + Datum).
   - **Sonnenreferenz-Cutoff** je Anlage (getrennt morgens/abends, Default 10 %):
     nur Anlagen, auf die die Sonne brauchbar scheint (Idealwert ≥ Anteil der
     kWp-Spitze), zählen für Sonnenintensität und ☀️/☁️ — verhindert falsche
@@ -158,13 +164,18 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
   prognosegeführte Betriebslevel durch. Erste Verbraucher: Filter-/Solarpumpe, Wallbox.
   Anleitung für neue Verbraucher: siehe [LEVEL_HANDLING.md](LEVEL_HANDLING.md).
 - 📤 **Output** — beliebige berechnete Werte an ioBroker-Ziel-Topics zurückgeben;
-  geschlossene Regelschleife mit aktivem Readback alle 30 Sekunden. Fehlende oder
-  abweichende Bestätigungen werden erneut geschrieben und je Output angezeigt.
-  Nicht rücklesbare Command-Topics sind als Ziel bewusst ausgeschlossen. Werte
-  werden über den zentralen **Wertekatalog** gewählt — eine durchsuchbare,
+  geschlossene Regelschleife mit aktivem Readback im 30-Sekunden-Fenster. Jeder
+  Output wird zu einem **zufälligen Zeitpunkt** innerhalb des Fensters geprüft
+  (statt alle gleichzeitig) und entlastet so den Broker; bereits bestätigte Werte
+  werden nur erneut abgefragt, wenn ihr Ist-Wert älter als ein Prüffenster ist.
+  Fehlende oder abweichende Bestätigungen werden erneut geschrieben und je Output
+  angezeigt. Nicht rücklesbare Command-Topics sind als Ziel bewusst ausgeschlossen.
+  Werte werden über den zentralen **Wertekatalog** gewählt — eine durchsuchbare,
   nach Herkunft (Photovoltaik, Stromverbrauch, Batterie, Prognose, …) geordnete
-  und einklappbare Liste mit Ist-Werten; angelegte Outputs erscheinen ebenso als
-  dichte, kategorisierte Liste.
+  und einklappbare Liste mit Ist-Werten; darin auch **statistische Jahreswerte**
+  (gestern, Durchschnitt, Minimum/Maximum inkl. Datum, Jahres-/Vorjahressumme) und
+  automatisch alle **Adapter-States**. Angelegte Outputs erscheinen als dichte,
+  kategorisierte Liste, deren Auf-/Zu-Zustand pro Kategorie gemerkt wird.
 - 🧩 **Module** — Verwaltungsseite zum Aktivieren/Deaktivieren optionaler Module;
   aktive Module erscheinen automatisch in der Sidebar.
 - 🔌 **Adapter** — austauschbare Geräte-Anbindungen (z. B. Modbus) als eigene
@@ -175,9 +186,10 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
   Vorlage: `adapter/demo`. Mitgeliefert: **Modbus-TCP-Adapter** (`adapter/modbus`)
   mit Register-Verwaltung und **Presets** (Vorlagen zum Anlegen der Live-States,
   inkl. Upload; Format: `adapter/modbus/PRESET.md`).
-- 🗂️ **States** — Baumansicht aller von Adaptern gemeldeten Werte (Instanz →
-  Kategorie → State) mit Live-Werten; hinter Topic-Feldern direkt per Auswahl­
-  dialog übernehmbar.
+- 🗂️ **States** — klappt als Unterpunkt unter **Adapter** auf: Baumansicht aller
+  von Adaptern gemeldeten Werte (Instanz → Kategorie → State) mit Live-Werten;
+  hinter Topic-Feldern direkt per Auswahldialog übernehmbar. Alle States sind
+  zusätzlich automatisch im Wertekatalog als Quelle verfügbar.
 - 🌤️ **Sonnenintensität** (% des Clear-Sky-Ideals, auf 100 % gedeckelt):
   aktuell sowie 10-Minuten-/Tages-/Vortagsmittel. Nur Anlagen oberhalb ihres
   größenrelativen Sonnenreferenz-Cutoffs fließen ein.

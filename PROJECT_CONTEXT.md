@@ -28,7 +28,11 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   (Werte + `system`-Block).
 - **Stromverbrauch**: MQTT-Topic-Felder für Eigenverbrauch L1–L3, Netzbezug
   L1–L3 und Zählerstände; oben Eigenverbrauch/Netzbezug als Phasensummen,
-  Woche/Jahr aus Tageswert plus Tagesstart-Abgleich; Jahreswechsel → Vorjahr.
+  Woche/Jahr aus Tageswert plus Tagesstart-Abgleich über den Dialog
+  **„Wert abgleichen"** (Woche/Jahr/Vorjahr sowie Minimum/Maximum je Kennzahl mit
+  Datum); Jahreswechsel → Vorjahr. Ein **Zähler-Topic-Wechsel verwirft den
+  gemerkten Rohstand** (`resetCountersForChangedTopics`), damit der erste Wert eines
+  neuen/getauschten Zählers als Ist-Stand gilt und kein Sprung gezählt wird.
 - **Photovoltaik**: verwaltet mehrere PV-Anlagen (Stammdaten, Zelltyp,
   **Konverter-/Reglertyp**, MQTT-Topics). Je Anlage **aktuelle Leistung groß,
   Clear-Sky-Idealwert klein**.
@@ -209,15 +213,21 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
     Badge im UI bleibt davon unberührt momentan.
 - **Output** (`/output`): beliebige berechnete Werte (Wert-Katalog) an
   ioBroker-**Ziel-Topics** zurückgeben. Die **Engine** (`output/engine.js`)
-  arbeitet als geschlossene Regelschleife: Ziel-States werden abonniert, alle
-  30 s aktiv per `/get` gelesen und nur eine frische Broker-Rückmeldung gilt als
-  Bestätigung. Bei fehlendem oder abweichendem Istwert wird rate-limitiert erneut
-  publiziert; `ack:false`-Schreib-Echos zählen nicht. Die Seite zeigt je Output
-  den Bestätigungsstatus. Command-Topics sind ausgeschlossen, weil sie keinen
-  verifizierbaren Istwert bereitstellen. Angelegte Outputs erscheinen als dichte,
-  nach Kategorie gruppierte und einklappbare Liste mit festen Spaltenbreiten
-  (Statuswechsel verschiebt den Ist-Wert nicht). Die Wertauswahl im Dialog
-  nutzt den zentralen Wertekatalog (`views/value-catalog.js`).
+  arbeitet als geschlossene Regelschleife: Ziel-States werden abonniert und in
+  einem 30-s-Fenster aktiv per `/get` gelesen — jedoch **je Output zu einem
+  zufälligen Zeitpunkt** innerhalb des Fensters (`verifyTick`, Slot-Verteilung),
+  damit nicht alle gleichzeitig den Broker treffen. Nur eine frische Broker-
+  Rückmeldung gilt als Bestätigung; ein bereits bestätigter Wert wird erst wieder
+  aktiv geprüft, wenn sein Ist-Wert älter als ein Prüffenster ist
+  (`readbackNeedsVerification`). Bei fehlendem oder abweichendem Istwert wird
+  rate-limitiert erneut publiziert; `ack:false`-Schreib-Echos zählen nicht. Die
+  Seite zeigt je Output den Bestätigungsstatus. Command-Topics sind ausgeschlossen,
+  weil sie keinen verifizierbaren Istwert bereitstellen. Angelegte Outputs
+  erscheinen als dichte, nach Kategorie gruppierte und einklappbare Liste mit festen
+  Spaltenbreiten (Statuswechsel verschiebt den Ist-Wert nicht); der Auf-/Zu-Zustand
+  je Kategorie wird pro Browser (localStorage) gemerkt, das Nachladen bei
+  MQTT-Bursts gebündelt (max. 1×/s). Die Wertauswahl im Dialog nutzt den zentralen
+  Wertekatalog (`views/value-catalog.js`).
 - **Optionale Module** (`src/modules/index.js`): generische Registry +
   In-Memory-Enabled-State; Seite `/module` zum Aktivieren/Deaktivieren.
   Aktivierte Module erscheinen automatisch in der Sidebar. Aktuell:
@@ -304,7 +314,14 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   Temperatur) und **Pool-Werte** (Wassertemperatur, Pumpen-Status, pH, Chlor — nur
   wenn Modul aktiv) sowie **Betrieb** (`operating.*`, u. a. Autark und
   `operating.notstrom` = Notstrombetrieb). Die Kalibrierfaktoren sind bewusst
-  **nicht** im Katalog (reine Diagnose). Alle Einträge haben `id`, `label`,
+  **nicht** im Katalog (reine Diagnose). Zusätzlich **statistische Jahreswerte** je
+  Kennzahl (PV, Netzbezug, Eigenverbrauch, E-Auto gesamt, Klimatisierung): gestern,
+  Minimum/Maximum inkl. Datum, Jahres-/Vorjahressumme aus `history/daily-metrics.js`
+  (Tabelle `daily_metric_history`, je Metrik ein abgeschlossener Tageswert pro Tag);
+  der **Durchschnitt** wird als Jahressumme ÷ angebrochene Tage gerechnet. Fehlt ein
+  Wert, zeigt der Katalog `0` (Datum: 1. Januar). Außerdem erscheinen automatisch
+  **alle Adapter-States** (`buildStatesTree`, Kategorie „Adapter: <Instanz>", id =
+  Scheme-Topic). Alle Einträge haben `id`, `label`,
   `value`, `display` und `category` (Herkunft, abgeleitet aus dem id-Präfix; siehe
   `categoryForId`/`VALUE_CATEGORIES`). Die Darstellung übernimmt die zentrale,
   wiederverwendbare Routine `views/value-catalog.js` (durchsuchbare, einklappbare
@@ -502,6 +519,14 @@ MQTT.md                   Referenz: ioBroker-MQTT-Regeln
 - `wallbox_daily_consumption(wallbox_id, day_key, consumption_kwh, completed, updated_at)`
 - `wallbox_hourly_consumption(wallbox_id, day_key, hour, consumption_kwh)` —
   getrennte Lernhistorie für Wochentagsbedarf und Ladezeit je Box.
+- `battery_energy_state(id=1, day_charge/discharge_kwh, week/month/year_charge/
+  discharge_offset, previous_year_charge/discharge_total, last_power_ts,
+  last_rollover_date, week/month/year_key)` — per Leistungsintegration erfasste
+  Netto-Akkuladung nach Tag/Woche/Monat/Jahr + Vorjahr.
+- `daily_metric_history(metric, day_key, value, updated_at)` — je Kennzahl
+  (`pv`, `strom.netzbezug`, `strom.eigenverbrauch`, `klima`) ein abgeschlossener
+  Tageswert pro Tag; Grundlage für die statistischen Jahreswerte (gestern,
+  Minimum/Maximum inkl. Datum) im Wert-Katalog. 400 Tage Aufbewahrung.
 
 > **Wert-Katalog** (`output/internal-values.js`): Outputs **und** Dashboard-Widgets
 > beziehen ihre Werte aus demselben Katalog. Enthält PV (Leistungen, Erträge,
@@ -541,7 +566,8 @@ Quellcode. Vollständiges Regelwerk in [ADAPTER.md](ADAPTER.md); Vorlage:
   `values`-Event aber nur bei tatsächlicher Wertänderung** — das verhindert
   write→Echo-Rückkopplungen auf Adapter-Topics und hält die Event-Last niedrig.
   Reaktive Konsumenten (Output-Engine, Prognose-Verhalten) entprellen mit 1000 ms;
-  browser-seitig fassen Dashboard/States das Nachladen pro Event-Burst zusammen.
+  browser-seitig fassen Dashboard/States/Output das Nachladen pro Event-Burst
+  zusammen (max. 1×/s).
 - **Router** `src/adapters/router.js` + Schema-Helfer `parseSchemeTopic`/
   `buildSchemeTopic` in `mqtt/topics.js`. Topics `prefix://instanz/adresse` werden
   vom Client an den Router delegiert (in `publish`, `subscribeAdHoc`,

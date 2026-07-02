@@ -120,6 +120,18 @@ body {
 
 .sidebar a.active { background-color: #444; }
 
+.nav-subnav {
+    display: none;
+    flex-direction: column;
+}
+
+.nav-group.expanded .nav-subnav { display: flex; }
+
+.nav-subnav a {
+    padding-left: 40px;
+    font-size: 0.9em;
+}
+
 .sidebar-footer a {
     text-align: center;
     font-weight: 600;

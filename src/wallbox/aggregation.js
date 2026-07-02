@@ -342,8 +342,19 @@ async function readWallboxValues(db, cache, boxes) {
   return result;
 }
 
+// Für die aggregierte "E-Auto"-Statistik (alle Boxen zusammen) im Wertekatalog:
+// abgeschlossene Tageswerte über alle Wallboxen je Tag summiert.
+async function readAggregateDailyHistory(db) {
+  return dbAll(
+    db,
+    `SELECT day_key, SUM(consumption_kwh) AS value FROM wallbox_daily_consumption
+     WHERE completed = 1 GROUP BY day_key ORDER BY day_key`
+  );
+}
+
 module.exports = {
   buildWallboxSnapshot, readWallboxValues, estimateSoc,
   updateWallboxCounter, updateWallboxSummary, loadCounterState, loadSummaryState,
   recordWallboxHistory, powerToWatt, counterToKwh, parseBool, parseNumber, totalWallboxPowerWatt,
+  readAggregateDailyHistory,
 };
