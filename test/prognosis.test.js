@@ -104,6 +104,34 @@ test('verspäteter Tageszähler-Reset übernimmt den Vortag nicht in den neuen L
   await new Promise((resolve) => db.close(resolve));
 });
 
+test('ein ungültiges Intervall mit riesigem Zählersprung überschwemmt den Tageswert nicht', async () => {
+  const db = new sqlite3.Database(':memory:');
+  await dbRun(db, `CREATE TABLE mqtt_config (
+    id INTEGER PRIMARY KEY, host TEXT, port INTEGER, username TEXT, password TEXT,
+    latitude REAL, longitude REAL, timezone TEXT, dst_enabled INTEGER,
+    outdoor_temperature_topic TEXT, clock_time_topic TEXT, clock_date_topic TEXT
+  )`);
+  await dbRun(db, "INSERT INTO mqtt_config VALUES (1, '', 1883, '', '', NULL, NULL, 'Europe/Berlin', 1, '', '', '')");
+  await dbRun(db, `CREATE TABLE prognosis_daily_consumption (
+    day_key TEXT PRIMARY KEY, consumption_kwh REAL, raw_consumption_kwh REAL, max_temperature REAL,
+    completed INTEGER, updated_at INTEGER
+  )`);
+  await dbRun(db, `CREATE TABLE prognosis_hourly_consumption (
+    day_key TEXT, hour INTEGER, consumption_kwh REAL, PRIMARY KEY(day_key, hour)
+  )`);
+
+  const start = new Date('2026-06-29T10:00:00Z');
+  await recordConsumptionSample(db, 10, new Map(), { batteryPower: 0 }, start);
+  // Zeitstempel-Lücke > 5 Minuten und Sprung >= 2 kWh: ungültiges Intervall,
+  // der Rohsprung darf trotzdem nur bis zur Obergrenze übernommen werden.
+  await recordConsumptionSample(db, 510, new Map(), { batteryPower: 0 }, new Date(start.getTime() + 6 * 60000));
+
+  const row = await dbGet(db, 'SELECT consumption_kwh, raw_consumption_kwh FROM prognosis_daily_consumption');
+  assert.equal(row.raw_consumption_kwh, 510);
+  assert.equal(row.consumption_kwh, 50);
+  await new Promise((resolve) => db.close(resolve));
+});
+
 test('Simulation verwendet für jeden Folgetag dessen eigene Wochentagskurve', () => {
   const input = baseInput();
   input.model.remainingByHour = Array(24).fill(0);
@@ -134,6 +162,16 @@ test('signifikanter Mehrverbrauch heißer Tage bildet ein separates Kühlmodell'
   assert.equal(model.sampleCount, 2);
   assert.equal(model.kwhPerDegree, 1);
   assert.equal(model.climateDayKeys.has('2026-06-15'), true);
+});
+
+test('ohne nicht-heißen Vergleichstag entsteht kein Scheinsignal aus zwei heißen Tagen', () => {
+  const model = buildCoolingModel([
+    { day_key: '2026-06-30', consumption_kwh: 33.56, max_temperature: 30.4 },
+    { day_key: '2026-07-01', consumption_kwh: 49.5, max_temperature: 29.1 },
+  ]);
+  assert.equal(model.enabled, false);
+  assert.equal(model.sampleCount, 0);
+  assert.equal(model.climateDayKeys.size, 0);
 });
 
 test('Kühlbedarf wird nach prognostizierter Temperatur separat aufgeschlagen', () => {

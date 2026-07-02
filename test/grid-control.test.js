@@ -330,6 +330,84 @@ test('grid command is verified against broker readback and re-asserted on diverg
   await new Promise((resolve) => db.close(resolve));
 });
 
+test('eine normale, kurz darauf bestätigte Schaltung erzeugt keinen „nicht bestätigt"-Fehlalarm im Protokoll', async () => {
+  const db = new sqlite3.Database(':memory:');
+  const exec = (sql) => new Promise((resolve, reject) => db.exec(sql, (err) => err ? reject(err) : resolve()));
+  await exec(`
+    CREATE TABLE modules (key TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE operating_state (id INTEGER PRIMARY KEY, operating_level INTEGER, emergency_mode INTEGER);
+    INSERT INTO operating_state VALUES (1, 2, 0);
+    CREATE TABLE batterie_config (
+      id INTEGER PRIMARY KEY, soc_topic TEXT, power_topic TEXT, voltage_topic TEXT,
+      temperatur_topic TEXT, min_soc_topic TEXT, min_soc INTEGER, battery_type TEXT,
+      cell_count INTEGER, lower_voltage REAL, upper_voltage REAL
+    );
+    INSERT INTO batterie_config VALUES (1, 'battery.soc', '', '', '', '', 20, 'lifepo4', 16, 44.8, 55.2);
+    CREATE TABLE grid_control_config (
+      id INTEGER PRIMARY KEY, grid_command_topic TEXT, feed_in_command_topic TEXT,
+      temperature_warning_topic TEXT, temperature_warning_value TEXT,
+      warning_text_topic TEXT, warning_active_topic TEXT, soc_enabled INTEGER,
+      voltage_enabled INTEGER, temperature_enabled INTEGER, feed_in_allowed INTEGER,
+      soc_lower_offset INTEGER, soc_upper_offset INTEGER, soc_hysteresis INTEGER,
+      voltage_hysteresis REAL, grid_frequency_l1_topic TEXT,
+      grid_frequency_l2_topic TEXT, grid_frequency_l3_topic TEXT,
+      grid_detection_seconds INTEGER
+    );
+    INSERT INTO grid_control_config VALUES
+      (1, 'grid.command', '', '', '1', 'warning.text', 'warning.active', 1, 0, 0, 0, 0, 5, 2, 0.5,
+       'grid.frequency.l1', 'grid.frequency.l2', 'grid.frequency.l3', 30);
+    CREATE TABLE grid_control_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, category TEXT NOT NULL,
+      message TEXT NOT NULL, values_text TEXT
+    );
+  `);
+  await operatingState.init(db);
+  await operatingState.setEmergencyMode(db, false);
+  await modulesState.setEnabled(db, 'grid-control', true);
+
+  const cache = mqttClient.getCache();
+  cache.clear();
+  const fresh = () => Date.now();
+  cache.set('mqtt.clockDate', { value: '2026-06-28', receivedAt: fresh() });
+  cache.set('gridcontrol.gridFrequencyL1', { value: 50, receivedAt: fresh() });
+  cache.set('gridcontrol.gridFrequencyL2', { value: 50, receivedAt: fresh() });
+  cache.set('gridcontrol.gridFrequencyL3', { value: 50, receivedAt: fresh() });
+
+  const originalPublish = mqttClient.publish;
+  const originalGetStatus = mqttClient.getStatus;
+  mqttClient.publish = () => true;
+  mqttClient.getStatus = () => ({ connected: true });
+
+  const automation = require('../src/grid-control/automation');
+  const dbAll = (sql) => new Promise((resolve, reject) => db.all(sql, (err, rows) => err ? reject(err) : resolve(rows || [])));
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 60));
+
+  // SoC unter der Schwelle → Netz an. Broker bestätigt kurz darauf.
+  cache.set('batterie.soc', { value: 10, receivedAt: fresh() });
+  await automation.runNow(db);
+  cache.set('gridcontrol.gridCommand', { value: 1, receivedAt: fresh() });
+  await automation.runNow(db);
+  assert.equal(automation.getState().gridCommandConfirmed, true, 'Schaltung wird kurz darauf bestätigt');
+
+  // SoC steigt über die obere Schwelle → Netz aus. Der Broker meldet den neuen
+  // Sollwert noch nicht zurück (Realität: Roundtrip dauert länger als ein Tick).
+  cache.set('batterie.soc', { value: 100, receivedAt: fresh() });
+  await automation.runNow(db);
+  assert.equal(automation.getState().gridActual, false, 'Netz wird abgeschaltet');
+  assert.equal(automation.getState().gridCommandConfirmed, false, 'im selben Tick noch nicht bestätigt');
+
+  await flush();
+  const rows = await dbAll('SELECT category, message FROM grid_control_log');
+  const notConfirmed = rows.filter((r) => /nicht bestätigt/.test(r.message));
+  assert.equal(notConfirmed.length, 0, 'kein sofortiger „nicht bestätigt"-Fehlalarm ohne abgelaufenes Timeout');
+  // Die eigentliche Schaltaktion wird weiterhin protokolliert.
+  assert.ok(rows.some((r) => r.category === 'action' && /Netz abgeschaltet/.test(r.message)), 'Schaltaktion bleibt im Protokoll');
+
+  mqttClient.publish = originalPublish;
+  mqttClient.getStatus = originalGetStatus;
+  await new Promise((resolve) => db.close(resolve));
+});
+
 test('stale grid frequencies do not unlatch emergency mode', async () => {
   const db = new sqlite3.Database(':memory:');
   const exec = (sql) => new Promise((resolve, reject) => db.exec(sql, (err) => err ? reject(err) : resolve()));

@@ -68,7 +68,9 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
   wird mit Tag und Uhrzeit ausgewiesen; Tagesend-SoC bleibt als Zusatzwert sichtbar.
   Für jeden Wochentag wird eine eigene Verbrauchskurve gelernt. Da der aus
   Netzbezug und PV abgeleitete Gesamtverbrauch auch Akkuladung enthält, wird die
-  signierte Batterieleistung vor dem Lernen herausgerechnet.
+  signierte Batterieleistung vor dem Lernen herausgerechnet. Auch die Jahresbasis
+  wird um die Netto-Akkuladung und den Wallbox-Verbrauch bereinigt, damit
+  gespeicherte Energie den prognostizierten Tagesbedarf nicht nach oben zieht.
   Oben rechts lässt sich ein Verhaltensmodell aktivieren: **Netzparallelbetrieb**
   bewertet ausschließlich die Versorgung bis zum nächsten Ladebeginn und nutzt
   danach das Netz als Reserve; **Autarkbetrieb** bewertet mehrere Prognosetage

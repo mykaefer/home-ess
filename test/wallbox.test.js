@@ -128,6 +128,27 @@ test('Privat lädt oberhalb Mindeststand nur bei nicht speicherbarem Prognose-Ü
   assert.equal(p.desiredOn, true);
 });
 
+test('Privat übersteuert eine zu vorsichtige Prognose, wenn der Hausakku bereits voll ist und real eingespeist wird', () => {
+  const box = { mode: 1, maxPowerW: 3000, minChargePercent: 40, priorityPrivate: 5, setpointTopic: '' };
+  const p = planCharge(box, {
+    plugged: true, soc: 52, surplusW: 3500, prognosisOverflowKwh: 0,
+    houseBatterySoc: 97, houseBatteryMinSoc: 20,
+  });
+  assert.equal(p.desiredOn, true);
+  assert.match(p.reason, /Hausakku voll/);
+});
+
+test('Privat lässt die Prognose-Bremse bei vollem Hausakku ohne ausreichenden Live-Überschuss bestehen', () => {
+  const box = { mode: 1, maxPowerW: 3000, minChargePercent: 40, priorityPrivate: 5, setpointTopic: '' };
+  // Akku voll, aber die Einspeisung deckt die feste Wallbox-Leistung noch nicht.
+  const p = planCharge(box, {
+    plugged: true, soc: 52, surplusW: 2000, prognosisOverflowKwh: 0,
+    houseBatterySoc: 97, houseBatteryMinSoc: 20,
+  });
+  assert.equal(p.desiredOn, false);
+  assert.match(p.reason, /nicht speicherbaren Überschuss/);
+});
+
 test('Privat wartet oberhalb Mindeststand nach Neustart auf die Prognose', () => {
   const box = { mode: 1, maxPowerW: 3000, minChargePercent: 40, priorityPrivate: 5, setpointTopic: '' };
   const p = planCharge(box, {

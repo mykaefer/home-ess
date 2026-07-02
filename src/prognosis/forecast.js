@@ -4,6 +4,7 @@ const { listPvPlants } = require('../photovoltaik/plants');
 const { computePvForecast } = require('../photovoltaik/forecast');
 const { readStromverbrauchValues } = require('../stromverbrauch/aggregation');
 const { loadBatterieConfig, readBatterieData, batteryCapacityKwh } = require('../batterie/config');
+const { readBatteryEnergyValues } = require('../batterie/energy');
 const { loadPrognosisConfig } = require('./config');
 const operatingState = require('../operating-state');
 const { loadMqttConfig } = require('../mqtt/config');
@@ -23,6 +24,14 @@ const COOLING_HOT_DAY_TEMPERATURE = 26;
 const COOLING_MIN_EXTRA_KWH = 1;
 const COOLING_MIN_EXTRA_FRACTION = 0.15;
 const COOLING_MIN_SAMPLES = 2;
+// Obergrenze für den Fallback-Pfad bei ungültigem Intervall (siehe
+// recordConsumptionSample). Ohne sie kann ein einzelner Zähler-Ausreißer
+// (z. B. verwaister Zeitstempel nach einem Neustart oder ein Sprung im
+// Quellzähler) den kompletten Rohsprung ungeprüft in den Tageswert
+// übernehmen. Der Tageswert wird nur aufaddiert, ein solcher Ausreißer bliebe
+// also für den ganzen Tag bestehen und würde als "gelernter" Verbrauch in die
+// Prognose folgender Tage einfließen.
+const MAX_FALLBACK_DELTA_KWH = 50;
 
 function dbAll(db, sql, params = []) {
   return new Promise((resolve, reject) => db.all(sql, params, (err, rows) => (err ? reject(err) : resolve(rows || []))));
@@ -137,8 +146,12 @@ function buildCoolingModel(rows) {
     maxTemperature: num(row.max_temperature),
   })).filter((row) => row.consumption != null && row.consumption > 0 && row.maxTemperature != null);
   const nonHot = valid.filter((row) => row.maxTemperature < COOLING_HOT_DAY_TEMPERATURE);
-  const fallbackBaseline = medianOf(nonHot.map((row) => row.consumption)) ||
-    medianOf(valid.map((row) => row.consumption));
+  // Ohne mindestens einen nicht-heißen Vergleichstag gibt es keine Baseline für
+  // "normalen" Verbrauch. Ein Rückfall auf den Median der (nur) heißen Tage
+  // würde Hitzetage nur gegeneinander vergleichen und selbst bei völlig
+  // gleichem Kühlbedarf zwangsläufig einen der beiden als "signifikant erhöht"
+  // markieren – ein Scheinsignal aus reinem Stichprobenrauschen.
+  const fallbackBaseline = medianOf(nonHot.map((row) => row.consumption));
   const baselinesByWeekday = Array.from({ length: 7 }, (_, weekday) =>
     medianOf(nonHot.filter((row) => row.weekday === weekday).map((row) => row.consumption)) || fallbackBaseline
   );
@@ -231,7 +244,7 @@ async function recordConsumptionSample(db, totalKwh, cache, options = {}, now = 
     // integrierte heutige Verbrauch bleibt jedoch unverändert.
     const adjustedDelta = validInterval
       ? adjustedConsumptionDelta(rawDelta, batteryPower, age, options.wallboxPower)
-      : Math.max(0, rawDelta);
+      : Math.min(Math.max(0, rawDelta), MAX_FALLBACK_DELTA_KWH);
     adjustedTotal = previousAdjusted + adjustedDelta;
     if (validInterval && adjustedDelta > 0 && adjustedDelta < 2) {
       await dbRun(
@@ -305,10 +318,17 @@ async function buildConsumptionModel(db, strom, config, cache, forecast = null, 
     0,
     num(todayRow && todayRow.consumption_kwh) ?? rawToday
   );
+  const batteryEnergy = await readBatteryEnergyValues(db);
   const year = num(strom.breakdown.year.summe);
   const previousYear = num(strom.breakdown.previousYear.summe);
-  const houseYear = year == null ? null : Math.max(0, year - wallboxModel.yearKwh);
-  const housePreviousYear = previousYear == null ? null : Math.max(0, previousYear - wallboxModel.previousYearKwh);
+  // Eigenverbrauch (PV+Import-Export) enthält auch die Akku- und Wallbox-
+  // Ladung mit; beide werden hier abgezogen, damit die Jahresbasis dieselbe
+  // "reine" Hausverbrauchsgröße abbildet wie der tagesweise angepasste Wert
+  // (siehe adjustedConsumptionDelta).
+  const houseYear = year == null ? null
+    : Math.max(0, year - wallboxModel.yearKwh - batteryEnergy.year.netCharge);
+  const housePreviousYear = previousYear == null ? null
+    : Math.max(0, previousYear - wallboxModel.previousYearKwh - batteryEnergy.previousYear.netCharge);
   const completedDays = elapsedDayCount(local.date);
   const annualAverage = completedDays > 0 && houseYear != null
     ? Math.max(0, houseYear - today) / completedDays

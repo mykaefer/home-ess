@@ -181,6 +181,31 @@ function openDatabase() {
         charged_today INTEGER NOT NULL DEFAULT 0
       )`
     );
+    // Kumulierte Akku-Lade-/Entladeenergie per Leistungsintegration (kein
+    // eigener Energiezähler am Hausakku). Dient dazu, den Jahres-Eigenverbrauch
+    // (PV+Import-Export) um die Netto-Akkuladung zu bereinigen – die fließt
+    // sonst als scheinbarer Mehrverbrauch in die Prognosebasis ein, obwohl sie
+    // später beim Entladen ohnehin schon einmal gezählt wird.
+    db.run(
+      `CREATE TABLE IF NOT EXISTS battery_energy_state (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        last_power_ts INTEGER,
+        day_charge_kwh REAL NOT NULL DEFAULT 0,
+        day_discharge_kwh REAL NOT NULL DEFAULT 0,
+        week_charge_offset REAL NOT NULL DEFAULT 0,
+        week_discharge_offset REAL NOT NULL DEFAULT 0,
+        month_charge_offset REAL NOT NULL DEFAULT 0,
+        month_discharge_offset REAL NOT NULL DEFAULT 0,
+        year_charge_offset REAL NOT NULL DEFAULT 0,
+        year_discharge_offset REAL NOT NULL DEFAULT 0,
+        previous_year_charge_total REAL NOT NULL DEFAULT 0,
+        previous_year_discharge_total REAL NOT NULL DEFAULT 0,
+        last_rollover_date TEXT NOT NULL DEFAULT '',
+        week_key TEXT NOT NULL DEFAULT '',
+        month_key TEXT NOT NULL DEFAULT '',
+        year_key TEXT NOT NULL DEFAULT ''
+      )`
+    );
     db.run(
       `CREATE TABLE IF NOT EXISTS prognosis_config (
         id INTEGER PRIMARY KEY CHECK (id = 1),

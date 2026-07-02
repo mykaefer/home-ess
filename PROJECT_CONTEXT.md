@@ -149,10 +149,23 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   dient 06:00 Uhr als definierter Ersatz.
   Verbrauchssampling speichert neben dem Rohwert den um Batterieenergie
   bereinigten Hausverbrauch: `DeltaVerbrauch − BatterieLeistung × Zeit`, wobei
-  positive Batterieleistung Laden und negative Entladen bedeutet. Aus den
-  bereinigten Stundenwerten entstehen sieben getrennte, weich gelernte
-  Wochentagsprofile samt wochentagsabhängigem Tagesniveau; bei wenig Daten wird
-  zum globalen beziehungsweise Standard-Haushaltsprofil zurückgeblendet.
+  positive Batterieleistung Laden und negative Entladen bedeutet. Lässt sich ein
+  Intervall nicht als plausibel einstufen (z. B. veralteter Zeitstempel nach
+  einem Neustart oder ein Sprung im Quellzähler), wird der Rohsprung auf höchstens
+  50 kWh je Ereignis begrenzt, damit ein einzelner Ausreißer nicht als
+  Tagesverbrauch stehen bleibt und die Prognose der Folgetage verzerrt. Die
+  Jahresbasis (`annualAverage`) zieht zusätzlich zur Wallbox-Energie die per
+  Leistungsintegration erfasste **Netto-Akkuladung** ab (`battery_energy_state`,
+  Tag/Woche/Monat/Jahr + Vorjahr, `batterie/energy.js`, 60-s-Job): Der
+  Eigenverbrauch (PV + Netzbezug − Einspeisung) enthält die Hausakku-Ladung
+  physikalisch mit, ohne Bereinigung verschiebt sie den prognostizierten
+  Tagesbedarf nach oben. Aus den bereinigten Stundenwerten entstehen sieben getrennte, weich
+  gelernte Wochentagsprofile samt wochentagsabhängigem Tagesniveau; bei wenig
+  Daten wird zum globalen beziehungsweise Standard-Haushaltsprofil
+  zurückgeblendet. Das **Klimatisierungsmodell** bewertet den Mehrverbrauch heißer
+  Tage erst, wenn mindestens ein echter nicht-heißer Vergleichstag als Baseline
+  vorliegt — sonst würde es heiße Tage nur gegeneinander vergleichen und
+  fälschlich einen als „Hitzetag mit Klimatisierung" lernen.
   Persistente Verhaltensmodelle (`prognosis_config.behavior_model/_active`):
   `grid_parallel` bewertet ausschließlich Reserve und Netzbedarf bis zum nächsten
   Ladebeginn; spätere Tage sind wegen des verfügbaren Netzes irrelevant und
@@ -189,7 +202,11 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
     nur **Schwellen-Übertritte mit Aktionen** (gelb) und **kritische Zustände**
     (rot), einzeilig mit Zeitstempel + Werte-Schnappschuss; paginiert
     (100/Seite, `/grid-control/log`), Seite 1 live, ab Seite 2 statisch. Reine
-    Wertänderungen werden bewusst **nicht** protokolliert.
+    Wertänderungen werden bewusst **nicht** protokolliert. Das kritische
+    „nicht bestätigt“ erscheint erst nach **tatsächlich anhaltender** Divergenz
+    (≥ 20 s, dieselbe Bedingung wie die MQTT-Warnung) — nicht schon im Schalt-Tick,
+    in dem der Broker den Soll-Wert unmöglich zurückmelden kann; der Live-Status-
+    Badge im UI bleibt davon unberührt momentan.
 - **Output** (`/output`): beliebige berechnete Werte (Wert-Katalog) an
   ioBroker-**Ziel-Topics** zurückgeben. Die **Engine** (`output/engine.js`)
   arbeitet als geschlossene Regelschleife: Ziel-States werden abonniert, alle
@@ -249,6 +266,10 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
       zum Mindest-Ladestand, darüber nur den prognostizierten Überschuss, der nach
       Hausverbrauch und Hausakku nicht mehr speicherbar ist. Hausakku-Entladung wird
       live gegengerechnet, nahe dessen Mindest-SoC bleibt die flexible Ladung aus.
+      Ein **live nachgewiesener Überlauf** (Hausakku-SoC ≥ 95 % **und** laufende
+      Netzeinspeisung über der Einschaltschwelle) übersteuert dabei eine zu
+      vorsichtige Tagesprognose — die eingetretene Realität hat Vorrang, die
+      Prognose bleibt nur für den vorausschauenden Start zuständig.
       **Beruflich** berechnet den spätesten Start aus Fahrzeug-Restenergie und
       Ladeleistung für 06:00 Uhr an gewählten Arbeitstagen; freie Tage → Privatregel.
       **Immer voll** lässt das Ladegerät aktiviert. Mit Soll-Leistungs-Topic

@@ -1,5 +1,19 @@
 # Changelog
 
+Alle nennenswerten Änderungen an homeESS. Format angelehnt an
+[Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
+
+## [0.10.2] — 2026-07-02
+
+### Hinzugefügt
+
+- **Akku-Lade-/Entladeenergie-Tracking** (`batterie/energy.js`, Tabelle
+  `battery_energy_state`, 60-s-Job). Erfasst per Leistungsintegration die
+  Netto-Akkuladung nach Tag/Woche/Monat/Jahr + Vorjahr — Grundlage für die
+  Bereinigung der Jahres-Prognosebasis (siehe unten).
+
+### Geändert
+
 - Modbus-/State-Editor-Adapter: Das Speichern der Instanz-Einstellungen löscht
   **nicht mehr die angelegten Register** – nicht im Settings-Schema enthaltene
   Werte (v. a. der State-Editor-Speicher) bleiben erhalten. Die States-Seite wurde
@@ -30,9 +44,40 @@
   werden über einen erwarteten Steuer-Topic-Readback bestätigt und niemals als
   Nutzerwunsch gewertet; das Status-Topic bleibt reiner Ist-Zustand.
   Nach einem Neustart wartet die flexible Ladung auf die erste vollständige Prognose.
+- **Jahresbasis des Verbrauchs um die Akkuladung bereinigt.** Der Eigenverbrauch
+  (PV + Netzbezug − Einspeisung) enthält physikalisch auch die Ladung des
+  Hausakkus. Bislang floss sie ungefiltert in die Jahresbasis der
+  Verbrauchsprognose ein und trieb den prognostizierten Tagesbedarf nach oben. Die
+  Netto-Akkuladung wird jetzt – analog zur bereits abgezogenen Wallbox-Energie –
+  aus der Jahresbasis herausgerechnet. Wirkt vorwärts, sobald Messwerte auflaufen.
+- **Wallbox „Privat": Live-Überlauf übersteuert eine zu vorsichtige Prognose.**
+  Ist der Hausakku bereits voll und speist die Anlage nachweislich ins Netz ein,
+  darf die Tagesprognose das Laden nicht mehr verhindern (bisher blockierte eine zu
+  niedrig ausgefallene Wetterprognose die Überschussladung trotz laufender
+  Einspeisung). Die Prognose bleibt für den vorausschauenden Start zuständig,
+  verliert aber ihr Vetorecht gegen die eingetretene Realität.
 
-Alle nennenswerten Änderungen an homeESS. Format angelehnt an
-[Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
+### Behoben
+
+- **Prognose-Tagesverbrauch gegen Ausreißer abgesichert.** Konnte der
+  Minuten-Sampler ein Intervall nicht als plausibel einstufen (z. B. veralteter
+  Zeitstempel nach einem Neustart oder ein Sprung im Quellzähler), wurde der
+  komplette Rohsprung ungebremst auf den Tageswert addiert – ein einzelner
+  Ausreißer (real bis ~500 kWh statt ~34 kWh) blieb für den ganzen Tag stehen und
+  verzerrte als „gelernter" Verbrauch die Prognose der Folgetage. Der Fallback ist
+  jetzt auf 50 kWh je Ereignis gedeckelt.
+- **Klimatisierungsmodell erzeugt kein Scheinsignal mehr.** Ohne einen einzigen
+  nicht-heißen Vergleichstag verglich das Modell heiße Tage nur gegeneinander und
+  markierte zwangsläufig einen davon als „signifikant erhöht" – ein vermeintlich
+  gelernter Hitzetag mit Klimatisierung, obwohl keine Klimaanlage lief. Residuen
+  werden jetzt erst bewertet, wenn ein echter nicht-heißer Referenztag als Baseline
+  vorliegt.
+- **Grid-Control-Protokoll: kein „nicht bestätigt"-Fehlalarm mehr.** Jede
+  Schaltung wurde im selben 2-Sekunden-Tick als „vom Broker nicht bestätigt – wird
+  wiederholt" (rot/kritisch) protokolliert, obwohl der Broker den Sollwert
+  unmöglich so schnell zurückmelden kann. Der kritische Log-Eintrag erscheint jetzt
+  – wie die zugehörige MQTT-Warnung – erst nach tatsächlich anhaltender Divergenz
+  (≥ 20 s); der Live-Status auf der Seite bleibt unverändert momentan.
 
 ## [0.10.1] — 2026-07-01
 

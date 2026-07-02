@@ -30,6 +30,7 @@ const state = {
   temperature: false, load: false, gridActual: false, feedInActual: false,
   gridPublished: null, feedInPublished: null,
   gridConfirmed: null, feedInConfirmed: null,
+  gridWarned: false, feedInWarned: false,
   gridZeroSince: 0,
   loadOffSince: 0,
   gridFrequencies: [null, null, null],
@@ -92,10 +93,18 @@ function recordLog(db, snap) {
   if (snap.load && !prev.load) appendLog(db, 'critical', 'Wechselrichterlast zu hoch', vals);
   if (snap.socLow && !prev.socLow) appendLog(db, 'critical', 'Akku-SoC am unteren Limit', vals);
   if (snap.emergency && !prev.emergency) appendLog(db, 'critical', 'Notstrombetrieb aktiviert (kein Netz erkannt)', vals);
-  if (snap.gridConfirmed === false && prev.gridConfirmed !== false) {
+  // Erst nach Ablauf des Bestätigungs-Timeouts (COMMAND_CONFIRM_TIMEOUT_MS) als
+  // kritisch protokollieren, nicht schon im selben Tick wie die Schaltung. Der
+  // Broker kann den Soll-Wert unmöglich innerhalb desselben 2-Sekunden-Zyklus
+  // zurückmelden; ein Log direkt auf den momentan-„nicht bestätigt"-Zustand
+  // erzeugte sonst zu jeder normalen, wenige Sekunden später bestätigten
+  // Schaltung einen roten Fehlalarm. `warned` markiert die tatsächlich
+  // anhaltende Divergenz (≥ 20 s) – dieselbe Bedingung, die auch die
+  // MQTT-Warnung auslöst.
+  if (snap.gridWarned && !prev.gridWarned) {
     appendLog(db, 'critical', 'Netzschaltung vom Broker nicht bestätigt – wird wiederholt', vals);
   }
-  if (snap.feedInConfirmed === false && prev.feedInConfirmed !== false) {
+  if (snap.feedInWarned && !prev.feedInWarned) {
     appendLog(db, 'critical', 'Überschusseinspeisung vom Broker nicht bestätigt – wird wiederholt', vals);
   }
 
@@ -446,6 +455,9 @@ async function tick(db) {
   );
   state.gridConfirmed = reconcileCommand('grid', cfg.gridCommandTopic, STATE_IDS.gridCommand, state.gridActual, { ...ctx, hasMeasurement: gridHasMeasurement, label: 'Netzschaltung' });
   state.feedInConfirmed = reconcileCommand('feedIn', cfg.feedInCommandTopic, STATE_IDS.feedInCommand, state.feedInActual, { ...ctx, label: 'Überschusseinspeisung' });
+  // Anhaltende (≥ Timeout) Divergenz für das Audit-Log – siehe recordLog.
+  state.gridWarned = !!commandTracks.get('grid')?.warned;
+  state.feedInWarned = !!commandTracks.get('feedIn')?.warned;
   // Für die hasMeasurement-Heuristik: sobald ein Netz-Topic konfiguriert ist und
   // wir hier ankommen, gilt die Steuerung als aktiv.
   if (hasMeasurement && cfg.gridCommandTopic) state.gridPublished = state.gridActual;
@@ -472,6 +484,8 @@ async function tick(db) {
       level: finalState.operatingLevel,
       gridConfirmed: state.gridConfirmed,
       feedInConfirmed: state.feedInConfirmed,
+      gridWarned: state.gridWarned,
+      feedInWarned: state.feedInWarned,
     });
   }
 

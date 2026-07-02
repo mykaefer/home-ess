@@ -39,6 +39,7 @@ const operatingState = require('./operating-state');
 const operatingLevelHandler = require('./operating-level/handler');
 const { recordConsumptionSample } = require('./prognosis/forecast');
 const { readBatterieData } = require('./batterie/config');
+const { updateBatteryEnergy } = require('./batterie/energy');
 const { buildEnvironmentSnapshot } = require('./mqtt/config');
 const prognosisBehavior = require('./prognosis/behavior');
 
@@ -144,6 +145,14 @@ function createApp() {
   };
   updateWallbox();
   setInterval(updateWallbox, 60000);
+
+  // Akku-Lade-/Entladeenergie fortschreiben (für die Bereinigung der
+  // Jahres-Prognosebasis um die Netto-Akkuladung).
+  const updateBattery = () => {
+    updateBatteryEnergy(db, mqttClient.getCache()).catch(() => {});
+  };
+  updateBattery();
+  setInterval(updateBattery, 60000);
 
   // Sonnenintensität als Zeitreihe erfassen (für 10-Minuten-/Tages-/Vortagsmittel).
   recordSample(db, mqttClient.getCache()).catch(() => {});

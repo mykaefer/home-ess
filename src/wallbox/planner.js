@@ -16,6 +16,7 @@ const BUSINESS_START_BUFFER_HOURS = 0.5;
 const CHARGE_EFFICIENCY = 0.9;
 const HOUSE_BATTERY_RESERVE_MARGIN_PERCENT = 5;
 const FORECAST_ENERGY_EPSILON_KWH = 0.05;
+const HOUSE_BATTERY_FULL_SOC_THRESHOLD = 95; // ab hier gilt der Hausakku als praktisch voll
 
 // Sonderfälle (decideWallboxAction):
 const SETTLE_MS = 8000;          // nach eigener Schaltung kurz nicht auf „manuell" prüfen
@@ -66,27 +67,41 @@ function privatePlan(box, ctx) {
     return { ...fullPowerPlan(box), reason: `Privat: unter Mindest-Ladestand (${box.minChargePercent} %)` };
   }
   if (isFull(ctx.soc)) return { desiredOn: false, setpointW: null, reason: 'Privat: Fahrzeug voll' };
-  // Oberhalb des Mindeststands darf ein kurzer momentaner PV-Peak nicht die
-  // Tagesreserve verbrauchen. Sobald die Prognose heute Netzbedarf oder keine
-  // freie Überschussenergie ausweist, bleibt die flexible Privatladung aus.
-  if (ctx.prognosisAvailable === false) {
-    return { desiredOn: false, setpointW: null,
-      reason: 'Privat: wartet auf vollständige Tagesprognose' };
-  }
-  const forecastOverflow = Number(ctx.prognosisOverflowKwh);
-  if (ctx.prognosisOverflowKwh != null && Number.isFinite(forecastOverflow) &&
-      forecastOverflow <= FORECAST_ENERGY_EPSILON_KWH) {
-    return { desiredOn: false, setpointW: null,
-      reason: 'Privat: Prognose ohne nicht speicherbaren Überschuss' };
-  }
+
+  const liveSurplus = surplusPlan(box, ctx.surplusW);
   const houseSoc = Number(ctx.houseBatterySoc);
+  // Ein bereits voller Hausakku bei gleichzeitig ausreichender Netzeinspeisung ist
+  // keine Prognose, sondern eingetretene Realität (siehe houseSurplusWatt). Das
+  // darf die Tagesprognose nicht mehr verwerfen können, auch wenn diese für den
+  // Rest des Tages (z. B. wegen einer zu vorsichtigen Wetterprognose) keinen
+  // Überschuss mehr erwartet – sonst speist die Anlage ungenutzt ins Netz ein,
+  // während die Prognose behauptet, es gäbe nichts zu verteilen.
+  const liveOverflow = Number.isFinite(houseSoc) &&
+    houseSoc >= HOUSE_BATTERY_FULL_SOC_THRESHOLD && liveSurplus.desiredOn;
+
+  if (!liveOverflow) {
+    // Oberhalb des Mindeststands darf ein kurzer momentaner PV-Peak nicht die
+    // Tagesreserve verbrauchen. Sobald die Prognose heute Netzbedarf oder keine
+    // freie Überschussenergie ausweist, bleibt die flexible Privatladung aus.
+    if (ctx.prognosisAvailable === false) {
+      return { desiredOn: false, setpointW: null,
+        reason: 'Privat: wartet auf vollständige Tagesprognose' };
+    }
+    const forecastOverflow = Number(ctx.prognosisOverflowKwh);
+    if (ctx.prognosisOverflowKwh != null && Number.isFinite(forecastOverflow) &&
+        forecastOverflow <= FORECAST_ENERGY_EPSILON_KWH) {
+      return { desiredOn: false, setpointW: null,
+        reason: 'Privat: Prognose ohne nicht speicherbaren Überschuss' };
+    }
+  }
   const houseMinSoc = Number(ctx.houseBatteryMinSoc);
   if (Number.isFinite(houseSoc) && Number.isFinite(houseMinSoc) &&
       houseSoc <= houseMinSoc + HOUSE_BATTERY_RESERVE_MARGIN_PERCENT) {
     return { desiredOn: false, setpointW: null,
       reason: 'Privat: Hausakku nahe Mindest-SoC' };
   }
-  return { ...surplusPlan(box, ctx.surplusW), reason: 'Privat: nur Überschuss' };
+  return { ...liveSurplus,
+    reason: liveOverflow ? 'Privat: Hausakku voll, Netzeinspeisung aktiv' : 'Privat: nur Überschuss' };
 }
 
 // Beruflichregel: an Arbeitstagen (bzw. am Vorabend) voll bereitstellen. Tagsüber
@@ -345,5 +360,6 @@ module.exports = {
   FULL_SOC, SURPLUS_ON_W, MIN_CHARGE_W, BUSINESS_FORCE_HOUR,
   BUSINESS_READY_HOUR, BUSINESS_START_BUFFER_HOURS, CHARGE_EFFICIENCY,
   HOUSE_BATTERY_RESERVE_MARGIN_PERCENT, FORECAST_ENERGY_EPSILON_KWH,
+  HOUSE_BATTERY_FULL_SOC_THRESHOLD,
   SETTLE_MS, RESTART_OFF_MS, STALL_EXPECT_MIN_W, MAX_RESTART_ATTEMPTS,
 };
