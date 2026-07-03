@@ -18,8 +18,25 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
   ans Gruppenende zu. **Gruppenlose Geräte** stehen im Abschnitt „Ohne Gruppe"
   am Seitenende unter den Gruppen.
 
+- **Messen + Schalten: interner Zählerstand statt Roh-Topic-Wert.** Der
+  angezeigte Zählerstand eines Geräts ist jetzt ein interner Zähler, der wie
+  beim Stromverbrauch nur die **Deltas** des Zähler-Topics fortschreibt. Bei
+  **Geräte-Neuanlage** startet er bei 0, bei **Wechsel des Zähler-Topics oder
+  der Einheit** wird nur die Baseline neu gesetzt — der aktuelle Rohwert des
+  Topics geht nicht mehr als Sprung in den Zählerstand ein. Rückwärtssprünge
+  des Rohwerts (Geräte-Reset) basieren ebenfalls nur neu, ohne den internen
+  Stand zu verändern. Bestehende Geräte übernehmen beim ersten Snapshot
+  einmalig ihren bisherigen Anzeigewert und laufen nahtlos weiter
+  (neue Spalte `counter_total_kwh` in `mess_schalt_actor_state`).
+
 ### Behoben
 
+- **Messen + Schalten: Validierungsfehler beim Gerät-Anlegen waren unsichtbar.**
+  Schlug die Server-Validierung fehl (z. B. nur Status-Topic angegeben oder
+  „Priorität der Gruppe verwenden" ohne Gruppenauswahl), öffnete sich der Dialog
+  zwar erneut mit den eingegebenen Werten, die Fehlermeldung wurde aber sofort
+  wieder gelöscht — „Speichern" sah aus, als täte es nichts. Die Meldung wird
+  jetzt nach dem Öffnen des Dialogs gesetzt und bleibt sichtbar.
 - Testschemata um die Lastabwurf-Spalten (`load_shed_enabled`,
   `load_shed_phase`) ergänzt, die seit 1.0.2/1.0.3 in den betroffenen
   Testtabellen fehlten (Aggregation, Funktionen, Wallbox-Prognose).

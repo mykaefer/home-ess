@@ -70,7 +70,10 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
     (mindestens Schalten, Leistung oder Zähler). Ohne Status-Topic gilt das
     Schalt-Topic (sonst die Leistung) als Ist-Stand. Ist nur ein Zähler gesetzt,
     wird die Leistung aus dem Zählerfortschritt abgeleitet und fällt nach über
-    10 Minuten ohne Fortschritt auf 0 W.
+    10 Minuten ohne Fortschritt auf 0 W. Der angezeigte Zählerstand ist ein
+    **interner Zähler**, der nur die Deltas des Zähler-Topics fortschreibt —
+    Geräte-Neuanlage oder ein Topic-Wechsel lassen ihn nicht auf den Rohwert
+    des Topics springen.
   - Alle Geräte mit Schalt-Topic laufen über das **Betriebslevel-Gate** und werden
     unterhalb ihrer Priorität ausgeschaltet; Einschalten ist dann auch manuell nicht
     erlaubt. **„Immer an"** schaltet bei erneuter Freigabe automatisch wieder ein.

@@ -626,16 +626,19 @@ ${renderUngrouped(ungrouped)}
     window.addEventListener('homeess:mqtt', queueRefresh);
     setInterval(refreshValues, 30000);
 
-    if (initialDialogError) {
-      document.getElementById('actorDialogError').innerHTML =
-        '<p class="error-text"></p>';
-      document.querySelector('#actorDialogError .error-text').textContent = initialDialogError;
-    }
     if (initialDialogMode === 'add') { openActorDialog('add'); setActorFormValues(initialDialogValues); }
     else if (initialDialogMode === 'edit' && initialEditingActorId != null) {
       openActorDialog('edit', initialEditingActorId); setActorFormValues(initialDialogValues);
     }
-    if (initialGroupDialogOpen) openGroupDialog('add');`;
+    if (initialGroupDialogOpen) openGroupDialog('add');
+    // Fehlermeldung erst NACH dem Öffnen setzen: openActorDialog() leert die
+    // Fehlerbox – umgekehrt würde die Server-Validierungsmeldung sofort wieder
+    // verschwinden und „Speichern" sähe aus, als täte es nichts.
+    if (initialDialogError) {
+      document.getElementById('actorDialogError').innerHTML =
+        '<p class="error-text"></p>';
+      document.querySelector('#actorDialogError .error-text').textContent = initialDialogError;
+    }`;
 
   return renderLayout({ title: 'Messen + Schalten', activePath: '/messen-schalten', body, script });
 }

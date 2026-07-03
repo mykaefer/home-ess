@@ -155,12 +155,22 @@ body {
 .logout-button:hover { background-color: #c82333; }
 
 .sidebar-copyright {
-    padding: 8px 20px 12px;
-    font-size: 0.7em;
+    padding: 6px 8px 4px;
+    font-size: 0.62em;
     line-height: 1.4;
     color: #999;
     text-align: center;
+    white-space: nowrap;
 }
+
+.sidebar-copyright a.sidebar-copyright-link {
+    display: inline;
+    padding: 0;
+    color: #999;
+    text-decoration: underline;
+}
+
+.sidebar-copyright a.sidebar-copyright-link:hover { color: #ccc; }
 
 .settings-layout {
     display: flex;

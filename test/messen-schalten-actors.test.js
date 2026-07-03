@@ -26,7 +26,7 @@ async function freshDb() {
     function_key TEXT NOT NULL DEFAULT '',
     load_shed_enabled INTEGER NOT NULL DEFAULT 0,
     load_shed_phase TEXT NOT NULL DEFAULT 'l1')`);
-  await dbRun(db, 'CREATE TABLE mess_schalt_actor_state (actor_id INTEGER PRIMARY KEY, last_counter_raw REAL, last_progress_ts INTEGER, derived_power_w REAL)');
+  await dbRun(db, 'CREATE TABLE mess_schalt_actor_state (actor_id INTEGER PRIMARY KEY, last_counter_raw REAL, last_progress_ts INTEGER, derived_power_w REAL, counter_total_kwh REAL)');
   return db;
 }
 
@@ -98,7 +98,8 @@ test('Lastabwurf erfordert ein Schalten-Topic', () => {
 test('deleteActor entfernt Gerät samt Ableitungszustand', async () => {
   const db = await freshDb();
   const a = await createActor(db, { name: 'A', counterTopic: 'c.0' });
-  await dbRun(db, 'INSERT INTO mess_schalt_actor_state (actor_id, last_counter_raw) VALUES (?, 1)', [a.id]);
+  // createActor legt die State-Zeile bereits an (interner Zähler = 0).
+  await dbRun(db, 'UPDATE mess_schalt_actor_state SET last_counter_raw = 1 WHERE actor_id = ?', [a.id]);
   await deleteActor(db, a.id);
   assert.equal((await listActors(db)).length, 0);
   const state = await new Promise((resolve, reject) =>

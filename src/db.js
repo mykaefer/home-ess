@@ -480,6 +480,7 @@ function openDatabase() {
         last_counter_raw REAL,
         last_progress_ts INTEGER,
         derived_power_w REAL,
+        counter_total_kwh REAL,
         FOREIGN KEY (actor_id) REFERENCES mess_schalt_actors(id) ON DELETE CASCADE
       )`
     );
@@ -1004,6 +1005,16 @@ function migrateMessSchaltActors(db) {
     const existing = new Set(rows.map((r) => r.name));
     if (!existing.has('function_key')) {
       db.run("ALTER TABLE mess_schalt_groups ADD COLUMN function_key TEXT NOT NULL DEFAULT ''");
+    }
+  });
+  // Interner Zählerstand (Delta-Fortschreibung des Zähler-Topics). NULL heißt
+  // „noch nie fortgeschrieben" – Altbestände übernehmen dann beim nächsten
+  // Snapshot einmalig den aktuellen Rohwert als Startstand (nahtlose Anzeige).
+  db.all('PRAGMA table_info(mess_schalt_actor_state)', (err, rows) => {
+    if (err || !Array.isArray(rows) || rows.length === 0) return;
+    const existing = new Set(rows.map((r) => r.name));
+    if (!existing.has('counter_total_kwh')) {
+      db.run('ALTER TABLE mess_schalt_actor_state ADD COLUMN counter_total_kwh REAL');
     }
   });
 }

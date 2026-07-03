@@ -34,7 +34,7 @@ async function freshDb() {
     load_shed_enabled INTEGER NOT NULL DEFAULT 0,
     load_shed_phase TEXT NOT NULL DEFAULT 'l1')`);
   await dbRun(db, "CREATE TABLE mess_schalt_groups (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, priority INTEGER NOT NULL DEFAULT 4, position INTEGER NOT NULL DEFAULT 0, function_key TEXT NOT NULL DEFAULT '')");
-  await dbRun(db, 'CREATE TABLE mess_schalt_actor_state (actor_id INTEGER PRIMARY KEY, last_counter_raw REAL, last_progress_ts INTEGER, derived_power_w REAL)');
+  await dbRun(db, 'CREATE TABLE mess_schalt_actor_state (actor_id INTEGER PRIMARY KEY, last_counter_raw REAL, last_progress_ts INTEGER, derived_power_w REAL, counter_total_kwh REAL)');
   await dbRun(db, `CREATE TABLE mess_schalt_function_hourly (
     function_key TEXT NOT NULL, day_key TEXT NOT NULL, hour INTEGER NOT NULL,
     consumption_kwh REAL NOT NULL DEFAULT 0, temperature REAL,

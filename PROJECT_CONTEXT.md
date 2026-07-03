@@ -128,7 +128,13 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   Schalt-Topic (sonst die Leistung) als Ist-Stand. Ist nur ein Zähler gesetzt, wird
   die **Leistung aus dem Zählerfortschritt** abgeleitet (`Δkwh/Δt`,
   `messen-schalten/aggregation.js`, 60-s-Job `messSchaltAggregation`) und fällt nach
-  über 10 min ohne Fortschritt auf 0 W. Zwei **Betriebsarten** je Gerät mit
+  über 10 min ohne Fortschritt auf 0 W. Der angezeigte **Zählerstand ist ein
+  interner Zähler** (`counter_total_kwh` in `mess_schalt_actor_state`), der wie der
+  Stromverbrauchs-Zähler nur die **Deltas** des Roh-Topics fortschreibt: Neuanlage
+  startet bei 0; Topic-/Einheitenwechsel setzt nur die Baseline (`last_counter_raw`)
+  zurück; Rückwärtssprünge des Rohwerts (Geräte-Reset) basieren neu, ohne den
+  Stand zu ändern. Altbestände ohne internen Zähler übernehmen beim ersten
+  Snapshot einmalig den Rohwert (nahtlose Anzeige). Zwei **Betriebsarten** je Gerät mit
   Schalt-Topic (Checkbox `always_on`):
   - **„Immer an"**: `messen-schalten/automation.js` registriert das Gerät am zentralen
     Betriebslevel-Handler mit seiner **effektiven Priorität** (eigene oder – per

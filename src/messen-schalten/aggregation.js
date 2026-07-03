@@ -4,6 +4,13 @@
 // Vorbild: wallbox/aggregation.js. Ist nur ein Zähler-Topic gesetzt, wird die
 // Leistung aus dem Fortschritt des Zählers (Δkwh/Δt) abgeleitet; bleibt der
 // Fortschritt länger als STALL_MS aus, fällt die abgeleitete Leistung auf 0 W.
+//
+// Der angezeigte Zählerstand ist ein INTERNER Zähler (counter_total_kwh), der wie
+// der Stromverbrauchs-Zähler nur die Deltas des Roh-Topics fortschreibt: Bei
+// Geräte-Neuanlage oder Topic-/Einheitenwechsel wird lediglich die Baseline
+// (last_counter_raw) neu gesetzt, ohne dass der aktuelle Rohwert als Sprung in
+// den internen Zähler eingeht. Rückwärtssprünge des Rohwerts (Geräte-Reset)
+// basieren ebenfalls nur neu.
 
 const { listActors, cacheKey } = require('./actors');
 
@@ -50,7 +57,7 @@ function counterToKwh(value, unit) {
 async function loadStates(db) {
   const rows = await dbAll(
     db,
-    'SELECT actor_id, last_counter_raw, last_progress_ts, derived_power_w FROM mess_schalt_actor_state'
+    'SELECT actor_id, last_counter_raw, last_progress_ts, derived_power_w, counter_total_kwh FROM mess_schalt_actor_state'
   );
   const map = new Map();
   for (const row of rows) {
@@ -58,6 +65,7 @@ async function loadStates(db) {
       lastCounterRaw: parseNumber(row.last_counter_raw),
       lastProgressTs: row.last_progress_ts == null ? null : Number(row.last_progress_ts),
       derivedPowerW: parseNumber(row.derived_power_w),
+      counterTotalKwh: parseNumber(row.counter_total_kwh),
     });
   }
   return map;
@@ -66,13 +74,14 @@ async function loadStates(db) {
 async function saveState(db, actorId, state) {
   await dbRun(
     db,
-    `INSERT INTO mess_schalt_actor_state (actor_id, last_counter_raw, last_progress_ts, derived_power_w)
-     VALUES (?, ?, ?, ?)
+    `INSERT INTO mess_schalt_actor_state (actor_id, last_counter_raw, last_progress_ts, derived_power_w, counter_total_kwh)
+     VALUES (?, ?, ?, ?, ?)
      ON CONFLICT(actor_id) DO UPDATE SET
        last_counter_raw = excluded.last_counter_raw,
        last_progress_ts = excluded.last_progress_ts,
-       derived_power_w = excluded.derived_power_w`,
-    [actorId, state.lastCounterRaw, state.lastProgressTs, state.derivedPowerW]
+       derived_power_w = excluded.derived_power_w,
+       counter_total_kwh = excluded.counter_total_kwh`,
+    [actorId, state.lastCounterRaw, state.lastProgressTs, state.derivedPowerW, state.counterTotalKwh]
   );
 }
 
@@ -84,32 +93,47 @@ function derivedPowerFromState(state, now) {
   return state.derivedPowerW == null ? null : state.derivedPowerW;
 }
 
-// Schreibende Fortschreibung der Leistungsableitung (60-s-Job). Nur für Geräte mit
-// Zähler-Topic und OHNE eigenes Leistungs-Topic relevant.
+// Schreibende Fortschreibung (60-s-Job) für alle Geräte mit Zähler-Topic:
+// interner Zählerstand (Delta-Fortschreibung) und – nur ohne eigenes
+// Leistungs-Topic – die Ableitung der Leistung aus dem Zählerfortschritt.
 async function buildActorSnapshot(db, cache, now = Date.now()) {
   const actors = await listActors(db);
   const states = await loadStates(db);
   for (const actor of actors) {
-    if (!actor.counterTopic || actor.powerTopic) continue;
+    if (!actor.counterTopic) continue;
     const raw = counterToKwh(getCacheNumber(cache, cacheKey(actor.id, 'counter')), actor.counterUnit);
     if (raw == null) continue;
-    const prev = states.get(actor.id) || { lastCounterRaw: null, lastProgressTs: null, derivedPowerW: null };
+    const prev = states.get(actor.id)
+      || { lastCounterRaw: null, lastProgressTs: null, derivedPowerW: null, counterTotalKwh: null };
     const next = { ...prev };
-    if (prev.lastCounterRaw == null) {
+
+    // Interner Zählerstand: nur Deltas des Rohwerts zählen. Ist die Baseline
+    // leer (Neuanlage, Topic-/Einheitenwechsel), wird nur neu basiert – der
+    // aktuelle Rohwert darf NICHT als Sprung eingehen.
+    if (prev.counterTotalKwh == null) {
+      // Altbestand ohne internen Zähler: bisher wurde der Rohwert angezeigt –
+      // einmalig als Startstand übernehmen, damit die Anzeige nahtlos weiterläuft.
+      next.counterTotalKwh = raw;
+    } else if (prev.lastCounterRaw != null && raw > prev.lastCounterRaw) {
+      next.counterTotalKwh = prev.counterTotalKwh + (raw - prev.lastCounterRaw);
+    }
+
+    // Leistungsableitung nur für Geräte ohne eigenes Leistungs-Topic.
+    if (!actor.powerTopic) {
+      if (prev.lastCounterRaw == null) {
+        next.derivedPowerW = 0;
+      } else if (raw > prev.lastCounterRaw) {
+        const dtH = prev.lastProgressTs != null ? (now - prev.lastProgressTs) / 3600000 : 0;
+        if (dtH > 0) next.derivedPowerW = Math.max(0, (raw - prev.lastCounterRaw) / dtH * 1000);
+      } else if (raw === prev.lastCounterRaw && prev.lastProgressTs != null && now - prev.lastProgressTs > STALL_MS) {
+        next.derivedPowerW = 0;
+      }
+      // raw < Baseline (Zähler-Reset, z. B. Geräteneustart): nicht leiten, nur neu basieren.
+    }
+
+    if (prev.lastCounterRaw == null || raw !== prev.lastCounterRaw) {
       next.lastCounterRaw = raw;
       next.lastProgressTs = now;
-      next.derivedPowerW = 0;
-    } else if (raw > prev.lastCounterRaw) {
-      const dtH = prev.lastProgressTs != null ? (now - prev.lastProgressTs) / 3600000 : 0;
-      if (dtH > 0) next.derivedPowerW = Math.max(0, (raw - prev.lastCounterRaw) / dtH * 1000);
-      next.lastCounterRaw = raw;
-      next.lastProgressTs = now;
-    } else if (raw < prev.lastCounterRaw) {
-      // Zähler-Reset (z. B. Geräteneustart): neu basieren, ohne zu leiten.
-      next.lastCounterRaw = raw;
-      next.lastProgressTs = now;
-    } else if (prev.lastProgressTs != null && now - prev.lastProgressTs > STALL_MS) {
-      next.derivedPowerW = 0;
     }
     await saveState(db, actor.id, next);
   }
@@ -150,8 +174,12 @@ async function readActorValues(db, cache, actors, now = Date.now()) {
       : null;
     const powerW = resolvePowerW(cache, actor, state, now);
     const statusOn = resolveStatus(cache, actor, switchOn, powerW);
+    // Interner Zählerstand statt Roh-Topic-Wert. Altbestände ohne fortgeschriebenen
+    // internen Zähler zeigen bis zum ersten Snapshot den Rohwert (wie bisher).
     const counterKwh = actor.counterTopic
-      ? counterToKwh(getCacheNumber(cache, cacheKey(actor.id, 'counter')), actor.counterUnit)
+      ? (state && state.counterTotalKwh != null
+        ? state.counterTotalKwh
+        : counterToKwh(getCacheNumber(cache, cacheKey(actor.id, 'counter')), actor.counterUnit))
       : null;
     return {
       id: actor.id,

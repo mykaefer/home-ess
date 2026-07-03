@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const sqlite3 = require('sqlite3').verbose();
 
-const { cacheKey } = require('../src/messen-schalten/actors');
+const { cacheKey, createActor, updateActor } = require('../src/messen-schalten/actors');
 const {
   buildActorSnapshot, readActorValues, readGroupSums, derivedPowerFromState, STALL_MS,
 } = require('../src/messen-schalten/aggregation');
@@ -29,7 +29,7 @@ async function freshDb() {
     function_key TEXT NOT NULL DEFAULT '',
     load_shed_enabled INTEGER NOT NULL DEFAULT 0,
     load_shed_phase TEXT NOT NULL DEFAULT 'l1')`);
-  await dbRun(db, 'CREATE TABLE mess_schalt_actor_state (actor_id INTEGER PRIMARY KEY, last_counter_raw REAL, last_progress_ts INTEGER, derived_power_w REAL)');
+  await dbRun(db, 'CREATE TABLE mess_schalt_actor_state (actor_id INTEGER PRIMARY KEY, last_counter_raw REAL, last_progress_ts INTEGER, derived_power_w REAL, counter_total_kwh REAL)');
   return db;
 }
 
@@ -85,6 +85,70 @@ test('readActorValues: dediziertes Status-Topic hat Vorrang', async () => {
   const values = await readActorValues(db, cache, null);
   assert.equal(values[0].switchOn, true);
   assert.equal(values[0].statusOn, false); // Status-Topic übersteuert Schalt-Topic
+  await new Promise((resolve) => db.close(resolve));
+});
+
+test('Interner Zählerstand: Neuanlage übernimmt den Rohwert nicht als Sprung', async () => {
+  const db = await freshDb();
+  const actor = await createActor(db, { name: 'Boiler', counterTopic: 'c.0' });
+  const t0 = 1_000_000_000_000;
+  // Erster Rohwert (Lebenszeit-Total des Geräts) basiert nur neu: Zähler bleibt 0.
+  await buildActorSnapshot(db, cacheFrom([[cacheKey(actor.id, 'counter'), 1234.5]]), t0);
+  let values = await readActorValues(db, cacheFrom([[cacheKey(actor.id, 'counter'), 1234.5]]), null, t0);
+  assert.equal(values[0].counterKwh, 0);
+  // Fortschritt +0,25 kWh geht als Delta ein.
+  await buildActorSnapshot(db, cacheFrom([[cacheKey(actor.id, 'counter'), 1234.75]]), t0 + 60_000);
+  values = await readActorValues(db, cacheFrom([[cacheKey(actor.id, 'counter'), 1234.75]]), null, t0 + 60_000);
+  assert.ok(Math.abs(values[0].counterKwh - 0.25) < 1e-9);
+  await new Promise((resolve) => db.close(resolve));
+});
+
+test('Interner Zählerstand: Topic-Wechsel und Geräte-Reset basieren nur neu', async () => {
+  const db = await freshDb();
+  const actor = await createActor(db, { name: 'Boiler', counterTopic: 'c.alt' });
+  const t0 = 1_000_000_000_000;
+  await buildActorSnapshot(db, cacheFrom([[cacheKey(actor.id, 'counter'), 10]]), t0);
+  await buildActorSnapshot(db, cacheFrom([[cacheKey(actor.id, 'counter'), 12]]), t0 + 60_000);
+  // Stand: 2 kWh intern. Topic-Wechsel darf den Rohwert des neuen Topics nicht addieren.
+  await updateActor(db, actor.id, { name: 'Boiler', counterTopic: 'c.neu' });
+  await buildActorSnapshot(db, cacheFrom([[cacheKey(actor.id, 'counter'), 500]]), t0 + 120_000);
+  let values = await readActorValues(db, cacheFrom([[cacheKey(actor.id, 'counter'), 500]]), null, t0 + 120_000);
+  assert.equal(values[0].counterKwh, 2);
+  await buildActorSnapshot(db, cacheFrom([[cacheKey(actor.id, 'counter'), 500.5]]), t0 + 180_000);
+  // Geräte-Reset (Rohwert fällt zurück): kein Rückschritt, danach zählen Deltas weiter.
+  await buildActorSnapshot(db, cacheFrom([[cacheKey(actor.id, 'counter'), 0]]), t0 + 240_000);
+  await buildActorSnapshot(db, cacheFrom([[cacheKey(actor.id, 'counter'), 0.2]]), t0 + 300_000);
+  values = await readActorValues(db, cacheFrom([[cacheKey(actor.id, 'counter'), 0.2]]), null, t0 + 300_000);
+  assert.ok(Math.abs(values[0].counterKwh - 2.7) < 1e-9);
+  await new Promise((resolve) => db.close(resolve));
+});
+
+test('Interner Zählerstand: Altbestand übernimmt einmalig den Rohwert (nahtlose Anzeige)', async () => {
+  const db = await freshDb();
+  // Zustand wie vor der Migration: State-Zeile ohne counter_total_kwh (NULL).
+  await dbRun(db, "INSERT INTO mess_schalt_actors (id, name, counter_topic) VALUES (1, 'Alt', 'c.0')");
+  await dbRun(db, 'INSERT INTO mess_schalt_actor_state (actor_id, last_counter_raw, last_progress_ts) VALUES (1, 10, 900000000000)');
+  const t0 = 1_000_000_000_000;
+  await buildActorSnapshot(db, cacheFrom([[cacheKey(1, 'counter'), 10.5]]), t0);
+  let values = await readActorValues(db, cacheFrom([[cacheKey(1, 'counter'), 10.5]]), null, t0);
+  assert.equal(values[0].counterKwh, 10.5); // bisheriger Anzeigewert bleibt
+  await buildActorSnapshot(db, cacheFrom([[cacheKey(1, 'counter'), 11]]), t0 + 60_000);
+  values = await readActorValues(db, cacheFrom([[cacheKey(1, 'counter'), 11]]), null, t0 + 60_000);
+  assert.equal(values[0].counterKwh, 11); // und läuft per Delta weiter
+  await new Promise((resolve) => db.close(resolve));
+});
+
+test('Interner Zählerstand zählt auch bei Geräten mit eigenem Leistungs-Topic', async () => {
+  const db = await freshDb();
+  const actor = await createActor(db, { name: 'Messdose', powerTopic: 'p.0', counterTopic: 'c.0' });
+  const t0 = 1_000_000_000_000;
+  await buildActorSnapshot(db, cacheFrom([[cacheKey(actor.id, 'counter'), 100]]), t0);
+  await buildActorSnapshot(db, cacheFrom([[cacheKey(actor.id, 'counter'), 100.4]]), t0 + 60_000);
+  const values = await readActorValues(db, cacheFrom([[cacheKey(actor.id, 'counter'), 100.4]]), null, t0 + 60_000);
+  assert.ok(Math.abs(values[0].counterKwh - 0.4) < 1e-9);
+  // Leistungsableitung bleibt Geräten ohne Leistungs-Topic vorbehalten.
+  const row = await dbGet(db, 'SELECT derived_power_w FROM mess_schalt_actor_state WHERE actor_id = ?', [actor.id]);
+  assert.equal(row.derived_power_w, null);
   await new Promise((resolve) => db.close(resolve));
 });
 

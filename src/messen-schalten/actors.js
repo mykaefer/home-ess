@@ -181,12 +181,21 @@ async function createActor(db, rawInput) {
       input.functionKey, input.loadShedEnabled ? 1 : 0, input.loadShedPhase,
     ]
   );
+  // Interner Zählerstand startet bei 0 und ohne Baseline: Der erste Rohwert des
+  // Zähler-Topics basiert nur neu und darf nicht als Sprung in den Zähler eingehen.
+  await dbRun(
+    db,
+    `INSERT INTO mess_schalt_actor_state (actor_id, last_counter_raw, last_progress_ts, derived_power_w, counter_total_kwh)
+     VALUES (?, NULL, NULL, NULL, 0)`,
+    [result.lastID]
+  );
   return getActor(db, result.lastID);
 }
 
 async function updateActor(db, id, rawInput) {
   const input = normalizeInput(rawInput);
   throwIfInvalid(input);
+  const previous = await getActor(db, id);
   await dbRun(
     db,
     `UPDATE mess_schalt_actors SET
@@ -201,6 +210,22 @@ async function updateActor(db, id, rawInput) {
       input.loadShedEnabled ? 1 : 0, input.loadShedPhase, id,
     ]
   );
+  // Zähler-Topic oder -Einheit gewechselt: Baseline und Leistungsableitung
+  // verwerfen, den internen Zählerstand aber behalten. Der nächste Rohwert
+  // basiert dann nur neu, statt als Sprung in den Zähler einzugehen.
+  if (previous && (previous.counterTopic !== input.counterTopic || previous.counterUnit !== input.counterUnit)) {
+    await dbRun(
+      db,
+      `INSERT INTO mess_schalt_actor_state (actor_id, last_counter_raw, last_progress_ts, derived_power_w, counter_total_kwh)
+       VALUES (?, NULL, NULL, NULL, 0)
+       ON CONFLICT(actor_id) DO UPDATE SET
+         last_counter_raw = NULL,
+         last_progress_ts = NULL,
+         derived_power_w = NULL,
+         counter_total_kwh = COALESCE(counter_total_kwh, 0)`,
+      [id]
+    );
+  }
   return getActor(db, id);
 }
 
