@@ -9,6 +9,9 @@ const {
   isSchemeTopic,
   buildSchemeTopic,
   normalizeMqttTopic,
+  isRadioTopic,
+  mqttReadCandidates,
+  mqttWriteCandidates,
 } = require('../src/mqtt/topics');
 
 test('normalizeMqttTopic zerstört das "://" von Adapter-Topics nicht', () => {
@@ -61,6 +64,32 @@ test('parseSchemeTopic liefert null für normale ioBroker-Topics', () => {
   assert.equal(parseSchemeTopic(''), null);
   assert.equal(isSchemeTopic('mqtt.0.foo'), false);
   assert.equal(isSchemeTopic('demo://sim1/x'), true);
+});
+
+test('isRadioTopic erkennt Homematic-Topics in Punkt- und Slash-Notation', () => {
+  assert.equal(isRadioTopic('hm-rpc.0.00085A499BECF6.4.STATE'), true);
+  assert.equal(isRadioTopic('hm-rpc/0/00085A499BECF6/4/STATE'), true);
+  assert.equal(isRadioTopic('HM-RPC.1.ABC.3.STATE'), true);
+  // Andere Adapter und Schema-Topics sind keine Funk-Topics.
+  assert.equal(isRadioTopic('zigbee.0.b0c7defffe8165af.state'), false);
+  assert.equal(isRadioTopic('0_userdata.0.Status.PV-Direct-Sun'), false);
+  assert.equal(isRadioTopic('shelly.0.SHSW-1#244CAB44336A#1.Relay0.Switch'), false);
+  assert.equal(isRadioTopic('tasmota://Tasmota/Kueche/Boiler/POWER'), false);
+  assert.equal(isRadioTopic(''), false);
+});
+
+test('mqttWriteCandidates fächert Funk-Topics NICHT auf', () => {
+  // Duty-Cycle: Punkt- und Slash-Variante landen beim Broker auf derselben
+  // hm-rpc-State-ID – jede Variante wäre ein eigener Funkbefehl. Beim
+  // Schreiben darf es deshalb genau einen Kandidaten geben.
+  const topic = 'hm-rpc.0.00085A499BECF6.4.STATE';
+  assert.ok(mqttReadCandidates(topic).length > 1); // Lesen fächert weiterhin auf
+  assert.deepEqual(mqttWriteCandidates(topic), [topic]);
+});
+
+test('mqttWriteCandidates behält die Auffächerung für Nicht-Funk-Topics', () => {
+  const topic = '0_userdata.0.Status.PV-Direct-Sun';
+  assert.deepEqual(mqttWriteCandidates(topic), mqttReadCandidates(topic));
 });
 
 test('buildSchemeTopic ist invers zu parseSchemeTopic', () => {

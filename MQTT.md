@@ -335,6 +335,27 @@ mqttClient.publish(topic, JSON.stringify({ val: value, ack: false }));
 mqttClient.publish(`${topic}/set`, String(value));
 ```
 
+### Funk-Topics (`hm-rpc.*`): genau EIN Publish
+
+Bei Homematic landet jede Publish-Variante (Punkt-/Slash-Notation, `/set`-Subtopic
+und Haupt-Topic) auf **derselben** State-ID – und jeder dieser `setState`-Aufrufe
+löst einen eigenen Funkbefehl aus. Die übliche Auffächerung würde also vier
+Funk-Frames pro logischem Schaltvorgang senden und den Duty-Cycle hochtreiben.
+
+Funk-Topics (`isRadioTopic`, aktuell `hm-rpc.*`) erhalten deshalb genau ein
+Publish: das Haupt-Topic in Punktnotation als JSON mit `ack: false`. Die
+Punktnotation wird vom Broker unabhängig von dessen Slash-Konvertierung korrekt
+auf die State-ID abgebildet. `mqttWriteCandidates` kapselt diese Entscheidung:
+
+```js
+function mqttWriteCandidates(configuredTopic) {
+  const clean = normalizeMqttTopic(configuredTopic);
+  if (!clean) return [];
+  if (isRadioTopic(clean)) return [clean]; // Funk: nur Punktnotation, kein /set
+  return mqttReadCandidates(clean);
+}
+```
+
 ### Command-Topics (`_SET`, `.SET`, `/SET`)
 
 Topics die auf `_SET`, `.SET` oder `/SET` enden, sind reine Schreib-Topics in ioBroker. Kein `/set`-Suffix anfügen, keinen JSON-Body senden – direkt den Rohwert publizieren:
@@ -393,6 +414,15 @@ function requestTopicValue(configuredTopic) {
 ```
 
 **Wichtig:** Wildcard-Topics (`#`, `+`) niemals für `/get`-Requests verwenden. Nur exakte Kandidaten.
+
+**Funk-Topics (`hm-rpc.*`) niemals per `/get` anfragen** – auch nicht beim
+Connect/Reconnect, beim Aktualisieren der State-Definitionen oder beim
+Registrieren von Ad-hoc-Abos (Regel 7). Jede Anfrage kann eine echte
+Funkabfrage auslösen. Ihre Werte kommen ausschließlich ereignisgetrieben über
+das Abo (Retained-Werte bzw. Zustandsänderungen). Außerdem fragt
+`setStateDefinitions` nur noch **neue bzw. umkonfigurierte** Definitionen aktiv
+an – unveränderte Topics waren durchgehend abonniert und haben ihren
+Cache-Wert behalten.
 
 ### Verifizierte HomeESS-Outputs
 

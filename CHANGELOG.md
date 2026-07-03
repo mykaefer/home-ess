@@ -3,6 +3,29 @@
 Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [1.0.8] — 2026-07-03
+
+### Behoben
+
+- **Homematic-Duty-Cycle: keine `/get`-Stürme mehr an `hm-rpc.*`.** Bisher
+  fragte der MQTT-Client bei jedem Connect/Reconnect sowie bei jedem
+  Konfig-Speichern (alle Modul-Seiten) sämtliche konfigurierten States aktiv
+  per `/get` an — inklusive aller Homematic-Topics (~88 Anfragen pro Burst
+  bei 11 Funk-Aktoren), von denen jede eine echte Funkabfrage auslösen kann.
+  Funk-Topics (`hm-rpc.*`) sind jetzt in allen Pfaden vom aktiven Polling
+  ausgenommen (Verbindungsaufbau, State-Definitionen, Ad-hoc-Abos,
+  Readback-Verifikation); ihre Werte kommen rein ereignisgetrieben über das
+  Abo. Zusätzlich fragt das Aktualisieren der State-Definitionen nur noch
+  neue bzw. umkonfigurierte Topics an statt bei jedem Speichern alle.
+- **Homematic-Duty-Cycle: ein Funkbefehl pro Schaltvorgang statt vier.**
+  Schreibvorgänge fächerten bisher auf Punkt- und Slash-Notation sowie
+  `/set`-Subtopic und Haupt-Topic auf — bei `hm-rpc.*` landen alle vier
+  Varianten auf derselben State-ID und lösten je einen eigenen Funkbefehl
+  aus. Funk-Topics erhalten jetzt genau ein Publish (Haupt-Topic in
+  Punktnotation als JSON mit `ack:false`). Betrifft die Schaltbefehle von
+  Messen + Schalten und der Poolsteuerung; alle anderen Topics behalten die
+  bisherige Auffächerung.
+
 ## [1.0.7] — 2026-07-03
 
 ### Hinzugefügt

@@ -449,7 +449,12 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   fürs Clear-Sky-Modell), MQTT-Broker konfigurieren + Verbindung testen.
 - MQTT-Verbindungs-Manager (Connect/Reconnect/Cache **+ publish**); abonnierte
   Topics ergeben sich aus den konfigurierten States (`mqtt/state-definitions.js`)
-  plus Ad-hoc-Abonnements für Pool-Topics.
+  plus Ad-hoc-Abonnements für Pool-Topics. **Homematic-Duty-Cycle-Schutz:**
+  Funk-Topics (`hm-rpc.*`) werden nie aktiv per `/get` gepollt (auch nicht bei
+  Connect/Reconnect, Konfig-Speichern oder Ad-hoc-Registrierung) und beim
+  Schreiben nicht auf mehrere Kandidaten aufgefächert — genau ein Publish pro
+  Schaltbefehl (`mqttWriteCandidates`/`isRadioTopic` in `mqtt/topics.js`).
+  `setStateDefinitions` fragt nur noch neue/umkonfigurierte Topics aktiv an.
 - **Live-Updates** per SSE (`/live/events`); Header-Werte + Himmelssymbol +
   Batterie-SoC über `/live/header`.
 - **systemd-Service** `home-ess` — startet automatisch beim Systemstart.

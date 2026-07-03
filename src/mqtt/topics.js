@@ -47,6 +47,29 @@ function mqttReadCandidates(configuredTopic) {
   return Array.from(result);
 }
 
+// Duty-Cycle-sensible Funk-Topics (Homematic, MQTT.md Regel 7): Jede aktive
+// Wertanfrage (/get) und jeder Schreibvorgang kann eine echte Funkübertragung
+// auslösen. Solche Topics dürfen niemals gepollt werden, und beim Schreiben
+// darf nicht auf mehrere Kandidaten aufgefächert werden – Punkt- und Slash-
+// Variante landen beim Broker auf derselben State-ID und würden denselben
+// Funkbefehl mehrfach senden.
+function isRadioTopic(topic) {
+  const clean = normalizeMqttTopic(topic);
+  return /^hm-rpc[./]/i.test(clean);
+}
+
+// Schreib-Kandidaten für ein konfiguriertes Topic. Funk-Topics erhalten genau
+// EINEN Kandidaten (Punktnotation): Sie wird vom Broker unabhängig von dessen
+// Slash-Konvertierung auf dieselbe State-ID abgebildet; jede weitere Variante
+// wäre ein zusätzlicher Funkbefehl. Alle anderen Topics behalten die
+// Auffächerung, weil dort ein verworfener Kandidat folgenlos bleibt.
+function mqttWriteCandidates(configuredTopic) {
+  const clean = normalizeMqttTopic(configuredTopic);
+  if (!clean) return [];
+  if (isRadioTopic(clean)) return [clean];
+  return mqttReadCandidates(clean);
+}
+
 // Wildcard-Abo für State-IDs mit eingebettetem Slash (Modbus/Victron-Bug).
 function mqttSlashStateWildcard(configuredTopic) {
   const clean = normalizeMqttTopic(configuredTopic);
@@ -144,6 +167,8 @@ module.exports = {
   ioBrokerIdToMqttTopic,
   mqttAdapterStateToBrokerTopic,
   mqttReadCandidates,
+  mqttWriteCandidates,
+  isRadioTopic,
   mqttSlashStateWildcard,
   mqttSubscribeCandidates,
   parseSchemeTopic,

@@ -7,11 +7,13 @@ const {
   normalizeMqttTopic,
   ioBrokerIdToMqttTopic,
   mqttReadCandidates,
+  mqttWriteCandidates,
   mqttSubscribeCandidates,
   unwrapMqttMessage,
   isMeaningfulValue,
   isCommandTopic,
   isSchemeTopic,
+  isRadioTopic,
   parseValue,
 } = require('./topics');
 
@@ -106,14 +108,22 @@ function subscribeAllTopics() {
 }
 
 
-function requestAllStateValues() {
+// Aktive /get-Anfrage für eine Liste von State-Definitionen. Funk-Topics
+// (hm-rpc) werden NIE aktiv gepollt – jede Anfrage kann eine echte Funkabfrage
+// auslösen und den Duty-Cycle hochtreiben (MQTT.md Regel 7). Ihre Werte kommen
+// ausschließlich ereignisgetrieben über das Abo.
+function requestStateValues(states) {
   if (!client || !connected) return;
-  for (const state of stateDefinitions) {
-    if (isSchemeTopic(state.topic)) continue;
+  for (const state of states) {
+    if (isSchemeTopic(state.topic) || isRadioTopic(state.topic)) continue;
     for (const candidate of mqttReadCandidates(state.topic)) {
       client.publish(`${candidate}/get`, '');
     }
   }
+}
+
+function requestAllStateValues() {
+  requestStateValues(stateDefinitions);
 }
 
 function handleMessage(topic, buffer) {
@@ -217,12 +227,20 @@ function setStateDefinitions(defs) {
       stateRequestTimes.delete(String(previous.id));
     }
   }
+  // Nur neue bzw. umkonfigurierte Definitionen aktiv anfragen. Unveränderte
+  // Topics waren durchgehend abonniert und haben ihren Cache-Wert behalten –
+  // ein erneutes /get wäre bei jedem Konfig-Speichern ein unnötiger Broker-
+  // Burst über sämtliche Topics.
+  const previousById = new Map(stateDefinitions.map((entry) => [String(entry.id), entry.topic]));
+  const changedDefinitions = nextDefinitions.filter(
+    (entry) => previousById.get(String(entry.id)) !== entry.topic
+  );
   stateDefinitions = nextDefinitions;
   buildTopicRoutes();
   if (connected) {
     subscribedTopics = new Set();
     subscribeAllTopics();
-    requestAllStateValues();
+    requestStateValues(changedDefinitions);
   }
 }
 
@@ -251,15 +269,23 @@ function requestStateValue(cacheKey) {
 // (Punkt- vs. Slash-Topic, abhängig von der topic2id-Rückbildung des Adapters)
 // abzudecken, schreiben wir an alle konkreten Write-Kandidaten. Ein Adapter, der
 // die Variante nicht auf eine State-ID abbilden kann, verwirft sie folgenlos.
+//
+// Ausnahme Funk-Topics (hm-rpc): Dort landet JEDE Variante (Punkt/Slash,
+// /set/Haupt-Topic) auf derselben State-ID und löst jeweils einen eigenen
+// Funkbefehl aus – vier Frames pro logischem Schaltvorgang treiben den
+// Duty-Cycle hoch. Funk-Topics erhalten deshalb genau EIN Publish (Haupt-Topic
+// als JSON mit ack:false); mqttWriteCandidates liefert dafür nur die
+// Punktnotation.
 function publish(targetTopic, value) {
   // Adapter-Topics (prefix://) gehen an die zuständige Instanz, nicht an den Broker.
   if (isSchemeTopic(targetTopic)) return adapterRouter.write(targetTopic, value);
   if (!client) return false;
   const baseTopic = ioBrokerIdToMqttTopic(normalizeMqttTopic(targetTopic));
   if (!baseTopic) return false;
+  const radio = isRadioTopic(targetTopic);
 
   if (isCommandTopic(targetTopic)) {
-    for (const candidate of mqttReadCandidates(targetTopic)) {
+    for (const candidate of mqttWriteCandidates(targetTopic)) {
       client.publish(candidate, String(value));
       dbg('->', candidate, String(value), 'cmd');
     }
@@ -267,10 +293,10 @@ function publish(targetTopic, value) {
   }
 
   const json = JSON.stringify({ val: parseValue(value), ack: false });
-  for (const candidate of mqttReadCandidates(targetTopic)) {
-    client.publish(`${candidate}/set`, String(value));
+  for (const candidate of mqttWriteCandidates(targetTopic)) {
+    if (!radio) client.publish(`${candidate}/set`, String(value));
     client.publish(candidate, json);
-    dbg('->', candidate, json, '(+/set)');
+    dbg('->', candidate, json, radio ? '(funk)' : '(+/set)');
   }
   return true;
 }
@@ -322,10 +348,12 @@ function subscribeAllAdhocTopics() {
   }
 }
 
-// Aktive Wertanfrage (/get) für alle Ad-hoc-Topics.
+// Aktive Wertanfrage (/get) für alle Ad-hoc-Topics. Funk-Topics (hm-rpc)
+// bleiben rein ereignisgetrieben (Duty-Cycle, MQTT.md Regel 7).
 function requestAllAdhocValues() {
   if (!client || !connected) return;
   for (const configuredTopic of adhocConfigured.values()) {
+    if (isRadioTopic(configuredTopic)) continue;
     for (const candidate of mqttReadCandidates(configuredTopic)) {
       client.publish(`${candidate}/get`, '');
     }
@@ -351,6 +379,9 @@ function subscribeAdHoc(configuredTopic, cacheKey) {
 
   if (connected) {
     for (const sub of mqttSubscribeCandidates(clean)) subscribeTopic(sub);
+    // Funk-Topics nicht aktiv anfragen – der Startwert kommt über das Abo
+    // (Retained/Event); ein /get könnte eine echte Funkabfrage auslösen.
+    if (isRadioTopic(clean)) return;
     for (const candidate of mqttReadCandidates(clean)) {
       client.publish(`${candidate}/get`, '');
     }
@@ -380,6 +411,9 @@ function requestAdHocValue(cacheKey) {
   const configuredTopic = adhocConfigured.get(cacheKey);
   if (!configuredTopic) return false;
   if (isSchemeTopic(configuredTopic)) return adapterRouter.requestValue(configuredTopic);
+  // Funk-Topics werden nie aktiv gepollt; der Aufrufer (z. B. die Readback-
+  // Verifikation der Output-Engine) muss auf ereignisgetriebene Werte warten.
+  if (isRadioTopic(configuredTopic)) return false;
   if (!client || !connected) return false;
   for (const candidate of mqttReadCandidates(configuredTopic)) {
     client.publish(`${candidate}/get`, '');
