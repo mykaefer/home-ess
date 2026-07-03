@@ -86,7 +86,7 @@ function renderLiveScript() {
         if (batNode && data.batterySoc != null) {
           var pct = Math.min(100, Math.max(0, data.batterySoc));
           batFill.style.width = pct.toFixed(0) + '%';
-          batFill.style.background = pct < 20 ? '#e74c3c' : pct < 50 ? '#d4a500' : '#2ecc71';
+          batFill.style.background = pct < 20 ? '#c53030' : pct < 50 ? '#c99a2e' : '#3f6fa5';
           batPct.textContent = pct.toFixed(0) + ' %';
           batNode.classList.add('bat-visible');
         }

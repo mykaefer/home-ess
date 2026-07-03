@@ -1,5 +1,32 @@
 /* Allgemeine Stile */
 /* Reset & Base */
+:root {
+    /* Ruhige UI-Basis; Energiefarben bleiben fachlich eindeutig. */
+    --color-canvas: #e1e5e3;
+    --color-surface: #ffffff;
+    --color-surface-subtle: #f7f9f8;
+    --color-shell: #18211f;
+    --color-shell-hover: #24312d;
+    --color-shell-active: #30443d;
+    --color-text: #1d2925;
+    --color-text-soft: #68746f;
+    --color-border: #dce3df;
+    --color-border-strong: #c8d2cd;
+    --color-action: #39705f;
+    --color-action-hover: #2c594b;
+    --color-action-tint: #e9f1ee;
+
+    --color-battery: #3f6fa5;
+    --color-battery-tint: #eaf1f8;
+    --color-grid: #b85450;
+    --color-grid-tint: #f8eceb;
+    --color-self: #76558f;
+    --color-self-tint: #f1ecf5;
+    --color-pv: #c99a2e;
+    --color-pv-tint: #faf3df;
+    --color-danger: #c53030;
+}
+
 * { box-sizing: border-box; }
 body {
     font-family: Arial, sans-serif;
@@ -2753,3 +2780,204 @@ h2 .cmd-confirm { font-size: 13px; vertical-align: middle; }
     padding: 2px 10px;
     white-space: nowrap;
 }
+
+/* -------------------------------------------------------------------------
+   Farbthema
+   Die Bedienoberflaeche bleibt neutral; kraeftigere Farben tragen nur
+   Interaktionen, Zustaende oder die vier fachlichen Energiearten.
+   ---------------------------------------------------------------------- */
+body,
+.page-dashboard {
+    background: var(--color-canvas);
+    color: var(--color-text);
+}
+
+.dashboard-header,
+.sidebar {
+    background: var(--color-shell);
+}
+
+.dashboard-header {
+    box-shadow: none;
+}
+
+.sidebar a:hover { background: var(--color-shell-hover); }
+.sidebar a.active,
+.sidebar-footer a.active { background: var(--color-shell-active); }
+.sidebar-copyright,
+.sidebar-copyright a.sidebar-copyright-link { color: #8f9d98; }
+.sidebar-copyright a.sidebar-copyright-link:hover { color: #d8dfdc; }
+
+.logout-button {
+    background: #9b403d;
+    color: #fff;
+    border: 0;
+}
+.logout-button:hover { background: #b85450; }
+
+.settings-card,
+.kpi-card,
+.energy-overview,
+.topic-panel,
+.raw-counter-panel,
+.panel-card,
+.widget-card,
+.plant-card,
+.pool-card,
+.adapter-card,
+.forecast-hero,
+.value-dialog {
+    background: var(--color-surface);
+    border-color: var(--color-border);
+    box-shadow: 0 1px 2px rgba(24, 33, 31, 0.035);
+}
+
+.widget-group,
+.forecast-card,
+.info-card,
+.dialog-section,
+.phase-threshold-card {
+    background: var(--color-surface-subtle);
+    border-color: var(--color-border);
+}
+
+.settings-card-hint,
+.field small,
+.muted,
+.kpi-label,
+.kpi-subvalue,
+.forecast-label,
+.forecast-subvalue,
+.widget-label,
+.info-row-key,
+.dialog-tab,
+.plant-calibration {
+    color: var(--color-text-soft);
+}
+
+.kpi-value,
+.widget-value,
+.info-row-val,
+.widget-group-title,
+.metric-breakdown strong,
+.energy-overview-row strong,
+.energy-overview-row span {
+    color: var(--color-text);
+}
+
+.settings-form button,
+.grid-control-form button,
+.topic-panel-head button,
+.forecast-behavior-form button,
+.login-card button {
+    background: var(--color-action);
+}
+.settings-form button:hover,
+.grid-control-form button:hover,
+.topic-panel-head button:hover,
+.forecast-behavior-form button:hover,
+.login-card button:hover {
+    background: var(--color-action-hover);
+}
+
+.secondary-button,
+.icon-button,
+.gc-log-pager button {
+    background: #eef2f0;
+    color: var(--color-text);
+    border-color: var(--color-border-strong);
+}
+.secondary-button:hover,
+.icon-button:hover,
+.gc-log-pager button:hover { background: #e3e9e6; }
+
+.settings-form button.button-secondary {
+    background: var(--color-surface);
+    color: var(--color-action);
+    border-color: var(--color-action);
+}
+.settings-form button.button-secondary:hover { background: var(--color-action-tint); }
+
+.settings-form input:focus,
+.settings-form select:focus,
+.grid-control-form input:focus,
+.grid-control-form select:focus {
+    border-color: var(--color-action);
+    box-shadow: 0 0 0 3px rgba(57, 112, 95, 0.13);
+    outline: none;
+}
+.settings-form input[type="checkbox"],
+.grid-control-form input[type="checkbox"] { accent-color: var(--color-action); }
+
+.dialog-tab.is-active {
+    color: var(--color-action);
+    border-bottom-color: var(--color-action);
+}
+.progress-bar { background: var(--color-action); }
+.widget-dropzone.drag-over { outline-color: var(--color-action); }
+
+.button-danger {
+    color: var(--color-danger);
+    border-color: var(--color-danger);
+}
+.button-danger:hover { background: #faeded; }
+
+/* Feste fachliche Zuordnung: Batterie blau, Netz rot,
+   Eigenverbrauch lila, Photovoltaik gelb. */
+.kpi-card--bat .kpi-value { color: var(--color-battery); }
+.soc-bar-fill { background: var(--color-battery); }
+.bat-fill { background: var(--color-battery); }
+
+.energy-overview-row--netzbezug strong,
+.energy-overview-row--netzbezug span { color: var(--color-grid); }
+
+.energy-overview-row--eigenverbrauch strong,
+.energy-overview-row--eigenverbrauch span { color: var(--color-self); }
+
+.kpi-card--pv .kpi-value,
+.forecast-value,
+.plant-power,
+.plant-yield-value { color: var(--color-pv); }
+.forecast-bar--pv { background: var(--color-pv); }
+
+/* Prognose: auch Summen, Stundenprofil und SoC folgen der Energie-Legende. */
+.forecast-bar--load { background: var(--color-self); }
+.forecast-bar-row--pv b { color: var(--color-pv); }
+.forecast-bar-row--load b { color: var(--color-self); }
+.fh-bar--ist { background: #684781; }
+.fh-bar--soll { background: #987caf; }
+.fh-key--ist { background: #684781; }
+.fh-key--soll { background: #987caf; }
+.fh-plan {
+    background: transparent;
+    border-top-color: #afa3b9;
+}
+.fh-key--plan { background: #afa3b9; }
+
+.kpi-card--grid .kpi-value { color: var(--color-grid); }
+.forecast-chip--bad {
+    color: var(--color-grid);
+    background: var(--color-grid-tint);
+}
+.forecast-chip--good {
+    color: #8b671d;
+    background: var(--color-pv-tint);
+}
+.forecast-hero-soc strong,
+.forecast-day-foot--battery strong { color: var(--color-battery); }
+
+/* Messen + Schalten: dunkle Abschnittsleisten trennen die Gruppen klar von
+   Arbeitsflaeche und weissen Geraetezeilen. */
+.ms-group { border-color: var(--color-border); }
+.ms-group-head {
+    background: #30443d;
+    color: #f5f7f6;
+}
+.ms-group-head:hover { background: #3a5149; }
+.ms-group-count {
+    background: rgba(255, 255, 255, 0.14);
+    color: #edf2f0;
+}
+.ms-caret { color: #c8d3cf; }
+.ms-row-name,
+.ms-row-power { color: var(--color-text); }

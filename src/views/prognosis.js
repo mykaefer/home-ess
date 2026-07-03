@@ -96,13 +96,13 @@ function renderDays(days = [], model = {}) {
       <div class="forecast-day-head"><strong>${escapeHtml(day.label)}</strong>${result}</div>
       <div class="forecast-day-body">
         <div class="forecast-day-bars">
-          <div class="forecast-bar-row"><span>PV</span><div class="forecast-bar-track"><i class="forecast-bar forecast-bar--pv" style="width:${pvWidth.toFixed(1)}%"></i></div><b>${formatEnergy(day.pvKwh)}</b></div>
-          <div class="forecast-bar-row"><span>Bedarf</span><div class="forecast-bar-track"><i class="forecast-bar forecast-bar--load" style="width:${loadWidth.toFixed(1)}%"></i></div><b>${formatEnergy(day.loadKwh)}</b></div>
+          <div class="forecast-bar-row forecast-bar-row--pv"><span>PV</span><div class="forecast-bar-track"><i class="forecast-bar forecast-bar--pv" style="width:${pvWidth.toFixed(1)}%"></i></div><b>${formatEnergy(day.pvKwh)}</b></div>
+          <div class="forecast-bar-row forecast-bar-row--load"><span>Bedarf</span><div class="forecast-bar-track"><i class="forecast-bar forecast-bar--load" style="width:${loadWidth.toFixed(1)}%"></i></div><b>${formatEnergy(day.loadKwh)}</b></div>
         </div>
         ${renderHourProfile(day, model, index === 0)}
       </div>
       ${wallboxes ? `<div class="forecast-day-foot">davon Wallbox: ${escapeHtml(wallboxes)}</div>` : ''}
-      <div class="forecast-day-foot">Batterie am Tagesende <strong>${formatPercent(day.batterySocEnd)}</strong>${day.batteryFull ? ' · wird voraussichtlich voll' : ''}</div>
+      <div class="forecast-day-foot forecast-day-foot--battery">Batterie am Tagesende <strong>${formatPercent(day.batterySocEnd)}</strong>${day.batteryFull ? ' · wird voraussichtlich voll' : ''}</div>
     </article>`;
   }).join('');
 }
@@ -175,7 +175,7 @@ function renderPrognosis({ prognosis, message = '', error = '' } = {}) {
           <div class="kpi-card kpi-card--pv"><div class="kpi-label">PV heute noch</div><div class="kpi-value">${formatEnergy(today.pvKwh)}</div></div>
           <div class="kpi-card"><div class="kpi-label">Verbrauch heute noch</div><div class="kpi-value">${formatEnergy(today.loadKwh)}</div></div>
           <div class="kpi-card kpi-card--bat"><div class="kpi-label">Batterie nutzbar</div><div class="kpi-value">${formatEnergy(simulation.initialStored)}</div><div class="kpi-subvalue">bis ${formatPercent(simulation.minSoc)} Mindest-SoC</div></div>
-          <div class="kpi-card"><div class="kpi-label">Netzbedarf heute</div><div class="kpi-value forecast-value--${today.gridKwh > 0.05 ? 'bad' : 'good'}">${formatEnergy(today.gridKwh)}</div></div>
+          <div class="kpi-card kpi-card--grid"><div class="kpi-label">Netzbedarf heute</div><div class="kpi-value">${formatEnergy(today.gridKwh)}</div></div>
           <div class="kpi-card forecast-autark-card"><div class="kpi-label">Heute autark</div><div class="kpi-value forecast-value--${operating.autark ? 'good' : 'bad'}">${operating.autark ? 'Ja' : 'Nein'}</div><div class="kpi-subvalue">${escapeHtml(operating.autarkDaysYear || 'aktuelles Jahr')}: ${escapeHtml(operating.autarkDaysCount)} Tage · ${escapeHtml(operating.autarkDaysPreviousYear || 'Vorjahr')}: ${escapeHtml(operating.autarkDaysPreviousYearCount)} Tage</div></div>
         </div>
 
