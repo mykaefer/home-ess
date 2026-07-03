@@ -1,10 +1,13 @@
 'use strict';
 
-// Seite „Messen + Schalten" (Vorbild: views/dashboard.js). Frei anlegbare Gruppen
-// und Geräte-Kacheln, per Drag&Drop anordbar (auch zwischen/ohne Gruppen). Jede
-// Kachel fasst Status, Leistung und Zähler zusammen; Geräte mit Schalt-Topic
-// erhalten einen An/Aus-Toggle (Wunschzustand, wird über das Betriebslevel gegatet).
-// Gruppen zeigen die Verbrauchssumme (Leistung) ihrer Geräte in der Titelzeile.
+// Seite „Messen + Schalten". Gruppen laufen als einklappbare Abschnitte über die
+// gesamte Seitenbreite (Vorbild: Output-Kategorien; Auf/Zu-Zustand in localStorage,
+// Standard zugeklappt) und sind fest alphanumerisch sortiert. Geräte sind
+// einzeilige Zeilen über die volle Breite, per Drag&Drop frei anordbar und
+// zwischen Gruppen verschiebbar; gruppenlose Geräte stehen am Ende unter den
+// Gruppen. Geräte mit Schalt-Topic erhalten einen An/Aus-Toggle (Wunschzustand,
+// wird über das Betriebslevel gegatet); Gruppen zeigen die Verbrauchssumme
+// (Leistung) ihrer Geräte in der Titelzeile.
 
 const { renderLayout } = require('./layout');
 const { escapeHtml, statusText } = require('./components');
@@ -63,9 +66,27 @@ function metaLabel(actor) {
   return 'manuell';
 }
 
-function actorCardHead(actor) {
-  return `              <div class="widget-card-head">
+// Einzeilige Geräte-Zeile über die volle Breite: Drag-Fläche, Status, Name,
+// Betriebsart, Leistung, Zähler, Toggle, Aktionen. Leere Platzhalter-Spans halten
+// die Spalten auch ohne Zähler/Toggle in der Flucht.
+function renderActorRow(actor) {
+  // Manueller Toggle nur bei Geräten mit Schalt-Topic OHNE „Immer an". Auch dieser
+  // Schaltweg wird durch Betriebslevel und Priorität freigegeben.
+  const toggle = actor.hasSwitch && !actor.alwaysOn
+    ? `<label class="ms-toggle" title="Ein-/Ausschalten (Einschalten nur bei freigegebener Priorität)"><input type="checkbox" id="ms-switch-${actor.id}" onchange="toggleActor(${actor.id}, this.checked)"${actor.statusOn === true ? ' checked' : ''}><span class="ms-toggle-slider"></span></label>`
+    : '<span aria-hidden="true"></span>';
+  const counter = actor.hasCounter
+    ? `<span class="ms-row-counter" id="ms-counter-${actor.id}">${escapeHtml(actor.counterDisplay)}</span>`
+    : '<span class="ms-row-counter" aria-hidden="true"></span>';
+  const muted = !actor.hasSwitch || (actor.hasSwitch && !actor.alwaysOn);
+  return `              <div class="ms-row" data-id="${actor.id}">
                 <span class="widget-drag" title="Zum Verschieben ziehen" aria-hidden="true">⠿</span>
+                <span class="${statusDotClass(actor.statusOn)}" id="ms-status-${actor.id}" title="Status"></span>
+                <span class="ms-row-name">${escapeHtml(actor.name)}</span>
+                <span class="ms-prio${muted ? ' ms-prio--muted' : ''}" id="ms-prio-${actor.id}" title="Betriebsart bzw. aktive Priorität, auf die dieses Gerät beim Betriebslevel reagiert">${escapeHtml(metaLabel(actor))}</span>
+                <span class="ms-row-power" id="ms-power-${actor.id}">${escapeHtml(actor.powerDisplay)}</span>
+                ${counter}
+                ${toggle}
                 <div class="widget-actions">
                   <button type="button" class="widget-icon-btn" title="Gerät bearbeiten" onclick="openActorDialog('edit', ${actor.id})">✎</button>
                   <button type="button" class="widget-icon-btn" title="Gerät entfernen" onclick="openDeleteActorDialog(${actor.id}, ${toJsStringLiteral(actor.name)})">🗑</button>
@@ -73,49 +94,43 @@ function actorCardHead(actor) {
               </div>`;
 }
 
-function renderActorCard(actor) {
-  // Manueller Toggle nur bei Geräten mit Schalt-Topic OHNE „Immer an". Auch dieser
-  // Schaltweg wird durch Betriebslevel und Priorität freigegeben.
-  const toggle = actor.hasSwitch && !actor.alwaysOn
-    ? `              <label class="ms-toggle" title="Ein-/Ausschalten (Einschalten nur bei freigegebener Priorität)">
-                <input type="checkbox" id="ms-switch-${actor.id}" onchange="toggleActor(${actor.id}, this.checked)"${actor.statusOn === true ? ' checked' : ''}>
-                <span class="ms-toggle-slider"></span>
-              </label>`
-    : '';
-  const counterRow = actor.hasCounter
-    ? `                <div class="ms-counter" id="ms-counter-${actor.id}">${escapeHtml(actor.counterDisplay)}</div>`
-    : '';
-  const muted = !actor.hasSwitch || (actor.hasSwitch && !actor.alwaysOn);
-  return `            <div class="widget-card ms-actor-card" data-id="${actor.id}">
-${actorCardHead(actor)}
-              <div class="ms-actor-title">
-                <span class="${statusDotClass(actor.statusOn)}" id="ms-status-${actor.id}" title="Status"></span>
-                <span class="widget-label">${escapeHtml(actor.name)}</span>
-              </div>
-              <div class="ms-actor-body">
-                <div class="widget-value" id="ms-power-${actor.id}">${escapeHtml(actor.powerDisplay)}</div>
-${counterRow}
-              </div>
-              <div class="ms-prio${muted ? ' ms-prio--muted' : ''}" id="ms-prio-${actor.id}" title="Betriebsart bzw. aktive Priorität, auf die dieses Gerät beim Betriebslevel reagiert">${escapeHtml(metaLabel(actor))}</div>
-${toggle}
-            </div>`;
+// Geräteliste einer Gruppe. Ohne Geräte bleibt die Dropzone wirklich leer
+// (kein Whitespace), damit der CSS-:empty-Platzhalter greift.
+function renderActorList(actors, groupId) {
+  const rows = actors.length ? `\n${actors.map(renderActorRow).join('\n')}\n            ` : '';
+  return `<div class="widget-dropzone ms-list" data-group="${groupId == null ? '' : groupId}">${rows}</div>`;
 }
 
+// Einklappbarer Gruppen-Abschnitt über die volle Seitenbreite (Vorbild:
+// Output-Kategorien). Standard zugeklappt; msApplyOpenState() stellt den in
+// localStorage gemerkten Zustand wieder her. Der Kopf ist zugleich Drop-Ziel,
+// damit Geräte auch in zugeklappte Gruppen gezogen werden können.
 function renderGroup(group) {
-  return `          <div class="widget-group ms-group" data-group-id="${group.id}">
-            <div class="widget-group-head">
-              <span class="widget-group-drag" title="Gruppe verschieben" aria-hidden="true">⠿</span>
-              <span class="widget-group-title">${escapeHtml(group.title)}</span>
+  return `          <div class="ms-group" data-group-id="${group.id}">
+            <div class="ms-group-head" role="button" tabindex="0" aria-expanded="false">
+              <span class="ms-caret" aria-hidden="true">▸</span>
+              <span class="ms-group-title">${escapeHtml(group.title)}</span>
+              <span class="ms-group-count" id="ms-group-count-${group.id}">${group.actors.length}</span>
               <span class="ms-group-prio" title="Priorität der Gruppe (Geräte mit „Priorität der Gruppe verwenden" erben sie)">Priorität ${Number(group.priority)}</span>
               <span class="ms-group-sum" id="ms-group-sum-${group.id}" title="Verbrauchssumme (Leistung)">${escapeHtml(group.sumDisplay)}</span>
               <div class="widget-group-actions">
-                <button type="button" class="widget-icon-btn" title="Gruppe bearbeiten" onclick="openGroupDialog('edit', ${group.id}, ${toJsStringLiteral(group.title)}, ${Number(group.priority)}, ${toJsStringLiteral(group.functionKey || '')})">✎</button>
-                <button type="button" class="widget-icon-btn" title="Gruppe entfernen" onclick="openDeleteGroupDialog(${group.id}, ${toJsStringLiteral(group.title)})">🗑</button>
+                <button type="button" class="widget-icon-btn" title="Gruppe bearbeiten" onclick="event.stopPropagation(); openGroupDialog('edit', ${group.id}, ${toJsStringLiteral(group.title)}, ${Number(group.priority)}, ${toJsStringLiteral(group.functionKey || '')})">✎</button>
+                <button type="button" class="widget-icon-btn" title="Gruppe entfernen" onclick="event.stopPropagation(); openDeleteGroupDialog(${group.id}, ${toJsStringLiteral(group.title)})">🗑</button>
               </div>
             </div>
-            <div class="widget-dropzone widget-grid" data-group="${group.id}">
-${group.actors.map(renderActorCard).join('\n')}
+            <div class="ms-group-body">${renderActorList(group.actors, group.id)}</div>
+          </div>`;
+}
+
+// Gruppenlose Geräte: fester Abschnitt am Seitenende unter den Gruppen, immer
+// sichtbar (nicht einklappbar), zugleich Dropzone zum Herauslösen aus Gruppen.
+function renderUngrouped(ungrouped) {
+  return `          <div class="ms-group ms-group--ungrouped">
+            <div class="ms-group-head ms-group-head--static">
+              <span class="ms-group-title">Ohne Gruppe</span>
+              <span class="ms-group-count" id="ms-group-count-none">${ungrouped.length}</span>
             </div>
+            <div class="ms-group-body">${renderActorList(ungrouped, null)}</div>
           </div>`;
 }
 
@@ -283,12 +298,9 @@ function renderMessenSchalten({
         ${statusText(formMessage, 'success')}
         ${groupDialogError ? statusText(groupDialogError) : ''}
 
-        <div class="widget-dropzone widget-grid" data-group="">
-${ungrouped.map(renderActorCard).join('\n')}
-        </div>
-
-        <div class="widget-groups" id="groupsContainer">
+        <div class="ms-groups" id="groupsContainer">
 ${groups.map(renderGroup).join('\n')}
+${renderUngrouped(ungrouped)}
         </div>
 
         ${renderActorDialog({ groupsForSelect, gridControlEnabled })}
@@ -304,7 +316,6 @@ ${groups.map(renderGroup).join('\n')}
     var initialGroupDialogOpen = ${groupDialogOpen ? 'true' : 'false'};
     var initialDialogError = ${JSON.stringify(dialogError || '')};
     var draggedCard = null, dropZone = null, dropRef = null;
-    var draggedGroup = null, groupDropRef = null;
 
     // --- Dialoge ------------------------------------------------------------
     function setActorFormValues(v) {
@@ -404,6 +415,64 @@ ${groups.map(renderGroup).join('\n')}
         .catch(function () {});
     }
 
+    // --- Einklappbare Gruppen (Vorbild: Output-Kategorien) ------------------
+    // Standard zugeklappt; die IDs der offenen Gruppen liegen in localStorage.
+    var MS_OPEN_KEY = 'homeess.ms.openGroups';
+
+    function msSaveOpenState() {
+      try {
+        var open = [];
+        document.querySelectorAll('.ms-group[data-group-id]').forEach(function (group) {
+          if (group.classList.contains('is-open')) open.push(group.getAttribute('data-group-id'));
+        });
+        localStorage.setItem(MS_OPEN_KEY, JSON.stringify(open));
+      } catch (_) {
+        // localStorage nicht verfügbar – Zustand wird dann nicht gemerkt.
+      }
+    }
+
+    function msApplyOpenState() {
+      var open = [];
+      try {
+        open = JSON.parse(localStorage.getItem(MS_OPEN_KEY) || '[]');
+      } catch (_) {
+        open = [];
+      }
+      if (!Array.isArray(open)) open = [];
+      document.querySelectorAll('.ms-group[data-group-id]').forEach(function (group) {
+        var isOpen = open.indexOf(group.getAttribute('data-group-id')) !== -1;
+        group.classList.toggle('is-open', isOpen);
+        var head = group.querySelector('.ms-group-head');
+        if (head) head.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+      });
+    }
+
+    function msToggleGroup(head) {
+      var group = head.parentNode;
+      var open = group.classList.toggle('is-open');
+      head.setAttribute('aria-expanded', open ? 'true' : 'false');
+      msSaveOpenState();
+    }
+
+    function setupGroupHead(head) {
+      head.addEventListener('click', function () { msToggleGroup(head); });
+      head.addEventListener('keydown', function (event) {
+        if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); msToggleGroup(head); }
+      });
+      // Der Kopf ist Drop-Ziel: Geräte lassen sich so auch in zugeklappte
+      // Gruppen ziehen (sie landen dann am Ende der Gruppe).
+      head.addEventListener('dragover', function (event) {
+        if (!draggedCard) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'move';
+        dropZone = head.parentNode.querySelector('.widget-dropzone');
+        dropRef = null;
+        clearDropIndicators();
+        head.classList.add('drag-over');
+      });
+      head.addEventListener('drop', function (event) { event.preventDefault(); });
+    }
+
     // --- Drag & Drop (Geräte) ----------------------------------------------
     function setupCard(card) {
       var handle = card.querySelector('.widget-drag');
@@ -421,12 +490,12 @@ ${groups.map(renderGroup).join('\n')}
         applyDrop();
         card.classList.remove('dragging'); card.removeAttribute('draggable');
         draggedCard = null; dropZone = null; dropRef = null;
-        clearDropIndicators(); persistLayout();
+        clearDropIndicators(); updateGroupCounts(); persistLayout();
       });
     }
 
     function insertionReference(zone, x, y) {
-      var cards = zone.querySelectorAll('.widget-card:not(.dragging)');
+      var cards = zone.querySelectorAll('.ms-row:not(.dragging)');
       if (!cards.length) return null;
       var nearest = null, nearestDist = Infinity;
       for (var i = 0; i < cards.length; i++) {
@@ -454,7 +523,7 @@ ${groups.map(renderGroup).join('\n')}
         if (dropRef && dropRef !== draggedCard) {
           dropRef.classList.add('drop-before');
         } else {
-          var rest = zone.querySelectorAll('.widget-card:not(.dragging)');
+          var rest = zone.querySelectorAll('.ms-row:not(.dragging)');
           if (rest.length) rest[rest.length - 1].classList.add('drop-after');
         }
       });
@@ -462,9 +531,9 @@ ${groups.map(renderGroup).join('\n')}
     }
 
     function clearDropIndicators() {
-      var marked = document.querySelectorAll('.widget-card.drop-before, .widget-card.drop-after');
+      var marked = document.querySelectorAll('.ms-row.drop-before, .ms-row.drop-after');
       for (var i = 0; i < marked.length; i++) { marked[i].classList.remove('drop-before'); marked[i].classList.remove('drop-after'); }
-      var zones = document.querySelectorAll('.widget-dropzone.drag-over');
+      var zones = document.querySelectorAll('.widget-dropzone.drag-over, .ms-group-head.drag-over');
       for (var j = 0; j < zones.length; j++) zones[j].classList.remove('drag-over');
     }
 
@@ -479,7 +548,7 @@ ${groups.map(renderGroup).join('\n')}
       var zones = document.querySelectorAll('.widget-dropzone');
       for (var z = 0; z < zones.length; z++) {
         var groupId = zones[z].dataset.group ? Number(zones[z].dataset.group) : null;
-        var cards = zones[z].querySelectorAll('.widget-card');
+        var cards = zones[z].querySelectorAll('.ms-row');
         for (var c = 0; c < cards.length; c++) {
           items.push({ id: Number(cards[c].dataset.id), groupId: groupId, position: c });
         }
@@ -490,98 +559,22 @@ ${groups.map(renderGroup).join('\n')}
       }).then(function () { setTimeout(refreshValues, 300); }).catch(function () {});
     }
 
-    // --- Drag & Drop (Gruppen) ---------------------------------------------
-    function setupGroup(groupEl) {
-      var handle = groupEl.querySelector('.widget-group-drag');
-      if (handle) {
-        handle.addEventListener('mousedown', function () { groupEl.setAttribute('draggable', 'true'); });
-        handle.addEventListener('mouseup', function () { groupEl.removeAttribute('draggable'); });
+    // Geräteanzahl in den Gruppenköpfen nach Drag&Drop nachführen (ohne Reload).
+    function updateGroupCounts() {
+      var zones = document.querySelectorAll('.widget-dropzone');
+      for (var z = 0; z < zones.length; z++) {
+        var badge = document.getElementById('ms-group-count-' + (zones[z].dataset.group || 'none'));
+        if (badge) badge.textContent = zones[z].querySelectorAll('.ms-row').length;
       }
-      groupEl.addEventListener('dragstart', function (event) {
-        if (groupEl.getAttribute('draggable') !== 'true') return;
-        event.stopPropagation();
-        draggedGroup = groupEl; groupDropRef = null;
-        groupEl.classList.add('group-dragging');
-        event.dataTransfer.effectAllowed = 'move';
-        if (event.dataTransfer.setData) event.dataTransfer.setData('text/plain', 'group:' + groupEl.dataset.groupId);
-      });
-      groupEl.addEventListener('dragend', function (event) {
-        if (!draggedGroup) return;
-        event.stopPropagation();
-        applyGroupDrop();
-        groupEl.classList.remove('group-dragging'); groupEl.removeAttribute('draggable');
-        draggedGroup = null; groupDropRef = null;
-        clearGroupIndicators(); persistGroupOrder();
-      });
-    }
-
-    function groupInsertionReference(container, x, y) {
-      var groupEls = container.querySelectorAll('.widget-group:not(.group-dragging)');
-      if (!groupEls.length) return null;
-      var nearest = null, nearestDist = Infinity;
-      for (var i = 0; i < groupEls.length; i++) {
-        var box = groupEls[i].getBoundingClientRect();
-        var cx = box.left + box.width / 2, cy = box.top + box.height / 2;
-        var dist = Math.hypot(x - cx, y - cy);
-        if (dist < nearestDist) { nearestDist = dist; nearest = { el: groupEls[i], cx: cx, cy: cy, h: box.height }; }
-      }
-      if (!nearest) return null;
-      var before = (y < nearest.cy - nearest.h / 2) || (Math.abs(y - nearest.cy) <= nearest.h / 2 && x < nearest.cx);
-      var ref = before ? nearest.el : nearest.el.nextElementSibling;
-      if (ref === draggedGroup) ref = draggedGroup.nextElementSibling;
-      return ref;
-    }
-
-    function setupGroupsContainer(container) {
-      container.addEventListener('dragover', function (event) {
-        if (!draggedGroup) return;
-        event.preventDefault();
-        event.dataTransfer.dropEffect = 'move';
-        groupDropRef = groupInsertionReference(container, event.clientX, event.clientY);
-        clearGroupIndicators();
-        if (groupDropRef && groupDropRef !== draggedGroup) {
-          groupDropRef.classList.add('group-drop-before');
-        } else {
-          var rest = container.querySelectorAll('.widget-group:not(.group-dragging)');
-          if (rest.length) rest[rest.length - 1].classList.add('group-drop-after');
-        }
-      });
-      container.addEventListener('drop', function (event) { if (draggedGroup) event.preventDefault(); });
-    }
-
-    function clearGroupIndicators() {
-      var marked = document.querySelectorAll('.widget-group.group-drop-before, .widget-group.group-drop-after');
-      for (var i = 0; i < marked.length; i++) { marked[i].classList.remove('group-drop-before'); marked[i].classList.remove('group-drop-after'); }
-    }
-
-    function applyGroupDrop() {
-      var container = document.getElementById('groupsContainer');
-      if (!draggedGroup || !container) return;
-      if (groupDropRef == null) container.appendChild(draggedGroup);
-      else if (groupDropRef !== draggedGroup) container.insertBefore(draggedGroup, groupDropRef);
-    }
-
-    function persistGroupOrder() {
-      var container = document.getElementById('groupsContainer');
-      if (!container) return;
-      var items = [];
-      var groupEls = container.querySelectorAll('.widget-group');
-      for (var i = 0; i < groupEls.length; i++) items.push({ id: Number(groupEls[i].dataset.groupId), position: i });
-      fetch('/messen-schalten/layout', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ groups: items })
-      }).catch(function () {});
     }
 
     function initDragAndDrop() {
-      var cards = document.querySelectorAll('.widget-card');
+      var cards = document.querySelectorAll('.ms-row');
       for (var i = 0; i < cards.length; i++) setupCard(cards[i]);
       var zones = document.querySelectorAll('.widget-dropzone');
       for (var j = 0; j < zones.length; j++) setupZone(zones[j]);
-      var groupEls = document.querySelectorAll('.widget-group');
-      for (var k = 0; k < groupEls.length; k++) setupGroup(groupEls[k]);
-      var groupsContainer = document.getElementById('groupsContainer');
-      if (groupsContainer) setupGroupsContainer(groupsContainer);
+      var heads = document.querySelectorAll('.ms-group[data-group-id] > .ms-group-head');
+      for (var k = 0; k < heads.length; k++) setupGroupHead(heads[k]);
     }
 
     // --- Live-Aktualisierung ------------------------------------------------
@@ -627,6 +620,7 @@ ${groups.map(renderGroup).join('\n')}
       setTimeout(function () { refreshQueued = false; refreshValues(); }, 1000);
     }
 
+    msApplyOpenState();
     initDragAndDrop();
     refreshValues();
     window.addEventListener('homeess:mqtt', queueRefresh);

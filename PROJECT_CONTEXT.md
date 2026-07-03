@@ -115,9 +115,14 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   nutzbaren Bereichs bis 100 %; High gilt über 90 %, Full über 98 %. Charged
   today wird persistent bis zum lokalen Tageswechsel gehalten.
 - **Messen + Schalten** (`/messen-schalten`, Kernseite, Menü unter Batterie):
-  Dashboard-artige Seite mit frei anlegbaren **Gruppen** und **Geräte-Kacheln**
-  (Aktoren), per Drag & Drop zwischen Gruppen bzw. ohne Gruppe anordbar (gemeinsame
-  Widget-Klassen/Logik wie das Dashboard). Je Gerät bis zu vier MQTT-Topics:
+  Gruppen als **einklappbare Abschnitte über die volle Seitenbreite** (Vorbild
+  Output-Kategorien: Standard zugeklappt, Auf/Zu-Zustand je Gruppe in
+  localStorage `homeess.ms.openGroups`), fest **alphanumerisch nach Titel
+  sortiert** (keine Drag-Fläche mehr, `listGroups` sortiert). **Geräte** (Aktoren)
+  sind einzeilige Zeilen über die volle Breite, per Drag & Drop frei anordbar und
+  zwischen Gruppen verschiebbar; Drop auf den Kopf einer zugeklappten Gruppe
+  ordnet ans Gruppenende zu. Gruppenlose Geräte stehen im festen Abschnitt
+  **„Ohne Gruppe"** am Seitenende unter den Gruppen. Je Gerät bis zu vier MQTT-Topics:
   **Schalten, Status, Leistung, Zähler** — mindestens Schalten, Leistung oder Zähler
   ist Pflicht (`messen-schalten/actors.js`, Validierung). Ohne Status-Topic gilt das
   Schalt-Topic (sonst die Leistung) als Ist-Stand. Ist nur ein Zähler gesetzt, wird
@@ -130,14 +135,14 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
     Checkbox – die der zugeordneten Gruppe; siehe [LEVEL_HANDLING.md](LEVEL_HANDLING.md))
     und schaltet es **automatisch EIN, sobald das Level die Priorität erreicht** – und
     hält es an (auch bei externem Ausschalten wieder ein). Unter der Priorität wird es
-    (auch extern eingeschaltet, `readActualOn`) **abgeschaltet**. Der Kachel-Toggle ist
-    hier **ausgeblendet**.
+    (auch extern eingeschaltet, `readActualOn`) **abgeschaltet**. Der Toggle der
+    Geräte-Zeile ist hier **ausgeblendet**.
   - **Manuell** (ohne „Immer an"): Unterhalb der effektiven Priorität greift ebenfalls
     Zwangs-Aus und manuelles Einschalten wird abgewiesen. Nach erneuter Freigabe bleibt
-    das Gerät aus, bis es über den Kachel-Toggle wieder eingeschaltet wird.
+    das Gerät aus, bis es über den Zeilen-Toggle wieder eingeschaltet wird.
   Die Steuerschleife reagiert zusätzlich zum 30-s-Tick **entprellt auf MQTT-Änderungen**
   der `messschalt:`-Topics (`onValuesChanged`/`isRelevantEvent`), sodass Geräte bei
-  externem Schalten prompt nachgeregelt werden. Je Kachel wird die
+  externem Schalten prompt nachgeregelt werden. Je Geräte-Zeile wird die
   **Betriebsart** angezeigt: „Immer an · Priorität N", „manuell" oder „nur Messen".
   Optional kann ein Gerät für den **Lastabwurf** des optionalen Grid-Control-Moduls
   markiert werden (`load_shed_enabled`, `load_shed_phase` = L1/L2/L3/Drehstrom).
@@ -147,7 +152,7 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   Last die nächste Prioritätsstufe abgeschaltet. Die Freigabe erfolgt in
   umgekehrter Reihenfolge, erst unter 50 % der Schwelle und mit **60 s Pause** je
   Freigabestufe. Geräte ohne „Immer an" bleiben nach einem Lastabwurf aus; aktive
-  Abwürfe erscheinen auf der Kachel als **„Lastabwurf · Priorität N"**.
+  Abwürfe erscheinen in der Geräte-Zeile als **„Lastabwurf · Priorität N"**.
   Gruppen zeigen ihre Priorität in der Titelzeile. Die Werte der gesetzten Topics stehen im
   Wertekatalog in Kategorie **Geräte** (`geraet.<id>.schalten/status/leistung/zaehler`),
   die Leistungssummen der Gruppen in Kategorie **Verbrauchssummen**

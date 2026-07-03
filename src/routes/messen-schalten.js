@@ -13,7 +13,7 @@ const {
   reorderActors, normalizeInput, effectivePriority,
 } = require('../messen-schalten/actors');
 const {
-  listGroups, createGroup, updateGroup, deleteGroup, reorderGroups,
+  listGroups, createGroup, updateGroup, deleteGroup,
 } = require('../messen-schalten/groups');
 const { readActorValues, readGroupSums } = require('../messen-schalten/aggregation');
 const automation = require('../messen-schalten/automation');
@@ -226,12 +226,12 @@ function messenSchaltenRoutes(db) {
     } catch (err) { next(err); }
   });
 
-  // Drag&Drop persistieren (Geräte: Gruppe + Position; Gruppen: Position).
+  // Drag&Drop persistieren (Geräte: Gruppe + Position; Gruppen sind fest
+  // alphanumerisch sortiert und nicht mehr verschiebbar).
   router.post('/messen-schalten/layout', requireAuth, async (req, res, next) => {
     try {
       const body = req.body || {};
       if (Array.isArray(body.actors)) await reorderActors(db, body.actors);
-      if (Array.isArray(body.groups)) await reorderGroups(db, body.groups);
       await automation.runNow(db).catch(() => {});
       res.json({ ok: true });
     } catch (err) { next(err); }

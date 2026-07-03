@@ -20,7 +20,8 @@ test('Wallbox-Prognose lernt Verbrauch und Ladezeit je Box und Wochentag getrenn
     counter_topic TEXT, counter_unit TEXT, setpoint_topic TEXT, plugged_topic TEXT,
     soc_topic TEXT, mode_sync_topic TEXT, mode INTEGER, priority_private INTEGER,
     priority_business INTEGER, priority_full INTEGER, min_charge_percent INTEGER,
-    business_days TEXT, stall_timeout_seconds INTEGER, stall_power_w REAL)`);
+    business_days TEXT, stall_timeout_seconds INTEGER, stall_power_w REAL,
+    load_shed_phase TEXT NOT NULL DEFAULT 'three_phase')`);
   await run(db, `CREATE TABLE wallbox_daily_consumption (
     wallbox_id INTEGER, day_key TEXT, consumption_kwh REAL, completed INTEGER, updated_at INTEGER,
     PRIMARY KEY(wallbox_id, day_key))`);
@@ -31,7 +32,7 @@ test('Wallbox-Prognose lernt Verbrauch und Ladezeit je Box und Wochentag getrenn
     wallbox_id INTEGER PRIMARY KEY, year_offset REAL, previous_year_total REAL)`);
   await run(db, `CREATE TABLE wallbox_counter_state (
     wallbox_id INTEGER PRIMARY KEY, day_total REAL)`);
-  const values = `(?, ?, 11000, 50, '', '', '', 'W', '', 'kWh', '', '', '', '', 1, 5, 3, 4, 30, '', 120, 200)`;
+  const values = `(?, ?, 11000, 50, '', '', '', 'W', '', 'kWh', '', '', '', '', 1, 5, 3, 4, 30, '', 120, 200, 'three_phase')`;
   await run(db, `INSERT INTO wallboxes VALUES ${values}`, [1, 'Auto A']);
   await run(db, `INSERT INTO wallboxes VALUES ${values}`, [2, 'Auto B']);
   await run(db, `INSERT INTO wallbox_summary_state VALUES (1, 20, 0), (2, 8, 0)`);

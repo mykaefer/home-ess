@@ -59,10 +59,13 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
     vorliegen, live aktualisiert via SSE.
   - Mindest-SoC mit MQTT-Ziel-Topic und 5-%-Schieberegler sowie Batterietyp,
     Zellzahl, Kapazität in Ah und manuell anpassbaren unteren/oberen Spannungsgrenzen.
-- 🔌 **Messen + Schalten** (Menü unter Batterie) — Dashboard-artige Seite für
-  schaltbare/messbare Geräte.
-  - Frei anlegbare **Gruppen** und **Geräte-Kacheln**, per Drag & Drop zwischen
-    Gruppen oder ohne Gruppe anordbar.
+- 🔌 **Messen + Schalten** (Menü unter Batterie) — Seite für schaltbare/messbare
+  Geräte.
+  - Frei anlegbare **Gruppen** als einklappbare Abschnitte über die volle
+    Seitenbreite (Standard zugeklappt, Auf/Zu-Zustand wird im Browser gemerkt),
+    fest alphanumerisch sortiert. **Geräte** sind einzeilige Zeilen über die
+    volle Breite, per Drag & Drop frei anordbar und zwischen Gruppen
+    verschiebbar; gruppenlose Geräte stehen am Ende unter den Gruppen.
   - Je Gerät bis zu vier MQTT-Topics: **Schalten, Status, Leistung, Zähler**
     (mindestens Schalten, Leistung oder Zähler). Ohne Status-Topic gilt das
     Schalt-Topic (sonst die Leistung) als Ist-Stand. Ist nur ein Zähler gesetzt,

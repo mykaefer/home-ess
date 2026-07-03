@@ -30,7 +30,9 @@ async function freshDb() {
     counter_unit TEXT NOT NULL DEFAULT 'kWh', priority INTEGER NOT NULL DEFAULT 4,
     use_group_priority INTEGER NOT NULL DEFAULT 0, desired_on INTEGER NOT NULL DEFAULT 0,
     always_on INTEGER NOT NULL DEFAULT 0,
-    function_key TEXT NOT NULL DEFAULT '')`);
+    function_key TEXT NOT NULL DEFAULT '',
+    load_shed_enabled INTEGER NOT NULL DEFAULT 0,
+    load_shed_phase TEXT NOT NULL DEFAULT 'l1')`);
   await dbRun(db, "CREATE TABLE mess_schalt_groups (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, priority INTEGER NOT NULL DEFAULT 4, position INTEGER NOT NULL DEFAULT 0, function_key TEXT NOT NULL DEFAULT '')");
   await dbRun(db, 'CREATE TABLE mess_schalt_actor_state (actor_id INTEGER PRIMARY KEY, last_counter_raw REAL, last_progress_ts INTEGER, derived_power_w REAL)');
   await dbRun(db, `CREATE TABLE mess_schalt_function_hourly (

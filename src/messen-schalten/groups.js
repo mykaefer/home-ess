@@ -2,8 +2,8 @@
 
 // CRUD für Messen-+-Schalten-Gruppen (Vorbild: dashboard/groups.js). Eine Gruppe
 // ist ein benannter Container mit einer Priorität (1–5), die zugeordnete Geräte
-// optional übernehmen (Checkbox „Priorität der Gruppe verwenden"). Gruppen lassen
-// sich untereinander anordnen (position) und bilden die Verbrauchssummen ihrer
+// optional übernehmen (Checkbox „Priorität der Gruppe verwenden"). Gruppen sind
+// fest alphanumerisch nach Titel sortiert und bilden die Verbrauchssummen ihrer
 // Geräte. Die optionale Funktion (Licht, Waschen, …) vererbt sich auf Geräte
 // ohne eigene Funktionszuordnung.
 
@@ -47,12 +47,15 @@ function normalizeGroupRow(row = {}) {
   };
 }
 
+// Feste alphanumerische Sortierung nach Titel („Heizung 2" vor „Heizung 10").
 async function listGroups(db) {
   const rows = await dbAll(
     db,
-    'SELECT id, title, priority, position, function_key FROM mess_schalt_groups ORDER BY position ASC, id ASC'
+    'SELECT id, title, priority, position, function_key FROM mess_schalt_groups'
   );
-  return rows.map(normalizeGroupRow);
+  return rows
+    .map(normalizeGroupRow)
+    .sort((a, b) => a.title.localeCompare(b.title, 'de', { numeric: true, sensitivity: 'base' }) || a.id - b.id);
 }
 
 async function getGroup(db, id) {
@@ -80,19 +83,13 @@ function ensureTitle(group) {
   }
 }
 
-async function nextPosition(db) {
-  const row = await dbGet(db, 'SELECT COALESCE(MAX(position), -1) + 1 AS pos FROM mess_schalt_groups');
-  return row ? row.pos : 0;
-}
-
 async function createGroup(db, input) {
   const group = normalizeGroupInput(input);
   ensureTitle(group);
-  const position = await nextPosition(db);
   const result = await dbRun(
     db,
-    'INSERT INTO mess_schalt_groups (title, priority, position, function_key) VALUES (?, ?, ?, ?)',
-    [group.title, group.priority, position, group.functionKey]
+    'INSERT INTO mess_schalt_groups (title, priority, function_key) VALUES (?, ?, ?)',
+    [group.title, group.priority, group.functionKey]
   );
   return getGroup(db, result.lastID);
 }
@@ -115,21 +112,11 @@ async function deleteGroup(db, id) {
   await dbRun(db, 'DELETE FROM mess_schalt_groups WHERE id = ?', [id]);
 }
 
-async function reorderGroups(db, items) {
-  for (let index = 0; index < (items || []).length; index += 1) {
-    const id = Number(items[index].id);
-    if (!Number.isFinite(id)) continue;
-    const position = Number.isFinite(Number(items[index].position)) ? Number(items[index].position) : index;
-    await dbRun(db, 'UPDATE mess_schalt_groups SET position = ? WHERE id = ?', [position, id]);
-  }
-}
-
 module.exports = {
   listGroups,
   getGroup,
   createGroup,
   updateGroup,
   deleteGroup,
-  reorderGroups,
   clampPriority,
 };

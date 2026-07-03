@@ -3,6 +3,27 @@
 Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [1.0.4] — 2026-07-03
+
+### Geändert
+
+- **Messen + Schalten komplett umstrukturiert.** Gruppen laufen jetzt als
+  **einklappbare Abschnitte über die volle Seitenbreite** (wie die Kategorien
+  der Output-Seite): Standard zugeklappt, der Auf/Zu-Zustand je Gruppe wird im
+  Browser gemerkt. Gruppen haben **keine Drag-Fläche mehr** und sind fest
+  **alphanumerisch nach Titel sortiert**. Geräte sind **einzeilige Zeilen über
+  die volle Breite** (Status, Name, Betriebsart, Leistung, Zähler, Toggle),
+  behalten ihre Drag-Fläche und bleiben frei anordbar bzw. zwischen Gruppen
+  verschiebbar — Drop auf den Kopf einer zugeklappten Gruppe ordnet das Gerät
+  ans Gruppenende zu. **Gruppenlose Geräte** stehen im Abschnitt „Ohne Gruppe"
+  am Seitenende unter den Gruppen.
+
+### Behoben
+
+- Testschemata um die Lastabwurf-Spalten (`load_shed_enabled`,
+  `load_shed_phase`) ergänzt, die seit 1.0.2/1.0.3 in den betroffenen
+  Testtabellen fehlten (Aggregation, Funktionen, Wallbox-Prognose).
+
 ## [1.0.3] — 2026-07-03
 
 ### Geändert
