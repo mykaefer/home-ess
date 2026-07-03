@@ -2244,6 +2244,12 @@ h2 .cmd-confirm { font-size: 13px; vertical-align: middle; }
 }
 .topic-input-row input { flex: 1; min-width: 0; }
 
+/* Im Messen-&-Schalten-Dialog beginnt nach dem Status eine eigene Energiezeile,
+   damit Leistungs- und Zähler-Topic als zusammengehöriges Paar stehen. */
+.ms-topic-status {
+    grid-column: 1 / -1;
+}
+
 /* Höhere Spezifität (.topic-input-row .state-pick-btn) als generische Form-Button-
    Regeln (.settings-form button u. a.), damit der Picker-Button überall gleich
    aussieht und nicht das blaue Submit-Button-Styling erbt. */

@@ -66,7 +66,7 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
     fest alphanumerisch sortiert. **Geräte** sind einzeilige Zeilen über die
     volle Breite, per Drag & Drop frei anordbar und zwischen Gruppen
     verschiebbar; gruppenlose Geräte stehen am Ende unter den Gruppen.
-  - Je Gerät bis zu vier MQTT-Topics: **Schalten, Status, Leistung, Zähler**
+  - Je Gerät bis zu fünf MQTT-Topics: **Schalten, Remote, Status, Leistung, Zähler**
     (mindestens Schalten, Leistung oder Zähler). Ohne Status-Topic gilt das
     Schalt-Topic (sonst die Leistung) als Ist-Stand. Ist nur ein Zähler gesetzt,
     wird die Leistung aus dem Zählerfortschritt abgeleitet und fällt nach über
@@ -74,6 +74,11 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
     **interner Zähler**, der nur die Deltas des Zähler-Topics fortschreibt —
     Geräte-Neuanlage oder ein Topic-Wechsel lassen ihn nicht auf den Rohwert
     des Topics springen.
+  - Das optionale **Remote-Topic** wird bidirektional mit dem Schaltzustand
+    synchronisiert: Eine Remote-Änderung schaltet das Gerät, eine Schaltung des
+    Geräts aktualisiert das Remote-Topic. Wird ein Einschaltwunsch durch
+    Betriebslevel oder Lastabwurf gesperrt, werden beide Topics auf `AUS`
+    zurückgesetzt.
   - Alle Geräte mit Schalt-Topic laufen über das **Betriebslevel-Gate** und werden
     unterhalb ihrer Priorität ausgeschaltet; Einschalten ist dann auch manuell nicht
     erlaubt. **„Immer an"** schaltet bei erneuter Freigabe automatisch wieder ein.

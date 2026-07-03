@@ -173,6 +173,19 @@ function createApp() {
     .catch(() => {});
   jobs.runExclusive('messSchaltAggregation', updateActors).catch(() => {});
   jobs.schedule('messSchaltAggregation', 60000, updateActors);
+  // Neue Zählerwerte sofort statt erst im nächsten Minutentakt verarbeiten.
+  // Der Browser aktualisiert sich per SSE nach 1 s und sieht damit bereits den
+  // fortgeschriebenen internen Zähler bzw. die daraus abgeleitete Leistung.
+  let actorAggregationTimer = null;
+  mqttClient.onValuesChanged((event) => {
+    const keys = event && Array.isArray(event.changedKeys) ? event.changedKeys : [];
+    if (!keys.some((key) => /^messschalt:\d+:counter$/.test(String(key)))) return;
+    if (actorAggregationTimer) return;
+    actorAggregationTimer = setTimeout(() => {
+      actorAggregationTimer = null;
+      jobs.runExclusive('messSchaltAggregation', updateActors).catch(() => {});
+    }, 100);
+  });
 
   // Akku-Lade-/Entladeenergie fortschreiben (für die Bereinigung der
   // Jahres-Prognosebasis um die Netto-Akkuladung).

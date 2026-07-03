@@ -26,6 +26,7 @@ const presetsRepo = require('../src/adapters/presets');
 const { buildStatesTree } = require('../src/adapters/states');
 const { openDatabase } = require('../src/db');
 const createTasmotaAdapter = require('../adapter/tasmota');
+const renderTasmotaDevices = require('../src/views/tasmota-devices');
 
 const EDITOR = {
   storageKey: 'registers', keyField: 'address', nameField: 'name', label: 'Register', presets: true,
@@ -486,6 +487,28 @@ test('Tasmota-Adapter erkennt frei angeordnetes FullTopic', () => {
     createTasmotaAdapter.commandTopicFromSubscription('house/kitchen/plug1/cmnd/#'),
     'house/kitchen/plug1/cmnd/STATUS'
   );
+});
+
+test('Tasmota-Gerätename überschreibt FriendlyName in Katalog und Geräteansicht', () => {
+  const device = {
+    topic: 'plug1',
+    friendlyName: 'Tasmota Plug',
+    customName: 'Boiler Keller',
+    fields: [{ path: 'POWER', name: 'POWER', category: 'Schalten', writable: true }],
+    values: [],
+  };
+  const catalog = createTasmotaAdapter.buildStateCatalog([device]);
+  assert.equal(catalog[0].name, 'Boiler Keller POWER');
+  assert.equal(catalog[0].category, 'Boiler Keller / Schalten');
+
+  const html = renderTasmotaDevices({
+    adapter: { name: 'Tasmota', prefix: 'tasmota' },
+    instance: { id: 7, name: 'broker' },
+    devices: [device],
+  });
+  assert.match(html, />Boiler Keller</);
+  assert.match(html, /tasmota-devices\/rename/);
+  assert.match(html, /value="Boiler Keller"/);
 });
 
 test.after(() => {

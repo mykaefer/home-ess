@@ -169,7 +169,10 @@ function renderActorDialog({ groupsForSelect, gridControlEnabled }) {
               <div class="dialog-grid dialog-grid--two">
                 <label class="field-block" for="msSwitch"><span>Schalten-Topic <span class="pool-optional">(an/aus)</span></span>
                   <input type="text" id="msSwitch" name="switchTopic" placeholder="z.B. steckdose.0.state"></label>
-                <label class="field-block" for="msStatus"><span>Status-Topic <span class="pool-optional">(optional)</span></span>
+                <label class="field-block" for="msRemote"><span>Remote-Topic <span class="pool-optional">(optional)</span></span>
+                  <input type="text" id="msRemote" name="remoteTopic" placeholder="z.B. fernbedienung.0.state">
+                  <small class="muted">Wird bidirektional mit dem Schaltzustand synchron gehalten.</small></label>
+                <label class="field-block ms-topic-status" for="msStatus"><span>Status-Topic <span class="pool-optional">(optional)</span></span>
                   <input type="text" id="msStatus" name="statusTopic" placeholder="z.B. steckdose.0.actual"></label>
                 <label class="field-block" for="msPower"><span>Leistungs-Topic <span class="pool-optional">(optional)</span></span>
                   <div class="topic-input-row">
@@ -323,6 +326,7 @@ ${renderUngrouped(ungrouped)}
       document.getElementById('msName').value = v.name || '';
       document.getElementById('msGroup').value = v.groupId == null ? '' : String(v.groupId);
       document.getElementById('msSwitch').value = v.switchTopic || '';
+      document.getElementById('msRemote').value = v.remoteTopic || '';
       document.getElementById('msStatus').value = v.statusTopic || '';
       document.getElementById('msPower').value = v.powerTopic || '';
       document.getElementById('msCounter').value = v.counterTopic || '';
@@ -624,6 +628,8 @@ ${renderUngrouped(ungrouped)}
     initDragAndDrop();
     refreshValues();
     window.addEventListener('homeess:mqtt', queueRefresh);
+    // MQTT-Änderungen aktualisieren per SSE sofort; der langsame Fallback liest
+    // nur den vorhandenen Cache und erzeugt keine Homematic-Funkabfragen.
     setInterval(refreshValues, 30000);
 
     if (initialDialogMode === 'add') { openActorDialog('add'); setActorFormValues(initialDialogValues); }

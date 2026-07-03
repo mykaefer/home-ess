@@ -1,7 +1,7 @@
 'use strict';
 
 // CRUD + Validierung der Messen-+-Schalten-Geräte (Aktoren). Vorbild:
-// wallbox/boxes.js. Je Gerät bis zu vier MQTT-Topics: schalten, status, leistung,
+// wallbox/boxes.js. Je Gerät bis zu fünf MQTT-Topics: schalten, remote, status, leistung,
 // zähler. Mindestens eines von schalten/leistung/zähler muss gesetzt sein. Die
 // Priorität (1–5) kann optional von der zugeordneten Gruppe übernommen werden.
 
@@ -76,6 +76,7 @@ function normalizeRow(row = {}) {
     groupId: row.group_id == null ? null : row.group_id,
     position: row.position == null ? 0 : row.position,
     switchTopic: row.switch_topic || '',
+    remoteTopic: row.remote_topic || '',
     statusTopic: row.status_topic || '',
     powerTopic: row.power_topic || '',
     powerUnit: normalizeUnit(row.power_unit, POWER_UNITS, 'W'),
@@ -93,7 +94,7 @@ function normalizeRow(row = {}) {
   };
 }
 
-const COLUMNS = `id, name, group_id, position, switch_topic, status_topic, power_topic,
+const COLUMNS = `id, name, group_id, position, switch_topic, remote_topic, status_topic, power_topic,
   power_unit, counter_topic, counter_unit, priority, use_group_priority, always_on,
   function_key, load_shed_enabled, load_shed_phase`;
 
@@ -115,6 +116,7 @@ function normalizeInput(input = {}) {
     name: String(input.name || '').trim(),
     groupId: parseGroupId(input.groupId),
     switchTopic: normalizeMqttTopic(input.switchTopic || ''),
+    remoteTopic: normalizeMqttTopic(input.remoteTopic || ''),
     statusTopic: normalizeMqttTopic(input.statusTopic || ''),
     powerTopic: normalizeMqttTopic(input.powerTopic || ''),
     powerUnit: normalizeUnit(input.powerUnit, POWER_UNITS, 'W'),
@@ -146,6 +148,9 @@ function validateInput(input) {
   if (input.loadShedEnabled && !input.switchTopic) {
     errors.push('„Zum Lastabwurf verwenden" erfordert ein Schalten-Topic.');
   }
+  if (input.remoteTopic && !input.switchTopic) {
+    errors.push('„Remote-Topic“ erfordert ein Schalten-Topic.');
+  }
   return errors;
 }
 
@@ -170,12 +175,12 @@ async function createActor(db, rawInput) {
   const result = await dbRun(
     db,
     `INSERT INTO mess_schalt_actors
-      (name, group_id, position, switch_topic, status_topic, power_topic, power_unit,
+      (name, group_id, position, switch_topic, remote_topic, status_topic, power_topic, power_unit,
        counter_topic, counter_unit, priority, use_group_priority, always_on, function_key,
        load_shed_enabled, load_shed_phase, desired_on)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
     [
-      input.name, input.groupId, position, input.switchTopic, input.statusTopic,
+      input.name, input.groupId, position, input.switchTopic, input.remoteTopic, input.statusTopic,
       input.powerTopic, input.powerUnit, input.counterTopic, input.counterUnit,
       input.priority, input.useGroupPriority ? 1 : 0, input.alwaysOn ? 1 : 0,
       input.functionKey, input.loadShedEnabled ? 1 : 0, input.loadShedPhase,
@@ -199,12 +204,12 @@ async function updateActor(db, id, rawInput) {
   await dbRun(
     db,
     `UPDATE mess_schalt_actors SET
-       name = ?, group_id = ?, switch_topic = ?, status_topic = ?, power_topic = ?,
+       name = ?, group_id = ?, switch_topic = ?, remote_topic = ?, status_topic = ?, power_topic = ?,
        power_unit = ?, counter_topic = ?, counter_unit = ?, priority = ?, use_group_priority = ?,
        always_on = ?, function_key = ?, load_shed_enabled = ?, load_shed_phase = ?
      WHERE id = ?`,
     [
-      input.name, input.groupId, input.switchTopic, input.statusTopic, input.powerTopic,
+      input.name, input.groupId, input.switchTopic, input.remoteTopic, input.statusTopic, input.powerTopic,
       input.powerUnit, input.counterTopic, input.counterUnit, input.priority,
       input.useGroupPriority ? 1 : 0, input.alwaysOn ? 1 : 0, input.functionKey,
       input.loadShedEnabled ? 1 : 0, input.loadShedPhase, id,
@@ -269,6 +274,7 @@ function buildMessSchaltStateDefinitions(actors) {
   const defs = [];
   for (const actor of actors || []) {
     if (actor.switchTopic) defs.push({ id: cacheKey(actor.id, 'switch'), topic: actor.switchTopic });
+    if (actor.remoteTopic) defs.push({ id: cacheKey(actor.id, 'remote'), topic: actor.remoteTopic });
     if (actor.statusTopic) defs.push({ id: cacheKey(actor.id, 'status'), topic: actor.statusTopic });
     if (actor.powerTopic) defs.push({ id: cacheKey(actor.id, 'power'), topic: actor.powerTopic });
     if (actor.counterTopic) defs.push({ id: cacheKey(actor.id, 'counter'), topic: actor.counterTopic });

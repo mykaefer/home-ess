@@ -38,7 +38,7 @@ ${rows}
 }
 
 function renderDevice(instance, device) {
-  const title = device.friendlyName || device.topic;
+  const title = device.customName || device.friendlyName || device.topic;
   return `          <details class="state-cat" open>
             <summary><span class="state-cat-name">${escapeHtml(title)}</span><span class="state-cat-count">${escapeHtml(device.topic)}</span></summary>
             <div style="padding:12px;">
@@ -48,7 +48,12 @@ function renderDevice(instance, device) {
                 <span class="muted">IP: <code>${escapeHtml(device.ip || '—')}</code></span>
                 <span class="muted">Intervall: <strong>${escapeHtml(formatInterval(device.intervalMs))}</strong></span>
                 <span class="muted">Zuletzt: ${escapeHtml(formatDate(device.lastSeenAt))}</span>
-                <form method="POST" action="/adapter/instance/${instance.id}/tasmota-devices/delete" onsubmit="return confirm('Gerät „${escapeHtml(title)}“ löschen?');" style="margin-left:auto;">
+                <form method="POST" action="/adapter/instance/${instance.id}/tasmota-devices/rename" style="display:flex; gap:6px; align-items:center; margin-left:auto;">
+                  <input type="hidden" name="topic" value="${escapeHtml(device.topic)}">
+                  <input type="text" name="name" value="${escapeHtml(device.customName || '')}" placeholder="Eigener Gerätename" aria-label="Gerätename" style="min-width:180px;">
+                  <button type="submit" class="module-toggle-btn">Umbenennen</button>
+                </form>
+                <form method="POST" action="/adapter/instance/${instance.id}/tasmota-devices/delete" onsubmit="return confirm('Gerät wirklich löschen?');">
                   <input type="hidden" name="topic" value="${escapeHtml(device.topic)}">
                   <button type="submit" class="module-toggle-btn button-danger">Löschen</button>
                 </form>

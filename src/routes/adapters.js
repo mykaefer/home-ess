@@ -370,7 +370,7 @@ function adapterRoutes(db) {
     return metaRows.map((device) => ({
       ...device,
       values: (byTopic.get(String(device.topic || '')) || []).sort((a, b) => a.address.localeCompare(b.address, 'de')),
-    })).sort((a, b) => String(a.friendlyName || a.topic || '').localeCompare(String(b.friendlyName || b.topic || ''), 'de'));
+    })).sort((a, b) => String(a.customName || a.friendlyName || a.topic || '').localeCompare(String(b.customName || b.friendlyName || b.topic || ''), 'de'));
   }
 
   router.get('/adapter/instance/:id/tasmota-devices', requireAuth, async (req, res) => {
@@ -378,6 +378,48 @@ function adapterRoutes(db) {
     if (!ctx) return res.status(404).send('Keine Tasmota-Geräteseite für diese Instanz.');
     const devices = await buildTasmotaDevices(ctx.instance);
     res.send(renderTasmotaDevices({ adapter: ctx.manifest, instance: ctx.instance, devices }));
+  });
+
+  router.post('/adapter/instance/:id/tasmota-devices/rename', requireAuth, async (req, res) => {
+    const ctx = await loadTasmotaContext(req.params.id).catch(() => null);
+    if (!ctx) return res.status(404).send('Keine Tasmota-Geräteseite für diese Instanz.');
+    const topic = String(req.body.topic || '').trim();
+    const customName = String(req.body.name || '').trim();
+    const devices = Array.isArray(ctx.instance.settings && ctx.instance.settings.devices) ? ctx.instance.settings.devices : [];
+    const found = devices.some((row) => String(row.topic || '') === topic);
+    if (!found) {
+      const current = await buildTasmotaDevices(ctx.instance);
+      return res.status(404).send(renderTasmotaDevices({
+        adapter: ctx.manifest, instance: ctx.instance, devices: current, error: 'Gerät nicht gefunden.',
+      }));
+    }
+    const nextDevices = devices.map((row) => String(row.topic || '') === topic
+      ? { ...row, customName }
+      : row);
+    await instancesRepo.updateSettingKey(db, ctx.instance.id, 'devices', nextDevices);
+    const renamedDevice = nextDevices.find((row) => String(row.topic || '') === topic);
+    const displayName = customName || String(renamedDevice.friendlyName || topic);
+    await Promise.all((renamedDevice.fields || []).map((field) => new Promise((resolve) => {
+      db.run(
+        'UPDATE adapter_states SET name = ?, category = ? WHERE instance_id = ? AND address = ?',
+        [
+          `${displayName} ${field.name || field.path}`.trim(),
+          `${displayName} / ${field.category || 'Werte'}`,
+          ctx.instance.id,
+          `${topic}/${field.path}`,
+        ],
+        () => resolve()
+      );
+    })));
+    await host.reloadInstance(ctx.instance.id).catch(() => {});
+    ctx.instance = await instancesRepo.getInstance(db, ctx.instance.id);
+    const next = await buildTasmotaDevices(ctx.instance);
+    res.send(renderTasmotaDevices({
+      adapter: ctx.manifest,
+      instance: ctx.instance,
+      devices: next,
+      message: customName ? `Gerät in „${customName}" umbenannt.` : 'Eigener Gerätename entfernt.',
+    }));
   });
 
   router.post('/adapter/instance/:id/tasmota-devices/delete', requireAuth, async (req, res) => {

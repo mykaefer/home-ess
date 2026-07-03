@@ -31,7 +31,13 @@ const state = new Map();
 function actorState(id) {
   let s = state.get(id);
   if (!s) {
-    s = { output: null, loadShedOff: false };
+    s = {
+      output: null,
+      loadShedOff: false,
+      remoteSeenOn: null,
+      pendingSwitch: null,
+      pendingRemote: null,
+    };
     state.set(id, s);
   }
   return s;
@@ -47,7 +53,28 @@ function isActorShedByStage(actor, priority) {
 
 function sendSwitch(actor, on) {
   if (!actor.switchTopic) return;
+  const s = actorState(actor.id);
+  const command = on ? 'on' : 'off';
+  // Solange der Ist-Zustand einen bereits gesendeten Befehl nicht bestätigt
+  // hat, denselben Funk-/MQTT-Befehl nicht bei jedem 30-s-Tick wiederholen.
+  if (s.pendingSwitch === command) return false;
   mqttClient.publish(actor.switchTopic, on ? '1' : '0');
+  s.pendingSwitch = command;
+  if (actor.remoteTopic && s.pendingRemote !== command) {
+    mqttClient.publish(actor.remoteTopic, on ? '1' : '0');
+    s.pendingRemote = command;
+  }
+  return true;
+}
+
+function sendRemote(actor, on) {
+  if (!actor.remoteTopic) return false;
+  const s = actorState(actor.id);
+  const command = on ? 'on' : 'off';
+  if (s.pendingRemote === command) return false;
+  mqttClient.publish(actor.remoteTopic, on ? '1' : '0');
+  s.pendingRemote = command;
+  return true;
 }
 
 // Tatsächlicher Ein-/Aus-Zustand eines Geräts aus dem Cache: bevorzugt das
@@ -63,6 +90,18 @@ function readActualOn(cache, actor) {
     if (raw != null && raw !== '') return parseBool(raw);
   }
   return null;
+}
+
+function readCachedBool(cache, key) {
+  const entry = cache.get(key);
+  if (!entry || entry.value == null || entry.value === '') return null;
+  return { on: parseBool(entry.value), receivedAt: Number(entry.receivedAt) || 0 };
+}
+
+function readActual(cache, actor) {
+  const status = actor.statusTopic ? readCachedBool(cache, cacheKey(actor.id, 'status')) : null;
+  if (status) return status;
+  return actor.switchTopic ? readCachedBool(cache, cacheKey(actor.id, 'switch')) : null;
 }
 
 let _knownConsumers = new Set();
@@ -117,9 +156,28 @@ async function tick(db) {
     const allowed = levelHandler.isAllowed(priority);
     const actualOn = readActualOn(cache, actor);
     const shedByStage = loadShedActive ? isActorShedByStage(actor, priority) : false;
+    const actual = readActual(cache, actor);
+    const remote = actor.remoteTopic ? readCachedBool(cache, cacheKey(actor.id, 'remote')) : null;
+    const remoteChanged = remote && remote.on !== s.remoteSeenOn;
+    if (remoteChanged) s.remoteSeenOn = remote.on;
+    // Erst eine bestätigte Zustandsmeldung gibt denselben Befehl wieder frei.
+    // Weicht das Gerät später erneut ab, kann die Regel genau einmal reagieren.
+    if (actual && s.pendingSwitch === (actual.on ? 'on' : 'off')) s.pendingSwitch = null;
+    if (remote && s.pendingRemote === (remote.on ? 'on' : 'off')) s.pendingRemote = null;
 
     if (!loadShedActive || !actor.loadShedEnabled) {
       s.loadShedOff = false;
+    }
+
+    if (remoteChanged) {
+      if (remote.on && (!allowed || shedByStage)) {
+        sendSwitch(actor, false);
+        s.output = 'off';
+        s.loadShedOff = !!shedByStage;
+      } else {
+        sendSwitch(actor, remote.on);
+        s.output = remote.on ? 'on' : 'off';
+      }
     }
 
     if (allowed && shedByStage) {
@@ -131,7 +189,7 @@ async function tick(db) {
       if (resumingAfterLoadShed) s.loadShedOff = false;
       // Nur „Immer an" schaltet nach der Freigabe automatisch wieder ein. Manuelle
       // Geräte behalten ihren Zustand und warten gegebenenfalls auf den Benutzer.
-      if (actor.alwaysOn) {
+      if (actor.alwaysOn && !actor.remoteTopic) {
         // Nach einem Lastabwurf wird der EIN-Befehl bewusst erneut gesendet,
         // auch wenn ein Status-Topic noch veraltet "an" meldet.
         if (resumingAfterLoadShed || actualOn !== true) sendSwitch(actor, true);
@@ -142,6 +200,16 @@ async function tick(db) {
       if (actualOn === true || (actualOn == null && s.output !== 'off')) sendSwitch(actor, false);
       s.output = 'off';
       s.loadShedOff = false;
+    }
+
+    // Eine lokale/physische Zustandsänderung nach der letzten Remote-Nachricht
+    // wird zurückgespiegelt. Damit gewinnt bei Abweichungen stets die neuere Seite.
+    if (actor.remoteTopic && actual && !remote && allowed && !shedByStage) {
+      sendRemote(actor, actual.on);
+    } else if (actor.remoteTopic && actual && remote && !remoteChanged && allowed && !shedByStage
+      && actual.on !== remote.on
+      && actual.receivedAt > remote.receivedAt) {
+      sendRemote(actor, actual.on);
     }
   }
 

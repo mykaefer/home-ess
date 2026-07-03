@@ -135,7 +135,7 @@ function relevantField(path) {
 function buildStateCatalog(devices) {
   const states = [];
   devices.forEach((device) => {
-    const baseName = device.friendlyName || device.topic;
+    const baseName = device.customName || device.friendlyName || device.topic;
     (device.fields || []).forEach((field) => {
       states.push({
         address: `${device.topic}/${field.path}`,
@@ -153,6 +153,7 @@ function recordForStorage(device) {
   return {
     topic: device.topic,
     identityLocked: !!device.identityLocked,
+    customName: device.customName || '',
     friendlyName: device.friendlyName || '',
     clientId: device.clientId || '',
     ip: device.ip || '',
@@ -261,6 +262,7 @@ module.exports = function createTasmotaAdapter(host) {
   function upsertDevice(topic, patch = {}) {
     const existing = devices.get(topic) || {
       topic,
+      customName: '',
       friendlyName: topic,
       clientId: '',
       ip: '',
@@ -284,7 +286,7 @@ module.exports = function createTasmotaAdapter(host) {
 
   function mergeDevice(target, source) {
     if (!source || target === source) return target;
-    ['friendlyName', 'clientId', 'ip', 'mac', 'version', 'module', 'commandTopic'].forEach((key) => {
+    ['customName', 'friendlyName', 'clientId', 'ip', 'mac', 'version', 'module', 'commandTopic'].forEach((key) => {
       const sourceValue = source[key];
       if (sourceValue && (!target[key] || target[key] === target.topic)) target[key] = sourceValue;
     });
@@ -688,6 +690,7 @@ module.exports = function createTasmotaAdapter(host) {
       if (!row || !row.topic) return;
       devices.set(String(row.topic), {
         topic: String(row.topic),
+        customName: row.customName || '',
         friendlyName: row.friendlyName || row.topic,
         clientId: row.clientId || '',
         ip: row.ip || '',
@@ -758,6 +761,23 @@ module.exports = function createTasmotaAdapter(host) {
 
     write(address, value) {
       sendDeviceCommand(address, value);
+    },
+
+    // Ein STATUS-Request liefert POWER und ENERGY gemeinsam. So müssen
+    // konfigurierte Verbraucher nicht bis zum nächsten Tasmota-TelePeriod
+    // (standardmäßig mehrere Minuten) auf einen frischen Wert warten.
+    read(address) {
+      const topics = Array.from(devices.keys()).sort((a, b) => b.length - a.length);
+      const topic = topics.find((candidate) => String(address).startsWith(`${candidate}/`));
+      const device = topic ? devices.get(topic) : null;
+      if (!device || !device.commandTopic) return;
+      const socket = Array.from(sockets).find((entry) => entry._authenticated &&
+        (entry._deviceKey === topic || (device.clientId && entry._clientId === device.clientId)));
+      if (!socket) return;
+      const now = Date.now();
+      if (now - (device.lastReadRequestAt || 0) < 3000) return;
+      device.lastReadRequestAt = now;
+      sendStatusRequest(socket, socket._protocolVersion || 4, device.commandTopic);
     },
   };
 };

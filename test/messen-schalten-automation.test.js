@@ -33,6 +33,7 @@ async function freshDb() {
   await dbRun(db, `CREATE TABLE mess_schalt_actors (
     id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL DEFAULT '', group_id INTEGER,
     position INTEGER NOT NULL DEFAULT 0, switch_topic TEXT NOT NULL DEFAULT '',
+    remote_topic TEXT NOT NULL DEFAULT '',
     status_topic TEXT NOT NULL DEFAULT '', power_topic TEXT NOT NULL DEFAULT '',
     power_unit TEXT NOT NULL DEFAULT 'W', counter_topic TEXT NOT NULL DEFAULT '',
     counter_unit TEXT NOT NULL DEFAULT 'kWh', priority INTEGER NOT NULL DEFAULT 4,
@@ -86,6 +87,28 @@ test('„Immer an" schaltet bei externem Ausschalten wieder ein', async () => {
     assert.deepEqual(published.at(-1), ['pu.0.state', '1']); // wieder ein
   });
   clearActual(11);
+  await new Promise((resolve) => db.close(resolve));
+});
+
+test('Unbestätigter Schaltbefehl wird nicht in jedem Tick wiederholt', async () => {
+  const db = await freshDb();
+  await dbRun(db, "INSERT INTO mess_schalt_actors (id, name, switch_topic, priority, always_on) VALUES (12, 'Pumpe', 'repeat.0.state', 4, 1)");
+  setActual(12, false);
+  await withPublishCapture(async (published) => {
+    levelHandler.applyLevel(5);
+    await automation.tick(db);
+    await automation.tick(db);
+    assert.deepEqual(published, [['repeat.0.state', '1']]);
+
+    // Bestätigung gibt den Befehl frei; eine spätere Abweichung darf erneut
+    // genau einen Einschaltbefehl auslösen.
+    setActual(12, true);
+    await automation.tick(db);
+    setActual(12, false);
+    await automation.tick(db);
+    assert.deepEqual(published, [['repeat.0.state', '1'], ['repeat.0.state', '1']]);
+  });
+  clearActual(12);
   await new Promise((resolve) => db.close(resolve));
 });
 
@@ -152,6 +175,37 @@ test('isRelevantEvent erkennt nur Messen-+-Schalten-Topics', () => {
   assert.equal(automation.isRelevantEvent({ changedKeys: ['messschalt:7:status', 'pv.current'] }), true);
   assert.equal(automation.isRelevantEvent({ changedKeys: ['wallbox:1:power'] }), false);
   assert.equal(automation.isRelevantEvent({}), false);
+});
+
+test('Remote-Topic schaltet das Gerät und wird bei Geräteänderungen synchronisiert', async () => {
+  const db = await freshDb();
+  await dbRun(db, "INSERT INTO mess_schalt_actors (id, name, switch_topic, remote_topic, priority) VALUES (70, 'Remote', 'device.0.state', 'remote.0.state', 2)");
+  levelHandler.applyLevel(5);
+  mqttClient.getCache().set(cacheKey(70, 'remote'), { value: '1', receivedAt: 100 });
+  await withPublishCapture(async (published) => {
+    await automation.tick(db);
+    assert.ok(published.some((p) => p[0] === 'device.0.state' && p[1] === '1'));
+    assert.ok(published.some((p) => p[0] === 'remote.0.state' && p[1] === '1'));
+
+    published.length = 0;
+    mqttClient.getCache().set(cacheKey(70, 'switch'), { value: '0', receivedAt: 200 });
+    await automation.tick(db);
+    assert.deepEqual(published, [['remote.0.state', '0']]);
+  });
+  await new Promise((resolve) => db.close(resolve));
+});
+
+test('Gesperrtes Remote-Einschalten setzt Gerät und Remote-Topic auf aus', async () => {
+  const db = await freshDb();
+  await dbRun(db, "INSERT INTO mess_schalt_actors (id, name, switch_topic, remote_topic, priority) VALUES (71, 'Gesperrt', 'device.1.state', 'remote.1.state', 5)");
+  levelHandler.applyLevel(2);
+  mqttClient.getCache().set(cacheKey(71, 'remote'), { value: '1', receivedAt: 100 });
+  await withPublishCapture(async (published) => {
+    await automation.tick(db);
+    assert.ok(published.some((p) => p[0] === 'device.1.state' && p[1] === '0'));
+    assert.ok(published.some((p) => p[0] === 'remote.1.state' && p[1] === '0'));
+  });
+  await new Promise((resolve) => db.close(resolve));
 });
 
 test('Geräte ohne Schalt-Topic nehmen nicht am Level teil', async () => {

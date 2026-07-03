@@ -39,6 +39,8 @@ const adhocConfigured = new Map();
 
 // Konfigurierte States/Lasten. Wird später aus der DB gefüllt; aktuell leer.
 let stateDefinitions = [];
+const stateRequestTimes = new Map();
+const STATE_REQUEST_THROTTLE_MS = 5000;
 
 // Draht-Diagnose: mit HOMEESS_MQTT_DEBUG=1 werden alle ein- und ausgehenden
 // MQTT-Nachrichten protokolliert (Topic, Wert, ack). Standardmäßig still.
@@ -210,7 +212,10 @@ function setStateDefinitions(defs) {
   const nextDefinitions = Array.isArray(defs) ? defs : [];
   const nextById = new Map(nextDefinitions.map((entry) => [String(entry.id), entry.topic]));
   for (const previous of stateDefinitions) {
-    if (nextById.get(String(previous.id)) !== previous.topic) valueCache.delete(String(previous.id));
+    if (nextById.get(String(previous.id)) !== previous.topic) {
+      valueCache.delete(String(previous.id));
+      stateRequestTimes.delete(String(previous.id));
+    }
   }
   stateDefinitions = nextDefinitions;
   buildTopicRoutes();
@@ -219,6 +224,22 @@ function setStateDefinitions(defs) {
     subscribeAllTopics();
     requestAllStateValues();
   }
+}
+
+// Einen konfigurierten lokalen Adapter-State aktiv neu anfordern. Broker-Topics
+// werden hier bewusst NICHT per /get gepollt: Bei Homematic kann jede solche
+// Anfrage eine echte Funkabfrage auslösen und den Duty-Cycle hochtreiben.
+// Die Drossel verhindert zusätzlich zu schnelle Reads lokaler Adapter.
+function requestStateValue(cacheKey) {
+  const key = String(cacheKey);
+  const state = stateDefinitions.find((entry) => String(entry.id) === key);
+  if (!state || !state.topic) return false;
+  const now = Date.now();
+  if (now - (stateRequestTimes.get(key) || 0) < STATE_REQUEST_THROTTLE_MS) return false;
+  if (!isSchemeTopic(state.topic)) return false;
+  const requested = adapterRouter.requestValue(state.topic);
+  if (requested) stateRequestTimes.set(key, now);
+  return requested;
 }
 
 // Wert an ein Ziel-Topic schreiben (ioBroker-Konvention aus MQTT.md):
@@ -376,6 +397,7 @@ module.exports = {
   subscribeAdHoc,
   unsubscribeAdHoc,
   requestAdHocValue,
+  requestStateValue,
   publish,
   testConnection,
 };

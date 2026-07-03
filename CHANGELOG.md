@@ -3,6 +3,46 @@
 Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [1.0.7] — 2026-07-03
+
+### Hinzugefügt
+
+- **Messen + Schalten: optionales Remote-Topic.** Schaltbare Geräte können
+  jetzt ein zusätzliches Remote-Topic erhalten. Änderungen am Remote-Topic
+  schalten das Gerät; manuelle und physische Zustandsänderungen werden auf das
+  Remote-Topic zurückgespiegelt. Verhindern Betriebslevel oder Lastabwurf das
+  Einschalten, werden Schalt- und Remote-Topic gemeinsam auf `AUS` gesetzt.
+  Bestehende Datenbanken erhalten die neue Spalte `remote_topic` automatisch.
+
+### Geändert
+
+- **Gerätedialog aufgeräumt.** Schalt- und Remote-Topic stehen als Paar,
+  das Status-Topic in einer eigenen Zeile und Leistungs- sowie Zähler-Topic
+  wieder nebeneinander.
+
+### Behoben
+
+- **Gerätestatus und Energiewerte aktualisieren sich schneller.** Neue
+  Zählerwerte werden sofort statt erst im Minutentakt verarbeitet. Beim
+  Live-Refresh werden ausschließlich lokale Adapterwerte aktiv und gedrosselt
+  angefordert; externe MQTT-Topics bleiben rein ereignisgetrieben, damit etwa
+  Homematic keine zusätzlichen Funkabfragen und Duty-Cycle-Last erhält. Der
+  Tasmota-Adapter beantwortet lokale Reads mit einem gemeinsamen `STATUS`-Abruf
+  für Schaltstatus und Energie.
+- **Keine endlosen Schaltwiederholungen bei ausbleibender Bestätigung.** Meldet
+  ein Status-Topic nach einem Schaltbefehl weiterhin den alten Zustand, sendet
+  der 30-s-Regeltakt nicht mehr fortlaufend denselben Befehl. Ein identischer
+  Befehl wird erst wieder freigegeben, nachdem der Ist-Zustand ihn bestätigt hat
+  und später erneut abweicht. Das verhindert insbesondere unnötige
+  Homematic-Funktelegramme und Duty-Cycle-Last.
+- **Poolsteuerung wiederholt gegatete Pumpenbefehle nicht mehr.** Wollte ein
+  Zeitfenster oder die Solarautomatik eine Pumpe einschalten, während das
+  Betriebslevel dies verhinderte, verglich die Regelung bisher den tatsächlichen
+  Zustand `AUS` fortlaufend mit dem ungegateten Wunsch `EIN`. Dadurch wurde alle
+  30 Sekunden und bei Grid-Ereignissen erneut `AUS` publiziert. Verglichen wird
+  jetzt mit dem tatsächlich erlaubten Zielzustand; ein blockiertes Einschalten
+  erzeugt keinen wiederholten Ausschaltbefehl mehr.
+
 ## [1.0.6] — 2026-07-03
 
 ### Geändert

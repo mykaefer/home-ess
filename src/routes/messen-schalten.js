@@ -60,6 +60,13 @@ function toViewActor(actor, value, groupsById) {
 async function buildLiveData(db) {
   const cache = mqttClient.getCache();
   const actors = await listActors(db);
+  // Lokale Adapterwerte beim Live-Refresh gedrosselt neu anfordern. Externe
+  // MQTT-Topics werden ausdrücklich nicht gepollt (Homematic-Duty-Cycle).
+  for (const actor of actors) {
+    for (const suffix of ['switch', 'status', 'power', 'counter']) {
+      if (actor[`${suffix}Topic`]) mqttClient.requestStateValue(`messschalt:${actor.id}:${suffix}`);
+    }
+  }
   const groups = await listGroups(db);
   const values = await readActorValues(db, cache, actors);
   const valueById = new Map(values.map((v) => [v.id, v]));
@@ -95,7 +102,7 @@ async function renderPage(db, res, options = {}) {
     groupsForSelect: groups,
     actorConfigs: actors.map((a) => ({
       id: a.id, name: a.name, groupId: a.groupId,
-      switchTopic: a.switchTopic, statusTopic: a.statusTopic,
+      switchTopic: a.switchTopic, remoteTopic: a.remoteTopic, statusTopic: a.statusTopic,
       powerTopic: a.powerTopic, powerUnit: a.powerUnit,
       counterTopic: a.counterTopic, counterUnit: a.counterUnit,
       priority: a.priority, useGroupPriority: a.useGroupPriority, alwaysOn: a.alwaysOn,

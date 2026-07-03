@@ -20,6 +20,19 @@ Dieses Dokument beschreibt alle bekannten Eigenheiten des ioBroker-MQTT-Brokers 
    ein gemeinsames Ereignis. MQTT-Topics, Retained-Verhalten und Pollintervalle
    bleiben davon unverändert.
 
+6. **Gekoppelte Schaltzustände gemeinsam bestätigen.** Bei einem optionalen
+   Remote-Topic eines „Messen + Schalten“-Geräts werden Remote- und Schaltzustand
+   bidirektional synchronisiert. Jeder akzeptierte Schaltbefehl wird auf beide
+   Topics publiziert. Wird `EIN` durch Betriebslevel oder Lastabwurf abgewiesen,
+   muss auch das Remote-Topic auf `AUS` zurückgesetzt werden; andernfalls würde
+   die Fernbedienung einen Zustand anzeigen, den das Gerät nicht annehmen darf.
+
+7. **Broker-States nicht zyklisch per `/get` pollen.** Insbesondere bei
+   Homematic kann eine Wertanfrage über ioBroker eine echte Funkabfrage auslösen.
+   Viele Geräte-Topics oder kurze Intervalle treiben dadurch den Duty-Cycle hoch.
+   Normale MQTT-States deshalb ereignisgetrieben abonnieren; aktive Reads sind
+   nur für lokale Adapter-Schema-Topics (`prefix://instanz/adresse`) zulässig.
+
 ---
 
 ## Topic-Formate in ioBroker

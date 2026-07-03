@@ -90,9 +90,9 @@ function phaseFor(which, cfg) {
 // priority = effektive Priorität der zugrunde liegenden Aufgabe (Solar-/Filterdienst).
 // Liefert den tatsächlich geschalteten Zustand (false, wenn das Level das Einschalten sperrt).
 function gatedSend(topic, on, priority) {
-  const effective = !!on && levelHandler.isAllowed(priority);
-  send(topic, effective);
-  return effective;
+  if (on && !levelHandler.isAllowed(priority)) return false;
+  send(topic, !!on);
+  return !!on;
 }
 
 // Sofort-Abschaltung auf Anforderung des Betriebslevel-Handlers (Level gesunken).
@@ -159,12 +159,16 @@ async function tick(db) {
   // ── Solarpumpe ──────────────────────────────────────────────────────────────
   if (cfg.solarPumpCommandTopic && pumpModes.solar !== 'auto') {
     const desired = pumpModes.solar;
-    if (solar.output !== desired) {
-      const shouldOn = desired === 'on' && !isShed('solar', cfg.solarPumpPriority, cfg);
-      if (desired === 'on' && !shouldOn) solar.loadShedOff = true;
+    const shouldOn = desired === 'on'
+      && levelHandler.isAllowed(cfg.solarPumpPriority)
+      && !isShed('solar', cfg.solarPumpPriority, cfg);
+    const target = shouldOn ? 'on' : 'off';
+    if (solar.output !== target) {
+      if (desired === 'on' && isShed('solar', cfg.solarPumpPriority, cfg)) solar.loadShedOff = true;
+      else if (desired === 'on') solar.loadShedOff = false;
       if (desired !== 'on') solar.loadShedOff = false;
       send(cfg.solarPumpCommandTopic, shouldOn);
-      solar.output = shouldOn ? 'on' : 'off';
+      solar.output = target;
       solar.changedAt = now;
     }
   } else if (cfg.solarPumpCommandTopic) {
@@ -248,12 +252,14 @@ async function tick(db) {
 
       // Sonnenbasierte Steuerung
       const desired = hasSun ? 'on' : 'off';
-      if (solar.output !== desired) {
+      let requestOn = desired === 'on';
+      if (requestOn && (isShed('solar', cfg.solarPumpPriority, cfg)
+        || !levelHandler.isAllowed(cfg.solarPumpPriority))) requestOn = false;
+      const target = requestOn ? 'on' : 'off';
+      if (solar.output !== target) {
         const holdOk = solar.changedAt === 0 || now - solar.changedAt >= HOLD_MS;
         if (holdOk) {
-          let requestOn = desired === 'on';
-          if (requestOn && isShed('solar', cfg.solarPumpPriority, cfg)) {
-            requestOn = false;
+          if (desired === 'on' && isShed('solar', cfg.solarPumpPriority, cfg)) {
             solar.loadShedOff = true;
           } else if (requestOn) {
             solar.loadShedOff = false;
@@ -278,13 +284,17 @@ async function tick(db) {
   // ── Filterpumpe ─────────────────────────────────────────────────────────────
   if (cfg.filterPumpCommandTopic && pumpModes.filter !== 'auto') {
     const desired = pumpModes.filter;
-    if (filter.output !== desired) {
-      const effectivePriority = getEffectivePriority('filter', cfg);
-      const shouldOn = desired === 'on' && !isShed('filter', effectivePriority, cfg);
-      if (desired === 'on' && !shouldOn) filter.loadShedOff = true;
+    const effectivePriority = getEffectivePriority('filter', cfg);
+    const shouldOn = desired === 'on'
+      && levelHandler.isAllowed(effectivePriority)
+      && !isShed('filter', effectivePriority, cfg);
+    const target = shouldOn ? 'on' : 'off';
+    if (filter.output !== target) {
+      if (desired === 'on' && isShed('filter', effectivePriority, cfg)) filter.loadShedOff = true;
+      else if (desired === 'on') filter.loadShedOff = false;
       if (desired !== 'on') filter.loadShedOff = false;
       send(cfg.filterPumpCommandTopic, shouldOn);
-      filter.output = shouldOn ? 'on' : 'off';
+      filter.output = target;
     }
   } else if (cfg.filterPumpCommandTopic && !_filterActsAsSolar) {
     let desired = 'off';
@@ -309,11 +319,13 @@ async function tick(db) {
       if (soc != null && soc >= (cfg.filterBatterySoc || 80)) desired = 'on';
     }
 
-    if (filter.output !== desired) {
-      let requestOn = desired === 'on';
-      const effectivePriority = getEffectivePriority('filter', cfg);
-      if (requestOn && isShed('filter', effectivePriority, cfg)) {
-        requestOn = false;
+    const effectivePriority = getEffectivePriority('filter', cfg);
+    let requestOn = desired === 'on';
+    if (requestOn && (isShed('filter', effectivePriority, cfg)
+      || !levelHandler.isAllowed(effectivePriority))) requestOn = false;
+    const target = requestOn ? 'on' : 'off';
+    if (filter.output !== target) {
+      if (desired === 'on' && isShed('filter', effectivePriority, cfg)) {
         filter.loadShedOff = true;
       } else if (requestOn) {
         filter.loadShedOff = false;

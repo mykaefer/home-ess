@@ -460,6 +460,7 @@ function openDatabase() {
         group_id INTEGER,
         position INTEGER NOT NULL DEFAULT 0,
         switch_topic TEXT NOT NULL DEFAULT '',
+        remote_topic TEXT NOT NULL DEFAULT '',
         status_topic TEXT NOT NULL DEFAULT '',
         power_topic TEXT NOT NULL DEFAULT '',
         power_unit TEXT NOT NULL DEFAULT 'W',
@@ -992,6 +993,9 @@ function migrateMessSchaltActors(db) {
     const existing = new Set(rows.map((r) => r.name));
     if (!existing.has('desired_on')) {
       db.run('ALTER TABLE mess_schalt_actors ADD COLUMN desired_on INTEGER NOT NULL DEFAULT 0');
+    }
+    if (!existing.has('remote_topic')) {
+      db.run("ALTER TABLE mess_schalt_actors ADD COLUMN remote_topic TEXT NOT NULL DEFAULT ''");
     }
     if (!existing.has('always_on')) {
       db.run('ALTER TABLE mess_schalt_actors ADD COLUMN always_on INTEGER NOT NULL DEFAULT 0');

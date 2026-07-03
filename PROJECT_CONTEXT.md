@@ -122,8 +122,8 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   sind einzeilige Zeilen über die volle Breite, per Drag & Drop frei anordbar und
   zwischen Gruppen verschiebbar; Drop auf den Kopf einer zugeklappten Gruppe
   ordnet ans Gruppenende zu. Gruppenlose Geräte stehen im festen Abschnitt
-  **„Ohne Gruppe"** am Seitenende unter den Gruppen. Je Gerät bis zu vier MQTT-Topics:
-  **Schalten, Status, Leistung, Zähler** — mindestens Schalten, Leistung oder Zähler
+  **„Ohne Gruppe"** am Seitenende unter den Gruppen. Je Gerät bis zu fünf MQTT-Topics:
+  **Schalten, Remote, Status, Leistung, Zähler** — mindestens Schalten, Leistung oder Zähler
   ist Pflicht (`messen-schalten/actors.js`, Validierung). Ohne Status-Topic gilt das
   Schalt-Topic (sonst die Leistung) als Ist-Stand. Ist nur ein Zähler gesetzt, wird
   die **Leistung aus dem Zählerfortschritt** abgeleitet (`Δkwh/Δt`,
@@ -134,8 +134,15 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   startet bei 0; Topic-/Einheitenwechsel setzt nur die Baseline (`last_counter_raw`)
   zurück; Rückwärtssprünge des Rohwerts (Geräte-Reset) basieren neu, ohne den
   Stand zu ändern. Altbestände ohne internen Zähler übernehmen beim ersten
-  Snapshot einmalig den Rohwert (nahtlose Anzeige). Zwei **Betriebsarten** je Gerät mit
-  Schalt-Topic (Checkbox `always_on`):
+  Snapshot einmalig den Rohwert (nahtlose Anzeige). Das optionale `remote_topic`
+  ist ebenfalls ein abonnierter Zustand
+  (`messschalt:<id>:remote`) und wird in `messen-schalten/automation.js`
+  bidirektional mit dem Gerät synchronisiert. Eine Wertänderung am Remote-Topic
+  wird als Schaltwunsch behandelt; Schaltbefehle und neuere bestätigte
+  Gerätezustände werden zurückgespiegelt. Einschalten bleibt durch effektive
+  Priorität und Lastabwurf gegatet. Bei Ablehnung publiziert die Automation `0`
+  auf Schalt- und Remote-Topic, damit beide Zustände konsistent bleiben.
+  Zwei **Betriebsarten** je Gerät mit Schalt-Topic (Checkbox `always_on`):
   - **„Immer an"**: `messen-schalten/automation.js` registriert das Gerät am zentralen
     Betriebslevel-Handler mit seiner **effektiven Priorität** (eigene oder – per
     Checkbox – die der zugeordneten Gruppe; siehe [LEVEL_HANDLING.md](LEVEL_HANDLING.md))
@@ -148,8 +155,20 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
     das Gerät aus, bis es über den Zeilen-Toggle wieder eingeschaltet wird.
   Die Steuerschleife reagiert zusätzlich zum 30-s-Tick **entprellt auf MQTT-Änderungen**
   der `messschalt:`-Topics (`onValuesChanged`/`isRelevantEvent`), sodass Geräte bei
-  externem Schalten prompt nachgeregelt werden. Je Geräte-Zeile wird die
-  **Betriebsart** angezeigt: „Immer an · Priorität N", „manuell" oder „nur Messen".
+  externem Schalten prompt nachgeregelt werden.
+  Schaltbefehle werden pro Gerät als `pendingSwitch`/`pendingRemote` entprellt:
+  Solange das jeweilige Readback den Befehl nicht bestätigt, wird derselbe Wert
+  im 30-s-Tick nicht erneut publiziert. Nach Bestätigung kann eine spätere echte
+  Abweichung wieder genau einen Regelbefehl auslösen.
+  Zähler-Aggregation reagiert ebenfalls ereignisgesteuert auf neue
+  `messschalt:<id>:counter`-Werte; der 60-s-Job bleibt als Fallback bestehen.
+  `/messen-schalten/data` fordert ausschließlich lokale Adapter-Topics über das
+  zentral auf 5 s gedrosselte `mqttClient.requestStateValue` aktiv an. Normale
+  Broker-/Homematic-Topics werden niemals per `/get` gepollt, da dies reale
+  Funkabfragen und Duty-Cycle-Last auslösen kann. Tasmota bündelt lokale Reads
+  in einem maximal alle 3 s ausgelösten `STATUS 0`-Request.
+  Je Geräte-Zeile wird die **Betriebsart** angezeigt: „Immer an · Priorität N",
+  „manuell" oder „nur Messen".
   Optional kann ein Gerät für den **Lastabwurf** des optionalen Grid-Control-Moduls
   markiert werden (`load_shed_enabled`, `load_shed_phase` = L1/L2/L3/Drehstrom).
   Die Lastabwurf-Logik arbeitet **stufenweise je Phase**: Grundlage ist die je
