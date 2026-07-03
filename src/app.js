@@ -27,10 +27,13 @@ const modulesRoutes = require('./routes/modules');
 const poolRoutes = require('./routes/pool');
 const gridControlRoutes = require('./routes/grid-control');
 const wallboxRoutes = require('./routes/wallbox');
+const messenSchaltenRoutes = require('./routes/messen-schalten');
 const adapterRoutes = require('./routes/adapters');
 const statesRoutes = require('./routes/states');
 const { buildWallboxSnapshot, totalWallboxPowerWatt } = require('./wallbox/aggregation');
 const { listWallboxes } = require('./wallbox/boxes');
+const { buildActorSnapshot } = require('./messen-schalten/aggregation');
+const { recordFunctionSamples, currentFunctionPowerW } = require('./messen-schalten/functions');
 const prognosisRoutes = require('./routes/prognosis');
 const { initModules, isEnabled } = require('./modules');
 const adapterHost = require('./adapters/host');
@@ -40,7 +43,6 @@ const operatingLevelHandler = require('./operating-level/handler');
 const { recordConsumptionSample } = require('./prognosis/forecast');
 const { readBatterieData } = require('./batterie/config');
 const { updateBatteryEnergy } = require('./batterie/energy');
-const { buildEnvironmentSnapshot } = require('./mqtt/config');
 const prognosisBehavior = require('./prognosis/behavior');
 const jobs = require('./job-scheduler');
 const { updatePoolEnergyModel } = require('./pool/energy-model');
@@ -71,6 +73,7 @@ function createApp() {
   app.use(poolRoutes(db));
   app.use(gridControlRoutes(db));
   app.use(wallboxRoutes(db));
+  app.use(messenSchaltenRoutes(db));
   app.use(adapterRoutes(db));
   app.use(statesRoutes(db));
 
@@ -134,11 +137,15 @@ function createApp() {
       // Eigenverbrauch ist hier die physikalische Hausbilanz PV + Netzsaldo.
       // `summe` addiert die separat dargestellte Netzkomponente ein zweites Mal
       // und ist deshalb keine geeignete kumulierte Quelle für das Lernmodell.
+      // Funktionszugeordnete Geräte (Licht, Waschen, …) werden separat
+      // statistisiert und deshalb – wie Wallbox und Pool – aus dem gelernten
+      // Haus-Grundverbrauch herausgerechnet.
+      const functionPower = await currentFunctionPowerW(db, cache).catch(() => 0);
       await recordConsumptionSample(db, snapshot.raw.today.eigenverbrauch, cache, {
         batteryPower: readBatterieData(cache).power,
         wallboxPower: totalWallboxPowerWatt(cache, boxes),
         poolPower: poolEnergy.currentPowerW,
-        outdoorTemperature: buildEnvironmentSnapshot(cache).temperature.value,
+        functionPower,
       });
     } catch (_) {
       // Der nächste Minutentakt versucht es erneut.
@@ -158,6 +165,15 @@ function createApp() {
   };
   jobs.runExclusive('wallboxAggregation', updateWallbox).catch(() => {});
   jobs.schedule('wallboxAggregation', 60000, updateWallbox);
+
+  // Messen + Schalten: „Leistung aus Zählerfortschritt" je Gerät fortschreiben
+  // (Δkwh/Δt; 0 W nach über 10 min ohne Fortschritt) und danach die
+  // Funktions-Stundenstatistik (Licht, Waschen, …) integrieren.
+  const updateActors = () => buildActorSnapshot(db, mqttClient.getCache())
+    .then(() => recordFunctionSamples(db, mqttClient.getCache()))
+    .catch(() => {});
+  jobs.runExclusive('messSchaltAggregation', updateActors).catch(() => {});
+  jobs.schedule('messSchaltAggregation', 60000, updateActors);
 
   // Akku-Lade-/Entladeenergie fortschreiben (für die Bereinigung der
   // Jahres-Prognosebasis um die Netto-Akkuladung).

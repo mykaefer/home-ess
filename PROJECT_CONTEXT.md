@@ -114,18 +114,61 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   Reserve endet bei 30 %, Good beginnt bei 25 % und HalfCharged bei 50 % des
   nutzbaren Bereichs bis 100 %; High gilt über 90 %, Full über 98 %. Charged
   today wird persistent bis zum lokalen Tageswechsel gehalten.
+- **Messen + Schalten** (`/messen-schalten`, Kernseite, Menü unter Batterie):
+  Dashboard-artige Seite mit frei anlegbaren **Gruppen** und **Geräte-Kacheln**
+  (Aktoren), per Drag & Drop zwischen Gruppen bzw. ohne Gruppe anordbar (gemeinsame
+  Widget-Klassen/Logik wie das Dashboard). Je Gerät bis zu vier MQTT-Topics:
+  **Schalten, Status, Leistung, Zähler** — mindestens Schalten, Leistung oder Zähler
+  ist Pflicht (`messen-schalten/actors.js`, Validierung). Ohne Status-Topic gilt das
+  Schalt-Topic (sonst die Leistung) als Ist-Stand. Ist nur ein Zähler gesetzt, wird
+  die **Leistung aus dem Zählerfortschritt** abgeleitet (`Δkwh/Δt`,
+  `messen-schalten/aggregation.js`, 60-s-Job `messSchaltAggregation`) und fällt nach
+  über 10 min ohne Fortschritt auf 0 W. Zwei **Betriebsarten** je Gerät mit
+  Schalt-Topic (Checkbox `always_on`):
+  - **„Immer an"**: `messen-schalten/automation.js` registriert das Gerät am zentralen
+    Betriebslevel-Handler mit seiner **effektiven Priorität** (eigene oder – per
+    Checkbox – die der zugeordneten Gruppe; siehe [LEVEL_HANDLING.md](LEVEL_HANDLING.md))
+    und schaltet es **automatisch EIN, sobald das Level die Priorität erreicht** – und
+    hält es an (auch bei externem Ausschalten wieder ein). Unter der Priorität wird es
+    (auch extern eingeschaltet, `readActualOn`) **abgeschaltet**. Der Kachel-Toggle ist
+    hier **ausgeblendet**.
+  - **Manuell** (ohne „Immer an"): Unterhalb der effektiven Priorität greift ebenfalls
+    Zwangs-Aus und manuelles Einschalten wird abgewiesen. Nach erneuter Freigabe bleibt
+    das Gerät aus, bis es über den Kachel-Toggle wieder eingeschaltet wird.
+  Die Steuerschleife reagiert zusätzlich zum 30-s-Tick **entprellt auf MQTT-Änderungen**
+  der `messschalt:`-Topics (`onValuesChanged`/`isRelevantEvent`), sodass Geräte bei
+  externem Schalten prompt nachgeregelt werden. Je Kachel wird die
+  **Betriebsart** angezeigt: „Immer an · Priorität N", „manuell" oder „nur Messen";
+  Gruppen zeigen ihre Priorität in der Titelzeile. Die Werte der gesetzten Topics stehen im
+  Wertekatalog in Kategorie **Geräte** (`geraet.<id>.schalten/status/leistung/zaehler`),
+  die Leistungssummen der Gruppen in Kategorie **Verbrauchssummen**
+  (`verbrauchssumme.<id>.leistung`); jede Gruppe zeigt ihre Summe zusätzlich in der
+  Titelzeile. Live-Refresh über `GET /messen-schalten/data`. Gruppen **und** Geräte
+  besitzen zusätzlich ein Dropdown **Funktion** (Licht, Waschen, Warmwasser,
+  Heizung / Klima, Kochen; Geräte ohne eigene Funktion erben die der Gruppe,
+  `messen-schalten/functions.js`). Je zugeordneter Funktion entstehen zwei
+  Wertekatalog-Einträge in Kategorie **Funktionen** (`funktion.<key>.leistung`,
+  `funktion.<key>.verbrauchHeute`); die minütlich integrierten Stundenenergien
+  (`mess_schalt_function_hourly`) liefern der Prognose Stundenprofile je Funktion
+  und werden aus dem gelernten Haus-Grundverbrauch herausgerechnet.
 - **Systemprognose** (`/prognose`, `prognosis/forecast.js`): simuliert heute +
   drei Folgetage stündlich aus PV-Wetterprognose, Verbrauch und Batterie. Die
   nutzbare Batterie endet am Mindest-SoC; Lade- und Entladewirkungsgrad werden
-  getrennt gerechnet. Ungelernte Wochentage starten aus dem bereits beobachteten,
-  bereinigten heutigen Verlauf; in sehr frühen Tagesstunden folgen der jüngste
-  bereinigte Mittelwert und erst zuletzt das Jahresmittel. Diese Basis enthält
-  weder Wallbox, Netto-Akkuladung noch den separat modellierten Klimaanteil. Ein
-  Haushalts-Standardstundenprofil wird innerhalb
-  von 14 vollständigen Lerntagen durch das eigene Lastprofil ersetzt; der heutige
+  getrennt gerechnet. Ungelernte Wochentage übernehmen **ausschließlich die
+  Lernkurve des jüngsten abgeschlossenen Tages (Vortag)** als Vorlage — Kurvenform
+  und Tagesziel (`previousDayKey`/`previousDayKwh`, `selectUnlearnedDailyTarget`);
+  danach folgen gleitender Mittelwert und Jahresmittel, eine Hochrechnung des
+  laufenden Tages greift nur noch im echten Kaltstart ab 30 % Tagesanteil (die
+  frühere `heute/Tagesanteil`-Erstwahl explodierte morgens bei ungelernter
+  Profilform). Diese Basis enthält weder Wallbox, Netto-Akkuladung, Pool noch die
+  funktionszugeordneten Messen-+-Schalten-Lasten. Das BDEW-Standardprofil dient
+  nur noch als Kaltstart ohne einen einzigen abgeschlossenen Tag; der heutige
   Verlauf kalibriert die Restprognose begrenzt nach. 60-s-Sampling persistiert
   Tagesstände in `prognosis_daily_consumption` und Zählerdifferenzen stündlich in
-  `prognosis_hourly_consumption`. 38 Ergebnisse sind als `prognose.*` im
+  `prognosis_hourly_consumption`. Je Prognosetag zeigt die Seite ein
+  24-h-Stundenprofil-Balkendiagramm (Soll = Tagesziel × Wochentagskurve); bereits
+  gelernte Stunden von heute erscheinen als Ist-Balken in abweichender Farbe mit
+  Soll-Marke je Stunde (`model.todayByHour`). Die Ergebnisse sind als `prognose.*` im
   Wertekatalog verfügbar. Zusätzlich zeigt die Seite den persistenten
   `operating.autark`-Tagesstatus. Beim lokalen Tageswechsel wird ein
   Jahreszähler nur dann erhöht, wenn der Tag weiterhin autark endete; ein
@@ -167,13 +210,17 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   Tag/Woche/Monat/Jahr + Vorjahr, `batterie/energy.js`, 60-s-Job): Der
   Eigenverbrauch (PV + Netzbezug) enthält die Hausakku-Ladung
   physikalisch mit, ohne Bereinigung verschiebt sie den prognostizierten
-  Tagesbedarf nach oben. Aus den bereinigten Stundenwerten entstehen sieben getrennte, weich
-  gelernte Wochentagsprofile samt wochentagsabhängigem Tagesniveau; bei wenig
-  Daten wird zum globalen beziehungsweise Standard-Haushaltsprofil
-  zurückgeblendet. Das **Klimatisierungsmodell** bewertet den Mehrverbrauch heißer
-  Tage erst, wenn mindestens ein echter nicht-heißer Vergleichstag als Baseline
-  vorliegt — sonst würde es heiße Tage nur gegeneinander vergleichen und
-  fälschlich einen als „Hitzetag mit Klimatisierung" lernen.
+  Tagesbedarf nach oben; ebenso werden die per `mess_schalt_function_hourly`
+  erfassten Funktionslasten je Jahr abgezogen. Aus den bereinigten Stundenwerten
+  entstehen sieben getrennte, weich gelernte Wochentagsprofile samt
+  wochentagsabhängigem Tagesniveau; bei wenig Daten wird zur Vortageskurve
+  zurückgeblendet. Die **Funktions-Statistik** (`messen-schalten/functions.js`)
+  ersetzt das frühere Klimatisierungsmodell: Geräte/Gruppen mit Funktion (Licht,
+  Waschen, Warmwasser, Heizung / Klima, Kochen) werden minütlich zu
+  Stundenenergien integriert (plausible Intervalle ≤ 5 min, analog Lernmodell)
+  und in der Simulation je Stunde aufgeschlagen — Heizung / Klima nach
+  Außentemperatur-Buckets in 5-°C-Schritten (nächstgelegener gelernter Bucket,
+  Prognosetemperatur aus Open-Meteo), die übrigen Funktionen nach Wochentag.
   Persistente Verhaltensmodelle (`prognosis_config.behavior_model/_active`):
   `grid_parallel` bewertet ausschließlich Reserve und Netzbedarf bis zum nächsten
   Ladebeginn; spätere Tage sind wegen des verfügbaren Netzes irrelevant und
@@ -329,7 +376,7 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   wenn Modul aktiv) sowie **Betrieb** (`operating.*`, u. a. Autark und
   `operating.notstrom` = Notstrombetrieb). Die Kalibrierfaktoren sind bewusst
   **nicht** im Katalog (reine Diagnose). Zusätzlich **statistische Jahreswerte** je
-  Kennzahl (PV, Netzbezug, Eigenverbrauch, E-Auto gesamt, Klimatisierung): gestern,
+  Kennzahl (PV, Netzbezug, Eigenverbrauch, E-Auto gesamt): gestern,
   Minimum/Maximum inkl. Datum, Jahres-/Vorjahressumme aus `history/daily-metrics.js`
   (Tabelle `daily_metric_history`, je Metrik ein abgeschlossener Tageswert pro Tag);
   der **Durchschnitt** wird als Jahressumme ÷ angebrochene Tage gerechnet. Fehlt ein
@@ -428,6 +475,13 @@ src/
     planner.js            Lademodus-Logik (Privat/Beruflich/Immer voll) — reine Funktion
     automation.js         Steuerschleife: Tick, Level-Handler-Registrierung, Modus-Sync,
                           Überschussberechnung, Schalten via mqttClient.publish
+  messen-schalten/
+    groups.js             Gruppen-CRUD (Titel/Priorität/Position) + reorder
+    actors.js             Geräte-CRUD + Validierung (min. 1 Topic), effectivePriority,
+                          buildMessSchaltStateDefinitions, cacheKey, setDesiredOn
+    aggregation.js        Live-Werte je Gerät, Leistung aus Zählerfortschritt
+                          (buildActorSnapshot, 60-s-Job), Gruppen-Verbrauchssummen
+    automation.js         Steuerschleife: Level-Handler-Gate je Gerät mit Schalt-Topic
   output/
     internal-values.js    Katalog (PV, Strom, Batterie, Pool, Wallbox, Sonne)
     outputs.js            Output-CRUD
@@ -451,6 +505,8 @@ src/
                           + GET /grid-control/status + GET /grid-control/log
     wallbox.js            GET /wallbox + Box-CRUD + POST /wallbox/box/:id/mode/:mode
                           + GET /wallbox/data
+    messen-schalten.js    GET /messen-schalten + Gruppen-/Geräte-CRUD + /layout
+                          + POST /messen-schalten/actor/:id/switch/:state + /data
   views/
     components.js         escapeHtml, statusText
     value-catalog.js      Zentrale Wertekatalog-Routine (Liste + Client-Script)
@@ -467,6 +523,7 @@ src/
     grid-control.js       Grid-Control — Zustände, Config, Bestätigungs-Badges,
                           Protokoll-Panel (live Seite 1, paginiert)
     wallbox.js            Wallbox — Boxenliste (KPI je Box), Modus-Buttons, Config-Dialog
+    messen-schalten.js    Messen + Schalten — Gruppen/Geräte-Kacheln, Drag&Drop, Dialoge
 public/styles.css         Einziges statisches Asset
 data/app.db               SQLite (gitignored)
 MQTT.md                   Referenz: ioBroker-MQTT-Regeln
@@ -533,12 +590,28 @@ MQTT.md                   Referenz: ioBroker-MQTT-Regeln
 - `wallbox_daily_consumption(wallbox_id, day_key, consumption_kwh, completed, updated_at)`
 - `wallbox_hourly_consumption(wallbox_id, day_key, hour, consumption_kwh)` —
   getrennte Lernhistorie für Wochentagsbedarf und Ladezeit je Box.
+- `mess_schalt_groups(id, title, priority 1–5, position, function_key)` —
+  Messen-+-Schalten-Gruppen; Priorität wird von Geräten mit `use_group_priority`
+  übernommen, `function_key` von Geräten ohne eigene Funktion geerbt.
+- `mess_schalt_actors(id, name, group_id, position, switch_topic, status_topic,
+  power_topic, power_unit 'W'|'kW', counter_topic, counter_unit 'Wh'|'kWh',
+  priority 1–5, use_group_priority, always_on, desired_on, function_key)` — je
+  Gerät eine Zeile; `always_on` = automatisch übers Betriebslevel (sonst manueller
+  Toggle, direkt am Schalt-Topic). `desired_on` ist ungenutzter Altbestand.
+- `mess_schalt_actor_state(actor_id, last_counter_raw, last_progress_ts,
+  derived_power_w)` — Ableitungszustand für „Leistung aus Zählerfortschritt"
+  (0 W nach über 10 min ohne Fortschritt).
+- `mess_schalt_function_hourly(function_key, day_key, hour, consumption_kwh,
+  temperature)` + `mess_schalt_function_state(id=1, last_sample_ts)` — je Funktion
+  und Stunde integrierte Energie samt maximaler Außentemperatur der Stunde;
+  Grundlage der Funktions-Stundenprofile der Prognose (Heizung / Klima nach
+  5-°C-Temperatur-Buckets, übrige Funktionen nach Wochentag). 400 Tage Aufbewahrung.
 - `battery_energy_state(id=1, day_charge/discharge_kwh, week/month/year_charge/
   discharge_offset, previous_year_charge/discharge_total, last_power_ts,
   last_rollover_date, week/month/year_key)` — per Leistungsintegration erfasste
   Netto-Akkuladung nach Tag/Woche/Monat/Jahr + Vorjahr.
 - `daily_metric_history(metric, day_key, value, updated_at)` — je Kennzahl
-  (`pv`, `strom.netzbezug`, `strom.eigenverbrauch`, `klima`) ein abgeschlossener
+  (`pv`, `strom.netzbezug`, `strom.eigenverbrauch`) ein abgeschlossener
   Tageswert pro Tag; Grundlage für die statistischen Jahreswerte (gestern,
   Minimum/Maximum inkl. Datum) im Wert-Katalog. 400 Tage Aufbewahrung.
 
@@ -547,8 +620,9 @@ MQTT.md                   Referenz: ioBroker-MQTT-Regeln
 > Sonne), Stromverbrauch (Leistungen, Energien je Zeitraum, Zählersummen),
 > Sonnenintensität, **PV-Prognose** (Tagesertrag heute/morgen/+2/+3 sowie heute
 > bisher / noch erwartet), **Systemprognose** (38 Werte), **Batterie** (Messwerte,
-> Energie/Restzeit und abgeleitete Zustände), **Betriebszustand**, **Grid-Control**
-> sowie **Pool** und **Wallbox** (wenn das jeweilige Modul aktiv ist). Jeder Eintrag
+> Energie/Restzeit und abgeleitete Zustände), **Betriebszustand**, **Grid-Control**,
+> **Geräte** und **Verbrauchssummen** (Messen + Schalten) sowie **Pool** und
+> **Wallbox** (wenn das jeweilige Modul aktiv ist). Jeder Eintrag
 > hat `id`, `label`, `value`, `display`.
 
 ## MQTT Ad-hoc-Subscriptions (Pool und Output-Readback)

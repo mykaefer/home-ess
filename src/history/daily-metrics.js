@@ -1,7 +1,7 @@
 'use strict';
 
 // Gemeinsame Ablage für abgeschlossene Tageswerte einzelner Kennzahlen (PV-Ertrag,
-// Netzbezug, Eigenverbrauch, Klimatisierungs-Mehrverbrauch, ...). Jede Kennzahl
+// Netzbezug, Eigenverbrauch, ...). Jede Kennzahl
 // schreibt genau einmal je abgeschlossenem Tag (beim Tageswechsel der Quelle);
 // daraus lässt sich die Jahres-Statistik (Durchschnitt/Minimum/Maximum inkl.
 // Datum/Summe) für den Wertekatalog ableiten. 400 Tage Aufbewahrung decken das

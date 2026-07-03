@@ -12,6 +12,7 @@ const NAV_CORE = [
   { path: '/stromverbrauch', label: 'Stromverbrauch', section: 'main' },
   { path: '/photovoltaik', label: 'Photovoltaik', section: 'main' },
   { path: '/batterie', label: 'Batterie', section: 'main' },
+  { path: '/messen-schalten', label: 'Messen + Schalten', section: 'main' },
   { path: '/prognose', label: 'Prognose', section: 'main' },
   {
     path: '/adapter',

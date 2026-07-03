@@ -432,6 +432,72 @@ function openDatabase() {
       )`
     );
     db.run('CREATE INDEX IF NOT EXISTS idx_wallbox_daily_day ON wallbox_daily_consumption (day_key, completed)');
+    // Messen + Schalten: frei anlegbare Gruppen (wie Dashboard-Gruppen) mit einer
+    // Priorität, die zugeordnete Geräte optional übernehmen können.
+    db.run(
+      `CREATE TABLE IF NOT EXISTS mess_schalt_groups (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        priority INTEGER NOT NULL DEFAULT 4,
+        position INTEGER NOT NULL DEFAULT 0,
+        function_key TEXT NOT NULL DEFAULT ''
+      )`
+    );
+    // Messen + Schalten: je Gerät (Aktor) bis zu vier MQTT-Topics (schalten/status/
+    // leistung/zähler). desired_on hält den persistenten Wunschzustand des Kachel-
+    // Toggles; er wird immer über das Betriebslevel gegatet. use_group_priority = 1
+    // ⇒ Gerät erhält die Priorität seiner Gruppe.
+    db.run(
+      `CREATE TABLE IF NOT EXISTS mess_schalt_actors (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL DEFAULT '',
+        group_id INTEGER,
+        position INTEGER NOT NULL DEFAULT 0,
+        switch_topic TEXT NOT NULL DEFAULT '',
+        status_topic TEXT NOT NULL DEFAULT '',
+        power_topic TEXT NOT NULL DEFAULT '',
+        power_unit TEXT NOT NULL DEFAULT 'W',
+        counter_topic TEXT NOT NULL DEFAULT '',
+        counter_unit TEXT NOT NULL DEFAULT 'kWh',
+        priority INTEGER NOT NULL DEFAULT 4,
+        use_group_priority INTEGER NOT NULL DEFAULT 0,
+        desired_on INTEGER NOT NULL DEFAULT 0,
+        always_on INTEGER NOT NULL DEFAULT 0,
+        function_key TEXT NOT NULL DEFAULT ''
+      )`
+    );
+    // Ableitungszustand für „Leistung aus Zählerfortschritt": zuletzt gesehener
+    // Zählerstand, Zeitpunkt des letzten Fortschritts und die daraus abgeleitete
+    // Leistung. Bleibt der Fortschritt > 10 min aus, fällt die Leistung auf 0 W.
+    db.run(
+      `CREATE TABLE IF NOT EXISTS mess_schalt_actor_state (
+        actor_id INTEGER PRIMARY KEY,
+        last_counter_raw REAL,
+        last_progress_ts INTEGER,
+        derived_power_w REAL,
+        FOREIGN KEY (actor_id) REFERENCES mess_schalt_actors(id) ON DELETE CASCADE
+      )`
+    );
+    // Funktions-Statistik (Licht, Waschen, Warmwasser, Heizung / Klima, Kochen):
+    // je Funktion und Stunde die integrierte Energie der zugeordneten Geräte plus
+    // die höchste Außentemperatur der Stunde (Basis der Temperatur-Bucket-Profile
+    // von Heizung / Klima).
+    db.run(
+      `CREATE TABLE IF NOT EXISTS mess_schalt_function_hourly (
+        function_key TEXT NOT NULL,
+        day_key TEXT NOT NULL,
+        hour INTEGER NOT NULL,
+        consumption_kwh REAL NOT NULL DEFAULT 0,
+        temperature REAL,
+        PRIMARY KEY (function_key, day_key, hour)
+      )`
+    );
+    db.run(
+      `CREATE TABLE IF NOT EXISTS mess_schalt_function_state (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        last_sample_ts INTEGER
+      )`
+    );
     // Adapter-Instanzen: je Zeile eine benannte Instanz eines Adapters (aus
     // /adapter/<adapter_id>). settings hält die instanzeigenen Einstellungen als
     // JSON. Es wird stets auf dieselben Adapterdateien zugegriffen.
@@ -463,7 +529,7 @@ function openDatabase() {
       )`
     );
     // Historisierte, abgeschlossene Tageswerte einzelner Kennzahlen (PV-Ertrag,
-    // Netzbezug, Eigenverbrauch, Klimatisierungs-Mehrverbrauch) für die
+    // Netzbezug, Eigenverbrauch) für die
     // Jahres-Statistik (Durchschnitt/Minimum/Maximum inkl. Datum) im
     // Wertekatalog. Wird je Kennzahl beim Tageswechsel der Quelle einmalig
     // geschrieben und danach nicht mehr verändert.
@@ -502,6 +568,7 @@ function openDatabase() {
     seedPoolConfig(db);
     migratePoolConfig(db);
     migrateWallboxes(db);
+    migrateMessSchaltActors(db);
   });
 
   return db;
@@ -898,6 +965,31 @@ function migrateWallboxes(db) {
     }
     if (!existing.has('stall_power_w')) {
       db.run('ALTER TABLE wallboxes ADD COLUMN stall_power_w REAL NOT NULL DEFAULT 200');
+    }
+  });
+}
+
+// Messen-+-Schalten-Geräte erhielten desired_on bzw. always_on (Modus „Immer an")
+// nachträglich; Altbestände ergänzen.
+function migrateMessSchaltActors(db) {
+  db.all('PRAGMA table_info(mess_schalt_actors)', (err, rows) => {
+    if (err || !Array.isArray(rows) || rows.length === 0) return;
+    const existing = new Set(rows.map((r) => r.name));
+    if (!existing.has('desired_on')) {
+      db.run('ALTER TABLE mess_schalt_actors ADD COLUMN desired_on INTEGER NOT NULL DEFAULT 0');
+    }
+    if (!existing.has('always_on')) {
+      db.run('ALTER TABLE mess_schalt_actors ADD COLUMN always_on INTEGER NOT NULL DEFAULT 0');
+    }
+    if (!existing.has('function_key')) {
+      db.run("ALTER TABLE mess_schalt_actors ADD COLUMN function_key TEXT NOT NULL DEFAULT ''");
+    }
+  });
+  db.all('PRAGMA table_info(mess_schalt_groups)', (err, rows) => {
+    if (err || !Array.isArray(rows) || rows.length === 0) return;
+    const existing = new Set(rows.map((r) => r.name));
+    if (!existing.has('function_key')) {
+      db.run("ALTER TABLE mess_schalt_groups ADD COLUMN function_key TEXT NOT NULL DEFAULT ''");
     }
   });
 }

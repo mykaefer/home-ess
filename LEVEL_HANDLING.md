@@ -6,7 +6,10 @@ Schritt-für-Schritt-Referenz gedacht, damit dafür nicht jedes Mal das gesamte 
 analysiert werden muss. Referenz-Implementierungen sind Filter- und Solarpumpe in
 [`src/pool/automation.js`](src/pool/automation.js) sowie die Wallboxen in
 [`src/wallbox/automation.js`](src/wallbox/automation.js) (Priorität je Lademodus,
-mehrere Instanzen, Registrierung/Abmeldung beim Hinzufügen/Löschen einer Box).
+mehrere Instanzen, Registrierung/Abmeldung beim Hinzufügen/Löschen einer Box) sowie
+die generischen Geräte in [`src/messen-schalten/automation.js`](src/messen-schalten/automation.js)
+(alle schaltbaren Geräte: Zwangs-Aus unter der effektiven Priorität; mit „Immer an"
+zusätzlich Auto-Ein nach erneuter Freigabe).
 
 ---
 

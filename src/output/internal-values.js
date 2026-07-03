@@ -24,6 +24,10 @@ const { loadPoolConfig, readPoolValue } = require('../pool/config');
 const { listWallboxes } = require('../wallbox/boxes');
 const { readWallboxValues, readAggregateDailyHistory } = require('../wallbox/aggregation');
 const wallboxAutomation = require('../wallbox/automation');
+const { listActors } = require('../messen-schalten/actors');
+const { listGroups: listMessSchaltGroups } = require('../messen-schalten/groups');
+const { readActorValues, readGroupSums } = require('../messen-schalten/aggregation');
+const { readFunctionValues } = require('../messen-schalten/functions');
 const { isEnabled } = require('../modules');
 const { getState: getGridControlState } = require('../grid-control/automation');
 const operatingState = require('../operating-state');
@@ -47,6 +51,9 @@ const VALUE_CATEGORIES = [
   'Netzsteuerung',
   'Pool',
   'Wallbox',
+  'Geräte',
+  'Funktionen',
+  'Verbrauchssummen',
   'Betrieb',
   'Sonstiges',
 ];
@@ -60,6 +67,9 @@ const CATEGORY_BY_PREFIX = [
   ['grid.', 'Netzsteuerung'],
   ['pool.', 'Pool'],
   ['wallbox.', 'Wallbox'],
+  ['geraet.', 'Geräte'],
+  ['funktion.', 'Funktionen'],
+  ['verbrauchssumme.', 'Verbrauchssummen'],
   ['operating.', 'Betrieb'],
 ];
 
@@ -418,7 +428,6 @@ async function buildInternalValues(db, cache) {
   });
   const prognosisToday = prognosis.today;
   const prognosisTomorrow = prognosis.days[1] || null;
-  const coolingModel = consumptionModel.coolingModel || { enabled: false, sampleCount: 0, kwhPerDegree: 0 };
   const freeBatteryKwh = batteryRemainingKwh(batCfg, bat.soc);
   const consumptionToSunrise = consumptionModel.consumptionToSunrise;
   const recentDailyProjection = consumptionModel.recentHourKwh == null
@@ -507,27 +516,8 @@ async function buildInternalValues(db, cache) {
     'Prognose verfügbare Energie aus Akku und PV heute',
     prognosis.available ? prognosis.initialStored + prognosisToday.pvKwh : null
   ));
-  entries.push(boolEntry('prognose.klimaModellAktiv', 'Prognose Klimatisierungsmodell aktiv', coolingModel.enabled));
-  entries.push(numberEntry('prognose.klimaLerntage', 'Prognose Klimatisierung Lerntage', coolingModel.sampleCount));
-  entries.push(decimalEntry('prognose.klimaKwhProGrad', 'Prognose Klimatisierung Mehrverbrauch pro Grad', coolingModel.kwhPerDegree, 'kWh/°C'));
-  entries.push(energyEntry('prognose.klimaMehrverbrauchHeute', 'Prognose Klimatisierung Mehrverbrauch heute', prognosisToday.coolingKwh));
-  entries.push(energyEntry('prognose.klimaMehrverbrauchMorgen', 'Prognose Klimatisierung Mehrverbrauch morgen', prognosisTomorrow ? prognosisTomorrow.coolingKwh : null));
-
-  // Klimatisierung – Jahres-Statistik aus dem historisierten Ist-Schätzwert
-  // (gelerntes Modell × gemessene Hitzegrade des jeweils abgeschlossenen Tages;
-  // keine direkte Messung, ab Einführung dieser Funktion, keine rückwirkende
-  // Befüllung möglich).
-  const klimaYesterday = await getDailyMetricValue(db, 'klima', yesterdayKey);
-  const klimaYearStats = await computeYearStats(db, 'klima', calendar.yearKey);
-  const klimaPreviousYearStats = await computeYearStats(db, 'klima', String(Number(calendar.yearKey) - 1));
-  entries.push(energyEntry('prognose.klimaMehrverbrauchGestern', 'Prognose Klimatisierung Mehrverbrauch gestern (Schätzung)', orZero(klimaYesterday)));
-  entries.push(energyEntry('prognose.klimaMehrverbrauchDurchschnittJahr', 'Prognose Klimatisierung Mehrverbrauch Durchschnitt dieses Jahr', avgPerDay(klimaYearStats.sum, dayOfYear)));
-  entries.push(energyEntry('prognose.klimaMehrverbrauchMinimumJahr', 'Prognose Klimatisierung Mehrverbrauch Minimum dieses Jahr', orZero(klimaYearStats.min)));
-  entries.push(dateEntry('prognose.klimaMehrverbrauchMinimumJahrDatum', 'Prognose Klimatisierung Mehrverbrauch Minimum dieses Jahr – Datum', orYearStart(klimaYearStats.minDate, calendar.yearKey)));
-  entries.push(energyEntry('prognose.klimaMehrverbrauchMaximumJahr', 'Prognose Klimatisierung Mehrverbrauch Maximum dieses Jahr', orZero(klimaYearStats.max)));
-  entries.push(dateEntry('prognose.klimaMehrverbrauchMaximumJahrDatum', 'Prognose Klimatisierung Mehrverbrauch Maximum dieses Jahr – Datum', orYearStart(klimaYearStats.maxDate, calendar.yearKey)));
-  entries.push(energyEntry('prognose.klimaMehrverbrauchSummeJahr', 'Prognose Klimatisierung Mehrverbrauch Summe dieses Jahr', orZero(klimaYearStats.sum)));
-  entries.push(energyEntry('prognose.klimaMehrverbrauchSummeVorjahr', 'Prognose Klimatisierung Mehrverbrauch Summe Vorjahr', orZero(klimaPreviousYearStats.sum)));
+  entries.push(energyEntry('prognose.funktionsVerbrauchHeute', 'Prognose Funktionslasten heute noch', prognosisToday.functionsKwh));
+  entries.push(energyEntry('prognose.funktionsVerbrauchMorgen', 'Prognose Funktionslasten morgen', prognosisTomorrow ? prognosisTomorrow.functionsKwh : null));
   entries.push(energyEntry('prognose.wallboxVerbrauchHeute', 'Prognose Wallbox-Verbrauch heute noch', prognosisToday.wallboxKwh));
   entries.push(energyEntry('prognose.wallboxVerbrauchMorgen', 'Prognose Wallbox-Verbrauch morgen', prognosisTomorrow ? prognosisTomorrow.wallboxKwh : null));
   for (const box of (consumptionModel.wallboxModel && consumptionModel.wallboxModel.boxes) || []) {
@@ -614,6 +604,46 @@ async function buildInternalValues(db, cache) {
     entries.push(boolEntry('grid.byTemperature', 'Grid by Temperature', grid.gridByTemperature));
     entries.push(boolEntry('grid.byLoad', 'Grid by Load', grid.gridByLoad));
     entries.push(boolEntry('grid.actual', 'Grid actual', grid.gridActual));
+  }
+
+  // Messen + Schalten: je Gerät die Werte der gesetzten Topics (Kategorie „Geräte"),
+  // je Gruppe die Verbrauchssumme der Leistung (Kategorie „Verbrauchssummen").
+  const messSchaltActors = await listActors(db);
+  if (messSchaltActors.length) {
+    const messSchaltGroups = await listMessSchaltGroups(db);
+    const actorValues = await readActorValues(db, cache, messSchaltActors);
+    const valueByActorId = new Map(actorValues.map((v) => [v.id, v]));
+    for (const actor of messSchaltActors) {
+      const v = valueByActorId.get(actor.id) || {};
+      if (actor.switchTopic) {
+        entries.push(boolEntry(`geraet.${actor.id}.schalten`, `${actor.name} – Schalten`, v.switchOn === true));
+      }
+      entries.push(boolEntry(`geraet.${actor.id}.status`, `${actor.name} – Status`, v.statusOn === true));
+      if (actor.powerTopic || actor.counterTopic) {
+        entries.push(powerEntry(`geraet.${actor.id}.leistung`, `${actor.name} – Leistung`, v.powerW));
+      }
+      if (actor.counterTopic) {
+        entries.push(energyEntry(`geraet.${actor.id}.zaehler`, `${actor.name} – Zähler`, v.counterKwh));
+      }
+    }
+    const groupSums = readGroupSums(messSchaltGroups, actorValues);
+    for (const group of messSchaltGroups) {
+      const sum = groupSums.get(group.id);
+      entries.push(powerEntry(
+        `verbrauchssumme.${group.id}.leistung`,
+        `${group.title} – Verbrauch (Leistung)`,
+        sum ? sum.powerW : null
+      ));
+    }
+
+    // Funktionen (Licht, Waschen, Warmwasser, Heizung / Klima, Kochen): je
+    // zugeordneter Funktion die aktuelle Leistungssumme und der heute bereits
+    // integrierte Verbrauch (Kategorie „Funktionen").
+    const functionValues = await readFunctionValues(db, cache).catch(() => []);
+    for (const fn of functionValues) {
+      entries.push(powerEntry(`funktion.${fn.key}.leistung`, `Funktion ${fn.label} – Leistung`, fn.powerW));
+      entries.push(energyEntry(`funktion.${fn.key}.verbrauchHeute`, `Funktion ${fn.label} – Verbrauch heute`, fn.todayKwh));
+    }
   }
 
   for (const entry of entries) entry.category = categoryForId(entry.id);

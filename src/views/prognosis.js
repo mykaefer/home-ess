@@ -32,10 +32,55 @@ function statusInfo(status) {
   return { label: 'Mindeststand in Sicht', detail: 'Vor dem nächsten sichtbaren Ladebeginn wird der Mindest-SoC voraussichtlich erreicht.', css: 'bad' };
 }
 
-function renderDays(days = []) {
+function formatShortEnergy(value) {
+  const number = Number(value);
+  return Number.isFinite(number)
+    ? `${number.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} kWh`
+    : '—';
+}
+
+// 24-h-Stundenprofil eines Prognosetages: erwarteter Hausverbrauch je Stunde
+// (Soll, Tagesziel × Wochentagskurve). Für heute werden bereits gelernte
+// Stunden als Ist-Balken in abweichender Farbe gezeigt; die Soll-Marke der
+// Stunde bleibt sichtbar, sodass die Abweichung direkt ablesbar ist.
+function renderHourProfile(day, model, isToday) {
+  const profile = (model.profilesByWeekday && model.profilesByWeekday[day.weekday]) || model.profile || [];
+  const target = model.dailyTargetsByWeekday && model.dailyTargetsByWeekday[day.weekday] != null
+    ? model.dailyTargetsByWeekday[day.weekday]
+    : model.dailyTarget;
+  const plan = Array.from({ length: 24 }, (_, hour) => Math.max(0, (Number(target) || 0) * (Number(profile[hour]) || 0)));
+  const actualByHour = isToday && Array.isArray(model.todayByHour) ? model.todayByHour : null;
+  const currentHour = isToday && model.local && model.local.time ? Number(model.local.time.hours) || 0 : null;
+  const max = Math.max(0.1, ...plan, ...(actualByHour || []).map((value) => Number(value) || 0));
+  const cells = Array.from({ length: 24 }, (_, hour) => {
+    const isLearned = isToday && currentHour != null && hour < currentHour;
+    const actual = isLearned ? Math.max(0, Number(actualByHour && actualByHour[hour]) || 0) : null;
+    const value = isLearned ? actual : plan[hour];
+    const heightPct = Math.min(100, value / max * 100);
+    const planPct = Math.min(100, plan[hour] / max * 100);
+    const deviation = isLearned && plan[hour] > 0.01
+      ? ` (${actual >= plan[hour] ? '+' : ''}${Math.round((actual / plan[hour] - 1) * 100)} %)`
+      : '';
+    const title = isLearned
+      ? `${String(hour).padStart(2, '0')} Uhr · Ist ${formatShortEnergy(actual)} · Soll ${formatShortEnergy(plan[hour])}${deviation}`
+      : `${String(hour).padStart(2, '0')} Uhr · Soll ${formatShortEnergy(plan[hour])}`;
+    const marker = isLearned ? `<i class="fh-plan" style="bottom:${planPct.toFixed(1)}%"></i>` : '';
+    return `<div class="fh-cell" title="${escapeHtml(title)}">${marker}<span class="fh-bar fh-bar--${isLearned ? 'ist' : 'soll'}" style="height:${heightPct.toFixed(1)}%"></span></div>`;
+  }).join('');
+  const legend = isToday
+    ? `<div class="forecast-hours-legend"><span><i class="fh-key fh-key--ist"></i>Ist (gelernt)</span><span><i class="fh-key fh-key--soll"></i>Soll (Profil)</span><span><i class="fh-key fh-key--plan"></i>Soll-Marke</span></div>`
+    : '';
+  return `<div class="forecast-hours">
+        <div class="forecast-hours-chart">${cells}</div>
+        <div class="forecast-hours-axis"><span>0</span><span>6</span><span>12</span><span>18</span><span>24 Uhr</span></div>
+        ${legend}
+      </div>`;
+}
+
+function renderDays(days = [], model = {}) {
   if (!days.length) return '<p class="muted">Noch keine PV-Wetterprognose verfügbar. Bitte Standort und PV-Anlagen prüfen.</p>';
   const max = Math.max(1, ...days.flatMap((day) => [day.pvKwh || 0, day.loadKwh || 0]));
-  return days.map((day) => {
+  return days.map((day, index) => {
     const pvWidth = Math.max(2, (day.pvKwh || 0) / max * 100);
     const loadWidth = Math.max(2, (day.loadKwh || 0) / max * 100);
     const result = day.gridKwh > 0.05
@@ -49,8 +94,13 @@ function renderDays(days = []) {
       .join(' · ');
     return `<article class="forecast-day">
       <div class="forecast-day-head"><strong>${escapeHtml(day.label)}</strong>${result}</div>
-      <div class="forecast-bar-row"><span>PV</span><div class="forecast-bar-track"><i class="forecast-bar forecast-bar--pv" style="width:${pvWidth.toFixed(1)}%"></i></div><b>${formatEnergy(day.pvKwh)}</b></div>
-      <div class="forecast-bar-row"><span>Bedarf</span><div class="forecast-bar-track"><i class="forecast-bar forecast-bar--load" style="width:${loadWidth.toFixed(1)}%"></i></div><b>${formatEnergy(day.loadKwh)}</b></div>
+      <div class="forecast-day-body">
+        <div class="forecast-day-bars">
+          <div class="forecast-bar-row"><span>PV</span><div class="forecast-bar-track"><i class="forecast-bar forecast-bar--pv" style="width:${pvWidth.toFixed(1)}%"></i></div><b>${formatEnergy(day.pvKwh)}</b></div>
+          <div class="forecast-bar-row"><span>Bedarf</span><div class="forecast-bar-track"><i class="forecast-bar forecast-bar--load" style="width:${loadWidth.toFixed(1)}%"></i></div><b>${formatEnergy(day.loadKwh)}</b></div>
+        </div>
+        ${renderHourProfile(day, model, index === 0)}
+      </div>
       ${wallboxes ? `<div class="forecast-day-foot">davon Wallbox: ${escapeHtml(wallboxes)}</div>` : ''}
       <div class="forecast-day-foot">Batterie am Tagesende <strong>${formatPercent(day.batterySocEnd)}</strong>${day.batteryFull ? ' · wird voraussichtlich voll' : ''}</div>
     </article>`;
@@ -82,10 +132,13 @@ function renderPrognosis({ prognosis, message = '', error = '' } = {}) {
   const weekdaySamples = currentWeekday == null || !model.weekdayProfileDays
     ? 0
     : model.weekdayProfileDays[currentWeekday] || 0;
-  const coolingModel = model.coolingModel || { enabled: false, sampleCount: 0, kwhPerDegree: 0 };
-  const coolingText = coolingModel.enabled
-    ? `${coolingModel.sampleCount} Hitzetage · ${Number(coolingModel.kwhPerDegree).toFixed(2).replace('.', ',')} kWh/°C`
-    : `lernt noch · ${coolingModel.sampleCount || 0}/2 Hitzetage`;
+  const formatDayKey = (dayKey) => {
+    const [year, month, day] = String(dayKey || '').split('-');
+    return day ? `${day}.${month}.${year}` : '—';
+  };
+  const templateText = weekdaySamples > 0
+    ? `${escapeHtml(WEEKDAY_NAMES[currentWeekday])} · ${weekdaySamples} Lerntage`
+    : (model.previousDayKey ? `Vortageskurve vom ${escapeHtml(formatDayKey(model.previousDayKey))}` : 'Standardprofil (Kaltstart)');
   const wallboxFacts = ((model.wallboxModel && model.wallboxModel.boxes) || []).map((box) => {
     const expected = box.dailyByWeekday[currentWeekday] || 0;
     const samples = box.samplesByWeekday[currentWeekday] || 0;
@@ -128,7 +181,7 @@ function renderPrognosis({ prognosis, message = '', error = '' } = {}) {
 
         <section class="panel-card">
           <div class="panel-head"><div><h2>Energiebilanz</h2><p class="muted">PV-Ertrag, dynamischer Verbrauch und Batterieverlauf für heute plus drei Tage.</p></div></div>
-          <div class="forecast-days">${renderDays(simulation.days)}</div>
+          <div class="forecast-days">${renderDays(simulation.days, model)}</div>
         </section>
 
         <div class="content-grid content-grid--split forecast-details">
@@ -138,11 +191,10 @@ function renderPrognosis({ prognosis, message = '', error = '' } = {}) {
               <div><dt>Jahresmittel</dt><dd>${formatEnergy(model.annualAverage)}</dd></div>
               <div><dt>Gleitender Mittelwert</dt><dd>${escapeHtml(recentText)}</dd></div>
               <div><dt>Gelernte volle Tage</dt><dd>${model.historyDays}</dd></div>
-              <div><dt>Aktive Verbrauchskurve</dt><dd>${currentWeekday == null ? '—' : `${escapeHtml(WEEKDAY_NAMES[currentWeekday])} · ${weekdaySamples} Lerntage`}</dd></div>
-              <div><dt>Klimatisierungsmodell</dt><dd>${escapeHtml(coolingText)}</dd></div>
-              <div><dt>Kühlbedarf heute noch</dt><dd>${formatEnergy(today.coolingKwh)}</dd></div>
+              <div><dt>Aktive Verbrauchskurve</dt><dd>${currentWeekday == null ? '—' : templateText}</dd></div>
               <div><dt>Tageskalibrierung</dt><dd>${escapeHtml(calibrationText)}</dd></div>
-              <div><dt>Prognose Hausverbrauch</dt><dd>${formatEnergy(model.expectedToday + (today.coolingKwh || 0))}</dd></div>
+              <div><dt>Prognose Hausverbrauch</dt><dd>${formatEnergy(model.expectedToday)}</dd></div>
+              <div><dt>Funktionslasten heute noch</dt><dd>${formatEnergy(today.functionsKwh)}</dd></div>
               <div><dt>Wallboxbedarf heute noch</dt><dd>${formatEnergy(today.wallboxKwh)}</dd></div>
               ${wallboxFacts}
               <div><dt>Hausverbrauch heute ohne Akku/Wallbox</dt><dd>${formatEnergy(model.today)}</dd></div>

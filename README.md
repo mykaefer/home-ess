@@ -59,6 +59,22 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
     vorliegen, live aktualisiert via SSE.
   - Mindest-SoC mit MQTT-Ziel-Topic und 5-%-Schieberegler sowie Batterietyp,
     Zellzahl, Kapazität in Ah und manuell anpassbaren unteren/oberen Spannungsgrenzen.
+- 🔌 **Messen + Schalten** (Menü unter Batterie) — Dashboard-artige Seite für
+  schaltbare/messbare Geräte.
+  - Frei anlegbare **Gruppen** und **Geräte-Kacheln**, per Drag & Drop zwischen
+    Gruppen oder ohne Gruppe anordbar.
+  - Je Gerät bis zu vier MQTT-Topics: **Schalten, Status, Leistung, Zähler**
+    (mindestens Schalten, Leistung oder Zähler). Ohne Status-Topic gilt das
+    Schalt-Topic (sonst die Leistung) als Ist-Stand. Ist nur ein Zähler gesetzt,
+    wird die Leistung aus dem Zählerfortschritt abgeleitet und fällt nach über
+    10 Minuten ohne Fortschritt auf 0 W.
+  - Alle Geräte mit Schalt-Topic laufen über das **Betriebslevel-Gate** und werden
+    unterhalb ihrer Priorität ausgeschaltet; Einschalten ist dann auch manuell nicht
+    erlaubt. **„Immer an"** schaltet bei erneuter Freigabe automatisch wieder ein.
+    Ohne diese Option bleibt das Gerät aus, bis es über den Kachel-Schalter manuell
+    eingeschaltet wird. Priorität je Gerät oder – per Häkchen – von der Gruppe.
+  - Die Werte der gesetzten Topics stehen im Wertekatalog (Kategorie **Geräte**);
+    die Gruppen bilden **Verbrauchssummen** und zeigen sie in der Titelzeile.
 - 📈 **Prognose** — Energiebilanz für heute plus drei Tage direkt unterhalb der
   Batterie im Menü. Kombiniert PV-Wetterprognose, nutzbare Batterieladung und ein
   selbstlernendes Verbrauchsmodell (bereinigter Tagesverlauf, gewichteter 28-Tage-Mittelwert,
@@ -74,11 +90,17 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
   wird mit Tag und Uhrzeit ausgewiesen; Tagesend-SoC bleibt als Zusatzwert sichtbar.
   Für jeden Wochentag wird eine eigene Verbrauchskurve gelernt. Da der aus
   Netzbezug und PV abgeleitete Gesamtverbrauch auch Akkuladung enthält, wird die
-  signierte Batterieleistung vor dem Lernen herausgerechnet. Wallbox,
-  Klimatisierung und Poolpumpen werden ebenfalls aus dem reinen Hausbedarf
-  entfernt und anschließend separat eingeplant. Ungelernte Wochentage übernehmen
-  nach ausreichendem Tagesfortschritt den bereinigten heutigen Verlauf, davor den
-  jüngsten bereinigten Mittelwert und nur ohne Lerndaten das bereinigte Jahresmittel.
+  signierte Batterieleistung vor dem Lernen herausgerechnet. Wallbox, Poolpumpen
+  und funktionszugeordnete Messen-+-Schalten-Geräte (Licht, Waschen, Warmwasser,
+  Heizung / Klima, Kochen) werden ebenfalls aus dem reinen Hausbedarf entfernt und
+  anschließend separat eingeplant — Heizung / Klima über Stundenprofile je
+  Außentemperatur-Bucket (5-°C-Schritte), die übrigen Funktionen je Wochentag.
+  Ungelernte Wochentage übernehmen ausschließlich die Lernkurve des jüngsten
+  abgeschlossenen Tages (Vortag) als Vorlage; die Tageskalibrierung passt sie an
+  den laufenden Verlauf an, und der abgeschlossene Tag wird wieder Vorlage für den
+  nächsten. Je Prognosetag zeigt ein 24-h-Balkendiagramm das erwartete
+  Stundenprofil; bereits gelernte Stunden des laufenden Tages erscheinen in
+  abweichender Farbe samt Soll-Marke, sodass Abweichungen sofort sichtbar sind.
   Oben rechts lässt sich ein Verhaltensmodell aktivieren: **Netzparallelbetrieb**
   bewertet ausschließlich die Versorgung bis zum nächsten Ladebeginn und nutzt
   danach das Netz als Reserve; **Autarkbetrieb** bewertet mehrere Prognosetage
@@ -340,6 +362,8 @@ src/
   grid-control/    Schaltlogik + verifizierte Regelschleife + Audit-Log (optional)
   wallbox/         Wallbox-CRUD (boxes.js), Zähler/SoC-Aggregation, Lademodus-
                    Planer (planner.js), Steuerschleife (automation.js) (optional)
+  messen-schalten/ Geräte-/Gruppen-CRUD, Live-Aggregation (Leistung aus Zähler),
+                   Level-Gate-Steuerschleife (Seite „Messen + Schalten")
   operating-state.js  Globaler Zustand (Betriebslevel, Notstrom, Autark-Latch)
   operating-level/    Betriebslevel-Handler / Lastmanagement (handler.js)
   output/          Wert-Katalog (PV, Prognose, Strom, Batterie, Pool, Sonne),

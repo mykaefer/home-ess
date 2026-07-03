@@ -6,7 +6,7 @@ const sqlite3 = require('sqlite3').verbose();
 const {
   normalizedProfile, adjustedConsumptionDelta, recordConsumptionSample, simulateDays,
   selectUnlearnedDailyTarget,
-  buildCoolingModel, hoursUntilNextSunrise, projectedConsumptionForHours,
+  hoursUntilNextSunrise, projectedConsumptionForHours,
 } = require('../src/prognosis/forecast');
 const { localCalendar } = require('../src/local-time');
 const { ENVIRONMENT_STATE_IDS } = require('../src/mqtt/config');
@@ -53,13 +53,26 @@ test('Batterieladung wird entfernt und Entladung dem Hausverbrauch zugerechnet',
   assert.equal(adjustedConsumptionDelta(1, 0, 60 * 60 * 1000, 500), 0.5);
 });
 
-test('ungelernte Wochentage folgen dem heutigen bereinigten Verlauf statt dem Jahreswert', () => {
+test('ungelernte Wochentage übernehmen den jüngsten Lerntag als Vorlage', () => {
+  // Vortag vorhanden: er ist die Vorlage – nicht die Tageshochrechnung.
   assert.equal(selectUnlearnedDailyTarget({
-    today: 10, elapsedShare: 0.5, recentAverage: 35, annualAverage: 50,
-  }), 20);
+    today: 10, elapsedShare: 0.5, previousDayKwh: 24, recentAverage: 35, annualAverage: 50,
+  }), 24);
+  // Ohne Vortag: gleitender Mittelwert vor dem Jahreswert.
   assert.equal(selectUnlearnedDailyTarget({
-    today: 0.2, elapsedShare: 0.05, recentAverage: 22, annualAverage: 50,
+    today: 0.2, elapsedShare: 0.05, previousDayKwh: null, recentAverage: 22, annualAverage: 50,
   }), 22);
+  assert.equal(selectUnlearnedDailyTarget({
+    today: 0.2, elapsedShare: 0.05, previousDayKwh: null, recentAverage: null, annualAverage: 50,
+  }), 50);
+  // Kaltstart: Hochrechnung erst ab 30 % Tagesanteil – frühe Morgenstunden mit
+  // ungelernter Profilform dürfen nicht mehr explodieren.
+  assert.equal(selectUnlearnedDailyTarget({
+    today: 5, elapsedShare: 0.1, previousDayKwh: null, recentAverage: null, annualAverage: null,
+  }), 0);
+  assert.equal(selectUnlearnedDailyTarget({
+    today: 10, elapsedShare: 0.5, previousDayKwh: null, recentAverage: null, annualAverage: null,
+  }), 20);
 });
 
 test('bereinigte Verbrauchssamples werden stündlich und täglich persistiert', async () => {
@@ -186,42 +199,23 @@ test('Simulation verwendet für jeden Folgetag dessen eigene Wochentagskurve', (
   assert.equal(result.days[2].loadKwh, 4);
 });
 
-test('signifikanter Mehrverbrauch heißer Tage bildet ein separates Kühlmodell', () => {
-  const model = buildCoolingModel([
-    { day_key: '2026-06-01', consumption_kwh: 10, max_temperature: 20 },
-    { day_key: '2026-06-08', consumption_kwh: 10, max_temperature: 21 },
-    { day_key: '2026-06-15', consumption_kwh: 16, max_temperature: 30 },
-    { day_key: '2026-06-22', consumption_kwh: 18, max_temperature: 32 },
-  ]);
-  assert.equal(model.enabled, true);
-  assert.equal(model.sampleCount, 2);
-  assert.equal(model.kwhPerDegree, 1);
-  assert.equal(model.climateDayKeys.has('2026-06-15'), true);
-});
-
-test('ohne nicht-heißen Vergleichstag entsteht kein Scheinsignal aus zwei heißen Tagen', () => {
-  const model = buildCoolingModel([
-    { day_key: '2026-06-30', consumption_kwh: 33.56, max_temperature: 30.4 },
-    { day_key: '2026-07-01', consumption_kwh: 49.5, max_temperature: 29.1 },
-  ]);
-  assert.equal(model.enabled, false);
-  assert.equal(model.sampleCount, 0);
-  assert.equal(model.climateDayKeys.size, 0);
-});
-
-test('Kühlbedarf wird nach prognostizierter Temperatur separat aufgeschlagen', () => {
+test('gelernte Funktionslasten werden je Stunde separat aufgeschlagen', () => {
   const input = baseInput();
   input.model.remainingByHour = Array(24).fill(0);
   input.model.remainingToday = 0;
-  input.model.coolingModel = {
-    enabled: true, sampleCount: 2, kwhPerDegree: 1,
-    baseTemperature: 24, hotDayTemperature: 26,
+  // Heizung / Klima nach Temperatur-Bucket, Kochen nach Wochentag.
+  const kochenByWeekday = Array.from({ length: 7 }, () => Array(24).fill(0));
+  const tuesday = 2; // 2026-06-30 ist ein Dienstag
+  kochenByWeekday[tuesday][12] = 1.5;
+  input.model.functionModels = {
+    heizung_klima: { type: 'temperature', buckets: new Map([[30, (() => { const h = Array(24).fill(0); h[14] = 2; return h; })()]]) },
+    kochen: { type: 'weekday', hourlyByWeekday: kochenByWeekday },
   };
   input.forecast.days.push({ dateKey: '2026-06-30', label: 'Morgen', totalKwh: 0 });
-  input.forecast.hours = [{ dateKey: '2026-06-30', hour: 14, kwh: 0, temperature: 30 }];
+  input.forecast.hours = [{ dateKey: '2026-06-30', hour: 14, kwh: 0, temperature: 31 }];
   const result = simulateDays(input);
-  assert.equal(result.days[1].coolingKwh, 6);
-  assert.equal(result.days[1].loadKwh, 8);
+  assert.equal(result.days[1].functionsKwh, 3.5);
+  assert.equal(result.days[1].loadKwh, 5.5);
 });
 
 test('Batteriesimulation respektiert Mindest-SoC', () => {
@@ -335,7 +329,73 @@ test('Verbrauch bis Sonnenaufgang integriert die gelernte Stundenkurve', () => {
     profilesByWeekday: Array.from({ length: 7 }, () => profile),
     dailyTargetsByWeekday: Array(7).fill(24),
     intradayFactor: 1,
-    coolingModel: { enabled: false },
   };
   assert.equal(projectedConsumptionForHours(model, null, 2.5), 2.5);
+});
+
+test('ungelernte Wochentage erhalten Kurve und Ziel des jüngsten Lerntags', async () => {
+  const { buildConsumptionModel } = require('../src/prognosis/forecast');
+  const db = new sqlite3.Database(':memory:');
+  await dbRun(db, `CREATE TABLE mqtt_config (
+    id INTEGER PRIMARY KEY, host TEXT, port INTEGER, username TEXT, password TEXT,
+    latitude REAL, longitude REAL, timezone TEXT, dst_enabled INTEGER,
+    outdoor_temperature_topic TEXT, clock_time_topic TEXT, clock_date_topic TEXT
+  )`);
+  await dbRun(db, "INSERT INTO mqtt_config VALUES (1, '', 1883, '', '', NULL, NULL, 'Europe/Berlin', 1, '', '', '')");
+  await dbRun(db, `CREATE TABLE prognosis_daily_consumption (
+    day_key TEXT PRIMARY KEY, consumption_kwh REAL, raw_consumption_kwh REAL, max_temperature REAL,
+    completed INTEGER, updated_at INTEGER
+  )`);
+  await dbRun(db, `CREATE TABLE prognosis_hourly_consumption (
+    day_key TEXT, hour INTEGER, consumption_kwh REAL, PRIMARY KEY(day_key, hour)
+  )`);
+  await dbRun(db, `CREATE TABLE battery_energy_state (
+    id INTEGER PRIMARY KEY CHECK (id = 1), last_power_ts INTEGER,
+    day_charge_kwh REAL NOT NULL DEFAULT 0, day_discharge_kwh REAL NOT NULL DEFAULT 0,
+    week_charge_offset REAL NOT NULL DEFAULT 0, week_discharge_offset REAL NOT NULL DEFAULT 0,
+    month_charge_offset REAL NOT NULL DEFAULT 0, month_discharge_offset REAL NOT NULL DEFAULT 0,
+    year_charge_offset REAL NOT NULL DEFAULT 0, year_discharge_offset REAL NOT NULL DEFAULT 0,
+    previous_year_charge_total REAL NOT NULL DEFAULT 0, previous_year_discharge_total REAL NOT NULL DEFAULT 0,
+    last_rollover_date TEXT NOT NULL DEFAULT '', week_key TEXT NOT NULL DEFAULT '',
+    month_key TEXT NOT NULL DEFAULT '', year_key TEXT NOT NULL DEFAULT ''
+  )`);
+  await dbRun(db, `CREATE TABLE mess_schalt_function_hourly (
+    function_key TEXT NOT NULL, day_key TEXT NOT NULL, hour INTEGER NOT NULL,
+    consumption_kwh REAL NOT NULL DEFAULT 0, temperature REAL,
+    PRIMARY KEY (function_key, day_key, hour))`);
+
+  // Jüngster Lerntag: 02.07.2026 (Donnerstag) mit 24 kWh und flacher Kurve.
+  await dbRun(db, "INSERT INTO prognosis_daily_consumption VALUES ('2026-07-02', 24, 24, NULL, 1, 0)");
+  for (let hour = 0; hour < 24; hour += 1) {
+    await dbRun(db, "INSERT INTO prognosis_hourly_consumption VALUES ('2026-07-02', ?, 1)", [hour]);
+  }
+  await dbRun(db, "INSERT INTO prognosis_daily_consumption VALUES ('2026-07-03', 8, 8, NULL, 0, 0)");
+
+  // Lokale Zeit über die MQTT-Uhr fixieren: Freitag, 03.07.2026, 08:00.
+  const cache = new Map([
+    [ENVIRONMENT_STATE_IDS.clockDate, { value: '03.07.2026' }],
+    [ENVIRONMENT_STATE_IDS.clockTime, { value: '08:00:00' }],
+  ]);
+  const strom = { breakdown: {
+    today: { eigenverbrauch: 8 },
+    year: { eigenverbrauch: null },
+    previousYear: { eigenverbrauch: null },
+  } };
+  const config = { historyDays: 28, chargeEfficiency: 95, dischargeEfficiency: 95 };
+  const model = await buildConsumptionModel(db, strom, config, cache, null, null);
+
+  assert.equal(model.previousDayKey, '2026-07-02');
+  assert.equal(model.previousDayKwh, 24);
+  // Samstag (6) hat keine Lerntage: exakt Vortagesziel und flache Vortageskurve.
+  assert.equal(model.dailyTargetsByWeekday[6], 24);
+  for (let hour = 0; hour < 24; hour += 1) {
+    assert.ok(Math.abs(model.profilesByWeekday[6][hour] - 1 / 24) < 1e-9);
+  }
+  // Auch der heutige Freitag (5, ungelernt) startet vom Vortagesziel; keine
+  // explodierende Morgen-Hochrechnung mehr.
+  assert.equal(model.dailyTargetsByWeekday[5], 24);
+  assert.ok(model.expectedToday < 30);
+  // Ist-Stunden des laufenden Tages stehen für die Seite bereit.
+  assert.equal(model.todayByHour.filter((value) => value != null).length, 0);
+  await new Promise((resolve) => db.close(resolve));
 });

@@ -3,6 +3,93 @@
 Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [1.0.1] — 2026-07-03
+
+### Geändert
+
+- **Prognose – Vortag als Vorlage für ungelernte Wochentage.** Wochentage ohne
+  eigene Lerntage übernehmen jetzt ausschließlich die Lernkurve des jüngsten
+  abgeschlossenen Tages (Kurvenform und Tagesziel); die Tageskalibrierung passt
+  sie an den laufenden Verlauf an, und der abgeschlossene Tag wird wieder Vorlage
+  für den nächsten. Die frühere Hochrechnung `heute ÷ erwarteter Tagesanteil`
+  konnte in den frühen Morgenstunden explodieren (kleiner Tagesanteil aus noch
+  ungelernter Profilform) und riss als Anker aller Wochentagsziele die gesamte
+  Bedarfsprognose nach oben; sie greift nur noch im echten Kaltstart ab 30 %
+  Tagesfortschritt.
+- **Klimatisierungsmodell entfernt.** Der temperaturbasierte Mehrverbrauchs-
+  Zuschlag samt `prognose.klima*`-Wertekatalog-Einträgen und `klima`-Tages-
+  historie entfällt ersatzlos; Klimatisierung wird stattdessen über die neue
+  Funktions-Statistik (Funktion „Heizung / Klima") gemessen und prognostiziert.
+
+### Hinzugefügt
+
+- **Messen + Schalten – Funktion je Gruppe und Gerät.** Neues Dropdown
+  **Funktion** (Licht, Waschen, Warmwasser, Heizung / Klima, Kochen) an Gruppen
+  und Geräten; Geräte ohne eigene Funktion erben die Funktion ihrer Gruppe. Je
+  zugeordneter Funktion entstehen zwei Wertekatalog-Einträge (Kategorie
+  **Funktionen**): aktuelle Leistung (`funktion.<key>.leistung`) und Verbrauch
+  heute (`funktion.<key>.verbrauchHeute`).
+- **Prognose – Stundenprofile je Funktion.** Die Leistung funktionszugeordneter
+  Geräte wird minütlich zu Stundenenergien integriert
+  (`mess_schalt_function_hourly`), aus dem gelernten Haus-Grundverbrauch
+  herausgerechnet (analog Wallbox/Pool) und in der Simulation separat
+  aufgeschlagen: Heizung / Klima nach Außentemperatur-Buckets in 5-°C-Schritten,
+  die übrigen Funktionen nach Wochentag.
+- **Prognoseseite – 24-h-Stundenprofil je Tag.** Die PV-/Bedarfs-Balken sind
+  kürzer; rechts daneben zeigt ein Balkendiagramm den erwarteten Verbrauch der
+  24 Stunden gemäß Tagesprofil. Bereits gelernte Stunden des laufenden Tages
+  erscheinen in abweichender Farbe (Ist) mit Soll-Marke je Stunde, sodass die
+  Abweichung zwischen tatsächlichem Verbrauch und Prognose direkt sichtbar ist
+  (Details je Stunde im Tooltip).
+
+## [1.0.0] — 2026-07-02
+
+### Stable Release
+
+- Erstes stabiles Release von **homeESS**.
+- **Messen + Schalten:** Alle schaltbaren Geräte werden unabhängig von der
+  Betriebsart durch Betriebslevel und effektive Priorität geschützt. „Immer an"
+  steuert nur das automatische Wiedereinschalten nach erneuter Freigabe.
+
+## [0.11.1] — 2026-07-02
+
+### Geändert
+
+- **Messen + Schalten – klare Betriebsart je Gerät.** Neue Checkbox **„Immer an"**:
+  Ist sie gesetzt, schaltet das Gerät automatisch ein, sobald das Betriebslevel die
+  Priorität zulässt (und darunter wieder aus, auch bei externem Einschalten); der
+  Kachel-Schalter entfällt. Ohne „Immer an" bleibt der Kachel-Schalter manuell, wird
+  aber ebenfalls durch die Priorität gegatet: Zwangs-Aus unterhalb der Freigabe und
+  kein automatisches Wiedereinschalten danach. Je Kachel wird die Betriebsart angezeigt
+  („Immer an · Priorität N", „manuell" bzw. „nur Messen").
+
+## [0.11.0] — 2026-07-02
+
+### Hinzugefügt
+
+- **Neue Seite „Messen + Schalten"** (Hauptmenü direkt unter Batterie), aufgebaut
+  wie das Dashboard: frei anlegbare **Gruppen** und **Geräte-Kacheln**, per
+  Drag & Drop zwischen Gruppen bzw. ohne Gruppe anordbar. Je Gerät bis zu vier
+  MQTT-Topics (**Schalten, Status, Leistung, Zähler**); mindestens Schalten,
+  Leistung oder Zähler ist erforderlich. Ohne Status-Topic gilt das Schalt-Topic
+  (bzw. die Leistung) als Ist-Stand. Ist nur ein Zähler gesetzt, wird die Leistung
+  aus dem Zählerfortschritt abgeleitet und fällt nach über 10 Minuten ohne
+  Fortschritt auf 0 W. Geräte mit Schalt-Topic haben einen **An/Aus-Toggle**
+  (persistenter Wunschzustand), der stets über das **Betriebslevel** gegatet wird
+  (Freigabe ab der Geräte- bzw. optional übernommenen Gruppenpriorität,
+  Zwangsabschaltung bei Levelabfall; siehe LEVEL_HANDLING.md). Die Werte der
+  gesetzten Topics stehen im Wertekatalog in der Kategorie **Geräte**, die
+  Leistungssummen der Gruppen in der Kategorie **Verbrauchssummen**; jede Gruppe
+  zeigt ihre Summe zusätzlich in der Titelzeile. Die **aktive (effektive) Priorität**
+  wird je Gerätekachel und je Gruppe angezeigt. Das **Betriebslevel-Gate wirkt auf den
+  Ist-Zustand**: ein Gerät, das läuft – auch extern oder am Gerät eingeschaltet –,
+  wird bei zu niedrigem Level abgeschaltet. Bei ausreichendem Level bleibt eine
+  externe Schaltung unangetastet (nicht-destruktiv, u. a. beim Anlegen mit Default
+  „aus"); aktiv „An" wird nur bei ausdrücklichem Wunsch und Freigabe gesetzt. Der
+  **Kachel-Toggle spiegelt den Ist-Zustand** (nicht mehr nur den Wunsch), passt also
+  auch bei externem Schalten zum Gerät, und die Steuerung reagiert **entprellt auf
+  MQTT-Änderungen**, sodass das Gate bei externem Ein-/Ausschalten prompt eingreift.
+
 ## [0.10.5] — 2026-07-02
 
 ### Behoben

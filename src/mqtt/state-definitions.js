@@ -15,6 +15,7 @@ const {
 } = require('../batterie/config');
 const { loadGridControlConfig, buildGridControlStateDefinitions } = require('../grid-control/config');
 const { listWallboxes, buildWallboxStateDefinitions } = require('../wallbox/boxes');
+const { listActors, buildMessSchaltStateDefinitions } = require('../messen-schalten/actors');
 const { isEnabled } = require('../modules');
 const { AUTARK_DAYS_STATE_ID, AUTARK_DAYS_PREVIOUS_YEAR_STATE_ID } = require('../operating-state');
 
@@ -34,6 +35,7 @@ async function loadAllStateDefinitions(db) {
     ...buildStromverbrauchStateDefinitions(stromverbrauchConfig),
     ...buildBatterieStateDefinitions(batterieConfig),
     ...buildPhotovoltaikStateDefinitions(pvPlants),
+    ...buildMessSchaltStateDefinitions(await listActors(db)),
   ];
   if (operatingRow && operatingRow.autark_days_topic) {
     definitions.push({ id: AUTARK_DAYS_STATE_ID, topic: operatingRow.autark_days_topic });
