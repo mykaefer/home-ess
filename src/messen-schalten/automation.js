@@ -8,6 +8,15 @@
 
 const mqttClient = require('../mqtt/client');
 const levelHandler = require('../operating-level/handler');
+const { isEnabled } = require('../modules');
+const gridControlAutomation = require('../grid-control/automation');
+const { loadGridControlConfig } = require('../grid-control/config');
+const loadShed = require('../grid-control/load-shed');
+const {
+  EIGENVERBRAUCH_L1_STATE_ID,
+  EIGENVERBRAUCH_L2_STATE_ID,
+  EIGENVERBRAUCH_L3_STATE_ID,
+} = require('../stromverbrauch/config');
 const { listActors, effectivePriority, cacheKey } = require('./actors');
 const { listGroups } = require('./groups');
 const { parseBool } = require('./aggregation');
@@ -22,10 +31,18 @@ const state = new Map();
 function actorState(id) {
   let s = state.get(id);
   if (!s) {
-    s = { output: null };
+    s = { output: null, loadShedOff: false };
     state.set(id, s);
   }
   return s;
+}
+
+function load(loader, db) {
+  return new Promise((resolve) => loader(db, resolve));
+}
+
+function isActorShedByStage(actor, priority) {
+  return actor.loadShedEnabled && loadShed.shouldShed(actor.loadShedPhase, priority);
 }
 
 function sendSwitch(actor, on) {
@@ -51,11 +68,35 @@ function readActualOn(cache, actor) {
 let _knownConsumers = new Set();
 
 async function tick(db) {
+  const now = Date.now();
   const cache = mqttClient.getCache();
   const actors = await listActors(db);
   const groups = await listGroups(db);
   const groupsById = new Map(groups.map((g) => [g.id, g]));
+  const gridControlEnabled = isEnabled('grid-control');
+  const gridCfg = gridControlEnabled ? await load(loadGridControlConfig, db) : null;
+  const gridState = gridControlEnabled ? gridControlAutomation.getState() : null;
+  const loadShedActive = !!(gridControlEnabled && gridCfg && gridCfg.loadEnabled && gridState);
   const seen = new Set();
+
+  loadShed.registerProvider('messschalt', actors
+    .filter((actor) => {
+      if (!actor.switchTopic || !actor.loadShedEnabled) return false;
+      const actualOn = readActualOn(cache, actor);
+      const s = actorState(actor.id);
+      return actualOn === true || s.output === 'on' || s.loadShedOff === true;
+    })
+    .map((actor) => ({
+      id: consumerId(actor),
+      phase: actor.loadShedPhase,
+      priority: effectivePriority(actor, groupsById),
+    })));
+
+  if (loadShedActive) {
+    loadShed.update(gridState.inverterLoads, gridCfg, now);
+  } else {
+    loadShed.unregisterProvider('messschalt');
+  }
 
   for (const actor of actors) {
     const id = consumerId(actor);
@@ -75,8 +116,18 @@ async function tick(db) {
 
     const allowed = levelHandler.isAllowed(priority);
     const actualOn = readActualOn(cache, actor);
+    const shedByStage = loadShedActive ? isActorShedByStage(actor, priority) : false;
 
-    if (allowed) {
+    if (!loadShedActive || !actor.loadShedEnabled) {
+      s.loadShedOff = false;
+    }
+
+    if (allowed && shedByStage) {
+      if (actualOn === true || (actualOn == null && s.output !== 'off')) sendSwitch(actor, false);
+      s.output = 'off';
+      s.loadShedOff = true;
+    } else if (allowed) {
+      if (s.loadShedOff) s.loadShedOff = false;
       // Nur „Immer an" schaltet nach der Freigabe automatisch wieder ein. Manuelle
       // Geräte behalten ihren Zustand und warten gegebenenfalls auf den Benutzer.
       if (actor.alwaysOn) {
@@ -87,6 +138,7 @@ async function tick(db) {
       // Priorität nicht erreicht ⇒ AUSschalten (auch extern/am Gerät eingeschaltet).
       if (actualOn === true || (actualOn == null && s.output !== 'off')) sendSwitch(actor, false);
       s.output = 'off';
+      s.loadShedOff = false;
     }
   }
 
@@ -149,7 +201,13 @@ function scheduleRun(db) {
 
 function isRelevantEvent(event) {
   const keys = event && Array.isArray(event.changedKeys) ? event.changedKeys : [];
-  return keys.some((key) => String(key).startsWith('messschalt:'));
+  return keys.some((key) => {
+    const text = String(key);
+    return text.startsWith('messschalt:')
+      || text === EIGENVERBRAUCH_L1_STATE_ID
+      || text === EIGENVERBRAUCH_L2_STATE_ID
+      || text === EIGENVERBRAUCH_L3_STATE_ID;
+  });
 }
 
 function init(db) {
@@ -163,4 +221,17 @@ function init(db) {
   runNow(db).catch(() => {});
 }
 
-module.exports = { init, runNow, tick, commandManual, consumerId, isRelevantEvent };
+function resetForTests() {
+  state.clear();
+  _knownConsumers = new Set();
+  loadShed.resetForTests();
+}
+
+function getActorAutomationState(actorId) {
+  const s = state.get(Number(actorId));
+  return s ? { output: s.output, loadShedOff: !!s.loadShedOff } : { output: null, loadShedOff: false };
+}
+
+module.exports = {
+  init, runNow, tick, commandManual, consumerId, isRelevantEvent, resetForTests, getActorAutomationState,
+};

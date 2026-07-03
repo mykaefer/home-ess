@@ -2,6 +2,7 @@
 
 const { renderLayout } = require('./layout');
 const { escapeHtml } = require('./components');
+const { PHASES } = require('../grid-control/load-shed');
 
 function priorityOptions(selected, def) {
   const val = selected != null ? Number(selected) : def;
@@ -17,12 +18,18 @@ function timeField(name, value, disabled) {
   return `<input type="time" name="${name}" value="${escapeHtml(value || '')}"${dis} class="pool-time-input">`;
 }
 
-function renderPool({ cfg = {}, message = '', solarOutput = null, filterOutput = null, batterieSocConfigured = false } = {}) {
+function phaseOptions(selected) {
+  const labels = { l1: 'L1', l2: 'L2', l3: 'L3', three_phase: 'Drehstrom' };
+  return PHASES.map((phase) => `<option value="${phase}"${phase === selected ? ' selected' : ''}>${labels[phase]}</option>`).join('');
+}
+
+function renderPool({ cfg = {}, message = '', solarOutput = null, filterOutput = null, batterieSocConfigured = false, gridControlEnabled = false } = {}) {
   const {
     temperatureTopic = '',
     solarPumpStatusTopic = '',
     solarPumpCommandTopic = '',
     solarPumpPriority = 2,
+    solarPumpPhase = 'l1',
     solarPumpMaxTemp = '',
     solarPumpTempOnSeconds = 30,
     solarPumpTempPauseMinutes = 30,
@@ -30,6 +37,7 @@ function renderPool({ cfg = {}, message = '', solarOutput = null, filterOutput =
     filterPumpStatusTopic = '',
     filterPumpCommandTopic = '',
     filterPumpPriority = 4,
+    filterPumpPhase = 'l1',
     filterPumpFollowSolar = false,
     filterTime1Start = '', filterTime1End = '',
     filterTime2Start = '', filterTime2End = '',
@@ -158,6 +166,13 @@ ${kpiSection}
                 </select>
               </div>
               <div class="field">
+                <label for="solarPumpPhase">Lastabwurf-Phase</label>
+                <select id="solarPumpPhase" name="solarPumpPhase"${gridControlEnabled ? '' : ' disabled'}>
+                  ${phaseOptions(solarPumpPhase)}
+                </select>
+                ${gridControlEnabled ? '' : '<input type="hidden" name="solarPumpPhase" value="' + escapeHtml(solarPumpPhase) + '">' }
+              </div>
+              <div class="field">
                 <label for="solarPumpMaxTemp">Max. Wassertemperatur (°C) <span class="pool-optional">(optional)</span></label>
                 <input type="number" step="0.5" id="solarPumpMaxTemp" name="solarPumpMaxTemp"
                        placeholder="z.B. 28"
@@ -208,7 +223,15 @@ ${kpiSection}
                   ${priorityOptions(filterPumpPriority, 4)}
                 </select>
               </div>
+              <div class="field">
+                <label for="filterPumpPhase">Lastabwurf-Phase</label>
+                <select id="filterPumpPhase" name="filterPumpPhase"${gridControlEnabled ? '' : ' disabled'}>
+                  ${phaseOptions(filterPumpPhase)}
+                </select>
+                ${gridControlEnabled ? '' : '<input type="hidden" name="filterPumpPhase" value="' + escapeHtml(filterPumpPhase) + '">' }
+              </div>
             </div>
+            ${gridControlEnabled ? '' : '<p class="settings-card-hint">Grid-Control ist deaktiviert. Die Lastabwurf-Phase wird erst bei aktivem Modul verwendet.</p>'}
 
             <label class="checkbox-field" style="margin-top:16px;" for="filterPumpFollowSolar">
               <input type="checkbox" id="filterPumpFollowSolar" name="filterPumpFollowSolar"

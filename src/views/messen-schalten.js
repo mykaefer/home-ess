@@ -9,6 +9,7 @@
 const { renderLayout } = require('./layout');
 const { escapeHtml, statusText } = require('./components');
 const { FUNCTIONS } = require('../messen-schalten/functions');
+const { LOAD_SHED_PHASES } = require('../messen-schalten/actors');
 
 // Dropdown „Funktion": Gruppen vererben ihre Funktion an Geräte ohne eigene
 // Zuordnung; die Prognose lernt je Funktion ein eigenes Stundenprofil.
@@ -32,6 +33,17 @@ function unitOptions(units, selected) {
   return units.map((u) => `<option value="${u}"${u === selected ? ' selected' : ''}>${u}</option>`).join('');
 }
 
+function loadShedPhaseOptions(selected) {
+  const labels = {
+    l1: 'L1',
+    l2: 'L2',
+    l3: 'L3',
+    three_phase: 'Drehstrom',
+  };
+  return LOAD_SHED_PHASES.map((phase) =>
+    `<option value="${phase}"${phase === selected ? ' selected' : ''}>${labels[phase]}</option>`).join('');
+}
+
 function statusDotClass(statusOn) {
   if (statusOn === true) return 'ms-status-dot is-on';
   if (statusOn === false) return 'ms-status-dot is-off';
@@ -46,6 +58,7 @@ function priorityText(priority, fromGroup) {
 // Meta-Zeile je Gerät: Messen-only, „Immer an" (mit aktiver Priorität) oder manuell.
 function metaLabel(actor) {
   if (!actor.hasSwitch) return 'nur Messen';
+  if (actor.loadShedActive) return `Lastabwurf · ${priorityText(actor.priority, actor.priorityFromGroup)}`;
   if (actor.alwaysOn) return `Immer an · ${priorityText(actor.priority, actor.priorityFromGroup)}`;
   return 'manuell';
 }
@@ -106,7 +119,11 @@ ${group.actors.map(renderActorCard).join('\n')}
           </div>`;
 }
 
-function renderActorDialog({ groupsForSelect }) {
+function renderActorDialog({ groupsForSelect, gridControlEnabled }) {
+  const disabledAttr = gridControlEnabled ? '' : ' disabled';
+  const hiddenMirrors = gridControlEnabled ? '' : `
+                <input type="hidden" name="loadShedEnabled" id="msLoadShedHiddenEnabled" value="">
+                <input type="hidden" name="loadShedPhase" id="msLoadShedHiddenPhase" value="l1">`;
   return `        <dialog id="actorDialog" class="value-dialog">
           <form id="actorForm" action="/messen-schalten/actors" method="POST" class="dialog-form dialog-form--plant">
             <div class="dialog-hero">
@@ -165,6 +182,23 @@ function renderActorDialog({ groupsForSelect }) {
                   <input type="checkbox" id="msUseGroupPriority" name="useGroupPriority" value="on">
                   <span>Priorität der Gruppe verwenden</span></label>
               </div>
+            </div>
+
+            <div class="dialog-section">
+              <div class="dialog-section-head"><h4>Lastabwurf</h4>
+                <p class="muted">Bei aktivem Grid-Control kann das Gerät schon vor dem Netzzuschalten abgeworfen werden: ab 80 % der konfigurierten Wechselrichterlast auf der gewählten Phase bzw. bei Drehstrom auf einer der drei Phasen. <strong>Immer an</strong> schaltet unter 50 % der zugehörigen Lastschwelle automatisch wieder ein.</p></div>
+              <div class="dialog-grid dialog-grid--two">
+                <label class="remember-row remember-row--boxed" for="msLoadShedEnabled" style="align-self:end;">
+                  <input type="checkbox" id="msLoadShedEnabled" name="loadShedEnabled" value="on"${disabledAttr}>
+                  <span>Zum Lastabwurf verwenden</span></label>
+                <label class="field-block" for="msLoadShedPhase"><span>Phase</span>
+                  <select id="msLoadShedPhase" name="loadShedPhase"${disabledAttr}>${loadShedPhaseOptions('l1')}</select>
+                </label>
+              </div>
+              ${gridControlEnabled
+                ? '<p class="muted">Drehstrom behandelt das Gerät als gleichmäßig auf L1, L2 und L3 verteilt.</p>'
+                : '<p class="muted">Grid-Control ist deaktiviert. Diese Einstellungen stehen erst nach Aktivierung des Moduls zur Verfügung.</p>'}
+              ${hiddenMirrors}
             </div>
 
             <div class="button-row">
@@ -234,6 +268,7 @@ function renderMessenSchalten({
   editingActorId = null,
   groupDialogOpen = false,
   groupDialogError = '',
+  gridControlEnabled = false,
 } = {}) {
   const body = `        <div class="panel-head">
           <div>
@@ -256,7 +291,7 @@ ${ungrouped.map(renderActorCard).join('\n')}
 ${groups.map(renderGroup).join('\n')}
         </div>
 
-        ${renderActorDialog({ groupsForSelect })}
+        ${renderActorDialog({ groupsForSelect, gridControlEnabled })}
         ${renderGroupDialog()}
         ${renderDeleteActorDialog()}
         ${renderDeleteGroupDialog()}`;
@@ -286,6 +321,12 @@ ${groups.map(renderGroup).join('\n')}
       document.getElementById('msUseGroupPriority').checked = v.useGroupPriority === true;
       document.getElementById('msAlwaysOn').checked = v.alwaysOn === true;
       document.getElementById('msFunction').value = v.functionKey || '';
+      document.getElementById('msLoadShedEnabled').checked = v.loadShedEnabled === true;
+      document.getElementById('msLoadShedPhase').value = v.loadShedPhase || 'l1';
+      var hiddenEnabled = document.getElementById('msLoadShedHiddenEnabled');
+      var hiddenPhase = document.getElementById('msLoadShedHiddenPhase');
+      if (hiddenEnabled) hiddenEnabled.value = v.loadShedEnabled === true ? 'on' : '';
+      if (hiddenPhase) hiddenPhase.value = v.loadShedPhase || 'l1';
     }
 
     function openActorDialog(mode, actorId) {
@@ -567,6 +608,7 @@ ${groups.map(renderGroup).join('\n')}
           var prio = document.getElementById('ms-prio-' + a.id);
           if (prio) {
             prio.textContent = !a.hasSwitch ? 'nur Messen'
+              : a.loadShedActive ? ('Lastabwurf · Priorität ' + a.priority + (a.priorityFromGroup ? ' (Gruppe)' : ''))
               : a.alwaysOn ? ('Immer an · Priorität ' + a.priority + (a.priorityFromGroup ? ' (Gruppe)' : ''))
               : 'manuell';
           }

@@ -316,6 +316,7 @@ function openDatabase() {
         solar_pump_status_topic TEXT NOT NULL DEFAULT '',
         solar_pump_command_topic TEXT NOT NULL DEFAULT '',
         solar_pump_priority INTEGER NOT NULL DEFAULT 2,
+        solar_pump_phase TEXT NOT NULL DEFAULT 'l1',
         solar_pump_max_temp REAL,
         solar_pump_temp_on_seconds INTEGER NOT NULL DEFAULT 30,
         solar_pump_temp_pause_minutes INTEGER NOT NULL DEFAULT 30,
@@ -323,6 +324,7 @@ function openDatabase() {
         filter_pump_status_topic TEXT NOT NULL DEFAULT '',
         filter_pump_command_topic TEXT NOT NULL DEFAULT '',
         filter_pump_priority INTEGER NOT NULL DEFAULT 4,
+        filter_pump_phase TEXT NOT NULL DEFAULT 'l1',
         filter_pump_follow_solar INTEGER NOT NULL DEFAULT 0,
         filter_time_1_start TEXT NOT NULL DEFAULT '',
         filter_time_1_end TEXT NOT NULL DEFAULT '',
@@ -376,6 +378,7 @@ function openDatabase() {
         priority_private INTEGER NOT NULL DEFAULT 5,
         priority_business INTEGER NOT NULL DEFAULT 3,
         priority_full INTEGER NOT NULL DEFAULT 4,
+        load_shed_phase TEXT NOT NULL DEFAULT 'three_phase',
         min_charge_percent INTEGER NOT NULL DEFAULT 30,
         business_days TEXT NOT NULL DEFAULT '',
         stall_timeout_seconds INTEGER NOT NULL DEFAULT 120,
@@ -463,7 +466,9 @@ function openDatabase() {
         use_group_priority INTEGER NOT NULL DEFAULT 0,
         desired_on INTEGER NOT NULL DEFAULT 0,
         always_on INTEGER NOT NULL DEFAULT 0,
-        function_key TEXT NOT NULL DEFAULT ''
+        function_key TEXT NOT NULL DEFAULT '',
+        load_shed_enabled INTEGER NOT NULL DEFAULT 0,
+        load_shed_phase TEXT NOT NULL DEFAULT 'l1'
       )`
     );
     // Ableitungszustand für „Leistung aus Zählerfortschritt": zuletzt gesehener
@@ -966,6 +971,9 @@ function migrateWallboxes(db) {
     if (!existing.has('stall_power_w')) {
       db.run('ALTER TABLE wallboxes ADD COLUMN stall_power_w REAL NOT NULL DEFAULT 200');
     }
+    if (!existing.has('load_shed_phase')) {
+      db.run("ALTER TABLE wallboxes ADD COLUMN load_shed_phase TEXT NOT NULL DEFAULT 'three_phase'");
+    }
   });
 }
 
@@ -983,6 +991,12 @@ function migrateMessSchaltActors(db) {
     }
     if (!existing.has('function_key')) {
       db.run("ALTER TABLE mess_schalt_actors ADD COLUMN function_key TEXT NOT NULL DEFAULT ''");
+    }
+    if (!existing.has('load_shed_enabled')) {
+      db.run('ALTER TABLE mess_schalt_actors ADD COLUMN load_shed_enabled INTEGER NOT NULL DEFAULT 0');
+    }
+    if (!existing.has('load_shed_phase')) {
+      db.run("ALTER TABLE mess_schalt_actors ADD COLUMN load_shed_phase TEXT NOT NULL DEFAULT 'l1'");
     }
   });
   db.all('PRAGMA table_info(mess_schalt_groups)', (err, rows) => {
@@ -1006,14 +1020,14 @@ function seedPoolConfig(db) {
       db.run(
         `INSERT INTO pool_config
          (id, temperature_topic, pump_status_topic, pump_command_topic, ph_topic, chlor_topic,
-          solar_pump_status_topic, solar_pump_command_topic, solar_pump_priority,
-          filter_pump_status_topic, filter_pump_command_topic, filter_pump_priority,
+          solar_pump_status_topic, solar_pump_command_topic, solar_pump_priority, solar_pump_phase,
+          filter_pump_status_topic, filter_pump_command_topic, filter_pump_priority, filter_pump_phase,
           filter_pump_follow_solar,
           filter_time_1_start, filter_time_1_end,
           filter_time_2_start, filter_time_2_end,
           filter_time_3_start, filter_time_3_end,
           filter_battery_enabled, filter_battery_soc, filter_battery_soc_topic)
-         VALUES (1, '', '', '', '', '', '', '', 5, '', '', 2, 0, '', '', '', '', '', '', 0, 80, '')`
+         VALUES (1, '', '', '', '', '', '', '', 5, 'l1', '', '', 2, 'l1', 0, '', '', '', '', '', '', 0, 80, '')`
       );
     }
   });
@@ -1027,6 +1041,7 @@ function migratePoolConfig(db) {
       { name: 'solar_pump_status_topic', sql: "ALTER TABLE pool_config ADD COLUMN solar_pump_status_topic TEXT NOT NULL DEFAULT ''" },
       { name: 'solar_pump_command_topic', sql: "ALTER TABLE pool_config ADD COLUMN solar_pump_command_topic TEXT NOT NULL DEFAULT ''" },
       { name: 'solar_pump_priority', sql: 'ALTER TABLE pool_config ADD COLUMN solar_pump_priority INTEGER NOT NULL DEFAULT 2' },
+      { name: 'solar_pump_phase', sql: "ALTER TABLE pool_config ADD COLUMN solar_pump_phase TEXT NOT NULL DEFAULT 'l1'" },
       { name: 'solar_pump_max_temp', sql: 'ALTER TABLE pool_config ADD COLUMN solar_pump_max_temp REAL' },
       { name: 'solar_pump_temp_on_seconds', sql: 'ALTER TABLE pool_config ADD COLUMN solar_pump_temp_on_seconds INTEGER NOT NULL DEFAULT 30' },
       { name: 'solar_pump_temp_pause_minutes', sql: 'ALTER TABLE pool_config ADD COLUMN solar_pump_temp_pause_minutes INTEGER NOT NULL DEFAULT 30' },
@@ -1034,6 +1049,7 @@ function migratePoolConfig(db) {
       { name: 'filter_pump_status_topic', sql: "ALTER TABLE pool_config ADD COLUMN filter_pump_status_topic TEXT NOT NULL DEFAULT ''" },
       { name: 'filter_pump_command_topic', sql: "ALTER TABLE pool_config ADD COLUMN filter_pump_command_topic TEXT NOT NULL DEFAULT ''" },
       { name: 'filter_pump_priority', sql: 'ALTER TABLE pool_config ADD COLUMN filter_pump_priority INTEGER NOT NULL DEFAULT 4' },
+      { name: 'filter_pump_phase', sql: "ALTER TABLE pool_config ADD COLUMN filter_pump_phase TEXT NOT NULL DEFAULT 'l1'" },
       { name: 'filter_pump_follow_solar', sql: 'ALTER TABLE pool_config ADD COLUMN filter_pump_follow_solar INTEGER NOT NULL DEFAULT 0' },
       { name: 'filter_time_1_start', sql: "ALTER TABLE pool_config ADD COLUMN filter_time_1_start TEXT NOT NULL DEFAULT ''" },
       { name: 'filter_time_1_end', sql: "ALTER TABLE pool_config ADD COLUMN filter_time_1_end TEXT NOT NULL DEFAULT ''" },

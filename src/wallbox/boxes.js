@@ -6,6 +6,7 @@
 // eigene Priorität für den Betriebslevel-Handler.
 
 const { normalizeMqttTopic } = require('../mqtt/topics');
+const { normalizePhase } = require('../grid-control/load-shed');
 
 const CHARGE_MODES = [
   { value: 1, key: 'private', label: 'Privat' },
@@ -111,6 +112,7 @@ function normalizeRow(row = {}) {
     priorityPrivate: clampPriority(row.priority_private, 5),
     priorityBusiness: clampPriority(row.priority_business, 3),
     priorityFull: clampPriority(row.priority_full, 4),
+    loadShedPhase: normalizePhase(row.load_shed_phase, 'three_phase'),
     minChargePercent: clampPercent(row.min_charge_percent, 30),
     businessDays: businessDaysToArray(row.business_days),
     stallTimeoutSeconds: row.stall_timeout_seconds != null ? Math.max(0, Math.round(row.stall_timeout_seconds)) : 120,
@@ -121,7 +123,7 @@ function normalizeRow(row = {}) {
 const COLUMNS = `id, name, max_power_w, battery_capacity_kwh, command_topic, status_topic,
   power_topic, power_unit, counter_topic, counter_unit, setpoint_topic, plugged_topic,
   soc_topic, mode_sync_topic, mode, priority_private, priority_business, priority_full,
-  min_charge_percent, business_days, stall_timeout_seconds, stall_power_w`;
+  load_shed_phase, min_charge_percent, business_days, stall_timeout_seconds, stall_power_w`;
 
 const wallboxListCache = new WeakMap();
 function invalidateWallboxes(db) { if (db) wallboxListCache.delete(db); }
@@ -158,6 +160,7 @@ function normalizeInput(input = {}) {
     priorityPrivate: clampPriority(input.priorityPrivate, 5),
     priorityBusiness: clampPriority(input.priorityBusiness, 3),
     priorityFull: clampPriority(input.priorityFull, 4),
+    loadShedPhase: normalizePhase(input.loadShedPhase, 'three_phase'),
     minChargePercent: clampPercent(input.minChargePercent, 30),
     businessDays: normalizeBusinessDays(input.businessDays),
     stallTimeoutSeconds: (() => {
@@ -189,7 +192,7 @@ const INSERT_PARAMS = (input, mode) => [
   input.statusTopic, input.powerTopic, input.powerUnit, input.counterTopic,
   input.counterUnit, input.setpointTopic, input.pluggedTopic, input.socTopic,
   input.modeSyncTopic, mode, input.priorityPrivate, input.priorityBusiness,
-  input.priorityFull, input.minChargePercent, input.businessDays,
+  input.priorityFull, input.loadShedPhase, input.minChargePercent, input.businessDays,
   input.stallTimeoutSeconds, input.stallPowerW,
 ];
 
@@ -206,9 +209,9 @@ async function createWallbox(db, rawInput) {
     `INSERT INTO wallboxes
      (name, max_power_w, battery_capacity_kwh, command_topic, status_topic, power_topic,
       power_unit, counter_topic, counter_unit, setpoint_topic, plugged_topic, soc_topic,
-      mode_sync_topic, mode, priority_private, priority_business, priority_full,
+      mode_sync_topic, mode, priority_private, priority_business, priority_full, load_shed_phase,
       min_charge_percent, business_days, stall_timeout_seconds, stall_power_w)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     INSERT_PARAMS(input, 1)
   );
   await dbRun(
@@ -240,7 +243,7 @@ async function updateWallbox(db, id, rawInput) {
        name = ?, max_power_w = ?, battery_capacity_kwh = ?, command_topic = ?, status_topic = ?,
        power_topic = ?, power_unit = ?, counter_topic = ?, counter_unit = ?, setpoint_topic = ?,
        plugged_topic = ?, soc_topic = ?, mode_sync_topic = ?, priority_private = ?,
-       priority_business = ?, priority_full = ?, min_charge_percent = ?, business_days = ?,
+       priority_business = ?, priority_full = ?, load_shed_phase = ?, min_charge_percent = ?, business_days = ?,
        stall_timeout_seconds = ?, stall_power_w = ?
      WHERE id = ?`,
     [
@@ -248,7 +251,8 @@ async function updateWallbox(db, id, rawInput) {
       input.statusTopic, input.powerTopic, input.powerUnit, input.counterTopic,
       input.counterUnit, input.setpointTopic, input.pluggedTopic, input.socTopic,
       input.modeSyncTopic, input.priorityPrivate, input.priorityBusiness,
-      input.priorityFull, input.minChargePercent, input.businessDays,
+      input.priorityFull, input.loadShedPhase,
+      input.minChargePercent, input.businessDays,
       input.stallTimeoutSeconds, input.stallPowerW, id,
     ]
   );

@@ -6,9 +6,11 @@
 // Priorität (1–5) kann optional von der zugeordneten Gruppe übernommen werden.
 
 const { normalizeMqttTopic } = require('../mqtt/topics');
+const { PHASES, normalizePhase: normalizeSharedPhase } = require('../grid-control/load-shed');
 
 const POWER_UNITS = ['W', 'kW'];
 const COUNTER_UNITS = ['Wh', 'kWh'];
+const LOAD_SHED_PHASES = PHASES;
 
 // Zulässige Funktions-Schlüssel (Dropdown „Funktion"). Hier lokal gehalten,
 // damit functions.js dieses Modul einbinden kann, ohne einen Zyklus zu bilden.
@@ -17,6 +19,10 @@ const FUNCTION_KEYS = ['licht', 'waschen', 'warmwasser', 'heizung_klima', 'koche
 function normalizeFunctionKey(value) {
   const key = String(value || '').trim();
   return FUNCTION_KEYS.includes(key) ? key : '';
+}
+
+function normalizeLoadShedPhase(value) {
+  return normalizeSharedPhase(value, 'l1');
 }
 
 function dbAll(db, sql, params = []) {
@@ -82,11 +88,14 @@ function normalizeRow(row = {}) {
     alwaysOn: Number(row.always_on) === 1,
     // Leer = Funktion der Gruppe übernehmen (falls gesetzt), sonst keine Funktion.
     functionKey: normalizeFunctionKey(row.function_key),
+    loadShedEnabled: Number(row.load_shed_enabled) === 1,
+    loadShedPhase: normalizeLoadShedPhase(row.load_shed_phase),
   };
 }
 
 const COLUMNS = `id, name, group_id, position, switch_topic, status_topic, power_topic,
-  power_unit, counter_topic, counter_unit, priority, use_group_priority, always_on, function_key`;
+  power_unit, counter_topic, counter_unit, priority, use_group_priority, always_on,
+  function_key, load_shed_enabled, load_shed_phase`;
 
 async function listActors(db) {
   const rows = await dbAll(
@@ -116,6 +125,8 @@ function normalizeInput(input = {}) {
     useGroupPriority: parseCheckbox(input.useGroupPriority),
     alwaysOn: parseCheckbox(input.alwaysOn),
     functionKey: normalizeFunctionKey(input.functionKey),
+    loadShedEnabled: parseCheckbox(input.loadShedEnabled),
+    loadShedPhase: normalizeLoadShedPhase(input.loadShedPhase),
   };
 }
 
@@ -131,6 +142,9 @@ function validateInput(input) {
   }
   if (input.useGroupPriority && input.groupId == null) {
     errors.push('„Priorität der Gruppe verwenden" erfordert die Zuordnung zu einer Gruppe.');
+  }
+  if (input.loadShedEnabled && !input.switchTopic) {
+    errors.push('„Zum Lastabwurf verwenden" erfordert ein Schalten-Topic.');
   }
   return errors;
 }
@@ -157,12 +171,14 @@ async function createActor(db, rawInput) {
     db,
     `INSERT INTO mess_schalt_actors
       (name, group_id, position, switch_topic, status_topic, power_topic, power_unit,
-       counter_topic, counter_unit, priority, use_group_priority, always_on, function_key, desired_on)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+       counter_topic, counter_unit, priority, use_group_priority, always_on, function_key,
+       load_shed_enabled, load_shed_phase, desired_on)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
     [
       input.name, input.groupId, position, input.switchTopic, input.statusTopic,
       input.powerTopic, input.powerUnit, input.counterTopic, input.counterUnit,
-      input.priority, input.useGroupPriority ? 1 : 0, input.alwaysOn ? 1 : 0, input.functionKey,
+      input.priority, input.useGroupPriority ? 1 : 0, input.alwaysOn ? 1 : 0,
+      input.functionKey, input.loadShedEnabled ? 1 : 0, input.loadShedPhase,
     ]
   );
   return getActor(db, result.lastID);
@@ -176,12 +192,13 @@ async function updateActor(db, id, rawInput) {
     `UPDATE mess_schalt_actors SET
        name = ?, group_id = ?, switch_topic = ?, status_topic = ?, power_topic = ?,
        power_unit = ?, counter_topic = ?, counter_unit = ?, priority = ?, use_group_priority = ?,
-       always_on = ?, function_key = ?
+       always_on = ?, function_key = ?, load_shed_enabled = ?, load_shed_phase = ?
      WHERE id = ?`,
     [
       input.name, input.groupId, input.switchTopic, input.statusTopic, input.powerTopic,
       input.powerUnit, input.counterTopic, input.counterUnit, input.priority,
-      input.useGroupPriority ? 1 : 0, input.alwaysOn ? 1 : 0, input.functionKey, id,
+      input.useGroupPriority ? 1 : 0, input.alwaysOn ? 1 : 0, input.functionKey,
+      input.loadShedEnabled ? 1 : 0, input.loadShedPhase, id,
     ]
   );
   return getActor(db, id);
@@ -235,8 +252,8 @@ function buildMessSchaltStateDefinitions(actors) {
 }
 
 module.exports = {
-  POWER_UNITS, COUNTER_UNITS, FUNCTION_KEYS,
+  POWER_UNITS, COUNTER_UNITS, FUNCTION_KEYS, LOAD_SHED_PHASES,
   listActors, getActor, createActor, updateActor, deleteActor, reorderActors,
   normalizeInput, validateInput, effectivePriority, cacheKey, buildMessSchaltStateDefinitions,
-  parseNumber, clampPriority, normalizeFunctionKey,
+  parseNumber, clampPriority, normalizeFunctionKey, normalizeLoadShedPhase,
 };

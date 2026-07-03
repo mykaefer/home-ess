@@ -7,6 +7,14 @@ const { assessHeaderSkyState } = require('../photovoltaik/aggregation');
 const { listPvPlants } = require('../photovoltaik/plants');
 const { isEnabled } = require('../modules');
 const levelHandler = require('../operating-level/handler');
+const { loadGridControlConfig } = require('../grid-control/config');
+const gridControlAutomation = require('../grid-control/automation');
+const loadShed = require('../grid-control/load-shed');
+const {
+  EIGENVERBRAUCH_L1_STATE_ID,
+  EIGENVERBRAUCH_L2_STATE_ID,
+  EIGENVERBRAUCH_L3_STATE_ID,
+} = require('../stromverbrauch/config');
 
 const HOLD_MS = 2 * 60 * 1000; // 2 Minuten Mindesthaltedauer nach Schaltung
 
@@ -17,6 +25,7 @@ const POOL_CONSUMER = { solar: 'pool.solar', filter: 'pool.filter' };
 const solar = {
   output: null,   // 'on' | 'off' | null
   changedAt: 0,
+  loadShedOff: false,
   tempMode: false,
   tempSampling: false,
   tempSamplingStart: 0,
@@ -25,7 +34,12 @@ const solar = {
 
 const filter = {
   output: null,
+  loadShedOff: false,
 };
+
+function load(loader, db) {
+  return new Promise((resolve) => loader(db, resolve));
+}
 
 function parseNum(v) {
   if (v == null || v === '') return null;
@@ -68,6 +82,10 @@ function commandTopic(which, cfg) {
   return which === 'filter' ? cfg.filterPumpCommandTopic : cfg.solarPumpCommandTopic;
 }
 
+function phaseFor(which, cfg) {
+  return which === 'filter' ? cfg.filterPumpPhase : cfg.solarPumpPhase;
+}
+
 // Einschalten im Automatikpfad nur nach Freigabe durch das Betriebslevel.
 // priority = effektive Priorität der zugrunde liegenden Aufgabe (Solar-/Filterdienst).
 // Liefert den tatsächlich geschalteten Zustand (false, wenn das Level das Einschalten sperrt).
@@ -84,10 +102,16 @@ function forceOff(which, cfg) {
   send(topic, false);
   if (which === 'filter') {
     filter.output = 'off';
+    filter.loadShedOff = false;
   } else {
     solar.output = 'off';
     solar.changedAt = Date.now();
+    solar.loadShedOff = false;
   }
+}
+
+function isShed(which, priority, cfg) {
+  return loadShed.shouldShed(phaseFor(which, cfg), priority);
 }
 
 // Registrierung beim Betriebslevel-Handler pflegen: nur im Automatik-Modus mit gesetztem Topic.
@@ -107,6 +131,7 @@ async function tick(db) {
   if (!isEnabled('pool')) {
     levelHandler.unregister(POOL_CONSUMER.solar);
     levelHandler.unregister(POOL_CONSUMER.filter);
+    loadShed.unregisterProvider('pool');
     return;
   }
 
@@ -114,13 +139,32 @@ async function tick(db) {
   const cache = mqttClient.getCache();
   const now = Date.now();
   const localMinutes = currentMinutes(cache);
+  const gridControlEnabled = isEnabled('grid-control');
+  const gridCfg = gridControlEnabled ? await load(loadGridControlConfig, db) : null;
+  const gridState = gridControlEnabled ? gridControlAutomation.getState() : null;
+  const loadShedActive = !!(gridControlEnabled && gridCfg && gridCfg.loadEnabled && gridState);
+  if (!loadShedActive) {
+    solar.loadShedOff = false;
+    filter.loadShedOff = false;
+  }
+
+  loadShed.registerProvider('pool', [
+    cfg.solarPumpCommandTopic && (solar.output === 'on' || solar.loadShedOff)
+      ? { id: POOL_CONSUMER.solar, phase: cfg.solarPumpPhase, priority: cfg.solarPumpPriority } : null,
+    cfg.filterPumpCommandTopic && (filter.output === 'on' || filter.loadShedOff)
+      ? { id: POOL_CONSUMER.filter, phase: cfg.filterPumpPhase, priority: getEffectivePriority('filter', cfg) } : null,
+  ].filter(Boolean));
+  if (loadShedActive) loadShed.update(gridState.inverterLoads, gridCfg, now);
 
   // ── Solarpumpe ──────────────────────────────────────────────────────────────
   if (cfg.solarPumpCommandTopic && pumpModes.solar !== 'auto') {
     const desired = pumpModes.solar;
     if (solar.output !== desired) {
-      send(cfg.solarPumpCommandTopic, desired === 'on');
-      solar.output = desired;
+      const shouldOn = desired === 'on' && !isShed('solar', cfg.solarPumpPriority, cfg);
+      if (desired === 'on' && !shouldOn) solar.loadShedOff = true;
+      if (desired !== 'on') solar.loadShedOff = false;
+      send(cfg.solarPumpCommandTopic, shouldOn);
+      solar.output = shouldOn ? 'on' : 'off';
       solar.changedAt = now;
     }
   } else if (cfg.solarPumpCommandTopic) {
@@ -207,7 +251,16 @@ async function tick(db) {
       if (solar.output !== desired) {
         const holdOk = solar.changedAt === 0 || now - solar.changedAt >= HOLD_MS;
         if (holdOk) {
-          const on = gatedSend(cfg.solarPumpCommandTopic, desired === 'on', cfg.solarPumpPriority);
+          let requestOn = desired === 'on';
+          if (requestOn && isShed('solar', cfg.solarPumpPriority, cfg)) {
+            requestOn = false;
+            solar.loadShedOff = true;
+          } else if (requestOn) {
+            solar.loadShedOff = false;
+          } else {
+            solar.loadShedOff = false;
+          }
+          const on = gatedSend(cfg.solarPumpCommandTopic, requestOn, cfg.solarPumpPriority);
           solar.output = on ? 'on' : 'off';
           solar.changedAt = now;
         }
@@ -226,8 +279,12 @@ async function tick(db) {
   if (cfg.filterPumpCommandTopic && pumpModes.filter !== 'auto') {
     const desired = pumpModes.filter;
     if (filter.output !== desired) {
-      send(cfg.filterPumpCommandTopic, desired === 'on');
-      filter.output = desired;
+      const effectivePriority = getEffectivePriority('filter', cfg);
+      const shouldOn = desired === 'on' && !isShed('filter', effectivePriority, cfg);
+      if (desired === 'on' && !shouldOn) filter.loadShedOff = true;
+      if (desired !== 'on') filter.loadShedOff = false;
+      send(cfg.filterPumpCommandTopic, shouldOn);
+      filter.output = shouldOn ? 'on' : 'off';
     }
   } else if (cfg.filterPumpCommandTopic && !_filterActsAsSolar) {
     let desired = 'off';
@@ -253,8 +310,33 @@ async function tick(db) {
     }
 
     if (filter.output !== desired) {
-      const on = gatedSend(cfg.filterPumpCommandTopic, desired === 'on', cfg.filterPumpPriority);
+      let requestOn = desired === 'on';
+      const effectivePriority = getEffectivePriority('filter', cfg);
+      if (requestOn && isShed('filter', effectivePriority, cfg)) {
+        requestOn = false;
+        filter.loadShedOff = true;
+      } else if (requestOn) {
+        filter.loadShedOff = false;
+      } else {
+        filter.loadShedOff = false;
+      }
+      const on = gatedSend(cfg.filterPumpCommandTopic, requestOn, effectivePriority);
       filter.output = on ? 'on' : 'off';
+    }
+  }
+
+  if (loadShedActive && cfg.solarPumpCommandTopic && solar.output === 'on' && isShed('solar', cfg.solarPumpPriority, cfg)) {
+    send(cfg.solarPumpCommandTopic, false);
+    solar.output = 'off';
+    solar.loadShedOff = true;
+    solar.changedAt = now;
+  }
+  if (loadShedActive && cfg.filterPumpCommandTopic) {
+    const effectivePriority = getEffectivePriority('filter', cfg);
+    if (filter.output === 'on' && isShed('filter', effectivePriority, cfg)) {
+      send(cfg.filterPumpCommandTopic, false);
+      filter.output = 'off';
+      filter.loadShedOff = true;
     }
   }
 
@@ -304,6 +386,7 @@ function getEffectivePriority(which, cfg) {
 
 let _timer = null;
 let _tickChain = Promise.resolve();
+let _unsubscribe = null;
 
 function runNow(db) {
   const run = _tickChain.then(() => tick(db));
@@ -314,6 +397,14 @@ function runNow(db) {
 function init(db) {
   if (_timer) return;
   _timer = setInterval(() => runNow(db).catch(() => {}), 30000);
+  if (!_unsubscribe) {
+    _unsubscribe = mqttClient.onValuesChanged((event) => {
+      const keys = event && Array.isArray(event.changedKeys) ? event.changedKeys : [];
+      if (keys.some((key) => [EIGENVERBRAUCH_L1_STATE_ID, EIGENVERBRAUCH_L2_STATE_ID, EIGENVERBRAUCH_L3_STATE_ID].includes(String(key)))) {
+        runNow(db).catch(() => {});
+      }
+    });
+  }
   runNow(db).catch(() => {});
 }
 

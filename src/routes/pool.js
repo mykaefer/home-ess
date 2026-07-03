@@ -28,6 +28,7 @@ function poolRoutes(db) {
         solarOutput: poolAutomation.getSolarOutput(),
         filterOutput: poolAutomation.getFilterOutput(),
         batterieSocConfigured,
+        gridControlEnabled: isEnabled('grid-control'),
       };
       if (options.cfg) {
         res.send(renderPool({ ...base, ...options }));

@@ -1,0 +1,15 @@
+{
+  "id": "tasmota",
+  "name": "Tasmota",
+  "prefix": "tasmota",
+  "version": "1.0.0",
+  "description": "Stellt einen lokalen MQTT-Endpunkt fuer Tasmota-Geraete bereit, erkennt deren Werte automatisch und fuehrt registrierte Geraete mit Online-/Offline-Erkennung.",
+  "multiInstance": true,
+  "main": "index.js",
+  "settings": [
+    { "key": "ipRange", "label": "Erlaubter IP-Bereich", "type": "text", "default": "", "hint": "Optional. IPv4, CIDR oder Bereich, z. B. 192.168.178.0/24 oder 192.168.178.10-192.168.178.50." },
+    { "key": "port", "label": "Port", "type": "number", "default": 1883, "hint": "Wenn 1883 belegt ist, wird auf der Einstellungsseite ein freier Alternativ-Port vorgeschlagen." },
+    { "key": "username", "label": "Benutzername", "type": "text", "default": "" },
+    { "key": "password", "label": "Kennwort", "type": "password", "default": "" }
+  ]
+}

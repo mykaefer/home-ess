@@ -7,7 +7,14 @@ const sqlite3 = require('sqlite3').verbose();
 const mqttClient = require('../src/mqtt/client');
 const levelHandler = require('../src/messen-schalten/../operating-level/handler');
 const automation = require('../src/messen-schalten/automation');
+const modulesState = require('../src/modules');
+const gridControlAutomation = require('../src/grid-control/automation');
 const { cacheKey } = require('../src/messen-schalten/actors');
+
+test.beforeEach(() => {
+  automation.resetForTests();
+  mqttClient.getCache().clear();
+});
 
 // Externen/Ist-Zustand eines Geräts im gemeinsamen Cache setzen bzw. entfernen.
 function setActual(id, on) {
@@ -31,8 +38,17 @@ async function freshDb() {
     counter_unit TEXT NOT NULL DEFAULT 'kWh', priority INTEGER NOT NULL DEFAULT 4,
     use_group_priority INTEGER NOT NULL DEFAULT 0, desired_on INTEGER NOT NULL DEFAULT 0,
     always_on INTEGER NOT NULL DEFAULT 0,
-    function_key TEXT NOT NULL DEFAULT '')`);
+    function_key TEXT NOT NULL DEFAULT '',
+    load_shed_enabled INTEGER NOT NULL DEFAULT 0,
+    load_shed_phase TEXT NOT NULL DEFAULT 'l1')`);
   await dbRun(db, "CREATE TABLE mess_schalt_groups (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, priority INTEGER NOT NULL DEFAULT 4, position INTEGER NOT NULL DEFAULT 0, function_key TEXT NOT NULL DEFAULT '')");
+  await dbRun(db, 'CREATE TABLE modules (key TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 0)');
+  await dbRun(db, `CREATE TABLE grid_control_config (
+    id INTEGER PRIMARY KEY, load_enabled INTEGER NOT NULL DEFAULT 0,
+    load_on_l1 REAL, load_on_l2 REAL, load_on_l3 REAL,
+    load_off_l1 REAL, load_off_l2 REAL, load_off_l3 REAL
+  )`);
+  await dbRun(db, 'INSERT INTO grid_control_config (id, load_enabled, load_on_l1, load_on_l2, load_on_l3, load_off_l1, load_off_l2, load_off_l3) VALUES (1, 1, 4000, 4000, 4000, 3000, 3000, 3000)');
   return db;
 }
 
@@ -146,4 +162,123 @@ test('Geräte ohne Schalt-Topic nehmen nicht am Level teil', async () => {
     assert.equal(published.length, 0);   // kein Schalt-Topic ⇒ nichts geschaltet
   });
   await new Promise((resolve) => db.close(resolve));
+});
+
+test('Lastabwurf schaltet Geräte ab 80 % Phasenlast aus', async () => {
+  const db = await freshDb();
+  await dbRun(db, "INSERT INTO mess_schalt_actors (id, name, switch_topic, always_on, load_shed_enabled, load_shed_phase) VALUES (50, 'Boiler', 'boiler.0.state', 1, 1, 'l2')");
+  await modulesState.setEnabled(db, 'grid-control', true);
+  const origGetState = gridControlAutomation.getState;
+  gridControlAutomation.getState = () => ({ inverterLoads: [1200, 3200, 900] });
+  setActual(50, true);
+  try {
+    await withPublishCapture(async (published) => {
+      levelHandler.applyLevel(5);
+      await automation.tick(db);
+      assert.ok(published.some((p) => p[0] === 'boiler.0.state' && p[1] === '0'));
+    });
+  } finally {
+    gridControlAutomation.getState = origGetState;
+    clearActual(50);
+    await modulesState.setEnabled(db, 'grid-control', false);
+    await new Promise((resolve) => db.close(resolve));
+  }
+});
+
+test('Lastabwurf schaltet „Immer an" unter 50 % wieder ein, manuelle Geräte aber nicht', async () => {
+  const db = await freshDb();
+  await dbRun(db, "INSERT INTO mess_schalt_actors (id, name, switch_topic, always_on, load_shed_enabled, load_shed_phase) VALUES (60, 'WP', 'wp.0.state', 1, 1, 'three_phase')");
+  await dbRun(db, "INSERT INTO mess_schalt_actors (id, name, switch_topic, always_on, load_shed_enabled, load_shed_phase) VALUES (61, 'Licht', 'licht.0.state', 0, 1, 'l1')");
+  await modulesState.setEnabled(db, 'grid-control', true);
+  const origGetState = gridControlAutomation.getState;
+  const origNow = Date.now;
+  let now = 100000;
+  Date.now = () => now;
+  try {
+    gridControlAutomation.getState = () => ({ inverterLoads: [3300, 1800, 1800] });
+    levelHandler.applyLevel(5);
+    setActual(60, true);
+    setActual(61, true);
+    await automation.tick(db);
+
+    gridControlAutomation.getState = () => ({ inverterLoads: [1500, 1500, 1500] });
+    setActual(60, false);
+    setActual(61, false);
+    await withPublishCapture(async (published) => {
+      now += 11000;
+      await automation.tick(db);
+      assert.ok(published.some((p) => p[0] === 'wp.0.state' && p[1] === '1'));
+      assert.ok(!published.some((p) => p[0] === 'licht.0.state' && p[1] === '1'));
+    });
+  } finally {
+    Date.now = origNow;
+    gridControlAutomation.getState = origGetState;
+    clearActual(60);
+    clearActual(61);
+    await modulesState.setEnabled(db, 'grid-control', false);
+    await new Promise((resolve) => db.close(resolve));
+  }
+});
+
+test('Lastabwurf eskaliert und erholt sich stufenweise mit 10 s bzw. 60 s Pause', async () => {
+  const db = await freshDb();
+  await dbRun(db, "INSERT INTO mess_schalt_actors (id, name, switch_topic, priority, always_on, load_shed_enabled, load_shed_phase) VALUES (70, 'P5', 'p5.0.state', 5, 1, 1, 'l1')");
+  await dbRun(db, "INSERT INTO mess_schalt_actors (id, name, switch_topic, priority, always_on, load_shed_enabled, load_shed_phase) VALUES (71, 'P4', 'p4.0.state', 4, 1, 1, 'l1')");
+  await modulesState.setEnabled(db, 'grid-control', true);
+  const origGetState = gridControlAutomation.getState;
+  const origNow = Date.now;
+  let now = 100000;
+  Date.now = () => now;
+  gridControlAutomation.getState = () => ({ inverterLoads: [3300, 1000, 1000] });
+  setActual(70, true);
+  setActual(71, true);
+  try {
+    await withPublishCapture(async (published) => {
+      levelHandler.applyLevel(5);
+      await automation.tick(db);
+      assert.ok(published.some((p) => p[0] === 'p5.0.state' && p[1] === '0'));
+      assert.ok(!published.some((p) => p[0] === 'p4.0.state' && p[1] === '0'));
+
+      published.length = 0;
+      now += 5000;
+      await automation.tick(db);
+      assert.ok(!published.some((p) => p[0] === 'p4.0.state' && p[1] === '0'), 'vor 10 s keine naechste Stufe');
+
+      published.length = 0;
+      now += 6000;
+      await automation.tick(db);
+      assert.ok(published.some((p) => p[0] === 'p4.0.state' && p[1] === '0'));
+
+      published.length = 0;
+      gridControlAutomation.getState = () => ({ inverterLoads: [1500, 1000, 1000] });
+      setActual(70, false);
+      setActual(71, false);
+      now += 9000;
+      await automation.tick(db);
+      assert.ok(!published.some((p) => p[1] === '1'), 'Freigabe wartet ebenfalls auf 10 s Stabilisierung');
+
+      published.length = 0;
+      now += 2000;
+      await automation.tick(db);
+      assert.ok(published.some((p) => p[0] === 'p4.0.state' && p[1] === '1'));
+      assert.ok(!published.some((p) => p[0] === 'p5.0.state' && p[1] === '1'));
+
+      published.length = 0;
+      now += 30000;
+      await automation.tick(db);
+      assert.ok(!published.some((p) => p[0] === 'p5.0.state' && p[1] === '1'), 'zwischen Freigabestufen 60 s Pause');
+
+      published.length = 0;
+      now += 31000;
+      await automation.tick(db);
+      assert.ok(published.some((p) => p[0] === 'p5.0.state' && p[1] === '1'));
+    });
+  } finally {
+    Date.now = origNow;
+    gridControlAutomation.getState = origGetState;
+    clearActual(70);
+    clearActual(71);
+    await modulesState.setEnabled(db, 'grid-control', false);
+    await new Promise((resolve) => db.close(resolve));
+  }
 });

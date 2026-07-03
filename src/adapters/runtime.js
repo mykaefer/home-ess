@@ -53,6 +53,12 @@ function buildHost() {
     setConnected(connected, detail) {
       send({ type: 'status', connected: !!connected, detail: detail == null ? '' : String(detail) });
     },
+    // Persistente Instanzdaten unter settings[key] ablegen, ohne die Instanz neu
+    // zu laden. Gedacht für dynamisch erkannte Geräte/Metadaten.
+    setStorage(key, value) {
+      if (key == null) return;
+      send({ type: 'storage', key: String(key), value });
+    },
     log(...args) {
       send({ type: 'log', level: 'info', message: args.map(String).join(' ') });
     },

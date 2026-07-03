@@ -63,6 +63,7 @@ function boxToFormValues(box) {
     priorityPrivate: box.priorityPrivate ?? 5,
     priorityBusiness: box.priorityBusiness ?? 3,
     priorityFull: box.priorityFull ?? 4,
+    loadShedPhase: box.loadShedPhase || 'three_phase',
     minChargePercent: box.minChargePercent ?? 30,
     businessDays: box.businessDays || [],
     stallTimeoutSeconds: box.stallTimeoutSeconds ?? 120,
@@ -79,6 +80,7 @@ async function renderPage(db, res, options = {}) {
   res.send(renderWallbox({
     boxes: boxes.map(boxToFormValues),
     values,
+    gridControlEnabled: isEnabled('grid-control'),
     formMessage: options.formMessage || '',
     formError: options.formError || '',
     dialogMode: options.dialogMode || '',

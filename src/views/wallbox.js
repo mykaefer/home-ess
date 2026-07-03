@@ -2,6 +2,7 @@
 
 const { renderLayout } = require('./layout');
 const { escapeHtml, statusText } = require('./components');
+const { PHASES } = require('../grid-control/load-shed');
 
 const MODES = [
   { value: 1, label: 'Privat' },
@@ -25,6 +26,11 @@ function priorityOptions(selected, def) {
 
 function unitOptions(units, selected) {
   return units.map((u) => `<option value="${u}"${u === selected ? ' selected' : ''}>${u}</option>`).join('');
+}
+
+function phaseOptions(selected) {
+  const labels = { l1: 'L1', l2: 'L2', l3: 'L3', three_phase: 'Drehstrom' };
+  return PHASES.map((phase) => `<option value="${phase}"${phase === selected ? ' selected' : ''}>${labels[phase]}</option>`).join('');
 }
 
 function modeButtons(box) {
@@ -86,12 +92,12 @@ function topicField(id, name, label, value, optional, placeholder) {
                 </label>`;
 }
 
-function renderBoxDialog({ dialogError, dialogValues, dialogMode, editingBoxId }) {
+function renderBoxDialog({ dialogError, dialogValues, dialogMode, editingBoxId, gridControlEnabled }) {
   const v = dialogValues || {
     name: '', maxPowerW: 11000, batteryCapacityKwh: 50, commandTopic: '', statusTopic: '',
     powerTopic: '', powerUnit: 'W', counterTopic: '', counterUnit: 'kWh', setpointTopic: '',
     pluggedTopic: '', socTopic: '', modeSyncTopic: '', priorityPrivate: 5, priorityBusiness: 3,
-    priorityFull: 4, minChargePercent: 30, businessDays: [], stallTimeoutSeconds: 120, stallPowerW: 200,
+    priorityFull: 4, loadShedPhase: 'three_phase', minChargePercent: 30, businessDays: [], stallTimeoutSeconds: 120, stallPowerW: 200,
   };
   const action = dialogMode === 'edit' && editingBoxId != null
     ? `/wallbox/boxes/${editingBoxId}` : '/wallbox/boxes';
@@ -152,9 +158,13 @@ function renderBoxDialog({ dialogError, dialogValues, dialogMode, editingBoxId }
                   <select id="wbPrioBusiness" name="priorityBusiness">${priorityOptions(v.priorityBusiness, 3)}</select></label>
                 <label class="field-block" for="wbPrioFull"><span>Priorität Immer voll</span>
                   <select id="wbPrioFull" name="priorityFull">${priorityOptions(v.priorityFull, 4)}</select></label>
+                <label class="field-block" for="wbLoadShedPhase"><span>Lastabwurf-Phase</span>
+                  <select id="wbLoadShedPhase" name="loadShedPhase"${gridControlEnabled ? '' : ' disabled'}>${phaseOptions(v.loadShedPhase || 'three_phase')}</select>
+                  ${gridControlEnabled ? '' : `<input type="hidden" name="loadShedPhase" value="${escapeHtml(v.loadShedPhase || 'three_phase')}">`}</label>
                 <label class="field-block" for="wbMinCharge"><span>Mindest-Ladestand Privat (%)</span>
                   <input type="number" min="0" max="100" step="1" id="wbMinCharge" name="minChargePercent" value="${escapeHtml(v.minChargePercent)}"></label>
               </div>
+              ${gridControlEnabled ? '' : '<p class="muted">Grid-Control ist deaktiviert. Die Lastabwurf-Phase wird erst bei aktivem Modul verwendet.</p>'}
               <div class="dialog-section-head" style="margin-top:14px;"><h4 style="font-size:14px;">Beruflich: Arbeitstage (Auto muss voll bereitstehen)</h4></div>
               <div class="pump-mode-btns" style="flex-wrap:wrap;">
                 ${WEEKDAYS.map((d) => `<label class="remember-row remember-row--boxed" style="margin:2px;" for="wbDay${d.index}">
@@ -197,7 +207,7 @@ function renderDeleteDialog() {
 
 function renderWallbox({
   boxes = [], values = [], formMessage = '', formError = '',
-  dialogMode = '', dialogError = '', dialogValues = null, editingBoxId = null,
+  dialogMode = '', dialogError = '', dialogValues = null, editingBoxId = null, gridControlEnabled = false,
 } = {}) {
   const valueById = new Map(values.map((v) => [v.id, v]));
   const list = boxes.length
@@ -219,7 +229,7 @@ function renderWallbox({
           ${list}
         </div>
 
-        ${renderBoxDialog({ dialogError, dialogValues, dialogMode, editingBoxId })}
+        ${renderBoxDialog({ dialogError, dialogValues, dialogMode, editingBoxId, gridControlEnabled })}
         ${renderDeleteDialog()}`;
 
   const script = `    const wallboxes = ${JSON.stringify(boxes)};
@@ -281,6 +291,7 @@ function renderWallbox({
       document.getElementById('wbPrioPrivate').value = v.priorityPrivate == null ? 5 : v.priorityPrivate;
       document.getElementById('wbPrioBusiness').value = v.priorityBusiness == null ? 3 : v.priorityBusiness;
       document.getElementById('wbPrioFull').value = v.priorityFull == null ? 4 : v.priorityFull;
+      document.getElementById('wbLoadShedPhase').value = v.loadShedPhase || 'three_phase';
       document.getElementById('wbMinCharge').value = v.minChargePercent == null ? 30 : v.minChargePercent;
       document.getElementById('wbStallTimeout').value = v.stallTimeoutSeconds == null ? 120 : v.stallTimeoutSeconds;
       document.getElementById('wbStallPower').value = v.stallPowerW == null ? 200 : v.stallPowerW;

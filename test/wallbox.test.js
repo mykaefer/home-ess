@@ -9,6 +9,7 @@ const {
   RESTART_OFF_MS, SURPLUS_ON_W,
 } = require('../src/wallbox/planner');
 const { houseSurplusWatt } = require('../src/wallbox/automation');
+const { createWallbox, updateWallbox, getWallbox } = require('../src/wallbox/boxes');
 const {
   updateWallboxCounter, updateWallboxSummary, loadSummaryState, loadCounterState,
   estimateSoc, recordWallboxHistory,
@@ -21,6 +22,31 @@ function dbRun(db, sql, params = []) {
 
 async function freshDb() {
   const db = new sqlite3.Database(':memory:');
+  await dbRun(db, `CREATE TABLE wallboxes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL DEFAULT '',
+    max_power_w REAL NOT NULL DEFAULT 11000,
+    battery_capacity_kwh REAL NOT NULL DEFAULT 50,
+    command_topic TEXT NOT NULL DEFAULT '',
+    status_topic TEXT NOT NULL DEFAULT '',
+    power_topic TEXT NOT NULL DEFAULT '',
+    power_unit TEXT NOT NULL DEFAULT 'W',
+    counter_topic TEXT NOT NULL DEFAULT '',
+    counter_unit TEXT NOT NULL DEFAULT 'kWh',
+    setpoint_topic TEXT NOT NULL DEFAULT '',
+    plugged_topic TEXT NOT NULL DEFAULT '',
+    soc_topic TEXT NOT NULL DEFAULT '',
+    mode_sync_topic TEXT NOT NULL DEFAULT '',
+    mode INTEGER NOT NULL DEFAULT 1,
+    priority_private INTEGER NOT NULL DEFAULT 5,
+    priority_business INTEGER NOT NULL DEFAULT 3,
+    priority_full INTEGER NOT NULL DEFAULT 4,
+    load_shed_phase TEXT NOT NULL DEFAULT 'three_phase',
+    min_charge_percent INTEGER NOT NULL DEFAULT 30,
+    business_days TEXT NOT NULL DEFAULT '',
+    stall_timeout_seconds INTEGER NOT NULL DEFAULT 120,
+    stall_power_w REAL NOT NULL DEFAULT 200
+  )`);
   await dbRun(db, `CREATE TABLE wallbox_counter_state (
     wallbox_id INTEGER PRIMARY KEY, last_raw_value REAL, day_total REAL NOT NULL DEFAULT 0,
     last_day_key TEXT NOT NULL DEFAULT '', plugged_energy_start REAL, last_power_ts INTEGER)`);
@@ -37,6 +63,28 @@ async function freshDb() {
     PRIMARY KEY(wallbox_id, day_key, hour))`);
   return db;
 }
+
+test('Wallbox speichert Lastabwurf-Phase und normalisiert ungueltige Werte', async () => {
+  const db = await freshDb();
+  const box = await createWallbox(db, {
+    name: 'WB',
+    maxPowerW: 11000,
+    batteryCapacityKwh: 50,
+    commandTopic: 'wb.0.command',
+    loadShedPhase: 'l2',
+  });
+  assert.equal(box.loadShedPhase, 'l2');
+  await updateWallbox(db, box.id, {
+    name: 'WB',
+    maxPowerW: 11000,
+    batteryCapacityKwh: 50,
+    commandTopic: 'wb.0.command',
+    loadShedPhase: 'foo',
+  });
+  const updated = await getWallbox(db, box.id);
+  assert.equal(updated.loadShedPhase, 'three_phase');
+  await new Promise((resolve) => db.close(resolve));
+});
 
 function cal(dateKey, weekKey, monthKey, yearKey) {
   return { dateKey, weekKey, monthKey, yearKey };

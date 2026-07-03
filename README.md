@@ -73,6 +73,14 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
     erlaubt. **„Immer an"** schaltet bei erneuter Freigabe automatisch wieder ein.
     Ohne diese Option bleibt das Gerät aus, bis es über den Kachel-Schalter manuell
     eingeschaltet wird. Priorität je Gerät oder – per Häkchen – von der Gruppe.
+  - Optionaler **Lastabwurf über Grid-Control**: Geräte können je Phase `L1`,
+    `L2`, `L3` oder als **Drehstrom** markiert werden. Bei hoher
+    Wechselrichterlast wirft homeESS pro Phase zuerst die **niedrigste Priorität**
+    ab, wartet **10 Sekunden** auf stabile Messwerte und eskaliert erst dann zur
+    nächsten Prioritätsstufe. Die Freigabe läuft in umgekehrter Reihenfolge mit
+    **60 Sekunden** Abstand je Stufe; nur Geräte mit **„Immer an"** schalten
+    danach automatisch wieder ein. Auf der Kachel wird ein aktiver Abwurf als
+    **„Lastabwurf · Priorität N"** angezeigt.
   - Die Werte der gesetzten Topics stehen im Wertekatalog (Kategorie **Geräte**);
     die Gruppen bilden **Verbrauchssummen** und zeigen sie in der Titelzeile.
 - 📈 **Prognose** — Energiebilanz für heute plus drei Tage direkt unterhalb der
@@ -141,7 +149,8 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
     Aktionen (gelb) und kritische Zustände (rot), einzeilig mit Zeitstempel und
     Werten; paginiert, Seite 1 live, ab Seite 2 statisch.
 - 🏊 **Poolsteuerung** (optionales Modul, aktivierbar unter `/module`):
-  - Solarpumpe und Filterpumpe mit je Status-/Steuerungs-Topic und Priorität.
+  - Solarpumpe und Filterpumpe mit je Status-/Steuerungs-Topic, Priorität und
+    **Lastabwurf-Phase** (`L1`, `L2`, `L3` oder `Drehstrom`).
   - **Drei Modus-Buttons** je Pumpe: An / Aus / Automatik.
   - Solarautomatik: sonnenbasiert, 2-Min-Mindesthaltedauer, Maximaltemperatur
     mit Probezyklus (Filterpumpe optional). Probeläufe starten nur bei direkter
@@ -155,6 +164,10 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
     Automatik-Modus schalten sie nur ein, wenn das Betriebslevel ihre Priorität
     freigibt, und schalten bei Levelabfall sofort ab. Hand An/Aus übersteuert das
     Level bewusst.
+  - Ist **Grid-Control** mit Wechselrichterlast aktiv, nehmen beide Pumpen am
+    **stufenweisen Lastabwurf** teil: erst niedrigste Priorität je Phase, dann
+    nach **10 Sekunden** Stabilisierung die nächste Stufe; Freigabe umgekehrt mit
+    **60 Sekunden** Abstand.
   - Ein Energiemodell lernt die Pumpenleistung aus realen Schaltvorgängen, zieht
     tatsächliche Laufzeiten aus dem gelernten Hausbedarf ab und plant sie separat:
     Solar aus den erwarteten PV-Stunden, Filter aus Zeitfenstern, Follow-Solar und
@@ -175,9 +188,14 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
     an gewählten Arbeitstagen; Immer voll lässt das Ladegerät aktiviert. Mit
     Soll-Leistungs-Topic wird vorsichtig gegen den Live-Überschuss moduliert;
     ohne Sollwert startet die Box erst bei vollständig gedeckter Ladeleistung.
-    Optionaler **Modus-Sync** über ein eigenes Topic.
+    Optionaler **Modus-Sync** über ein eigenes Topic. Jede Box besitzt zusätzlich
+    eine **Lastabwurf-Phase** (`L1`, `L2`, `L3` oder `Drehstrom`).
   - Als **Verbraucher am Betriebslevel-Handler** angemeldet (Priorität des aktiven
     Modus): Einschalten nur nach Freigabe, Zwangsabschaltung bei Levelabfall.
+  - Bei aktiver Grid-Control-Wechselrichterlast nimmt die Wallbox ebenfalls am
+    **stufenweisen Lastabwurf** teil und wird phasenabhängig gemeinsam mit den
+    anderen Lastabwurf-Verbrauchern priorisiert abgeworfen bzw. später wieder
+    freigegeben.
   - **Sonderfälle**: hängt der Ladestart trotz Befehl unter der Leerlaufschwelle, wird
     nach einer konfigurierbaren Vorgabezeit kurz aus-/eingeschaltet; manuelles Einschalten
     am Broker löst eine einmalige Volladung bis Leistungsabfall oder Abziehen aus;

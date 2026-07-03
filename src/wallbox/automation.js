@@ -9,10 +9,18 @@ const mqttClient = require('../mqtt/client');
 const { isEnabled } = require('../modules');
 const levelHandler = require('../operating-level/handler');
 const { loadMqttConfig } = require('../mqtt/config');
+const { loadGridControlConfig } = require('../grid-control/config');
+const gridControlAutomation = require('../grid-control/automation');
+const loadShed = require('../grid-control/load-shed');
 const { localCalendar } = require('../local-time');
 const { listWallboxes, setWallboxMode, cacheKey } = require('./boxes');
 const { readWallboxValues, parseNumber, parseBool } = require('./aggregation');
 const { readStromverbrauchValues } = require('../stromverbrauch/aggregation');
+const {
+  EIGENVERBRAUCH_L1_STATE_ID,
+  EIGENVERBRAUCH_L2_STATE_ID,
+  EIGENVERBRAUCH_L3_STATE_ID,
+} = require('../stromverbrauch/config');
 const { readBatterieData, loadBatterieConfig } = require('../batterie/config');
 const { listPvPlants } = require('../photovoltaik/plants');
 const { readPhotovoltaikValues } = require('../photovoltaik/aggregation');
@@ -41,6 +49,7 @@ function boxState(id) {
       manualOff: false, manualOffDay: '', lastTodayKey: '',
       chargeStartedAt: null, restartUntil: 0, restartAttempts: 0,
       nextChargeAt: null, nextChargeHour: null,
+      loadShedOff: false,
     };
     state.set(id, s);
   }
@@ -62,6 +71,14 @@ function sendCommand(box, stateForBox, on) {
 }
 function sendSetpoint(topic, watt) {
   if (topic && watt != null) mqttClient.publish(topic, String(Math.round(watt)));
+}
+
+function load(loader, db) {
+  return new Promise((resolve) => loader(db, resolve));
+}
+
+function loadShedPriority(box) {
+  return Number(box.mode === 2 ? box.priorityBusiness : box.mode === 3 ? box.priorityFull : box.priorityPrivate);
 }
 
 function weekdayMonZero(dateKey) {
@@ -156,6 +173,7 @@ async function tick(db) {
   if (!isEnabled('wallbox')) {
     for (const id of _knownConsumers) levelHandler.unregister(id);
     _knownConsumers = new Set();
+    loadShed.unregisterProvider('wallbox');
     return;
   }
 
@@ -198,6 +216,24 @@ async function tick(db) {
 
   const values = await readWallboxValues(db, cache, boxes);
   const valueById = new Map(values.map((v) => [v.id, v]));
+  const gridControlEnabled = isEnabled('grid-control');
+  const gridCfg = gridControlEnabled ? await load(loadGridControlConfig, db) : null;
+  const gridState = gridControlEnabled ? gridControlAutomation.getState() : null;
+  const loadShedActive = !!(gridControlEnabled && gridCfg && gridCfg.loadEnabled && gridState);
+  if (!loadShedActive) {
+    for (const box of boxes) boxState(box.id).loadShedOff = false;
+  }
+  loadShed.registerProvider('wallbox', boxes
+    .filter((box) => {
+      const s = boxState(box.id);
+      return box.commandTopic && (s.output === 'on' || s.loadShedOff || readBrokerCommand(cache, box) === 'on');
+    })
+    .map((box) => ({
+      id: consumerId(box),
+      phase: box.loadShedPhase,
+      priority: loadShedPriority(box),
+    })));
+  if (loadShedActive) loadShed.update(gridState.inverterLoads, gridCfg, now);
   const seen = new Set();
 
   for (const box of boxes) {
@@ -249,6 +285,16 @@ async function tick(db) {
       levelAllows: levelHandler.isAllowed(plan.priority),
       now,
     });
+    const wantsOn = decision.on === true;
+    if (loadShedActive && wantsOn && loadShed.shouldShed(box.loadShedPhase, plan.priority)) {
+      decision.on = false;
+      decision.setpointW = null;
+      s.loadShedOff = true;
+    } else if (wantsOn) {
+      s.loadShedOff = false;
+    } else {
+      s.loadShedOff = false;
+    }
 
     // Soll-Leistung (falls Topic) bei aktiver Ladung modulieren.
     if (box.setpointTopic && decision.on && decision.setpointW != null) {
@@ -315,6 +361,7 @@ function forceOff(box) {
   s.output = 'off';
   s.changedAt = Date.now();
   s.setpointW = null;
+  s.loadShedOff = false;
 }
 
 // Sichtbare manuelle Übersteuerung je Wallbox. MQTT-Schaltänderungen im laufenden
@@ -357,6 +404,7 @@ async function applyModeChange(db, box) {
 
 let _timer = null;
 let _tickChain = Promise.resolve();
+let _unsubscribe = null;
 
 function runNow(db) {
   const run = _tickChain.then(() => tick(db));
@@ -366,6 +414,14 @@ function runNow(db) {
 
 function init(db) {
   if (_timer) return;
+  if (!_unsubscribe) {
+    _unsubscribe = mqttClient.onValuesChanged((event) => {
+      const keys = event && Array.isArray(event.changedKeys) ? event.changedKeys : [];
+      if (keys.some((key) => [EIGENVERBRAUCH_L1_STATE_ID, EIGENVERBRAUCH_L2_STATE_ID, EIGENVERBRAUCH_L3_STATE_ID].includes(String(key)))) {
+        runNow(db).catch(() => {});
+      }
+    });
+  }
   _timer = setInterval(() => runNow(db).catch(() => {}), 30000);
   runNow(db).catch(() => {});
 }

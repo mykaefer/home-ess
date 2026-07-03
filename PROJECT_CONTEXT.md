@@ -138,7 +138,16 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   Die Steuerschleife reagiert zusätzlich zum 30-s-Tick **entprellt auf MQTT-Änderungen**
   der `messschalt:`-Topics (`onValuesChanged`/`isRelevantEvent`), sodass Geräte bei
   externem Schalten prompt nachgeregelt werden. Je Kachel wird die
-  **Betriebsart** angezeigt: „Immer an · Priorität N", „manuell" oder „nur Messen";
+  **Betriebsart** angezeigt: „Immer an · Priorität N", „manuell" oder „nur Messen".
+  Optional kann ein Gerät für den **Lastabwurf** des optionalen Grid-Control-Moduls
+  markiert werden (`load_shed_enabled`, `load_shed_phase` = L1/L2/L3/Drehstrom).
+  Die Lastabwurf-Logik arbeitet **stufenweise je Phase**: Bei mindestens 80 % der
+  jeweiligen Grid-Control-Lastschwelle wird zunächst die **niedrigste Priorität**
+  dieser Phase abgeworfen; erst nach **10 s Stabilisierung** wird bei weiter hoher
+  Last die nächste Prioritätsstufe abgeschaltet. Die Freigabe erfolgt in
+  umgekehrter Reihenfolge, erst unter 50 % der Schwelle und mit **60 s Pause** je
+  Freigabestufe. Geräte ohne „Immer an" bleiben nach einem Lastabwurf aus; aktive
+  Abwürfe erscheinen auf der Kachel als **„Lastabwurf · Priorität N"**.
   Gruppen zeigen ihre Priorität in der Titelzeile. Die Werte der gesetzten Topics stehen im
   Wertekatalog in Kategorie **Geräte** (`geraet.<id>.schalten/status/leistung/zaehler`),
   die Leistungssummen der Gruppen in Kategorie **Verbrauchssummen**
@@ -286,7 +295,8 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   In-Memory-Enabled-State; Seite `/module` zum Aktivieren/Deaktivieren.
   Aktivierte Module erscheinen automatisch in der Sidebar. Aktuell:
   - **Poolsteuerung** (`/pool`): Solarpumpe + Filterpumpe mit je Status-/
-    Steuerungs-Topic, Priorität 1–5. KPI-Kacheln (Temperatur, Pumpen, pH, Chlor)
+    Steuerungs-Topic, Priorität 1–5 und eigener **Lastabwurf-Phase**
+    (`l1`/`l2`/`l3`/`three_phase`). KPI-Kacheln (Temperatur, Pumpen, pH, Chlor)
     nur wenn konfiguriert. **Drei Modus-Buttons** (An/Aus/Automatik) je Pumpe,
     aktiver Button hervorgehoben.
     - *Solarautomatik*: sonnenbasiert, 2-Min-Mindesthaltedauer, Maximaltemperatur
@@ -313,12 +323,17 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
       **Betriebslevel-Handler** registriert (siehe „Betriebslevel / Lastmanagement"
       und [LEVEL_HANDLING.md](LEVEL_HANDLING.md)): Einschalten nur nach Freigabe,
       Zwangsabschaltung bei Levelabfall — im Automatik-Modus, nicht bei Hand An/Aus.
+    - Zusätzlich sind beide Pumpen am gemeinsamen **Grid-Control-Lastabwurf**
+      angemeldet (`grid-control/load-shed.js`): je Phase wird zuerst die
+      niedrigste Priorität abgeworfen, nach **10 s** ggf. weiter eskaliert und
+      erst unter **50 %** Last mit **60 s** Abstand je Stufe wieder freigegeben.
   - **Wallbox** (`/wallbox`): verwaltet mehrere PKW-Wallboxen, einzeln anlegbar wie die
     PV-Anlagen (`wallbox/boxes.js`, Tabellen `wallboxes`/`wallbox_counter_state`/
     `wallbox_summary_state`). Je Box ein Pflicht-**Steuer-Topic** sowie optional Status
     (sonst Steuer-Topic als Ist-Stand), Leistung (W/kW), fortlaufender Zähler (Wh/kWh),
     Soll-Leistung, „Fahrzeug angesteckt" (true/false), Fahrzeug-SoC (%) und ein
-    bidirektionales **Modus-Sync-Topic**; dazu Maximalleistung und Fahrzeug-Akkugröße.
+    bidirektionales **Modus-Sync-Topic**; dazu Maximalleistung, Fahrzeug-Akkugröße
+    und **Lastabwurf-Phase**.
     - *Verbrauch* je Box Tag/Woche/Monat/Jahr + Vorjahr (`wallbox/aggregation.js`,
       `buildWallboxSnapshot` im 60-s-Job, Vorbild `stromverbrauch/aggregation.js`); ohne
       Zähler-Topic aus der Leistung integriert. **SoC-Schätzung** aus der seit Einstecken
@@ -351,6 +366,11 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
       Mindesthaltedauer). Die vorausschauende Bewertung nutzt die System-Prognose
       (`computePrognosis`); die Mehrtagessicht wirkt zusätzlich über das prognosegeführte
       Betriebslevel auf die Modus-Priorität.
+    - Wallboxen nehmen zusätzlich am gemeinsamen **Grid-Control-Lastabwurf**
+      teil. Die Abwurfreihenfolge richtet sich nach der Priorität des **aktiven
+      Lademodus** und der konfigurierten Phase; Eskalation und Freigabe laufen
+      identisch zu Messen + Schalten beziehungsweise Pool über
+      `grid-control/load-shed.js`.
     - *Sonderfälle* in `decideWallboxAction` (planner.js, testbar): **Ladestart-Neustart**
       (hängt die Ist-Leistung trotz Befehl nach `stall_timeout_seconds` unter
       `stall_power_w`, 1 Minute aus/ein, gedeckelte Versuche — **nur bei `plugged === true`**,
@@ -720,10 +740,15 @@ Anleitung zum Anbinden neuer Verbraucher: [LEVEL_HANDLING.md](LEVEL_HANDLING.md)
 - **Drei Modi pro Verbraucher** (`an`/`aus`/`automatik`): nur **`automatik`** läuft über das
   Gate (registriert, Einschalten nur nach Freigabe, Zwangsabschaltung). **`an`/`aus`**
   übersteuern das Level bewusst und sind **nicht** registriert.
-- **Verbraucher:** Filter- und Solarpumpe (`pool.solar`, `pool.filter`) sowie je
-  Wallbox `wallbox.<id>` (Priorität des aktiven Lademodus) in
-  `pool/automation.js`. `getEffectivePriority(which, cfg)` liefert während eines
-  Filter-Probelaufs die Solarpumpen-Priorität für die Filterpumpe.
+- **Verbraucher:** Filter- und Solarpumpe (`pool.solar`, `pool.filter`) in
+  `pool/automation.js` sowie je Wallbox `wallbox.<id>` (Priorität des aktiven
+  Lademodus) in `wallbox/automation.js`. `getEffectivePriority(which, cfg)`
+  liefert während eines Filter-Probelaufs die Solarpumpen-Priorität für die
+  Filterpumpe.
+- **Zusätzlicher phasenbezogener Lastabwurf:** `grid-control/load-shed.js`
+  bündelt die Teilnehmer aus **Messen + Schalten**, **Pool** und **Wallbox**,
+  führt je Phase die aktive Abwurfstufe und entscheidet mit gemeinsamer
+  Prioritätsreihenfolge über Abschaltung beziehungsweise spätere Freigabe.
 - Init in `app.js` (`operatingLevelHandler.init()`) nach geladenem Betriebszustand, vor
   `prognosisBehavior.init`. Neue Verbraucher registrieren sich aus ihrer eigenen
   Steuerschleife heraus, sobald sie aktiv sind.

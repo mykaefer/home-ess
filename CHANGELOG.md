@@ -3,6 +3,36 @@
 Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [1.0.3] — 2026-07-03
+
+### Geändert
+
+- **Poolsteuerung und Wallbox nehmen jetzt ebenfalls am phasenbezogenen
+  Lastabwurf teil.** Solarpumpe, Filterpumpe und jede Wallbox können nun einer
+  **Lastabwurf-Phase** (`L1`, `L2`, `L3`, `Drehstrom`) zugeordnet werden und
+  nutzen dieselbe **stufenweise Prioritätslogik** wie Messen + Schalten:
+  niedrigste Priorität zuerst, **10 Sekunden** Stabilisierung vor der nächsten
+  Stufe und Wiedereinschaltung in umgekehrter Reihenfolge mit **60 Sekunden**
+  Abstand. Bei deaktiviertem Grid-Control bleiben die zugehörigen
+  Formulareinstellungen ausgegraut.
+
+## [1.0.2] — 2026-07-03
+
+### Hinzugefügt
+
+- **Messen + Schalten – Lastabwurf-Anzeige auf der Kachel.** Geräte zeigen bei
+  aktivem Lastabwurf jetzt direkt **„Lastabwurf · Priorität N"** statt nur ihrer
+  normalen Betriebsart.
+
+### Geändert
+
+- **Messen + Schalten – Lastabwurf jetzt stufenweise nach Priorität.** Pro
+  Phase werden bei hoher Wechselrichterlast zuerst Geräte der **niedrigsten
+  Priorität** abgeworfen, danach frühestens nach **10 Sekunden** Stabilisierung
+  die nächste Stufe. Die Wiedereinschaltung erfolgt in umgekehrter Reihenfolge
+  mit **60 Sekunden** Abstand je Stufe; nur Geräte mit **„Immer an"** werden
+  danach automatisch wieder zugeschaltet.
+
 ## [1.0.1] — 2026-07-03
 
 ### Geändert

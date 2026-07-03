@@ -18,6 +18,7 @@ const {
 const { readActorValues, readGroupSums } = require('../messen-schalten/aggregation');
 const automation = require('../messen-schalten/automation');
 const renderMessenSchalten = require('../views/messen-schalten');
+const { isEnabled } = require('../modules');
 
 async function refreshMqttDefinitions(db) {
   const defs = await loadAllStateDefinitions(db);
@@ -38,6 +39,7 @@ function counterDisplay(kwh) {
 function toViewActor(actor, value, groupsById) {
   const v = value || {};
   const fromGroup = actor.useGroupPriority && actor.groupId != null && groupsById.has(actor.groupId);
+  const runtime = automation.getActorAutomationState(actor.id);
   return {
     id: actor.id,
     name: actor.name,
@@ -50,6 +52,8 @@ function toViewActor(actor, value, groupsById) {
     counterDisplay: counterDisplay(v.counterKwh),
     priority: effectivePriority(actor, groupsById),
     priorityFromGroup: fromGroup,
+    loadShedEnabled: actor.loadShedEnabled === true,
+    loadShedActive: runtime.loadShedOff === true,
   };
 }
 
@@ -96,7 +100,9 @@ async function renderPage(db, res, options = {}) {
       counterTopic: a.counterTopic, counterUnit: a.counterUnit,
       priority: a.priority, useGroupPriority: a.useGroupPriority, alwaysOn: a.alwaysOn,
       functionKey: a.functionKey,
+      loadShedEnabled: a.loadShedEnabled, loadShedPhase: a.loadShedPhase,
     })),
+    gridControlEnabled: isEnabled('grid-control'),
     formMessage: options.formMessage || '',
     formError: options.formError || '',
     dialogMode: options.dialogMode || '',

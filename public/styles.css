@@ -2229,6 +2229,29 @@ h2 .cmd-confirm { font-size: 13px; vertical-align: middle; }
 .adapter-instances { display: flex; flex-direction: column; }
 
 /* Adapter-Übersicht: volle Breite, flache spaltige Zeilen */
+.page-head--split {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+.page-head--split h1 { margin-top: 0; }
+.adapter-filter-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+    font-size: 13px;
+    font-weight: 600;
+    color: #334155;
+    white-space: nowrap;
+}
+.adapter-filter-toggle input {
+    width: 16px;
+    height: 16px;
+    margin: 0;
+}
 .adapter-list { display: flex; flex-direction: column; gap: 16px; }
 .adapter-block {
     border: 1px solid #e5e7eb;
@@ -2308,6 +2331,12 @@ h2 .cmd-confirm { font-size: 13px; vertical-align: middle; }
 .adapter-badge--warn { color: #d97706; }
 
 @media (max-width: 760px) {
+    .page-head--split { flex-direction: column; }
+    .adapter-filter-toggle {
+        width: 100%;
+        justify-content: flex-start;
+        margin-left: 0;
+    }
     .adapter-row, .adapter-row--head {
         grid-template-columns: 1fr 1fr;
         row-gap: 4px;

@@ -97,6 +97,15 @@ function updateSettings(db, id, settings) {
   });
 }
 
+function updateSettingKey(db, id, key, value) {
+  return getInstance(db, id).then((instance) => {
+    if (!instance) return;
+    const settings = { ...(instance.settings || {}) };
+    settings[String(key)] = value;
+    return updateSettings(db, id, settings);
+  });
+}
+
 function deleteInstance(db, id) {
   return new Promise((resolve, reject) => {
     db.run('DELETE FROM adapter_states WHERE instance_id = ?', [id], () => {
@@ -116,5 +125,6 @@ module.exports = {
   renameInstance,
   setEnabled,
   updateSettings,
+  updateSettingKey,
   deleteInstance,
 };

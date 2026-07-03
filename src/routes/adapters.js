@@ -1,6 +1,7 @@
 'use strict';
 
 const express = require('express');
+const net = require('net');
 const { requireAuth } = require('../auth/session');
 const registry = require('../adapters/registry');
 const instancesRepo = require('../adapters/instances');
@@ -9,6 +10,28 @@ const presetsRepo = require('../adapters/presets');
 const stateEditor = require('../adapters/state-editor');
 const { renderAdapters, renderAdapterInstance } = require('../views/adapters');
 const { renderAdapterStates, renderAdapterPresets, renderPresetSelection } = require('../views/adapter-states');
+const renderTasmotaDevices = require('../views/tasmota-devices');
+const bus = require('../state-bus');
+const { buildSchemeTopic } = require('../mqtt/topics');
+
+function canBindPort(port) {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.once('error', () => resolve(false));
+    server.listen(port, '0.0.0.0', () => {
+      server.close(() => resolve(true));
+    });
+  });
+}
+
+async function suggestPort(start) {
+  const base = Math.max(1024, Number(start) || 1883);
+  for (let port = base; port < base + 20; port += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    if (await canBindPort(port)) return port;
+  }
+  return null;
+}
 
 function adapterRoutes(db) {
   const router = express.Router();
@@ -61,7 +84,17 @@ function adapterRoutes(db) {
       if (!instance) return res.status(404).send('Instanz nicht gefunden.');
       const manifest = registry.getManifest(instance.adapterId);
       if (!manifest) return res.status(404).send('Adapter nicht gefunden.');
-      res.send(renderAdapterInstance({ adapter: manifest, instance }));
+      const hints = [];
+      if (manifest.id === 'tasmota' && !host.getStatus(instance.id).running) {
+        const port = Number(instance.settings && instance.settings.port) || 1883;
+        if (!(await canBindPort(port))) {
+          const alternative = await suggestPort(port + 1);
+          hints.push(alternative
+            ? `Port ${port} ist lokal bereits belegt. Vorschlag: ${alternative}.`
+            : `Port ${port} ist lokal bereits belegt.`);
+        }
+      }
+      res.send(renderAdapterInstance({ adapter: manifest, instance, hints }));
     } catch (_) {
       res.status(500).send('Fehler beim Laden.');
     }
@@ -116,10 +149,21 @@ function adapterRoutes(db) {
       }
       await instancesRepo.updateSettings(db, instance.id, settings);
       await reload(instance.id);
+      const hints = [];
+      if (manifest.id === 'tasmota' && !host.getStatus(instance.id).running) {
+        const port = Number(settings.port) || 1883;
+        if (!(await canBindPort(port))) {
+          const alternative = await suggestPort(port + 1);
+          hints.push(alternative
+            ? `Port ${port} ist lokal bereits belegt. Vorschlag: ${alternative}.`
+            : `Port ${port} ist lokal bereits belegt.`);
+        }
+      }
       res.send(renderAdapterInstance({
         adapter: manifest,
         instance: { ...instance, settings },
         message: 'Einstellungen gespeichert.',
+        hints,
       }));
     } catch (_) {
       res.status(500).send('Speichern fehlgeschlagen.');
@@ -287,6 +331,67 @@ function adapterRoutes(db) {
     } catch (_) {
       res.status(500).json({ ok: false, error: 'Speichern fehlgeschlagen.' });
     }
+  });
+
+  async function loadTasmotaContext(id) {
+    const instance = await instancesRepo.getInstance(db, Number(id));
+    if (!instance || instance.adapterId !== 'tasmota') return null;
+    const manifest = registry.getManifest(instance.adapterId);
+    if (!manifest) return null;
+    return { instance, manifest };
+  }
+
+  async function buildTasmotaDevices(instance) {
+    const rows = await new Promise((resolve) => {
+      db.all('SELECT * FROM adapter_states WHERE instance_id = ? ORDER BY category, name, address', [instance.id], (err, result) => {
+        resolve(err ? [] : result || []);
+      });
+    });
+    const cache = bus.getCache();
+    const metaRows = Array.isArray(instance.settings && instance.settings.devices) ? instance.settings.devices : [];
+    const byTopic = new Map();
+    const topics = metaRows
+      .map((device) => String(device.topic || ''))
+      .filter(Boolean)
+      .sort((a, b) => b.length - a.length);
+    for (const row of rows) {
+      const address = String(row.address || '');
+      const topic = topics.find((candidate) => address === candidate || address.startsWith(`${candidate}/`));
+      if (!topic) continue;
+      if (!byTopic.has(topic)) byTopic.set(topic, []);
+      const cacheEntry = cache.get(buildSchemeTopic('tasmota', instance.name, address));
+      const value = cacheEntry ? cacheEntry.value : row.last_value;
+      byTopic.get(topic).push({
+        address,
+        name: row.name || address,
+        display: row.unit && value != null && value !== '' ? `${value} ${row.unit}` : (value == null || value === '' ? '—' : String(value)),
+      });
+    }
+    return metaRows.map((device) => ({
+      ...device,
+      values: (byTopic.get(String(device.topic || '')) || []).sort((a, b) => a.address.localeCompare(b.address, 'de')),
+    })).sort((a, b) => String(a.friendlyName || a.topic || '').localeCompare(String(b.friendlyName || b.topic || ''), 'de'));
+  }
+
+  router.get('/adapter/instance/:id/tasmota-devices', requireAuth, async (req, res) => {
+    const ctx = await loadTasmotaContext(req.params.id).catch(() => null);
+    if (!ctx) return res.status(404).send('Keine Tasmota-Geräteseite für diese Instanz.');
+    const devices = await buildTasmotaDevices(ctx.instance);
+    res.send(renderTasmotaDevices({ adapter: ctx.manifest, instance: ctx.instance, devices }));
+  });
+
+  router.post('/adapter/instance/:id/tasmota-devices/delete', requireAuth, async (req, res) => {
+    const ctx = await loadTasmotaContext(req.params.id).catch(() => null);
+    if (!ctx) return res.status(404).send('Keine Tasmota-Geräteseite für diese Instanz.');
+    const topic = String(req.body.topic || '').trim();
+    const devices = Array.isArray(ctx.instance.settings && ctx.instance.settings.devices) ? ctx.instance.settings.devices : [];
+    await instancesRepo.updateSettingKey(db, ctx.instance.id, 'devices', devices.filter((row) => String(row.topic || '') !== topic));
+    await new Promise((resolve) => {
+      db.run('DELETE FROM adapter_states WHERE instance_id = ? AND (address = ? OR address LIKE ?)', [ctx.instance.id, topic, `${topic}/%`], () => resolve());
+    });
+    ctx.instance = await instancesRepo.getInstance(db, ctx.instance.id);
+    const next = await buildTasmotaDevices(ctx.instance);
+    res.send(renderTasmotaDevices({ adapter: ctx.manifest, instance: ctx.instance, devices: next, message: 'Gerät gelöscht.' }));
   });
 
   return router;

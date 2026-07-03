@@ -11,8 +11,16 @@ function renderAdapters({ registry = [], instancesByAdapter = new Map(), statusB
     ? registry.map((adapter) => renderAdapterBlock(adapter, instancesByAdapter.get(adapter.id) || [], statusById)).join('\n')
     : '<div class="info-card"><p class="muted">Keine Adapter gefunden. Lege einen Adapter unter <code>/adapter/&lt;name&gt;/</code> mit einer <code>adapter.json</code> an (siehe ADAPTER.md).</p></div>';
 
-  const body = `        <h1>Adapter</h1>
-        <p class="muted" style="margin-bottom: 18px;">Adapter verbinden homeESS mit Geräten (z. B. Modbus). Jeder Adapter liegt als Unterverzeichnis in <code>/adapter/</code>. Pro Adapter lassen sich mehrere benannte Instanzen anlegen und einzeln aktivieren. Werte werden über <code>prefix://instanz/adresse</code> angesprochen.</p>
+  const body = `        <div class="page-head page-head--split">
+          <div>
+            <h1>Adapter</h1>
+            <p class="muted" style="margin-bottom: 18px;">Adapter verbinden homeESS mit Geräten (z. B. Modbus). Jeder Adapter liegt als Unterverzeichnis in <code>/adapter/</code>. Pro Adapter lassen sich mehrere benannte Instanzen anlegen und einzeln aktivieren. Werte werden über <code>prefix://instanz/adresse</code> angesprochen.</p>
+          </div>
+          <label class="adapter-filter-toggle">
+            <input type="checkbox" id="hide-inactive-adapters" checked>
+            <span>Inaktive Adapter ausblenden</span>
+          </label>
+        </div>
         ${message ? statusText(message, 'success') : ''}
         ${error ? statusText(error) : ''}
         <div class="adapter-list">
@@ -26,9 +34,24 @@ ${blocks}
       el.className = 'adapter-badge adapter-badge--' + cls;
     }
     function adapterStateOf(s) {
-      var active = !s.enabled ? ['off','Inaktiv'] : (s.running ? ['on','Aktiv'] : ['warn','Startet…']);
-      var conn = (!s.enabled || !s.running) ? ['off','—'] : (s.connected ? ['on','Verbunden'] : ['warn','Getrennt']);
+      var active = s.running ? ['on','Aktiv'] : (s.enabled ? ['warn','Startet…'] : ['off','Inaktiv']);
+      var conn = !s.running ? ['off','—'] : (s.connected ? ['on','Verbunden'] : ['warn','Getrennt']);
       return { active: active, conn: conn, detail: s.detail || '' };
+    }
+    function syncAdapterVisibility() {
+      var hideInactive = document.getElementById('hide-inactive-adapters');
+      var hide = !hideInactive || hideInactive.checked;
+      document.querySelectorAll('.adapter-block').forEach(function (block) {
+        var hasActive = block.getAttribute('data-has-active') === '1';
+        block.hidden = hide && !hasActive;
+      });
+    }
+    function updateBlockState(block) {
+      if (!block) return;
+      var hasActive = Array.prototype.some.call(block.querySelectorAll('.adapter-row[data-running]'), function (row) {
+        return row.getAttribute('data-running') === '1';
+      });
+      block.setAttribute('data-has-active', hasActive ? '1' : '0');
     }
     function adapterStatusTick() {
       fetch('/adapter/status.json', { headers: { Accept: 'application/json' } })
@@ -43,9 +66,17 @@ ${blocks}
             var conn = row.querySelector('[data-role="conn"]');
             adapterBadge(conn, st.conn[0], st.conn[1]);
             if (conn) conn.title = st.detail;
+            row.setAttribute('data-enabled', data.instances[id].enabled ? '1' : '0');
+            row.setAttribute('data-running', data.instances[id].running ? '1' : '0');
+            updateBlockState(row.closest('.adapter-block'));
           });
+          syncAdapterVisibility();
         }).catch(function () {});
     }
+    var hideInactiveToggle = document.getElementById('hide-inactive-adapters');
+    if (hideInactiveToggle) hideInactiveToggle.addEventListener('change', syncAdapterVisibility);
+    document.querySelectorAll('.adapter-block').forEach(updateBlockState);
+    syncAdapterVisibility();
     adapterStatusTick();
     setInterval(adapterStatusTick, 5000);
   `;
@@ -58,6 +89,7 @@ function badge(role, cls, text, title) {
 }
 
 function renderAdapterBlock(adapter, instances, statusById) {
+  const hasActive = instances.some((inst) => !!(statusById[inst.id] && statusById[inst.id].running));
   const rows = instances.length
     ? instances.map((inst) => renderInstanceRow(adapter, inst, statusById[inst.id] || {})).join('\n')
     : '            <div class="adapter-row adapter-row--empty"><span class="muted">Noch keine Instanz angelegt.</span></div>';
@@ -68,7 +100,7 @@ function renderAdapterBlock(adapter, instances, statusById) {
             </div>`
     : '';
 
-  return `          <div class="adapter-block">
+  return `          <div class="adapter-block" data-has-active="${hasActive ? '1' : '0'}">
             <div class="adapter-block-head">
               <div class="adapter-block-title">
                 <strong>${escapeHtml(adapter.name)}</strong>
@@ -91,13 +123,17 @@ function renderInstanceRow(adapter, inst, status) {
   const enabled = inst.enabled;
   const running = !!status.running;
   const connected = !!status.connected;
-  const active = !enabled ? ['off', 'Inaktiv'] : running ? ['on', 'Aktiv'] : ['warn', 'Startet…'];
-  const conn = !enabled || !running ? ['off', '—'] : connected ? ['on', 'Verbunden'] : ['warn', 'Getrennt'];
+  const active = running ? ['on', 'Aktiv'] : enabled ? ['warn', 'Startet…'] : ['off', 'Inaktiv'];
+  const conn = !running ? ['off', '—'] : connected ? ['on', 'Verbunden'] : ['warn', 'Getrennt'];
   const toggleAction = enabled ? 'disable' : 'enable';
   const toggleLabel = enabled ? 'Deaktivieren' : 'Aktivieren';
   const toggleClass = enabled ? 'button-danger' : '';
 
-  return `            <div class="adapter-row" data-instance="${inst.id}">
+  const tasmotaLink = adapter.id === 'tasmota'
+    ? `<a href="/adapter/instance/${inst.id}/tasmota-devices" class="module-toggle-btn">Geräte</a>`
+    : '';
+
+  return `            <div class="adapter-row" data-instance="${inst.id}" data-enabled="${enabled ? '1' : '0'}" data-running="${running ? '1' : '0'}">
               <span class="adapter-col-name"><strong>${escapeHtml(inst.name)}</strong></span>
               <span class="adapter-col-addr muted">${escapeHtml(adapter.prefix)}://${escapeHtml(inst.name)}/</span>
               <span>${badge('active', active[0], active[1])}</span>
@@ -105,6 +141,7 @@ function renderInstanceRow(adapter, inst, status) {
               <span class="adapter-row-actions">
                 <a href="/adapter/instance/${inst.id}" class="module-toggle-btn">Einstellungen</a>
                 ${adapter.stateEditor ? `<a href="/adapter/instance/${inst.id}/states" class="module-toggle-btn">${escapeHtml(adapter.stateEditor.label)}</a>` : ''}
+                ${tasmotaLink}
                 <form action="/adapter/instance/${inst.id}/${toggleAction}" method="POST">
                   <button type="submit" class="module-toggle-btn ${toggleClass}">${toggleLabel}</button>
                 </form>
@@ -118,7 +155,7 @@ function renderInstanceRow(adapter, inst, status) {
 // Generische Einstellungsseite einer Instanz: rendert das Schema aus dem Manifest.
 // Ist das Schema leer, bleibt die Seite (bis auf Namen/Umbenennen) leer – der
 // Adapter bestimmt selbst, was hier erscheint.
-function renderAdapterInstance({ adapter, instance, message = '', error = '' } = {}) {
+function renderAdapterInstance({ adapter, instance, message = '', error = '', hints = [] } = {}) {
   const fields = (adapter.settings || []).map((field) => renderSettingField(field, instance.settings)).join('\n');
   const settingsBlock = fields
     ? `          <div class="settings-card">
@@ -135,10 +172,14 @@ ${fields}
   const editorLink = adapter.stateEditor
     ? ` · <a href="/adapter/instance/${instance.id}/states">${escapeHtml(adapter.stateEditor.label)} verwalten</a>`
     : '';
+  const tasmotaLink = adapter.id === 'tasmota'
+    ? ` · <a href="/adapter/instance/${instance.id}/tasmota-devices">Geräte ansehen</a>`
+    : '';
   const body = `        <h1>${escapeHtml(adapter.name)} – ${escapeHtml(instance.name)}</h1>
-        <p class="muted" style="margin-bottom:16px;">Adresse: <code>${escapeHtml(adapter.prefix)}://${escapeHtml(instance.name)}/</code>${editorLink}</p>
+        <p class="muted" style="margin-bottom:16px;">Adresse: <code>${escapeHtml(adapter.prefix)}://${escapeHtml(instance.name)}/</code>${editorLink}${tasmotaLink}</p>
         ${message ? statusText(message, 'success') : ''}
         ${error ? statusText(error) : ''}
+        ${hints.map((hint) => `<p class="muted">${escapeHtml(hint)}</p>`).join('')}
 
         <form action="/adapter/instance/${instance.id}/rename" method="POST" class="settings-form" style="margin-bottom:16px;">
           <div class="settings-card">

@@ -3,6 +3,7 @@
 const os = require('os');
 const fs = require('fs');
 const path = require('path');
+const net = require('net');
 
 // Temp-Adapterverzeichnis und Temp-DB VOR dem Laden von config/db setzen.
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'homeess-adapters-'));
@@ -24,6 +25,7 @@ const stateEditor = require('../src/adapters/state-editor');
 const presetsRepo = require('../src/adapters/presets');
 const { buildStatesTree } = require('../src/adapters/states');
 const { openDatabase } = require('../src/db');
+const createTasmotaAdapter = require('../adapter/tasmota');
 
 const EDITOR = {
   storageKey: 'registers', keyField: 'address', nameField: 'name', label: 'Register', presets: true,
@@ -53,6 +55,17 @@ function freshDb() {
   fs.rmSync(dbPath, { force: true });
   const db = openDatabase();
   return new Promise((resolve) => setTimeout(() => resolve(db), 300));
+}
+
+function getFreePort() {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const { port } = server.address();
+      server.close((err) => (err ? reject(err) : resolve(port)));
+    });
+  });
 }
 
 test('Registry scannt /adapter und validiert Prefix/Manifest', () => {
@@ -203,6 +216,23 @@ test('Host startet Instanz als (Fake-)Kindprozess und verarbeitet IPC', async ()
   db.close();
 });
 
+test('Host persistiert dynamische Adapter-Instanzdaten via storage-IPC', async () => {
+  const db = await freshDb();
+  registry.loadRegistry();
+  const id = await instancesRepo.createInstance(db, 'demo', 'simstorage');
+  await instancesRepo.setEnabled(db, id, true);
+  await host.initAdapters(db);
+
+  const entry = { instance: { id, name: 'simstorage' }, manifest: { prefix: 'demo' }, status: {} };
+  host._handleMessage(entry, { type: 'storage', key: 'devices', value: [{ topic: 'plug1', online: true }] });
+  await new Promise((r) => setTimeout(r, 150));
+
+  const instance = await instancesRepo.getInstance(db, id);
+  assert.deepEqual(instance.settings.devices, [{ topic: 'plug1', online: true }]);
+  await host.stopAll();
+  db.close();
+});
+
 test('Host startet abgestürztes Kind automatisch neu', async () => {
   const db = await freshDb();
   registry.loadRegistry();
@@ -348,6 +378,114 @@ test('Einstellungen speichern behält den State-Editor-Speicher (Register)', asy
   assert.equal(inst.settings.host, 'neu', 'Schema-Feld aktualisiert');
   assert.deepEqual(inst.settings.registers, [{ address: 'b/soc', name: 'SoC' }], 'Register bleiben erhalten');
   db.close();
+});
+
+test('Tasmota-Adapter nimmt MQTT-Verbindung an, fragt STATUS an und publiziert Werte', async () => {
+  const mqtt = require('mqtt');
+  const port = await getFreePort();
+  const events = { states: [], values: [], storage: [], connections: [] };
+  const adapter = createTasmotaAdapter({
+    setStates(list) { events.states.push(list); },
+    publishState(address, value) { events.values.push({ address, value }); },
+    publishStates(values) { values.forEach((entry) => events.values.push(entry)); },
+    setStorage(key, value) { events.storage.push({ key, value }); },
+    setConnected(connected, detail) { events.connections.push({ connected, detail }); },
+    log() {},
+  });
+
+  await adapter.start({
+    port,
+    username: 'user',
+    password: 'secret',
+    devices: [
+      { topic: 'tasmota-test', clientId: 'tasmota-test', friendlyName: 'tasmota-test', fields: [] },
+      { topic: 'plug1', clientId: 'tasmota-test', friendlyName: 'Kueche Boiler', fields: [] },
+    ],
+  });
+  assert.equal(events.connections.at(-1).connected, false, 'Broker ohne Gerät ist nicht verbunden');
+
+  const client = mqtt.connect(`mqtt://127.0.0.1:${port}`, {
+    clientId: 'tasmota-test',
+    username: 'user',
+    password: 'secret',
+    reconnectPeriod: 0,
+  });
+
+  const received = [];
+  client.on('message', (topic, payload) => received.push({ topic, payload: payload.toString('utf8') }));
+
+  await new Promise((resolve, reject) => {
+    client.once('error', reject);
+    client.once('connect', resolve);
+  });
+  assert.equal(events.connections.at(-1).connected, true, 'MQTT-Gerät setzt Verbindungsflag');
+
+  await new Promise((resolve, reject) => client.subscribe('cmnd/plug1/POWER', (err) => (err ? reject(err) : resolve())));
+  await new Promise((resolve) => setTimeout(resolve, 700));
+  assert.ok(received.some((entry) => entry.topic === 'cmnd/plug1/STATUS' && entry.payload === '0'));
+
+  await new Promise((resolve, reject) => client.publish('tele/plug1/LWT', 'Online', (err) => (err ? reject(err) : resolve())));
+  await new Promise((resolve, reject) => client.publish('tele/plug1/STATE', JSON.stringify({
+    Time: '2026-07-03T10:00:00',
+    POWER: 'ON',
+    Wifi: { RSSI: 74 },
+  }), (err) => (err ? reject(err) : resolve())));
+  await new Promise((resolve, reject) => client.publish('tele/plug1/SENSOR', JSON.stringify({
+    ENERGY: { Total: 500.218, Today: 0.166, Yesterday: 0.472, Power: 42, Voltage: 229 },
+  }), (err) => (err ? reject(err) : resolve())));
+  await new Promise((resolve, reject) => client.publish('tele/other-route/STATE', JSON.stringify({
+    POWER: 'OFF',
+  }), (err) => (err ? reject(err) : resolve())));
+
+  await new Promise((resolve) => setTimeout(resolve, 500));
+
+  assert.ok(events.values.some((entry) => entry.address === 'plug1/online' && entry.value === true));
+  assert.ok(events.values.some((entry) => entry.address === 'plug1/POWER' && entry.value === true));
+  assert.ok(events.values.some((entry) => entry.address === 'plug1/ENERGY/Power' && entry.value === 42));
+  assert.equal(events.values.some((entry) => entry.address === 'plug1/Wifi/RSSI'), false);
+  assert.equal(events.values.some((entry) => entry.address === 'plug1/ENERGY/Voltage'), false);
+  assert.ok(events.states.some((list) => list.some((entry) => entry.address === 'plug1/POWER')));
+  const catalog = events.states.at(-1);
+  assert.deepEqual(catalog.map((entry) => entry.address).sort(), [
+    'plug1/ENERGY/Power',
+    'plug1/ENERGY/Today',
+    'plug1/ENERGY/Total',
+    'plug1/ENERGY/Yesterday',
+    'plug1/POWER',
+  ]);
+  assert.equal(catalog.find((entry) => entry.address === 'plug1/POWER').writable, true);
+  assert.ok(events.storage.some((entry) => entry.key === 'devices' && Array.isArray(entry.value) && entry.value.some((row) => row.topic === 'plug1')));
+  const storedDevices = events.storage.at(-1).value;
+  assert.equal(storedDevices.filter((row) => row.clientId === 'tasmota-test').length, 1, 'Client-ID-Dublette wird zusammengeführt');
+  assert.equal(storedDevices.some((row) => row.topic === 'tasmota-test'), false, 'vorläufiger Client-Eintrag wird entfernt');
+  assert.equal(storedDevices.some((row) => row.topic === 'other-route'), false, 'kanonische Geräteadresse bleibt nach weiteren Topics stabil');
+
+  adapter.write('plug1/POWER', false);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.ok(received.some((entry) => entry.topic === 'cmnd/plug1/POWER' && entry.payload === 'OFF'));
+
+  await new Promise((resolve) => client.end(false, resolve));
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(events.connections.at(-1).connected, false, 'Letztes getrenntes Gerät löscht Verbindungsflag');
+  await adapter.stop();
+});
+
+test('Tasmota-Adapter erkennt frei angeordnetes FullTopic', () => {
+  const parsed = createTasmotaAdapter.parseTasmotaTopic('house/kitchen/plug1/tele/SENSOR');
+  assert.deepEqual(parsed, {
+    group: 'tele',
+    deviceTopic: 'house/kitchen/plug1',
+    messageType: 'SENSOR',
+  });
+  assert.deepEqual(createTasmotaAdapter.parseTasmotaTopic('custom/device/STATE'), {
+    group: 'tele',
+    deviceTopic: 'custom/device',
+    messageType: 'STATE',
+  });
+  assert.equal(
+    createTasmotaAdapter.commandTopicFromSubscription('house/kitchen/plug1/cmnd/#'),
+    'house/kitchen/plug1/cmnd/STATUS'
+  );
 });
 
 test.after(() => {

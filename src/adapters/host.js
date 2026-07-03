@@ -92,6 +92,11 @@ function handleMessage(entry, msg) {
       entry.status.connected = !!msg.connected;
       entry.status.detail = msg.detail ? String(msg.detail) : '';
       break;
+    case 'storage':
+      if (msg.key != null) {
+        instancesRepo.updateSettingKey(db, entry.instance.id, String(msg.key), msg.value).catch(() => {});
+      }
+      break;
     case 'log':
       console.log(`[adapter ${entry.manifest.prefix}://${name}] ${msg.message}`);
       break;

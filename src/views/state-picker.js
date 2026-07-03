@@ -35,6 +35,7 @@ function statePickerScript() {
     var statePickerData = null;
     var statePickerAnchor = null;
     var statePickerWired = false;
+    var statePickerHome = null;
 
     function statePickerOpen(inputId) {
       statePickerTarget = inputId;
@@ -42,6 +43,12 @@ function statePickerScript() {
       statePickerAnchor = (input && input.closest && input.closest('.topic-input-row')) || input;
       var pop = document.getElementById('state-picker-pop');
       if (!pop) return;
+      if (!statePickerHome) statePickerHome = pop.parentNode;
+      // In modalen <dialog>-Fenstern wird alles außerhalb des Dialogs inert.
+      // Der gemeinsame Picker muss daher in den aktiven Dialog umgehängt werden,
+      // damit Kategorien und States darin anklickbar bleiben.
+      var host = (input && input.closest && input.closest('dialog')) || statePickerHome;
+      if (host && pop.parentNode !== host) host.appendChild(pop);
       if (pop.showPopover) {
         if (!pop.matches(':popover-open')) pop.showPopover();
       } else {
@@ -67,6 +74,7 @@ function statePickerScript() {
       if (pop) {
         if (pop.hidePopover && pop.matches(':popover-open')) pop.hidePopover();
         pop.classList.remove('is-open');
+        if (statePickerHome && pop.parentNode !== statePickerHome) statePickerHome.appendChild(pop);
       }
       statePickerTarget = null;
       statePickerAnchor = null;
@@ -80,7 +88,11 @@ function statePickerScript() {
       window.addEventListener('resize', statePickerPosition);
       // Popover-Lightdismiss (Klick außerhalb / Esc) räumt den Zielzustand auf.
       pop.addEventListener('toggle', function (e) {
-        if (e.newState === 'closed') { statePickerTarget = null; statePickerAnchor = null; }
+        if (e.newState === 'closed') {
+          statePickerTarget = null;
+          statePickerAnchor = null;
+          if (statePickerHome && pop.parentNode !== statePickerHome) statePickerHome.appendChild(pop);
+        }
       });
     }
 
