@@ -73,24 +73,24 @@ function nextRecoveryCutoff(currentCutoff, prioritiesDesc) {
   return index === 0 ? null : prioritiesDesc[index - 1];
 }
 
-function updateStage(phaseKey, load, onThreshold, prioritiesDesc, now) {
+function updateStage(phaseKey, load, maxLoad, prioritiesDesc, now) {
   const stage = stages[phaseKey];
-  if (!Number.isFinite(load) || !Number.isFinite(onThreshold) || !prioritiesDesc.length) {
+  if (!Number.isFinite(load) || !Number.isFinite(maxLoad) || !prioritiesDesc.length) {
     stage.cutoff = null;
     stage.nextEscalateAt = 0;
     stage.nextRecoverAt = 0;
     return;
   }
 
-  const overloaded = load >= onThreshold * 0.8;
-  const recoverable = load < onThreshold * 0.5;
+  const overloaded = load >= maxLoad * 0.8;
+  const recoverable = load < maxLoad * 0.5;
 
   if (overloaded) {
     const nextCutoff = nextEscalationCutoff(stage.cutoff, prioritiesDesc);
     if (nextCutoff !== stage.cutoff && now >= stage.nextEscalateAt) {
       stage.cutoff = nextCutoff;
       stage.nextEscalateAt = now + LOAD_SHED_SETTLE_MS;
-      stage.nextRecoverAt = now + LOAD_SHED_SETTLE_MS;
+      stage.nextRecoverAt = now + LOAD_SHED_RECOVER_MS;
     }
     return;
   }
@@ -107,9 +107,9 @@ function update(loads, cfg, now = Date.now()) {
     resetStages();
     return getStageState();
   }
-  updateStage('l1', Number(loads[0]), Number(cfg.loadOnL1), prioritiesForPhase('l1'), now);
-  updateStage('l2', Number(loads[1]), Number(cfg.loadOnL2), prioritiesForPhase('l2'), now);
-  updateStage('l3', Number(loads[2]), Number(cfg.loadOnL3), prioritiesForPhase('l3'), now);
+  updateStage('l1', Number(loads[0]), Number(cfg.loadShedMaxL1), prioritiesForPhase('l1'), now);
+  updateStage('l2', Number(loads[1]), Number(cfg.loadShedMaxL2), prioritiesForPhase('l2'), now);
+  updateStage('l3', Number(loads[2]), Number(cfg.loadShedMaxL3), prioritiesForPhase('l3'), now);
   return getStageState();
 }
 

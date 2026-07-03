@@ -19,6 +19,7 @@ const DEFAULTS = {
   gridFrequencyL1Topic: '', gridFrequencyL2Topic: '', gridFrequencyL3Topic: '',
   gridDetectionSeconds: 30,
   loadOffDelaySeconds: 30,
+  loadShedMaxL1: '', loadShedMaxL2: '', loadShedMaxL3: '',
   loadOnL1: '', loadOnL2: '', loadOnL3: '', loadOffL1: '', loadOffL2: '', loadOffL3: '',
 };
 
@@ -58,6 +59,9 @@ function rowToConfig(row = {}) {
     gridFrequencyL2Topic: row.grid_frequency_l2_topic || '', gridFrequencyL3Topic: row.grid_frequency_l3_topic || '',
     gridDetectionSeconds: row.grid_detection_seconds == null ? DEFAULTS.gridDetectionSeconds : row.grid_detection_seconds,
     loadOffDelaySeconds: row.load_off_delay_seconds == null ? DEFAULTS.loadOffDelaySeconds : row.load_off_delay_seconds,
+    loadShedMaxL1: nullableValue(row.load_shed_max_l1),
+    loadShedMaxL2: nullableValue(row.load_shed_max_l2),
+    loadShedMaxL3: nullableValue(row.load_shed_max_l3),
     loadOnL1: nullableValue(row.load_on_l1), loadOnL2: nullableValue(row.load_on_l2), loadOnL3: nullableValue(row.load_on_l3),
     loadOffL1: nullableValue(row.load_off_l1), loadOffL2: nullableValue(row.load_off_l2), loadOffL3: nullableValue(row.load_off_l3),
   };
@@ -102,6 +106,9 @@ function normalizeGridControlInput(input = {}) {
     gridFrequencyL3Topic: normalizeMqttTopic(input.gridFrequencyL3Topic || ''),
     gridDetectionSeconds: Math.round(number(input.gridDetectionSeconds, 1, 3600, DEFAULTS.gridDetectionSeconds)),
     loadOffDelaySeconds: Math.round(number(input.loadOffDelaySeconds, 0, 3600, DEFAULTS.loadOffDelaySeconds)),
+    loadShedMaxL1: optionalNumber(input.loadShedMaxL1),
+    loadShedMaxL2: optionalNumber(input.loadShedMaxL2),
+    loadShedMaxL3: optionalNumber(input.loadShedMaxL3),
     loadOnL1: optionalNumber(input.loadOnL1), loadOnL2: optionalNumber(input.loadOnL2), loadOnL3: optionalNumber(input.loadOnL3),
     loadOffL1: optionalNumber(input.loadOffL1), loadOffL2: optionalNumber(input.loadOffL2), loadOffL3: optionalNumber(input.loadOffL3),
   };
@@ -116,8 +123,9 @@ function saveGridControlConfig(db, input, callback) {
        soc_lower_offset, soc_upper_offset, soc_hysteresis, voltage_hysteresis,
        grid_frequency_l1_topic, grid_frequency_l2_topic, grid_frequency_l3_topic, grid_detection_seconds,
        load_enabled, load_off_delay_seconds,
+       load_shed_max_l1, load_shed_max_l2, load_shed_max_l3,
        load_on_l1, load_on_l2, load_on_l3, load_off_l1, load_off_l2, load_off_l3)
-     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
        grid_command_topic=excluded.grid_command_topic, feed_in_command_topic=excluded.feed_in_command_topic,
        temperature_warning_topic=excluded.temperature_warning_topic, temperature_warning_value=excluded.temperature_warning_value,
@@ -131,6 +139,8 @@ function saveGridControlConfig(db, input, callback) {
        grid_frequency_l3_topic=excluded.grid_frequency_l3_topic,
        grid_detection_seconds=excluded.grid_detection_seconds, load_enabled=excluded.load_enabled,
        load_off_delay_seconds=excluded.load_off_delay_seconds,
+       load_shed_max_l1=excluded.load_shed_max_l1, load_shed_max_l2=excluded.load_shed_max_l2,
+       load_shed_max_l3=excluded.load_shed_max_l3,
        load_on_l1=excluded.load_on_l1, load_on_l2=excluded.load_on_l2, load_on_l3=excluded.load_on_l3,
        load_off_l1=excluded.load_off_l1, load_off_l2=excluded.load_off_l2, load_off_l3=excluded.load_off_l3`,
     [cfg.gridCommandTopic, cfg.feedInCommandTopic, cfg.temperatureWarningTopic, cfg.temperatureWarningValue,
@@ -138,6 +148,7 @@ function saveGridControlConfig(db, input, callback) {
       cfg.temperatureEnabled ? 1 : 0, cfg.feedInAllowed ? 1 : 0, cfg.socLowerOffset, cfg.socUpperOffset,
       cfg.socHysteresis, cfg.voltageHysteresis, cfg.gridFrequencyL1Topic, cfg.gridFrequencyL2Topic,
       cfg.gridFrequencyL3Topic, cfg.gridDetectionSeconds, cfg.loadEnabled ? 1 : 0, cfg.loadOffDelaySeconds,
+      cfg.loadShedMaxL1, cfg.loadShedMaxL2, cfg.loadShedMaxL3,
       cfg.loadOnL1, cfg.loadOnL2, cfg.loadOnL3, cfg.loadOffL1, cfg.loadOffL2, cfg.loadOffL3],
     (err) => {
       if (!err) {

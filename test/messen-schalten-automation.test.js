@@ -45,10 +45,11 @@ async function freshDb() {
   await dbRun(db, 'CREATE TABLE modules (key TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 0)');
   await dbRun(db, `CREATE TABLE grid_control_config (
     id INTEGER PRIMARY KEY, load_enabled INTEGER NOT NULL DEFAULT 0,
+    load_shed_max_l1 REAL, load_shed_max_l2 REAL, load_shed_max_l3 REAL,
     load_on_l1 REAL, load_on_l2 REAL, load_on_l3 REAL,
     load_off_l1 REAL, load_off_l2 REAL, load_off_l3 REAL
   )`);
-  await dbRun(db, 'INSERT INTO grid_control_config (id, load_enabled, load_on_l1, load_on_l2, load_on_l3, load_off_l1, load_off_l2, load_off_l3) VALUES (1, 1, 4000, 4000, 4000, 3000, 3000, 3000)');
+  await dbRun(db, 'INSERT INTO grid_control_config (id, load_enabled, load_shed_max_l1, load_shed_max_l2, load_shed_max_l3, load_on_l1, load_on_l2, load_on_l3, load_off_l1, load_off_l2, load_off_l3) VALUES (1, 1, 4000, 4000, 4000, 4000, 4000, 4000, 3000, 3000, 3000)');
   return db;
 }
 
@@ -164,9 +165,10 @@ test('Geräte ohne Schalt-Topic nehmen nicht am Level teil', async () => {
   await new Promise((resolve) => db.close(resolve));
 });
 
-test('Lastabwurf schaltet Geräte ab 80 % Phasenlast aus', async () => {
+test('Lastabwurf schaltet nach 80 % der separaten Maximallast aus', async () => {
   const db = await freshDb();
   await dbRun(db, "INSERT INTO mess_schalt_actors (id, name, switch_topic, always_on, load_shed_enabled, load_shed_phase) VALUES (50, 'Boiler', 'boiler.0.state', 1, 1, 'l2')");
+  await dbRun(db, 'UPDATE grid_control_config SET load_shed_max_l2 = 4000, load_on_l2 = 6000 WHERE id = 1');
   await modulesState.setEnabled(db, 'grid-control', true);
   const origGetState = gridControlAutomation.getState;
   gridControlAutomation.getState = () => ({ inverterLoads: [1200, 3200, 900] });
@@ -205,7 +207,13 @@ test('Lastabwurf schaltet „Immer an" unter 50 % wieder ein, manuelle Geräte a
     setActual(60, false);
     setActual(61, false);
     await withPublishCapture(async (published) => {
-      now += 11000;
+      now += 59000;
+      await automation.tick(db);
+      assert.ok(!published.some((p) => p[0] === 'wp.0.state' && p[1] === '1'));
+      assert.ok(!published.some((p) => p[0] === 'licht.0.state' && p[1] === '1'));
+
+      published.length = 0;
+      now += 2000;
       await automation.tick(db);
       assert.ok(published.some((p) => p[0] === 'wp.0.state' && p[1] === '1'));
       assert.ok(!published.some((p) => p[0] === 'licht.0.state' && p[1] === '1'));
@@ -220,7 +228,40 @@ test('Lastabwurf schaltet „Immer an" unter 50 % wieder ein, manuelle Geräte a
   }
 });
 
-test('Lastabwurf eskaliert und erholt sich stufenweise mit 10 s bzw. 60 s Pause', async () => {
+test('Lastabwurf sendet die Wiedereinschaltung auch bei veraltetem Status-Topic erneut', async () => {
+  const db = await freshDb();
+  await dbRun(
+    db,
+    "INSERT INTO mess_schalt_actors (id, name, switch_topic, status_topic, always_on, load_shed_enabled, load_shed_phase) VALUES (62, 'WM', 'wm.0.switch', 'wm.0.status', 1, 1, 'l3')"
+  );
+  await modulesState.setEnabled(db, 'grid-control', true);
+  const origGetState = gridControlAutomation.getState;
+  const origNow = Date.now;
+  let now = 100000;
+  Date.now = () => now;
+  try {
+    gridControlAutomation.getState = () => ({ inverterLoads: [200, 200, 3300] });
+    levelHandler.applyLevel(5);
+    mqttClient.getCache().set(cacheKey(62, 'status'), { value: '1' });
+    await automation.tick(db);
+
+    gridControlAutomation.getState = () => ({ inverterLoads: [200, 200, 1500] });
+    await withPublishCapture(async (published) => {
+      now += 61000;
+      await automation.tick(db);
+      assert.ok(published.some((p) => p[0] === 'wm.0.switch' && p[1] === '1'));
+    });
+  } finally {
+    Date.now = origNow;
+    gridControlAutomation.getState = origGetState;
+    clearActual(62);
+    mqttClient.getCache().delete(cacheKey(62, 'status'));
+    await modulesState.setEnabled(db, 'grid-control', false);
+    await new Promise((resolve) => db.close(resolve));
+  }
+});
+
+test('Lastabwurf eskaliert mit 10 s und erholt sich erst nach 60 s stufenweise', async () => {
   const db = await freshDb();
   await dbRun(db, "INSERT INTO mess_schalt_actors (id, name, switch_topic, priority, always_on, load_shed_enabled, load_shed_phase) VALUES (70, 'P5', 'p5.0.state', 5, 1, 1, 'l1')");
   await dbRun(db, "INSERT INTO mess_schalt_actors (id, name, switch_topic, priority, always_on, load_shed_enabled, load_shed_phase) VALUES (71, 'P4', 'p4.0.state', 4, 1, 1, 'l1')");
@@ -253,9 +294,9 @@ test('Lastabwurf eskaliert und erholt sich stufenweise mit 10 s bzw. 60 s Pause'
       gridControlAutomation.getState = () => ({ inverterLoads: [1500, 1000, 1000] });
       setActual(70, false);
       setActual(71, false);
-      now += 9000;
+      now += 59000;
       await automation.tick(db);
-      assert.ok(!published.some((p) => p[1] === '1'), 'Freigabe wartet ebenfalls auf 10 s Stabilisierung');
+      assert.ok(!published.some((p) => p[1] === '1'), 'erste Freigabe wartet 60 s unter 50 %');
 
       published.length = 0;
       now += 2000;

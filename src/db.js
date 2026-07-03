@@ -268,6 +268,9 @@ function openDatabase() {
         grid_detection_seconds INTEGER NOT NULL DEFAULT 30,
         load_enabled INTEGER NOT NULL DEFAULT 0,
         load_off_delay_seconds INTEGER NOT NULL DEFAULT 30,
+        load_shed_max_l1 REAL,
+        load_shed_max_l2 REAL,
+        load_shed_max_l3 REAL,
         load_on_l1 REAL,
         load_on_l2 REAL,
         load_on_l3 REAL,
@@ -486,7 +489,7 @@ function openDatabase() {
     );
     // Funktions-Statistik (Licht, Waschen, Warmwasser, Heizung / Klima, Kochen):
     // je Funktion und Stunde die integrierte Energie der zugeordneten Geräte plus
-    // die höchste Außentemperatur der Stunde (Basis der Temperatur-Bucket-Profile
+    // die energiegewichtete Außentemperatur der Stunde (Basis der Temperatur-Bucket-Profile
     // von Heizung / Klima).
     db.run(
       `CREATE TABLE IF NOT EXISTS mess_schalt_function_hourly (
@@ -936,6 +939,9 @@ function migrateGridControlConfig(db) {
       { name: 'grid_detection_seconds', sql: 'ALTER TABLE grid_control_config ADD COLUMN grid_detection_seconds INTEGER NOT NULL DEFAULT 30' },
       { name: 'load_enabled', sql: 'ALTER TABLE grid_control_config ADD COLUMN load_enabled INTEGER NOT NULL DEFAULT 0' },
       { name: 'load_off_delay_seconds', sql: 'ALTER TABLE grid_control_config ADD COLUMN load_off_delay_seconds INTEGER NOT NULL DEFAULT 30' },
+      { name: 'load_shed_max_l1', sql: 'ALTER TABLE grid_control_config ADD COLUMN load_shed_max_l1 REAL' },
+      { name: 'load_shed_max_l2', sql: 'ALTER TABLE grid_control_config ADD COLUMN load_shed_max_l2 REAL' },
+      { name: 'load_shed_max_l3', sql: 'ALTER TABLE grid_control_config ADD COLUMN load_shed_max_l3 REAL' },
       { name: 'load_on_l1', sql: 'ALTER TABLE grid_control_config ADD COLUMN load_on_l1 REAL' },
       { name: 'load_on_l2', sql: 'ALTER TABLE grid_control_config ADD COLUMN load_on_l2 REAL' },
       { name: 'load_on_l3', sql: 'ALTER TABLE grid_control_config ADD COLUMN load_on_l3 REAL' },

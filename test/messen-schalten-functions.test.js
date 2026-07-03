@@ -100,6 +100,26 @@ test('recordFunctionSamples integriert Leistung in Stundenenergie samt Temperatu
   await new Promise((resolve) => db.close(resolve));
 });
 
+test('Heizung/Klima verwendet die energiegewichtete Stundentemperatur', async () => {
+  const db = await freshDb();
+  const actor = await createActor(db, { name: 'Waermepumpe', powerTopic: 'wp.0.power', functionKey: 'heizung_klima' });
+  const cache = new Map([
+    [cacheKey(actor.id, 'power'), { value: '1000' }],
+    [ENVIRONMENT_STATE_IDS.outdoorTemperature, { value: '4' }],
+  ]);
+  const start = new Date('2026-01-15T10:00:00Z').getTime();
+  await recordFunctionSamples(db, cache, start);
+  await recordFunctionSamples(db, cache, start + 60000);
+  cache.set(ENVIRONMENT_STATE_IDS.outdoorTemperature, { value: '14' });
+  await recordFunctionSamples(db, cache, start + 120000);
+
+  const rows = await dbAll(db, 'SELECT temperature FROM mess_schalt_function_hourly');
+  assert.equal(rows.length, 1);
+  assert.ok(Math.abs(rows[0].temperature - 9) < 1e-9);
+  assert.equal(temperatureBucket(rows[0].temperature), 5);
+  await new Promise((resolve) => db.close(resolve));
+});
+
 test('recordFunctionSamples überspringt unplausibel lange Intervalle (Neustart)', async () => {
   const db = await freshDb();
   await createActor(db, { name: 'Herd', powerTopic: 'herd.0.power', functionKey: 'kochen' });

@@ -51,6 +51,10 @@ test('Batterieladung wird entfernt und Entladung dem Hausverbrauch zugerechnet',
   assert.equal(adjustedConsumptionDelta(0.1, 100, 60 * 60 * 1000), 0);
   assert.equal(adjustedConsumptionDelta(0, -100, 60 * 60 * 1000), 0.1);
   assert.equal(adjustedConsumptionDelta(1, 0, 60 * 60 * 1000, 500), 0.5);
+  assert.equal(adjustedConsumptionDelta(4, 0, 60 * 60 * 1000, 3000, 0, 500), 0.5);
+  // Ein exakter Wallbox-Zählerdelta hat Vorrang vor dem möglicherweise
+  // verzögerten Leistungswert.
+  assert.ok(Math.abs(adjustedConsumptionDelta(1, 0, 60000, 0, 0, 0, 0.8) - 0.2) < 1e-12);
 });
 
 test('ungelernte Wochentage übernehmen den jüngsten Lerntag als Vorlage', () => {

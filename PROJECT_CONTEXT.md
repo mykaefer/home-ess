@@ -152,13 +152,15 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   **Betriebsart** angezeigt: „Immer an · Priorität N", „manuell" oder „nur Messen".
   Optional kann ein Gerät für den **Lastabwurf** des optionalen Grid-Control-Moduls
   markiert werden (`load_shed_enabled`, `load_shed_phase` = L1/L2/L3/Drehstrom).
-  Die Lastabwurf-Logik arbeitet **stufenweise je Phase**: Bei mindestens 80 % der
-  jeweiligen Grid-Control-Lastschwelle wird zunächst die **niedrigste Priorität**
-  dieser Phase abgeworfen; erst nach **10 s Stabilisierung** wird bei weiter hoher
-  Last die nächste Prioritätsstufe abgeschaltet. Die Freigabe erfolgt in
-  umgekehrter Reihenfolge, erst unter 50 % der Schwelle und mit **60 s Pause** je
-  Freigabestufe. Geräte ohne „Immer an" bleiben nach einem Lastabwurf aus; aktive
-  Abwürfe erscheinen in der Geräte-Zeile als **„Lastabwurf · Priorität N"**.
+  Die Lastabwurf-Logik arbeitet **stufenweise je Phase**: Grundlage ist die je
+  Phase separat konfigurierte **Lastabwurf-Maximallast**. Bei mindestens **80 %**
+  davon wird zunächst die **niedrigste Priorität** dieser Phase abgeworfen; erst
+  nach **10 s Stabilisierung** wird bei weiter hoher Last die nächste
+  Prioritätsstufe abgeschaltet. Die Freigabe erfolgt in umgekehrter Reihenfolge,
+  erst unter **50 %** der Maximallast und mit **60 s Pause bereits vor der ersten
+  sowie zwischen allen weiteren Freigabestufen**. Geräte ohne „Immer an" bleiben
+  nach einem Lastabwurf aus; aktive Abwürfe erscheinen in der Geräte-Zeile als
+  **„Lastabwurf · Priorität N"**.
   Gruppen zeigen ihre Priorität in der Titelzeile. Die Werte der gesetzten Topics stehen im
   Wertekatalog in Kategorie **Geräte** (`geraet.<id>.schalten/status/leistung/zaehler`),
   die Leistungssummen der Gruppen in Kategorie **Verbrauchssummen**
@@ -185,7 +187,11 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   nur noch als Kaltstart ohne einen einzigen abgeschlossenen Tag; der heutige
   Verlauf kalibriert die Restprognose begrenzt nach. 60-s-Sampling persistiert
   Tagesstände in `prognosis_daily_consumption` und Zählerdifferenzen stündlich in
-  `prognosis_hourly_consumption`. Je Prognosetag zeigt die Seite ein
+  `prognosis_hourly_consumption`. Wallbox-Zählerdelta und Haus-Sample laufen im
+  selben Takt; E-Auto-Energie wird nur aus angeschlossenem Fahrzeug, Live-SoC und
+  Ladestrategie geplant, nicht aus historischen Ladezeiten. Heizung / Klima wird
+  separat nach energiegewichteter Stundentemperatur in 5-°C-Fenstern gelernt und
+  anhand der prognostizierten Außentemperatur zugeschlagen. Je Prognosetag zeigt die Seite ein
   24-h-Stundenprofil-Balkendiagramm (Soll = Tagesziel × Wochentagskurve); bereits
   gelernte Stunden von heute erscheinen als Ist-Balken in abweichender Farbe mit
   Soll-Marke je Stunde (`model.todayByHour`). Die Ergebnisse sind als `prognose.*` im
@@ -337,7 +343,8 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
     - Zusätzlich sind beide Pumpen am gemeinsamen **Grid-Control-Lastabwurf**
       angemeldet (`grid-control/load-shed.js`): je Phase wird zuerst die
       niedrigste Priorität abgeworfen, nach **10 s** ggf. weiter eskaliert und
-      erst unter **50 %** Last mit **60 s** Abstand je Stufe wieder freigegeben.
+      erst unter **50 %** der je Phase konfigurierten Lastabwurf-Maximallast mit
+      **60 s** Abstand je Freigabestufe wieder freigegeben.
   - **Wallbox** (`/wallbox`): verwaltet mehrere PKW-Wallboxen, einzeln anlegbar wie die
     PV-Anlagen (`wallbox/boxes.js`, Tabellen `wallboxes`/`wallbox_counter_state`/
     `wallbox_summary_state`). Je Box ein Pflicht-**Steuer-Topic** sowie optional Status
@@ -725,7 +732,10 @@ Quellcode. Vollständiges Regelwerk in [ADAPTER.md](ADAPTER.md); Vorlage:
 - **States-Seite** (`/states`, Menü unter Prognose): `src/adapters/states.js`
   aggregiert gemeldete States (persistiert in `adapter_states`) + Live-Werte aus
   dem Bus zum Baum. **Adapter-Seite** (`/adapter`, Fußbereich über Module):
-  Verwaltung + generische Settings aus dem Manifest-Schema.
+  Verwaltung + generische Settings aus dem Manifest-Schema. Die Übersicht
+  blendet Adapter ohne aktivierte Instanz standardmäßig aus; ein Schalter oben
+  rechts blendet diese Karten bei Bedarf wieder ein. Die Sichtbarkeit wird im
+  Client anhand des Live-Status (`/adapter/status.json`) nachgeführt.
 - **State-Picker** `src/views/state-picker.js` (analog `value-catalog.js`): Button
   hinter Topic-Feldern öffnet den State-Baum (`/states/catalog.json`) und
   übernimmt `prefix://instanz/adresse`. Als **Popover** (Popover-API,
@@ -760,6 +770,8 @@ Anleitung zum Anbinden neuer Verbraucher: [LEVEL_HANDLING.md](LEVEL_HANDLING.md)
   bündelt die Teilnehmer aus **Messen + Schalten**, **Pool** und **Wallbox**,
   führt je Phase die aktive Abwurfstufe und entscheidet mit gemeinsamer
   Prioritätsreihenfolge über Abschaltung beziehungsweise spätere Freigabe.
+  Auslöser ist dabei die separat konfigurierte **Lastabwurf-Maximallast** je
+  Phase, nicht die Netz-Einschaltschwelle.
 - Init in `app.js` (`operatingLevelHandler.init()`) nach geladenem Betriebszustand, vor
   `prognosisBehavior.init`. Neue Verbraucher registrieren sich aus ihrer eigenen
   Steuerschleife heraus, sobald sie aktiv sind.

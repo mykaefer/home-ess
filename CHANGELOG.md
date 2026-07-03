@@ -3,9 +3,49 @@
 Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [1.0.6] — 2026-07-03
+
+### Geändert
+
+- **Grid-Control trennt jetzt Netzschwellen und Lastabwurf-Maximallast sauber
+  je Phase.** Für `L1`–`L3` gibt es eigene Felder **„Maximallast Lastabwurf"**.
+  Der phasenbezogene Lastabwurf arbeitet damit auf **80 % / 50 %** dieser
+  Maximallast, während **„Netz ein über"** und **„Netz aus unter"** weiterhin
+  ausschließlich die eigentliche Netzschaltung steuern.
+- **Lastabwurf-Freigabe erst nach 60 Sekunden stabil unter 50 %.** Nicht nur
+  zwischen zwei Freigabestufen, sondern bereits für die **erste**
+  Wiedereinschaltung gilt jetzt dieselbe **60-s-Verzögerung**.
+
+### Behoben
+
+- **Messen + Schalten: Wiedereinschaltung nach Lastabwurf robuster.** Geräte
+  mit **„Immer an"** senden nach einer Lastabwurf-Freigabe den Einschaltbefehl
+  jetzt erneut, selbst wenn ein veraltetes `status_topic` noch `AN` meldet.
+  Dadurch bleiben z. B. Waschmaschinen nach einem Lastabwurf nicht mehr
+  fälschlich aus.
+
+## [1.0.5] — 2026-07-03
+
+### Geändert
+
+- **Prognose trennt E-Auto und temperaturabhängige Lasten strikt vom
+  Grundbedarf.** Wallbox-Zählerdelta und Hausverbrauch werden jetzt im selben
+  Minutentakt erfasst; der exakte Ladeenergie-Delta hat Vorrang vor dem
+  Leistungswert. E-Auto-Last wird nur bei angeschlossenem Fahrzeug mit bekanntem
+  SoC und genau einmal gemäß Ladestrategie eingeplant, nicht aus historischen
+  Ladezeiten. **Heizung / Klima** bleibt separat und verwendet 5-°C-Fenster auf
+  Basis der energiegewichteten Stundentemperatur.
+
 ## [1.0.4] — 2026-07-03
 
 ### Geändert
+
+- **Adapter-Seite: inaktive Adapter standardmäßig ausgeblendet.** Oben rechts
+  gibt es jetzt einen Schalter **„Inaktive Adapter ausblenden"**, der per
+  Default aktiv ist. Versteckt werden Adapterkarten, die aktuell **keine
+  aktivierte Instanz** besitzen; über den Schalter lassen sie sich wieder
+  einblenden. Die Sichtbarkeit zieht bei Aktivieren/Deaktivieren einer Instanz
+  ohne Neuladen mit dem Live-Status nach.
 
 - **Messen + Schalten komplett umstrukturiert.** Gruppen laufen jetzt als
   **einklappbare Abschnitte über die volle Seitenbreite** (wie die Kategorien

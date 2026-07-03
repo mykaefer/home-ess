@@ -125,6 +125,12 @@ function createApp() {
     const cache = mqttClient.getCache();
     try {
       const boxes = isEnabled('wallbox') ? await listWallboxes(db) : [];
+      // Im selben Takt fortschreiben: So kann der exakte Zählerdelta direkt aus
+      // dem Hausverbrauch entfernt werden, ohne auf einen synchronen Power-Wert
+      // der Wallbox angewiesen zu sein.
+      const wallboxSample = boxes.length
+        ? await buildWallboxSnapshot(db, cache)
+        : { hourlyDeltaKwh: null };
       const snapshot = await buildStromverbrauchSnapshot(db, cache);
       const rawCounters = snapshot.raw.rawCounters || {};
       const hasCounterReading = ['import', 'export'].some((direction) =>
@@ -144,6 +150,7 @@ function createApp() {
       await recordConsumptionSample(db, snapshot.raw.today.eigenverbrauch, cache, {
         batteryPower: readBatterieData(cache).power,
         wallboxPower: totalWallboxPowerWatt(cache, boxes),
+        wallboxEnergyDelta: wallboxSample.hourlyDeltaKwh,
         poolPower: poolEnergy.currentPowerW,
         functionPower,
       });
@@ -157,14 +164,6 @@ function createApp() {
     listPvPlants(db)
       .then((plants) => touchPhotovoltaikAggregation(db, mqttClient.getCache(), plants))
   );
-
-  // Wallbox-Zähler/Summen je Box fortschreiben (Tag/Woche/Monat/Jahr + Vorjahr,
-  // bzw. Power-Integration ohne Zähler-Topic). Nur aktiv, wenn Boxen angelegt sind.
-  const updateWallbox = () => {
-    return buildWallboxSnapshot(db, mqttClient.getCache()).catch(() => {});
-  };
-  jobs.runExclusive('wallboxAggregation', updateWallbox).catch(() => {});
-  jobs.schedule('wallboxAggregation', 60000, updateWallbox);
 
   // Messen + Schalten: „Leistung aus Zählerfortschritt" je Gerät fortschreiben
   // (Δkwh/Δt; 0 W nach über 10 min ohne Fortschritt) und danach die

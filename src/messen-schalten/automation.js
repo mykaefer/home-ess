@@ -127,11 +127,14 @@ async function tick(db) {
       s.output = 'off';
       s.loadShedOff = true;
     } else if (allowed) {
-      if (s.loadShedOff) s.loadShedOff = false;
+      const resumingAfterLoadShed = s.loadShedOff === true;
+      if (resumingAfterLoadShed) s.loadShedOff = false;
       // Nur „Immer an" schaltet nach der Freigabe automatisch wieder ein. Manuelle
       // Geräte behalten ihren Zustand und warten gegebenenfalls auf den Benutzer.
       if (actor.alwaysOn) {
-        if (actualOn !== true) sendSwitch(actor, true);
+        // Nach einem Lastabwurf wird der EIN-Befehl bewusst erneut gesendet,
+        // auch wenn ein Status-Topic noch veraltet "an" meldet.
+        if (resumingAfterLoadShed || actualOn !== true) sendSwitch(actor, true);
         s.output = 'on';
       }
     } else {

@@ -51,7 +51,7 @@ test('Wallbox-Prognose lernt Verbrauch und Ladezeit je Box und Wochentag getrenn
   await new Promise((resolve) => db.close(resolve));
 });
 
-test('Wallbox-Ladeplan vergibt PV-Überschuss nicht mehrfach und plant Pflichtladung fest ein', () => {
+test('Wallbox-Ladeplan nutzt nur tatsächlichen Bedarf und plant Pflichtladung fest ein', () => {
   const common = {
     dailyByWeekday: Array(7).fill(6),
     profilesByWeekday: Array.from({ length: 7 }, () => Array(24).fill(1 / 24)),
@@ -79,11 +79,11 @@ test('Wallbox-Ladeplan vergibt PV-Überschuss nicht mehrfach und plant Pflichtla
   const flexA = model.boxes.find((box) => box.id === 1);
   const flexB = model.boxes.find((box) => box.id === 2);
   const full = model.boxes.find((box) => box.id === 3);
-  assert.equal(flexA.plannedEnergyByDate['2026-06-30'], 6);
+  assert.equal(flexA.plannedEnergyByDate['2026-06-30'], 0);
   assert.equal(flexB.plannedEnergyByDate['2026-06-30'], 0);
   assert.equal(full.plannedEnergyByDate['2026-06-30'], 5);
   assert.equal(full.nextCharge.hour, 8);
-  assert.equal(wallboxForecastForDay(model, '2026-06-30', 0).totalKwh, 11);
+  assert.equal(wallboxForecastForDay(model, '2026-06-30', 0).totalKwh, 5);
 });
 
 test('Privat-Ladeplan nutzt nur Überschuss, der nicht mehr in den Hausakku passt', () => {
@@ -109,6 +109,28 @@ test('Privat-Ladeplan nutzt nur Überschuss, der nicht mehr in den Hausakku pass
     capacityKwh: 10, minSoc: 20, soc: 100, chargeEfficiency: 1, dischargeEfficiency: 1,
   });
   assert.equal(fullBatteryModel.boxes[0].plannedFlexibleEnergyByDate['2026-06-30'], 6);
+});
+
+test('historischer Wallbox-Verbrauch erzeugt ohne tatsächlichen Fahrzeugbedarf keine Prognoselast', () => {
+  const profile = Array(24).fill(0);
+  profile[8] = 1;
+  const model = {
+    boxes: [{
+      id: 1, name: 'Auto', mode: 1, priority: 5, maxPowerW: 11000,
+      batteryCapacityKwh: 50, minChargePercent: 30, businessDays: [],
+      soc: null, plugged: null, todayRemainingKwh: 12,
+      dailyByWeekday: Array(7).fill(12),
+      profilesByWeekday: Array.from({ length: 7 }, () => profile),
+      samplesByWeekday: Array(7).fill(4),
+    }],
+  };
+  const slots = [8, 9].map((hour) => ({
+    dateKey: '2026-07-03', dayIndex: 0, hour, durationHours: 1,
+    startMs: Date.UTC(2026, 6, 3, hour), pvKwh: 20, houseKwh: 1,
+  }));
+
+  planWallboxSchedule(model, slots);
+  assert.equal(wallboxForecastForDay(model, '2026-07-03', 0).totalKwh, 0);
 });
 
 test('Privat-Restbedarf wird über den Tageswechsel in morgigen Überschuss getragen', () => {

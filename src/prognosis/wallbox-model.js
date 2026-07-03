@@ -208,8 +208,12 @@ function planWallboxSchedule(model, slots = [], storage = null) {
     const energyToMinimum = soc == null ? 0
       : capacity * Math.max(0, (Number(box.minChargePercent) || 0) - soc) / 100;
 
-    const currentPrivateVehicle = box.mode === 1 && energyToFull != null && box.plugged !== false;
-    if (currentPrivateVehicle) {
+    const hasActualDemand = energyToFull != null && box.plugged !== false;
+    if (!hasActualDemand) {
+      // Historische Ladungen beschreiben kein wiederkehrendes Haushaltsprofil.
+      // Ohne aktuell angeschlossenes Fahrzeug mit bekanntem SoC gibt es keinen
+      // belastbaren Ladebedarf und deshalb auch keine E-Auto-Prognoselast.
+    } else if (box.mode === 1) {
       // Der aktuelle Fahrzeugbedarf endet nicht am Tageswechsel. Mindestladung
       // ist verbindlich; der restliche Bedarf darf über den gesamten sichtbaren
       // Horizont ausschließlich echten Überschuss nach Hausakku nutzen.
@@ -219,57 +223,28 @@ function planWallboxSchedule(model, slots = [], storage = null) {
         : 0;
       const mandatoryDelivered = mandatoryTarget - mandatoryLeft;
       addPlannedEnergy(box, slots, Math.max(0, energyToFull - mandatoryDelivered), true);
-    } else dateKeys.forEach((key, dayIndex) => {
-      const daySlots = slotsByDate.get(key) || [];
-      const learned = dayIndex === 0
-        ? Math.max(0, Number(box.todayRemainingKwh) || 0)
-        : Math.max(0, Number(box.dailyByWeekday[weekday(key)]) || 0);
-      let desired = learned;
-      let mandatory = 0;
-
-      // Der Live-SoC gehört zum aktuell angeschlossenen Fahrzeug und ersetzt
-      // daher nur den heutigen statistischen Bedarf.
-      if (dayIndex === 0 && energyToFull != null) {
-        desired = box.mode === 1 ? energyToFull : Math.min(energyToFull, Math.max(learned, energyToMinimum));
-        if (box.mode === 3) {
-          desired = energyToFull;
-          mandatory = desired;
-        } else if (box.mode === 1 && energyToMinimum > 0) {
-          mandatory = energyToMinimum;
-        } else if (box.mode === 2) {
-          const tomorrowKey = dateKeys[1];
-          const beforeBusiness = isBusinessDay(box, key) || (tomorrowKey && isBusinessDay(box, tomorrowKey));
-          if (beforeBusiness) desired = energyToFull;
-        }
+    } else if (box.mode === 3) {
+      addPlannedEnergy(box, slots, energyToFull, false);
+    } else {
+      // Beruflich: den tatsächlichen Restbedarf zunächst mit Überschuss decken.
+      // Vor dem nächsten Arbeitstag wird ein verbliebener Bedarf ab der
+      // Garantiezeit erzwungen. Die Fahrzeugenergie wird dabei nur einmal geplant.
+      const deadlineIndex = dateKeys.findIndex((key, index) => {
+        const nextKey = dateKeys[index + 1];
+        return isBusinessDay(box, key) || (nextKey && isBusinessDay(box, nextKey));
+      });
+      const eligible = deadlineIndex >= 0
+        ? slots.filter((slot) => slot.dayIndex <= deadlineIndex)
+        : slots;
+      let remaining = addPlannedEnergy(box, eligible, energyToFull, true);
+      if (remaining > 0 && deadlineIndex >= 0) {
+        const deadlineSlots = eligible.filter(
+          (slot) => slot.dayIndex === deadlineIndex && slot.hour >= BUSINESS_FORCE_HOUR
+        );
+        remaining = addPlannedEnergy(box, deadlineSlots, remaining, false);
+        if (remaining > 0) addPlannedEnergy(box, eligible, remaining, false);
       }
-
-      if (box.mode === 2) {
-        const nextKey = dateKeys[dayIndex + 1];
-        const beforeBusiness = isBusinessDay(box, key) || (nextKey && isBusinessDay(box, nextKey));
-        if (beforeBusiness) {
-          let remaining = addPlannedEnergy(box, daySlots, desired, true);
-          if (remaining > 0) {
-            remaining = addPlannedEnergy(
-              box,
-              daySlots.filter((slot) => slot.hour >= BUSINESS_FORCE_HOUR),
-              remaining,
-              false
-            );
-          }
-          if (remaining > 0 && dayIndex === 0) {
-            addPlannedEnergy(box, slots.filter((slot) => slot.dayIndex > 0), remaining, false);
-          }
-          return;
-        }
-      }
-
-      let remaining = desired;
-      if (mandatory > 0) {
-        const mandatoryLeft = addPlannedEnergy(box, daySlots, mandatory, false);
-        remaining = mandatoryLeft + Math.max(0, desired - mandatory);
-      }
-      addPlannedEnergy(box, daySlots, remaining, true);
-    });
+    }
 
     const first = slots.find((slot) => box.plannedHourlyByDate[slot.dateKey][slot.hour] > 0.000001);
     box.nextCharge = first ? { at: first.startMs, hour: first.hour, dateKey: first.dateKey } : null;

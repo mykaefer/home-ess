@@ -76,6 +76,13 @@ test('load off-delay is configurable from zero to one hour', () => {
   assert.equal(normalizeGridControlInput({ loadOffDelaySeconds: 9999 }).loadOffDelaySeconds, 3600);
 });
 
+test('load shed max values are normalized independently from grid load thresholds', () => {
+  const cfg = normalizeGridControlInput({ loadShedMaxL1: 5000, loadOnL1: 3000, loadOffL1: 1500 });
+  assert.equal(cfg.loadShedMaxL1, 5000);
+  assert.equal(cfg.loadOnL1, 3000);
+  assert.equal(cfg.loadOffL1, 1500);
+});
+
 test('running load off-delay survives a HomeESS database reopen', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'homeess-grid-delay-'));
   const dbPath = path.join(dir, 'state.db');
@@ -100,17 +107,18 @@ test('running load off-delay survives a HomeESS database reopen', async () => {
         id INTEGER PRIMARY KEY, grid_command_topic TEXT, feed_in_command_topic TEXT,
         temperature_warning_topic TEXT, temperature_warning_value TEXT,
         warning_text_topic TEXT, warning_active_topic TEXT, soc_enabled INTEGER,
-        voltage_enabled INTEGER, temperature_enabled INTEGER, feed_in_allowed INTEGER,
-        soc_lower_offset INTEGER, soc_upper_offset INTEGER, soc_hysteresis INTEGER,
-        voltage_hysteresis REAL, grid_frequency_l1_topic TEXT,
-        grid_frequency_l2_topic TEXT, grid_frequency_l3_topic TEXT,
-        grid_detection_seconds INTEGER, load_enabled INTEGER, load_off_delay_seconds INTEGER,
-        load_on_l1 REAL, load_on_l2 REAL, load_on_l3 REAL,
-        load_off_l1 REAL, load_off_l2 REAL, load_off_l3 REAL
-      );
-      INSERT INTO grid_control_config VALUES
-        (1, 'grid.command', '', '', '1', '', '', 0, 0, 0, 0, 0, 5, 2, 0.5,
-         '', '', '', 30, 1, 30, 4000, 4000, 4000, 3000, 3000, 3000);
+      voltage_enabled INTEGER, temperature_enabled INTEGER, feed_in_allowed INTEGER,
+      soc_lower_offset INTEGER, soc_upper_offset INTEGER, soc_hysteresis INTEGER,
+      voltage_hysteresis REAL, grid_frequency_l1_topic TEXT,
+      grid_frequency_l2_topic TEXT, grid_frequency_l3_topic TEXT,
+      grid_detection_seconds INTEGER, load_enabled INTEGER, load_off_delay_seconds INTEGER,
+      load_shed_max_l1 REAL, load_shed_max_l2 REAL, load_shed_max_l3 REAL,
+      load_on_l1 REAL, load_on_l2 REAL, load_on_l3 REAL,
+      load_off_l1 REAL, load_off_l2 REAL, load_off_l3 REAL
+    );
+    INSERT INTO grid_control_config VALUES
+      (1, 'grid.command', '', '', '1', '', '', 0, 0, 0, 0, 0, 5, 2, 0.5,
+       '', '', '', 30, 1, 30, 4000, 4000, 4000, 4000, 4000, 4000, 3000, 3000, 3000);
       CREATE TABLE grid_control_runtime (
         id INTEGER PRIMARY KEY, load_active INTEGER, load_off_since INTEGER, initialized INTEGER
       );

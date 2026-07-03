@@ -141,7 +141,12 @@ async function recordFunctionSamples(db, cache, now = Date.now()) {
          temperature = CASE
            WHEN excluded.temperature IS NULL THEN mess_schalt_function_hourly.temperature
            WHEN mess_schalt_function_hourly.temperature IS NULL THEN excluded.temperature
-           ELSE MAX(mess_schalt_function_hourly.temperature, excluded.temperature)
+           WHEN mess_schalt_function_hourly.consumption_kwh + excluded.consumption_kwh <= 0
+             THEN excluded.temperature
+           ELSE (
+             mess_schalt_function_hourly.temperature * mess_schalt_function_hourly.consumption_kwh +
+             excluded.temperature * excluded.consumption_kwh
+           ) / (mess_schalt_function_hourly.consumption_kwh + excluded.consumption_kwh)
          END`,
       [fn, calendar.dateKey, hour, kwh, temperature]
     );

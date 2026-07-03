@@ -57,11 +57,18 @@ function gridControlRoutes(db) {
       }
       const on = [candidate.loadOnL1, candidate.loadOnL2, candidate.loadOnL3];
       const off = [candidate.loadOffL1, candidate.loadOffL2, candidate.loadOffL3];
+      const shedMax = [candidate.loadShedMaxL1, candidate.loadShedMaxL2, candidate.loadShedMaxL3];
+      if (shedMax.some((value) => value == null)) {
+        return page(res, { error: 'Für den Lastabwurf müssen alle drei Maximallasten ausgefüllt sein.' });
+      }
       if (on.some((value) => value == null) || off.some((value) => value == null)) {
         return page(res, { error: 'Für die Lastschaltung müssen alle Ein- und Ausschaltschwellen ausgefüllt sein.' });
       }
       if (on.some((value, index) => off[index] >= value)) {
         return page(res, { error: 'Die Ausschaltschwelle muss auf jeder Phase unter der zugehörigen Einschaltschwelle liegen.' });
+      }
+      if (shedMax.some((value) => value <= 0)) {
+        return page(res, { error: 'Die Maximallast für den Lastabwurf muss auf jeder Phase größer als 0 sein.' });
       }
     }
     saveGridControlConfig(db, req.body, (err) => {

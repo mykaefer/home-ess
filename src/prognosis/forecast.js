@@ -131,16 +131,24 @@ function normalizedProfile(values) {
   return total > 0 ? safe.map((value) => value / total) : DEFAULT_PROFILE.map((value) => value / 100);
 }
 
-function adjustedConsumptionDelta(rawDelta, batteryPower, durationMs, wallboxPower = 0, poolPower = 0, functionPower = 0) {
+function adjustedConsumptionDelta(
+  rawDelta, batteryPower, durationMs, wallboxPower = 0, poolPower = 0, functionPower = 0,
+  wallboxEnergyDelta = null
+) {
   const raw = Math.max(0, num(rawDelta) || 0);
   const power = num(batteryPower) || 0;
   const duration = Math.max(0, Number(durationMs) || 0);
   // Batterie-Leistung: positiv = laden, negativ = entladen.
   // Gesamtverbrauch enthält Laden und unterschlägt Entladen → signiert abziehen.
   const wallbox = Math.max(0, num(wallboxPower) || 0);
+  const measuredWallboxKwh = num(wallboxEnergyDelta);
   const pool = Math.max(0, num(poolPower) || 0);
   const functions = Math.max(0, num(functionPower) || 0);
-  return Math.max(0, raw - (power + wallbox + pool + functions) * duration / 3600000000);
+  const powerBasedCorrection = (power + pool + functions) * duration / 3600000000;
+  const wallboxCorrection = measuredWallboxKwh == null
+    ? wallbox * duration / 3600000000
+    : Math.max(0, measuredWallboxKwh);
+  return Math.max(0, raw - powerBasedCorrection - wallboxCorrection);
 }
 
 // Tagesziel eines Wochentags ohne eigene Lerntage: Vorlage ist ausschließlich
@@ -201,7 +209,10 @@ async function recordConsumptionSample(db, totalKwh, cache, options = {}, now = 
     // wird raw_consumption_kwh unten auf den neuen Stand basiert, der bereits
     // integrierte heutige Verbrauch bleibt jedoch unverändert.
     const candidateDelta = validInterval
-      ? adjustedConsumptionDelta(rawDelta, batteryPower, age, options.wallboxPower, options.poolPower, options.functionPower)
+      ? adjustedConsumptionDelta(
+        rawDelta, batteryPower, age, options.wallboxPower, options.poolPower,
+        options.functionPower, options.wallboxEnergyDelta
+      )
       : 0;
     // Auch bei einem formal gültigen Rohintervall kann ein fehlerhafter oder
     // falsch skalierter Leistungswert die Akku-Korrektur explodieren lassen.

@@ -284,11 +284,14 @@ async function buildWallboxSnapshot(db, cache, now = Date.now()) {
   const mqttConfig = await new Promise((resolve) => loadMqttConfig(db, resolve));
   const calendar = localCalendar(cache, mqttConfig.timezone, new Date(now));
   const boxes = await listWallboxes(db);
+  let hourlyDeltaKwh = 0;
   for (const box of boxes) {
     const { previousDayTotal, state, hourlyDelta } = await updateWallboxCounter(db, cache, box, calendar, now);
+    hourlyDeltaKwh += hourlyDelta;
     await updateWallboxSummary(db, box, previousDayTotal, calendar);
     await recordWallboxHistory(db, box, calendar, state, hourlyDelta, now);
   }
+  return { hourlyDeltaKwh };
 }
 
 function totalWallboxPowerWatt(cache, boxes) {

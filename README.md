@@ -83,9 +83,12 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
     `L2`, `L3` oder als **Drehstrom** markiert werden. Bei hoher
     Wechselrichterlast wirft homeESS pro Phase zuerst die **niedrigste Priorität**
     ab, wartet **10 Sekunden** auf stabile Messwerte und eskaliert erst dann zur
-    nächsten Prioritätsstufe. Die Freigabe läuft in umgekehrter Reihenfolge mit
-    **60 Sekunden** Abstand je Stufe; nur Geräte mit **„Immer an"** schalten
-    danach automatisch wieder ein. Auf der Kachel wird ein aktiver Abwurf als
+    nächsten Prioritätsstufe. Grundlage ist je Phase die separat hinterlegte
+    **Maximallast Lastabwurf**; abgeworfen wird ab **80 %** davon, freigegeben
+    erst unter **50 %** davon. Die Freigabe läuft in umgekehrter Reihenfolge mit
+    **60 Sekunden** Abstand bereits vor der ersten und zwischen allen weiteren
+    Freigabestufen; nur Geräte mit **„Immer an"** schalten danach automatisch
+    wieder ein. Auf der Kachel wird ein aktiver Abwurf als
     **„Lastabwurf · Priorität N"** angezeigt.
   - Die Werte der gesetzten Topics stehen im Wertekatalog (Kategorie **Geräte**);
     die Gruppen bilden **Verbrauchssummen** und zeigen sie in der Titelzeile.
@@ -108,7 +111,10 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
   und funktionszugeordnete Messen-+-Schalten-Geräte (Licht, Waschen, Warmwasser,
   Heizung / Klima, Kochen) werden ebenfalls aus dem reinen Hausbedarf entfernt und
   anschließend separat eingeplant — Heizung / Klima über Stundenprofile je
-  Außentemperatur-Bucket (5-°C-Schritte), die übrigen Funktionen je Wochentag.
+  energiegewichteter Stundentemperatur in 5-°C-Schritten, die übrigen Funktionen
+  je Wochentag. E-Auto-Ladung wird ausschließlich aus dem aktuellen Fahrzeugbedarf
+  (angesteckt + SoC) und der gewählten Ladestrategie geplant; historische
+  Ladezeiten erzeugen keine Lastprognose.
   Ungelernte Wochentage übernehmen ausschließlich die Lernkurve des jüngsten
   abgeschlossenen Tages (Vortag) als Vorlage; die Tageskalibrierung passt sie an
   den laufenden Verlauf an, und der abgeschlossene Tag wird wieder Vorlage für den
@@ -143,7 +149,9 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
   Betriebslevel 1–5 erscheint als rot-grüne Balkenanzeige in der Titelzeile.
   Eine dreiphasige Wechselrichterlast-Hysterese nutzt die vorhandenen
   Eigenverbrauchsleistungen L1–L3, schaltet bei Überlast einer Phase zu und
-  erst unter allen drei Rückschaltschwellen wieder ab.
+  erst unter allen drei Rückschaltschwellen wieder ab. Der zusätzliche
+  phasenbezogene **Lastabwurf** arbeitet davon getrennt mit eigener
+  **Maximallast Lastabwurf** je Phase.
   Der globale Katalogwert **Autark** startet jeden Tag auf `true`, sofern keine
   Mindest-SoC-Netzschaltung aktiv ist, und bleibt nach einer solchen Schaltung
   für den restlichen Tag auf `false`. Die obere SoC-Grenze schaltet das Netz nur
@@ -243,9 +251,11 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
   Schema laufen weiter über den MQTT-Broker). Regelwerk: [ADAPTER.md](ADAPTER.md),
   Vorlage: `adapter/demo`. Mitgeliefert: **Modbus-TCP-Adapter** (`adapter/modbus`)
   mit Register-Verwaltung und **Presets** (Vorlagen zum Anlegen der Live-States,
-  inkl. Upload; Format: `adapter/modbus/PRESET.md`). Zusammenhängende Register
-  gleicher Unit-ID, Registerart und Pollrate werden blockweise gelesen und als
-  gemeinsamer State-Batch verteilt; Pollintervalle und State-Adressen bleiben gleich.
+  inkl. Upload; Format: `adapter/modbus/PRESET.md`). Die Übersichtsseite blendet
+  standardmäßig Adapter ohne **aktive Instanz** aus; oben rechts lässt sich das
+  per Schalter umstellen. Zusammenhängende Register gleicher Unit-ID,
+  Registerart und Pollrate werden blockweise gelesen und als gemeinsamer
+  State-Batch verteilt; Pollintervalle und State-Adressen bleiben gleich.
 - 🗂️ **States** — klappt als Unterpunkt unter **Adapter** auf: Baumansicht aller
   von Adaptern gemeldeten Werte (Instanz → Kategorie → State) mit Live-Werten;
   hinter Topic-Feldern direkt per Auswahldialog übernehmbar. Alle States sind
