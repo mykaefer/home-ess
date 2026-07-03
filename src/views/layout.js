@@ -4,6 +4,14 @@ const { escapeHtml } = require('./components');
 const { getEnabledNavItems } = require('../modules');
 const { statePickerModal, statePickerScript, statePickerAutoAttach } = require('./state-picker');
 
+let pkgVersion = '—';
+try {
+  // eslint-disable-next-line global-require
+  pkgVersion = require('../../package.json').version || '—';
+} catch (_) {
+  /* Version bleibt unbekannt */
+}
+
 // Gemeinsame App-Hülle (Header + Sidebar) für alle authentifizierten Seiten.
 // Kernseiten stehen fest; optionale Module fügen sich über getEnabledNavItems()
 // dynamisch in die Hauptnavigation ein.
@@ -197,6 +205,10 @@ function renderLayout({ title, activePath = '', body = '', script = '' } = {}) {
         <div class="sidebar-footer">
           ${renderNavLinks('footer', activePath)}
           <button class="logout-button" onclick="window.location.href='/logout'">Abmelden</button>
+          <div class="sidebar-copyright">
+            Copyright (C) 2026 Kevin Käfer | MyKaefer Apps<br>
+            Version: ${escapeHtml(pkgVersion)}
+          </div>
         </div>
       </aside>
 

@@ -154,6 +154,14 @@ body {
 
 .logout-button:hover { background-color: #c82333; }
 
+.sidebar-copyright {
+    padding: 8px 20px 12px;
+    font-size: 0.7em;
+    line-height: 1.4;
+    color: #999;
+    text-align: center;
+}
+
 .settings-layout {
     display: flex;
     flex-direction: column;
