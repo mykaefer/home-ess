@@ -1247,6 +1247,17 @@ h2 .cmd-confirm { font-size: 13px; vertical-align: middle; }
     display: flex;
 }
 
+/* Rekursive Adapter-Kategorien als eingerückter Verzeichnisbaum. */
+.value-cat--nested > .value-cat-head {
+    padding-left: calc(10px + var(--tree-depth, 1) * 16px);
+    position: relative;
+    top: auto;
+    background: #f8fafc;
+}
+.value-cat--nested > .value-cat-body > .value-row {
+    padding-left: calc(24px + var(--tree-depth, 1) * 16px);
+}
+
 .value-row {
     display: flex;
     align-items: center;

@@ -171,12 +171,19 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   Zähler-Aggregation reagiert ebenfalls ereignisgesteuert auf neue
   `messschalt:<id>:counter`-Werte; der 60-s-Job bleibt als Fallback bestehen.
   `/messen-schalten/data` fordert ausschließlich lokale Adapter-Topics über das
-  zentral auf 5 s gedrosselte `mqttClient.requestStateValue` aktiv an. Normale
-  Broker-/Homematic-Topics werden niemals per `/get` gepollt, da dies reale
-  Funkabfragen und Duty-Cycle-Last auslösen kann. Tasmota bündelt lokale Reads
-  in einem maximal alle 3 s ausgelösten `STATUS 0`-Request.
-  Die Oberfläche bewertet `receivedAt` der passiv empfangenen Status-, Leistungs-
-  und Zählerwerte ohne aktive Abfrage: Nach 5 min wird ein Wert als veraltet
+  zentral auf 5 s gedrosselte `mqttClient.requestStateValue` aktiv an. Über den
+  **MQTT-Broker** werden Funk-/Homematic-Topics dabei niemals per `/get` gepollt,
+  da dies reale Funkabfragen und Duty-Cycle-Last auslösen kann. Der **HM-RPC-
+  Adapter** bedient diesen Refresh dagegen CCU-seitig aus seinem Cache
+  (`getParamset` auf VALUES) — kein Funk, kein Duty-Cycle: So werden CCU-
+  Änderungen auch ohne Push-Event übernommen und Werte veralten nicht mehr
+  fälschlich. Ergänzend hält der Adapter Werte über einen optionalen, gleichmäßig
+  verteilten Hintergrund-Refresh (Round-Robin, ein Kanal nach dem anderen) sowie
+  ein 5-s-Beobachtungsfenster nach jedem Steuerbefehl aktuell (`adapter/hm-rpc`).
+  Tasmota bündelt lokale Reads in einem maximal alle 3 s ausgelösten
+  `STATUS 0`-Request.
+  Die Oberfläche bewertet `receivedAt` der empfangenen Status-, Leistungs-
+  und Zählerwerte: Nach 5 min ohne Aktualisierung wird ein Wert als veraltet
   markiert. Ein bestätigtes `AUS` setzt einen eventuell älteren/hängengebliebenen
   direkten Leistungswert des schaltbaren Geräts auf 0 W.
   Je Geräte-Zeile wird die **Betriebsart** angezeigt: „Immer an · Priorität N",

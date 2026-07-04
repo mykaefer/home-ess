@@ -11,6 +11,7 @@ const stateEditor = require('../adapters/state-editor');
 const { renderAdapters, renderAdapterInstance } = require('../views/adapters');
 const { renderAdapterStates, renderAdapterPresets, renderPresetSelection } = require('../views/adapter-states');
 const renderTasmotaDevices = require('../views/tasmota-devices');
+const renderHmRpcDevices = require('../views/hm-rpc-devices');
 const bus = require('../state-bus');
 const { buildSchemeTopic } = require('../mqtt/topics');
 
@@ -434,6 +435,95 @@ function adapterRoutes(db) {
     ctx.instance = await instancesRepo.getInstance(db, ctx.instance.id);
     const next = await buildTasmotaDevices(ctx.instance);
     res.send(renderTasmotaDevices({ adapter: ctx.manifest, instance: ctx.instance, devices: next, message: 'Gerät gelöscht.' }));
+  });
+
+  async function loadHmRpcContext(id) {
+    const instance = await instancesRepo.getInstance(db, Number(id));
+    if (!instance || instance.adapterId !== 'hm-rpc') return null;
+    const manifest = registry.getManifest(instance.adapterId);
+    if (!manifest) return null;
+    return { instance, manifest };
+  }
+
+  // Geräte-Metadaten (settings.devices, vom Adapter gepflegt) mit den aktuellen
+  // State-Werten anreichern, damit die Geräteseite Live-Werte zeigt.
+  async function buildHmRpcDevices(instance) {
+    const rows = await new Promise((resolve) => {
+      db.all('SELECT * FROM adapter_states WHERE instance_id = ?', [instance.id], (err, result) => {
+        resolve(err ? [] : result || []);
+      });
+    });
+    const cache = bus.getCache();
+    const byAddress = new Map(rows.map((row) => [String(row.address), row]));
+    const metaRows = Array.isArray(instance.settings && instance.settings.devices) ? instance.settings.devices : [];
+    const stateFor = (entry) => {
+      const row = byAddress.get(String(entry.address));
+      const cacheEntry = cache.get(buildSchemeTopic('hm-rpc', instance.name, entry.address));
+      const value = cacheEntry ? cacheEntry.value : (row ? row.last_value : null);
+      const unit = row ? row.unit : '';
+      return {
+        address: entry.address,
+        name: (row && row.name) || entry.name || entry.address,
+        writable: !!entry.writable,
+        display: unit && value != null && value !== '' ? `${value} ${unit}` : (value == null || value === '' ? '—' : String(value)),
+      };
+    };
+    return metaRows.map((device) => ({
+      address: device.address,
+      name: device.name || device.address,
+      customName: device.customName || '',
+      channels: (device.channels || []).map((channel) => ({
+        address: channel.address,
+        name: channel.name || channel.address,
+        states: (channel.states || []).map(stateFor),
+      })),
+    })).sort((a, b) => String(a.customName || a.name || a.address).localeCompare(String(b.customName || b.name || b.address), 'de'));
+  }
+
+  router.get('/adapter/instance/:id/hm-rpc-devices', requireAuth, async (req, res) => {
+    const ctx = await loadHmRpcContext(req.params.id).catch(() => null);
+    if (!ctx) return res.status(404).send('Keine Geräteseite für diese Instanz.');
+    const devices = await buildHmRpcDevices(ctx.instance);
+    res.send(renderHmRpcDevices({ adapter: ctx.manifest, instance: ctx.instance, devices }));
+  });
+
+  router.post('/adapter/instance/:id/hm-rpc-devices/rename', requireAuth, async (req, res) => {
+    const ctx = await loadHmRpcContext(req.params.id).catch(() => null);
+    if (!ctx) return res.status(404).send('Keine Geräteseite für diese Instanz.');
+    const address = String(req.body.address || '').trim();
+    const customName = String(req.body.name || '').trim();
+    const devices = Array.isArray(ctx.instance.settings && ctx.instance.settings.devices) ? ctx.instance.settings.devices : [];
+    const target = devices.find((row) => String(row.address || '') === address);
+    if (!target) {
+      const current = await buildHmRpcDevices(ctx.instance);
+      return res.status(404).send(renderHmRpcDevices({
+        adapter: ctx.manifest, instance: ctx.instance, devices: current, error: 'Gerät nicht gefunden.',
+      }));
+    }
+    const nextDevices = devices.map((row) => String(row.address || '') === address ? { ...row, customName } : row);
+    await instancesRepo.updateSettingKey(db, ctx.instance.id, 'devices', nextDevices);
+    // State-Kategorien sofort auf den neuen Namen umstellen (Adapter-Resync tut es
+    // andernfalls erst beim nächsten CCU-Sync). Nur die Kategorie ändert sich – der
+    // State-Name selbst enthält bereits nur Kanal + Parameter.
+    const displayName = customName || String(target.name || address);
+    const updates = [];
+    for (const channel of target.channels || []) {
+      for (const state of channel.states || []) {
+        updates.push([`${displayName} / ${channel.name || channel.address}`, ctx.instance.id, String(state.address)]);
+      }
+    }
+    await Promise.all(updates.map((params) => new Promise((resolve) => {
+      db.run('UPDATE adapter_states SET category = ? WHERE instance_id = ? AND address = ?', params, () => resolve());
+    })));
+    await host.reloadInstance(ctx.instance.id).catch(() => {});
+    ctx.instance = await instancesRepo.getInstance(db, ctx.instance.id);
+    const next = await buildHmRpcDevices(ctx.instance);
+    res.send(renderHmRpcDevices({
+      adapter: ctx.manifest,
+      instance: ctx.instance,
+      devices: next,
+      message: customName ? `Gerät in „${customName}" umbenannt.` : 'Eigener Gerätename entfernt.',
+    }));
   });
 
   return router;

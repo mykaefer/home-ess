@@ -188,11 +188,16 @@ Das an die Factory übergebene `host`-Objekt:
 {
   address: 'messwerte/temperatur', // Pflicht – eindeutig je Instanz
   name:    'Temperatur',           // Anzeigename (Default = address)
-  category:'Messwerte',            // Gruppe im States-Baum (Default 'Allgemein')
+  category:'Gerät / Messwerte',    // Pfad im States-Baum (Default 'Allgemein')
   unit:    '°C',                   // optional, für die Anzeige
   writable: false                  // optional, true = beschreibbar (write())
 }
 ```
+
+`category` darf mehrere, mit `/` getrennte Ebenen enthalten. homeESS stellt sie
+auf der States-Seite und im Topic-Picker als einzeln ausklappbaren Verzeichnisbaum
+dar (z. B. `Wohnzimmer / Thermostat / Messwerte`). Einfache Kategorien ohne `/`
+bleiben vollständig abwärtskompatibel.
 
 ## States & Adressen
 

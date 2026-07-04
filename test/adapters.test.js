@@ -23,7 +23,7 @@ const host = require('../src/adapters/host');
 const bus = require('../src/state-bus');
 const stateEditor = require('../src/adapters/state-editor');
 const presetsRepo = require('../src/adapters/presets');
-const { buildStatesTree } = require('../src/adapters/states');
+const { buildStatesTree, categoryParts, forEachState } = require('../src/adapters/states');
 const { openDatabase } = require('../src/db');
 const createTasmotaAdapter = require('../adapter/tasmota');
 const renderTasmotaDevices = require('../src/views/tasmota-devices');
@@ -272,6 +272,18 @@ test('State-Editor normalisiert Zeilen typgerecht', () => {
   assert.equal(row.scale, 0.01);              // Komma -> Punkt
 });
 
+test('Adapter-Kategorien unterstützen tiefe Verzeichnispfade und einfache Kategorien', () => {
+  assert.deepEqual(categoryParts('Haus / Gerät / Kanal'), ['Haus', 'Gerät', 'Kanal']);
+  assert.deepEqual(categoryParts('Messwerte'), ['Messwerte']);
+  const found = [];
+  forEachState([{
+    name: 'Haus', states: [], children: [{
+      name: 'Gerät', states: [{ topic: 'hm-rpc://test/a' }], children: [],
+    }],
+  }], (state) => found.push(state.topic));
+  assert.deepEqual(found, ['hm-rpc://test/a']);
+});
+
 test('State-Editor validiert Pflichtfelder', () => {
   assert.deepEqual(stateEditor.validateRow(stateEditor.normalizeRow({ address: 'a', name: 'n', register: 1 }, EDITOR), EDITOR), []);
   const errs = stateEditor.validateRow(stateEditor.normalizeRow({ name: 'n' }, EDITOR), EDITOR);
@@ -509,6 +521,75 @@ test('Tasmota-Gerätename überschreibt FriendlyName in Katalog und Geräteansic
   assert.match(html, />Boiler Keller</);
   assert.match(html, /tasmota-devices\/rename/);
   assert.match(html, /value="Boiler Keller"/);
+});
+
+const renderHmRpcDevices = require('../src/views/hm-rpc-devices');
+
+test('HM-RPC-Geräteseite zeigt die Geräte-ID und bietet Umbenennen an', () => {
+  const html = renderHmRpcDevices({
+    adapter: { name: 'HM-RPC', prefix: 'hm-rpc' },
+    instance: { id: 3, name: 'ccu' },
+    devices: [{
+      address: 'ABC0000001',
+      name: 'Lampe',
+      customName: 'Wohnzimmerlampe',
+      channels: [{ address: 'ABC0000001:1', name: 'Kanal 1', states: [{ address: 'ABC0000001%3A1/STATE', name: 'Kanal 1 STATE', writable: true, display: 'true' }] }],
+    }],
+  });
+  assert.match(html, />Wohnzimmerlampe</);
+  assert.match(html, />ABC0000001</); // Geräte-ID bleibt sichtbar
+  assert.match(html, /hm-rpc-devices\/rename/);
+  assert.match(html, /value="Wohnzimmerlampe"/);
+});
+
+test('HM-RPC-Umbenennen speichert Klarnamen und stellt die State-Kategorie um', async () => {
+  const express = require('express');
+  const http = require('http');
+  const adapterRoutes = require('../src/routes/adapters');
+
+  const db = await freshDb();
+  writeAdapter('hm-rpc', 'hm-rpc');
+  registry.loadRegistry();
+  const id = await instancesRepo.createInstance(db, 'hm-rpc', 'ccu');
+  await instancesRepo.updateSettings(db, id, {
+    devices: [{
+      address: 'ABC0000001',
+      name: 'HM-LC-Sw1 (ABC0000001)',
+      customName: '',
+      channels: [{ address: 'ABC0000001:1', name: 'Kanal 1', states: [{ address: 'ABC0000001%3A1/STATE', name: 'Kanal 1 STATE' }] }],
+    }],
+  });
+  await new Promise((resolve) => db.run(
+    'INSERT INTO adapter_states (instance_id, address, name, category, unit, writable, last_value, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    [id, 'ABC0000001%3A1/STATE', 'Kanal 1 STATE', 'HM-LC-Sw1 (ABC0000001) / Kanal 1', '', 1, 'false', Date.now()], () => resolve()
+  ));
+
+  const app = express();
+  app.use(express.urlencoded({ extended: false }));
+  app.use((req, _res, next) => { req.session = { user: 'test' }; next(); });
+  app.use(adapterRoutes(db));
+  const server = http.createServer(app).listen(0);
+  await new Promise((r) => server.once('listening', r));
+  const port = server.address().port;
+
+  await new Promise((resolve, reject) => {
+    const data = 'address=ABC0000001&name=Wohnzimmerlampe';
+    const req = http.request({ method: 'POST', port, path: `/adapter/instance/${id}/hm-rpc-devices/rename`,
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(data) } },
+      (res) => { res.resume(); res.on('end', resolve); });
+    req.on('error', reject);
+    req.end(data);
+  });
+  server.close();
+
+  const inst = await instancesRepo.getInstance(db, id);
+  assert.equal(inst.settings.devices[0].customName, 'Wohnzimmerlampe', 'Klarname persistiert');
+  const category = await new Promise((resolve) => db.get(
+    'SELECT category FROM adapter_states WHERE instance_id = ? AND address = ?',
+    [id, 'ABC0000001%3A1/STATE'], (_err, row) => resolve(row && row.category)
+  ));
+  assert.equal(category, 'Wohnzimmerlampe / Kanal 1', 'Kategorie nutzt den Klarnamen statt der Geräte-ID');
+  db.close();
 });
 
 test.after(() => {

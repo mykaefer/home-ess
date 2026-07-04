@@ -44,7 +44,12 @@ function reloadRegistry() {
 
 function persistStates(instanceId, list) {
   if (!db) return;
-  db.run('DELETE FROM adapter_states WHERE instance_id = ?', [instanceId], () => {
+  // Große dynamische Kataloge (z. B. RPC-Geräte) stets in genau einer
+  // Transaktion schreiben. Einzelne Autocommit-INSERTs blockieren SQLite und
+  // damit bei tausenden States die gesamte Anwendung für lange Zeit.
+  db.serialize(() => {
+    db.run('BEGIN');
+    db.run('DELETE FROM adapter_states WHERE instance_id = ?', [instanceId]);
     const stmt = db.prepare(
       `INSERT OR REPLACE INTO adapter_states
         (instance_id, address, name, category, unit, writable, last_value, updated_at)
@@ -65,6 +70,7 @@ function persistStates(instanceId, list) {
       ]);
     }
     stmt.finalize();
+    db.run('COMMIT');
   });
 }
 

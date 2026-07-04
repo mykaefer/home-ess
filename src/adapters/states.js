@@ -1,7 +1,7 @@
 'use strict';
 
 // Aggregiert die von den Adapter-Instanzen gemeldeten States zu einem Baum
-// (Instanz → Kategorie → State) inkl. aktuellem Live-Wert aus dem state-bus.
+// (Instanz → Kategorie → beliebig viele Unterkategorien → State).
 // Grundlage ist die persistierte Tabelle adapter_states (vom Host gepflegt), damit
 // die States-Seite und der Picker auch bei gestopptem Adapter Namen anzeigen.
 
@@ -24,9 +24,26 @@ function displayValue(value, unit) {
   return unit ? `${value} ${unit}` : String(value);
 }
 
-// Liefert: [{ instanceId, instanceName, adapterId, prefix, enabled, running,
-//             categories: [{ name, states: [{ address, name, topic, unit,
-//             writable, value, display }] }] }]
+function categoryParts(value) {
+  const parts = String(value || 'Allgemein').split(/\s*\/\s*/).map((part) => part.trim()).filter(Boolean);
+  return parts.length ? parts : ['Allgemein'];
+}
+
+function categoryList(root) {
+  return Array.from(root.values()).sort((a, b) => a.name.localeCompare(b.name, 'de')).map((node) => {
+    const children = categoryList(node._children);
+    const stateCount = node.states.length + children.reduce((sum, child) => sum + child.stateCount, 0);
+    return { name: node.name, states: node.states, children, stateCount };
+  });
+}
+
+function forEachState(categories, callback) {
+  for (const category of categories || []) {
+    for (const state of category.states || []) callback(state, category);
+    forEachState(category.children, callback);
+  }
+}
+
 async function buildStatesTree(db) {
   const instances = await instancesRepo.listInstances(db);
   const rows = await loadStateRows(db);
@@ -40,14 +57,19 @@ async function buildStatesTree(db) {
   return instances.map((instance) => {
     const manifest = registry.getManifest(instance.adapterId);
     const prefix = manifest ? manifest.prefix : instance.adapterId;
-    const byCategory = new Map();
+    const categoryRoot = new Map();
     for (const row of rowsByInstance.get(instance.id) || []) {
       const topic = buildSchemeTopic(prefix, instance.name, row.address);
       const cached = cache.get(topic);
       const value = cached ? cached.value : row.last_value;
-      const cat = row.category || 'Allgemein';
-      if (!byCategory.has(cat)) byCategory.set(cat, []);
-      byCategory.get(cat).push({
+      let level = categoryRoot;
+      let category;
+      for (const name of categoryParts(row.category)) {
+        if (!level.has(name)) level.set(name, { name, states: [], _children: new Map() });
+        category = level.get(name);
+        level = category._children;
+      }
+      category.states.push({
         address: row.address,
         name: row.name || row.address,
         topic,
@@ -57,9 +79,7 @@ async function buildStatesTree(db) {
         display: displayValue(value, row.unit),
       });
     }
-    const categories = Array.from(byCategory.entries())
-      .sort((a, b) => a[0].localeCompare(b[0], 'de'))
-      .map(([name, states]) => ({ name, states }));
+    const categories = categoryList(categoryRoot);
     return {
       instanceId: instance.id,
       instanceName: instance.name,
@@ -73,4 +93,4 @@ async function buildStatesTree(db) {
   });
 }
 
-module.exports = { buildStatesTree, displayValue };
+module.exports = { buildStatesTree, displayValue, forEachState, categoryParts };

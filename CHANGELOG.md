@@ -3,6 +3,64 @@
 Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [1.0.11] — 2026-07-04
+
+> HM-RPC-Adapter auf **1.1.0** angehoben.
+
+### Hinzugefügt
+
+- **HM-RPC hält Werte jetzt aktiv aktuell.** Der Adapter reagiert nicht mehr rein
+  passiv auf CCU-Push-Events, sondern kann Werte gezielt aus dem **CCU-Cache**
+  nachladen (`getParamset` auf das VALUES-Paramset — **kein Funk, kein
+  Duty-Cycle**). Damit werden Änderungen in der CCU auch dann übernommen, wenn ein
+  Push-Event ausbleibt, und die Frische-Zeitstempel bleiben aktuell (behebt das
+  fälschliche „⚠"/veraltet bei trägen Zählern wie kWh). Drei Ebenen greifen
+  ineinander: **On-Demand** (Live-Refresh der Messen-Schalten-Seite), ein
+  optionaler, **gleichmäßig verteilter Hintergrund-Refresh** (neue Einstellung
+  „Hintergrund-Refresh (s)", 0 = aus — arbeitet als serialisierter Round-Robin,
+  ein Kanal nach dem anderen, nie als Burst) und ein **aktives Beobachtungsfenster
+  nach Steuerbefehlen** (5 s lang werden nach einem Schaltbefehl alle Kanäle des
+  Geräts engmaschig nachgefragt, damit das zugehörige Status-Topic zeitnah
+  nachzieht).
+- **Topic-Picker mit fester Breite und gemerktem Zustand.** Das Auswahl-Dropdown
+  ist nicht mehr an die (oft schmale) Breite des Topic-Felds gekoppelt, sodass
+  lange State-Namen nicht mehr abgeschnitten werden. Zusätzlich merkt sich der
+  Picker pro Kategorie den **Ein-/Ausklappzustand** und seine **letzte
+  Scrollposition**, sodass man beim Zuweisen mehrerer Topics den gesuchten Wert
+  nicht jedes Mal neu suchen muss.
+- **HM-RPC-Geräteseite: eingeklappt und persistent.** Die Geräte sind beim Laden
+  standardmäßig eingeklappt und merken sich ihren Auf-/Zu-Zustand. Die Geräteliste
+  bleibt über einen Adapterneustart erhalten und wird nicht mehr bei jedem Start
+  komplett aus der CCU neu aufgebaut.
+
+### Geändert
+
+- **HM-RPC bündelt CCU-Geräteaktualisierungen.** `updateDevice`-Ereignisse der CCU
+  lösen nicht mehr je Ereignis einen vollständigen Re-Sync aus, sondern werden mit
+  Debounce und Single-Flight zu **einem** Re-Sync zusammengefasst. Das senkt die
+  CPU-Last des Adapters bei Geräte-Bursts deutlich.
+
+### Behoben
+
+- **HM-RPC übernimmt die Einheiten der Werte.** Bei großen Anlagen konnten
+  Push-Events schneller eintreffen, als die Parameterbeschreibungen (mit Einheit)
+  geladen wurden; die betroffenen States blieben dann dauerhaft ohne Einheit. Der
+  Adapter wertet einen bereits angelegten State jetzt nach, sobald die echte
+  Beschreibung vorliegt, sodass die übermittelte Einheit an den Werten erscheint.
+
+## [1.0.10] — 2026-07-04
+
+### Hinzugefügt
+
+- **Geräteseite für den HM-RPC-Adapter.** Jede HM-RPC-Instanz hat jetzt – wie
+  Tasmota – eine eigene „Geräte"-Unterseite. Dort lässt sich jedem von der CCU
+  erkannten Gerät ein frei wählbarer Klarname geben (z. B. „Wohnzimmerlampe"),
+  mit dem es sich in homeESS identifiziert; er ersetzt die kryptische Geräte-ID
+  in den State-Kategorien. Die technische Geräte-ID sowie der CCU-Name bleiben
+  auf der Geräteseite weiterhin sichtbar. Der Adapter meldet die erkannten
+  Geräte samt Kanälen als Metadaten, sodass die Seite auch bei kurzzeitig
+  getrennter CCU nutzbar bleibt.
+
 ## [1.0.9] — 2026-07-04
 
 ### Behoben

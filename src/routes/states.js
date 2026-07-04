@@ -2,7 +2,7 @@
 
 const express = require('express');
 const { requireAuth } = require('../auth/session');
-const { buildStatesTree, displayValue } = require('../adapters/states');
+const { buildStatesTree, displayValue, forEachState } = require('../adapters/states');
 const renderStates = require('../views/states');
 
 function statesRoutes(db) {
@@ -33,9 +33,7 @@ function statesRoutes(db) {
       const tree = await buildStatesTree(db);
       const values = {};
       for (const inst of tree) {
-        for (const cat of inst.categories) {
-          for (const st of cat.states) values[st.topic] = displayValue(st.value, st.unit);
-        }
+        forEachState(inst.categories, (st) => { values[st.topic] = displayValue(st.value, st.unit); });
       }
       res.json({ values });
     } catch (_) {

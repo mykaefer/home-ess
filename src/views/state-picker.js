@@ -36,6 +36,31 @@ function statePickerScript() {
     var statePickerAnchor = null;
     var statePickerWired = false;
     var statePickerHome = null;
+    var STATE_PICKER_WIDTH = 460;
+    var STATE_PICKER_EXPAND_KEY = 'homeess.statepicker.expanded.v1';
+    var STATE_PICKER_SCROLL_KEY = 'homeess.statepicker.scroll.v1';
+    var statePickerExpandedCache = {};
+    var statePickerScrollTimer = null;
+
+    function statePickerLoadExpanded() {
+      try { return JSON.parse(localStorage.getItem(STATE_PICKER_EXPAND_KEY) || '{}') || {}; }
+      catch (_) { return {}; }
+    }
+    function statePickerSaveExpanded(map) {
+      try { localStorage.setItem(STATE_PICKER_EXPAND_KEY, JSON.stringify(map)); } catch (_) {}
+    }
+    function statePickerRestoreScroll() {
+      var body = document.getElementById('state-picker-body');
+      if (!body) return;
+      var v = 0;
+      try { v = parseInt(localStorage.getItem(STATE_PICKER_SCROLL_KEY) || '0', 10) || 0; } catch (_) {}
+      body.scrollTop = v;
+    }
+    function statePickerSaveScroll() {
+      var body = document.getElementById('state-picker-body');
+      if (!body) return;
+      try { localStorage.setItem(STATE_PICKER_SCROLL_KEY, String(body.scrollTop)); } catch (_) {}
+    }
 
     function statePickerOpen(inputId) {
       statePickerTarget = inputId;
@@ -86,6 +111,13 @@ function statePickerScript() {
       statePickerWired = true;
       window.addEventListener('scroll', statePickerPosition, true);
       window.addEventListener('resize', statePickerPosition);
+      // Letzte Scrollposition der Liste merken (gedrosselt), damit sie beim
+      // nächsten Öffnen wiederhergestellt werden kann.
+      var body = document.getElementById('state-picker-body');
+      if (body) body.addEventListener('scroll', function () {
+        if (statePickerScrollTimer) clearTimeout(statePickerScrollTimer);
+        statePickerScrollTimer = setTimeout(statePickerSaveScroll, 200);
+      });
       // Popover-Lightdismiss (Klick außerhalb / Esc) räumt den Zielzustand auf.
       pop.addEventListener('toggle', function (e) {
         if (e.newState === 'closed') {
@@ -102,7 +134,9 @@ function statePickerScript() {
       if (!pop || !statePickerAnchor) return;
       var r = statePickerAnchor.getBoundingClientRect();
       var vw = window.innerWidth, vh = window.innerHeight;
-      var width = Math.max(260, Math.min(r.width, 520));
+      // Feste, komfortable Breite – NICHT an die (oft schmale) Feldbreite gekoppelt,
+      // damit lange State-Namen nicht abgeschnitten werden. Nur der Viewport begrenzt.
+      var width = Math.min(STATE_PICKER_WIDTH, vw - 16);
       var left = Math.max(8, Math.min(r.left, vw - width - 8));
       var spaceBelow = vh - r.bottom, spaceAbove = r.top;
       var openUp = spaceBelow < 240 && spaceAbove > spaceBelow;
@@ -137,6 +171,25 @@ function statePickerScript() {
     function statePickerToggle(head) {
       var cat = head.parentNode;
       cat.classList.toggle('is-open');
+      var key = cat.getAttribute('data-tree-key');
+      if (!key) return;
+      var map = statePickerLoadExpanded();
+      if (cat.classList.contains('is-open')) map[key] = true; else delete map[key];
+      statePickerExpandedCache = map;
+      statePickerSaveExpanded(map);
+    }
+
+    function statePickerRenderCategory(cat, depth, path, instKey) {
+      var currentPath = path ? path + ' ' + cat.name : cat.name;
+      var treeKey = instKey + '/' + currentPath;
+      var openClass = statePickerExpandedCache[treeKey] === true ? ' is-open' : '';
+      var html = '<div class="value-cat state-tree-level' + (depth ? ' value-cat--nested' : '') + openClass + '" style="--tree-depth:' + depth + '" data-tree-key="' + statePickerEsc(treeKey) + '"><button type="button" class="value-cat-head" onclick="statePickerToggle(this)"><span class="value-cat-caret">▸</span><span class="value-cat-name">' + statePickerEsc(cat.name) + '</span><span class="value-cat-count">' + (cat.stateCount == null ? cat.states.length : cat.stateCount) + '</span></button><div class="value-cat-body">';
+      for (var s = 0; s < cat.states.length; s++) {
+        var st = cat.states[s];
+        html += '<button type="button" class="value-row" data-topic="' + statePickerEsc(st.topic) + '" data-search="' + statePickerEsc((currentPath + ' ' + st.name + ' ' + st.topic).toLowerCase()) + '" onclick="statePickerSelect(this.getAttribute(\\'data-topic\\'))"><span class="value-row-label">' + statePickerEsc(st.name) + '</span><span class="value-row-now">' + statePickerEsc(st.display == null ? '—' : st.display) + '</span></button>';
+      }
+      for (var c = 0; c < (cat.children || []).length; c++) html += statePickerRenderCategory(cat.children[c], depth + 1, currentPath, instKey);
+      return html + '</div></div>';
     }
 
     function statePickerRender() {
@@ -147,22 +200,21 @@ function statePickerScript() {
         body.innerHTML = '<p class="muted" style="padding:12px;">Noch keine Adapter-States vorhanden. Lege auf der Adapter-Seite eine Instanz an und aktiviere sie.</p>';
         return;
       }
+      // Ein-/Ausklapp-Zustand einmal je Render laden und beim Aufbau anwenden.
+      statePickerExpandedCache = statePickerLoadExpanded();
       var html = '';
       for (var i = 0; i < data.instances.length; i++) {
         var inst = data.instances[i];
-        html += '<div class="state-inst"><div class="state-inst-name">' + statePickerEsc(inst.prefix + '://' + inst.instanceName) + '</div>';
+        var instKey = inst.prefix + '://' + inst.instanceName;
+        html += '<div class="state-inst"><div class="state-inst-name">' + statePickerEsc(instKey) + '</div>';
         for (var c = 0; c < inst.categories.length; c++) {
-          var cat = inst.categories[c];
-          html += '<div class="value-cat"><button type="button" class="value-cat-head" onclick="statePickerToggle(this)"><span class="value-cat-caret">▸</span><span class="value-cat-name">' + statePickerEsc(cat.name) + '</span><span class="value-cat-count">' + cat.states.length + '</span></button><div class="value-cat-body">';
-          for (var s = 0; s < cat.states.length; s++) {
-            var st = cat.states[s];
-            html += '<button type="button" class="value-row" data-search="' + statePickerEsc((st.name + ' ' + st.topic).toLowerCase()) + '" onclick="statePickerSelect(\\'' + statePickerEsc(st.topic) + '\\')"><span class="value-row-label">' + statePickerEsc(st.name) + '</span><span class="value-row-now">' + statePickerEsc(st.display == null ? '—' : st.display) + '</span></button>';
-          }
-          html += '</div></div>';
+          html += statePickerRenderCategory(inst.categories[c], 0, '', instKey);
         }
         html += '</div>';
       }
       body.innerHTML = html;
+      // Zuletzt gemerkte Scrollposition wiederherstellen (nach dem Aufbau).
+      statePickerRestoreScroll();
     }
 
     function statePickerFilter(query) {

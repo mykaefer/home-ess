@@ -33,7 +33,28 @@ ${blocks}
         })
         .catch(function () {});
     }
-    function statesToggle(head) { head.parentNode.classList.toggle('is-open'); }
+    var STATES_EXPANSION_KEY = 'homeess.states.expanded.v2';
+    function statesExpansionLoad() {
+      try { return JSON.parse(localStorage.getItem(STATES_EXPANSION_KEY) || '{}') || {}; }
+      catch (_) { return {}; }
+    }
+    function statesToggle(head) {
+      var cat = head.parentNode;
+      cat.classList.toggle('is-open');
+      var key = cat.getAttribute('data-tree-key');
+      if (!key) return;
+      var expanded = statesExpansionLoad();
+      expanded[key] = cat.classList.contains('is-open');
+      try { localStorage.setItem(STATES_EXPANSION_KEY, JSON.stringify(expanded)); } catch (_) {}
+    }
+    function statesRestoreExpansion() {
+      var expanded = statesExpansionLoad();
+      var cats = document.querySelectorAll('.states-tree [data-tree-key]');
+      for (var i = 0; i < cats.length; i++) {
+        var key = cats[i].getAttribute('data-tree-key');
+        cats[i].classList.toggle('is-open', expanded[key] === true);
+      }
+    }
     // MQTT-Events kommen in Bursts – pro Burst nur EIN Nachladen (coalesced),
     // sonst flutet die offene Seite den Server mit /states/data.json-Anfragen.
     var statesQueued = false;
@@ -42,7 +63,9 @@ ${blocks}
       statesQueued = true;
       setTimeout(function () { statesQueued = false; statesRefresh(); }, 1000);
     }
+    statesRestoreExpansion();
     statesRefresh();
+    window.addEventListener('pageshow', statesRestoreExpansion);
     window.addEventListener('homeess:mqtt', queueStatesRefresh);
     setInterval(statesRefresh, 15000);
   `;
@@ -54,7 +77,7 @@ function renderInstanceBlock(inst) {
   const statusClass = inst.enabled ? (inst.running ? 'module-status--on' : 'module-status--off') : 'module-status--off';
   const statusLabel = !inst.enabled ? 'Inaktiv' : inst.running ? 'Läuft' : 'Startet…';
   const cats = inst.categories.length
-    ? inst.categories.map((cat) => renderCategory(cat)).join('\n')
+    ? inst.categories.map((cat) => renderCategory(cat, 0, `${inst.prefix}://${inst.instanceName}`, '')).join('\n')
     : '          <p class="muted" style="margin:6px 0;">Dieser Adapter hat noch keine States gemeldet.</p>';
 
   return `          <div class="states-inst">
@@ -66,7 +89,7 @@ ${cats}
           </div>`;
 }
 
-function renderCategory(cat) {
+function renderCategory(cat, depth = 0, instanceKey = '', parentPath = '') {
   const rows = cat.states.map((st) => {
     const valueAttr = escapeHtml(st.topic);
     return `              <div class="value-row">
@@ -75,14 +98,18 @@ function renderCategory(cat) {
               </div>`;
   }).join('\n');
 
-  return `            <div class="value-cat is-open">
+  const path = parentPath ? `${parentPath}/${cat.name}` : cat.name;
+  const treeKey = `${instanceKey}/${path}`;
+  const children = (cat.children || []).map((child) => renderCategory(child, depth + 1, instanceKey, path)).join('\n');
+  return `            <div class="value-cat state-tree-level${depth ? ' value-cat--nested' : ''}" style="--tree-depth:${depth}" data-tree-key="${escapeHtml(treeKey)}">
               <button type="button" class="value-cat-head" onclick="statesToggle(this)">
                 <span class="value-cat-caret">▸</span>
                 <span class="value-cat-name">${escapeHtml(cat.name)}</span>
-                <span class="value-cat-count">${cat.states.length}</span>
+                <span class="value-cat-count">${cat.stateCount == null ? cat.states.length : cat.stateCount}</span>
               </button>
               <div class="value-cat-body">
 ${rows}
+${children}
               </div>
             </div>`;
 }

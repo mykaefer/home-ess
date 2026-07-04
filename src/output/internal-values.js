@@ -34,7 +34,7 @@ const operatingState = require('../operating-state');
 const { loadPrognosisConfig } = require('../prognosis/config');
 const { buildConsumptionModel, simulateDays } = require('../prognosis/forecast');
 const { getBehaviorRecommendation } = require('../prognosis/behavior');
-const { buildStatesTree } = require('../adapters/states');
+const { buildStatesTree, forEachState } = require('../adapters/states');
 const { loadMqttConfig } = require('../mqtt/config');
 const { localCalendar } = require('../local-time');
 const { computeYearStats, getDailyMetricValue, statsFromRows, dayKeyOffset } = require('../history/daily-metrics');
@@ -654,17 +654,13 @@ async function buildInternalValues(db, cache) {
   // sich eindeutig von den Katalog-Ids der berechneten Werte unterscheiden.
   const statesTree = await buildStatesTree(db);
   for (const instance of statesTree) {
-    for (const cat of instance.categories) {
-      for (const state of cat.states) {
-        entries.push({
-          id: state.topic,
-          label: `${instance.instanceName} – ${state.name}`,
-          value: state.value,
-          display: state.display,
-          category: `Adapter: ${instance.instanceName}`,
-        });
-      }
-    }
+    forEachState(instance.categories, (state) => entries.push({
+      id: state.topic,
+      label: `${instance.instanceName} – ${state.name}`,
+      value: state.value,
+      display: state.display,
+      category: `Adapter: ${instance.instanceName}`,
+    }));
   }
 
   entries.sort((a, b) => a.label.localeCompare(b.label, 'de'));

@@ -1,0 +1,20 @@
+{
+  "id": "hm-rpc",
+  "name": "HM-RPC",
+  "prefix": "hm-rpc",
+  "version": "1.1.0",
+  "description": "Bindet eine CCU per XML-RPC an, hält Gerätewerte ereignisbasiert aktuell und schützt Schreibzugriffe anhand des Duty Cycle.",
+  "multiInstance": true,
+  "main": "index.js",
+  "settings": [
+    { "key": "host", "label": "CCU-Adresse", "type": "text", "default": "", "hint": "IP-Adresse oder Hostname der CCU, ohne Protokoll." },
+    { "key": "port", "label": "RPC-Port", "type": "number", "default": 2010, "hint": "HmIP-RF: 2010, BidCos-RF: 2001, virtuelle Geräte: 9292." },
+    { "key": "callbackHost", "label": "Callback-Adresse", "type": "text", "default": "", "hint": "Vom CCU-Netz erreichbare IP dieses homeESS-Servers. Leer = automatisch ermitteln." },
+    { "key": "callbackPort", "label": "Callback-Port", "type": "number", "default": 0, "hint": "0 wählt automatisch einen freien Port." },
+    { "key": "username", "label": "Benutzername", "type": "text", "default": "" },
+    { "key": "password", "label": "Kennwort", "type": "password", "default": "" },
+    { "key": "dutyCycleLimit", "label": "Duty-Cycle-Schreibsperre ab (%)", "type": "number", "default": 80, "hint": "Ab diesem Wert werden neue Funk-Schreibbefehle verworfen. 0 deaktiviert die Sperre." },
+    { "key": "reconnectInterval", "label": "Reconnect-Intervall (s)", "type": "number", "default": 30 },
+    { "key": "refreshInterval", "label": "Hintergrund-Refresh (s)", "type": "number", "default": 0, "hint": "0 = aus. Zeitfenster, in dem alle Gerätewerte einmal aus dem CCU-Cache aufgefrischt werden – gleichmäßig verteilt (ein Kanal nach dem anderen), kein Funk, kein Duty-Cycle. Empfehlung < 300 (unter dem 5-min-Stale-Fenster)." }
+  ]
+}
