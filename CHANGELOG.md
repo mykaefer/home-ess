@@ -3,6 +3,16 @@
 Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [1.0.15] — 2026-07-04
+
+### Hinzugefügt
+
+- **Wertekatalog: „Sonstige Verbraucher" unter Verbrauchssummen.** Neuer Eintrag
+  mit der Leistung, die sich aus der Eigenverbrauchsleistung (lt. Stromverbrauch)
+  abzüglich aller Gruppen-Verbrauchssummen ergibt. Der Wert wird bei 0 gekappt,
+  damit Messungenauigkeiten keine negativen Werte erzeugen; ohne verfügbare
+  Eigenverbrauchsleistung bleibt er leer.
+
 ## [1.0.14] — 2026-07-04
 
 ### Geändert

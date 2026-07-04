@@ -609,6 +609,9 @@ async function buildInternalValues(db, cache) {
   // Messen + Schalten: je Gerät die Werte der gesetzten Topics (Kategorie „Geräte"),
   // je Gruppe die Verbrauchssumme der Leistung (Kategorie „Verbrauchssummen").
   const messSchaltActors = await listActors(db);
+  // Summe aller Gruppen-Verbrauchssummen (Leistung) für den Restposten
+  // „Sonstige Verbraucher" weiter unten.
+  let verbrauchssummeGroupTotal = 0;
   if (messSchaltActors.length) {
     const messSchaltGroups = await listMessSchaltGroups(db);
     const actorValues = await readActorValues(db, cache, messSchaltActors);
@@ -629,10 +632,12 @@ async function buildInternalValues(db, cache) {
     const groupSums = readGroupSums(messSchaltGroups, actorValues);
     for (const group of messSchaltGroups) {
       const sum = groupSums.get(group.id);
+      const powerW = sum ? sum.powerW : null;
+      if (powerW != null) verbrauchssummeGroupTotal += powerW;
       entries.push(powerEntry(
         `verbrauchssumme.${group.id}.leistung`,
         `${group.title} – Verbrauch (Leistung)`,
-        sum ? sum.powerW : null
+        powerW
       ));
     }
 
@@ -645,6 +650,16 @@ async function buildInternalValues(db, cache) {
       entries.push(energyEntry(`funktion.${fn.key}.verbrauchHeute`, `Funktion ${fn.label} – Verbrauch heute`, fn.todayKwh));
     }
   }
+
+  // Restposten „Sonstige Verbraucher": Eigenverbrauchsleistung laut Stromverbrauch
+  // abzüglich aller Gruppen-Verbrauchssummen, bei 0 gekappt (Messungenauigkeiten
+  // dürfen nicht zu negativen Werten führen). Fehlt die Eigenverbrauchsleistung,
+  // bleibt der Wert leer (null).
+  entries.push(powerEntry(
+    'verbrauchssumme.sonstige.leistung',
+    'Sonstige Verbraucher – Verbrauch (Leistung)',
+    strom.eigenverbrauchPower == null ? null : Math.max(0, strom.eigenverbrauchPower - verbrauchssummeGroupTotal)
+  ));
 
   for (const entry of entries) entry.category = categoryForId(entry.id);
 
