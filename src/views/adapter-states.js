@@ -90,7 +90,10 @@ function renderRowGroups(editor, rows) {
     .sort((a, b) => a.localeCompare(b, 'de'))
     .map((cat) => {
       const groupRows = groups.get(cat);
-      return `          <details class="state-cat" open>
+      // data-cat-key: Merkschlüssel für den clientseitig persistierten Auf-/
+      // Zuklapp-Zustand (Standard offen; abweichender Zustand wird beim Laden
+      // aus localStorage angewandt, siehe initStateCats).
+      return `          <details class="state-cat" open data-cat-key="${escapeHtml(cat)}">
             <summary><span class="state-cat-name">${escapeHtml(cat)}</span><span class="state-cat-count">${groupRows.length}</span></summary>
 ${renderRowsTable(editor, groupRows, detailCols)}
           </details>`;
@@ -197,6 +200,35 @@ ${renderStateDialog(instance, editor, { dialogOpen, dialogError, dialogValues, d
       var d = document.getElementById('stateDialog');
       if (d && typeof d.showModal === 'function') d.showModal();
     }
+
+    // Auf-/Zuklapp-Zustand der Kategorien merken (wie der Topic-/Wertekatalog).
+    // Schlüssel je Instanz, damit sich unterschiedliche Adapterinstanzen nicht
+    // gegenseitig überschreiben. Kategorien ohne gemerkten Zustand bleiben offen.
+    var STATE_EDITOR_EXPAND_KEY = 'homeess.stateeditor.expanded.v1';
+    var STATE_EDITOR_SCOPE = ${JSON.stringify(String(instance.id))};
+    function stateCatLoad() {
+      try { return JSON.parse(localStorage.getItem(STATE_EDITOR_EXPAND_KEY) || '{}') || {}; }
+      catch (_) { return {}; }
+    }
+    function stateCatSave(map) {
+      try { localStorage.setItem(STATE_EDITOR_EXPAND_KEY, JSON.stringify(map)); } catch (_) {}
+    }
+    function stateCatKey(cat) { return STATE_EDITOR_SCOPE + '/' + cat; }
+    function initStateCats() {
+      var map = stateCatLoad();
+      var cats = document.querySelectorAll('.state-cat[data-cat-key]');
+      for (var i = 0; i < cats.length; i++) {
+        var key = stateCatKey(cats[i].getAttribute('data-cat-key'));
+        if (Object.prototype.hasOwnProperty.call(map, key)) cats[i].open = !!map[key];
+        cats[i].addEventListener('toggle', function (e) {
+          var d = e.currentTarget;
+          var m = stateCatLoad();
+          m[stateCatKey(d.getAttribute('data-cat-key'))] = d.open;
+          stateCatSave(m);
+        });
+      }
+    }
+    initStateCats();
   `;
 
   return renderLayout({ title: `${adapter.name} – ${editor.label}`, activePath: '/adapter', body, script });

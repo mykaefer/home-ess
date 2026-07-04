@@ -467,12 +467,18 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   (Tabelle `daily_metric_history`, je Metrik ein abgeschlossener Tageswert pro Tag);
   der **Durchschnitt** wird als Jahressumme ÷ angebrochene Tage gerechnet. Fehlt ein
   Wert, zeigt der Katalog `0` (Datum: 1. Januar). Außerdem erscheinen automatisch
-  **alle Adapter-States** (`buildStatesTree`, Kategorie „Adapter: <Instanz>", id =
-  Scheme-Topic). Alle Einträge haben `id`, `label`,
-  `value`, `display` und `category` (Herkunft, abgeleitet aus dem id-Präfix; siehe
-  `categoryForId`/`VALUE_CATEGORIES`). Die Darstellung übernimmt die zentrale,
-  wiederverwendbare Routine `views/value-catalog.js` (durchsuchbare, einklappbare
-  Liste mit Ist-Werten) — eingebettet in Output- und Dashboard-Dialoge.
+  **alle Adapter-States** (`buildStatesTree`, mehrstufige Kategorie
+  „Adapter: <Instanz> / <Gerät> / <Kanal>", id = Scheme-Topic). Alle Einträge haben
+  `id`, `label`, `value`, `display` und `category` (Herkunft, abgeleitet aus dem
+  id-Präfix; siehe `categoryForId`/`VALUE_CATEGORIES`). Die Darstellung übernimmt die
+  zentrale, wiederverwendbare Routine `views/value-catalog.js` (durchsuchbare,
+  einklappbare Liste mit Ist-Werten) — eingebettet in Output- und Dashboard-Dialoge.
+  Kategorien der Form „A / B / C" werden als **eingerückter Verzeichnisbaum**
+  gerendert (wie der Adapter-State-Picker, `buildValueCatalogTree`). Der
+  Auf-/Zuklapp-Zustand jeder Ebene wird clientseitig in `localStorage`
+  (`homeess.valuecatalog.expanded.v1`) gemerkt und beim Öffnen des Dialogs
+  wiederhergestellt; die Suche klappt Treffer (auch über den Kategorie-Pfad) auf und
+  stellt beim Leeren den gemerkten Zustand wieder her.
 - Einstellungen (Karten-Layout): Passwort ändern, **Standort & Zeit**
   (Breiten-/Längengrad, Zeitzone, automatische Zeitumstellung — Eingangsgrößen
   fürs Clear-Sky-Modell), MQTT-Broker konfigurieren + Verbindung testen.

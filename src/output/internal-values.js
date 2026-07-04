@@ -34,7 +34,7 @@ const operatingState = require('../operating-state');
 const { loadPrognosisConfig } = require('../prognosis/config');
 const { buildConsumptionModel, simulateDays } = require('../prognosis/forecast');
 const { getBehaviorRecommendation } = require('../prognosis/behavior');
-const { buildStatesTree, forEachState } = require('../adapters/states');
+const { buildStatesTree } = require('../adapters/states');
 const { loadMqttConfig } = require('../mqtt/config');
 const { localCalendar } = require('../local-time');
 const { computeYearStats, getDailyMetricValue, statsFromRows, dayKeyOffset } = require('../history/daily-metrics');
@@ -651,16 +651,28 @@ async function buildInternalValues(db, cache) {
   // Adapter-States: alle von Adaptern gemeldeten Roh-Werte erscheinen automatisch
   // im Wertekatalog (Herkunft = Adapterinstanz), zusätzlich zu den oben berechneten
   // Werten. Die id bleibt das Scheme-Topic (`prefix://instanz/adresse`), wodurch sie
-  // sich eindeutig von den Katalog-Ids der berechneten Werte unterscheiden.
+  // sich eindeutig von den Katalog-Ids der berechneten Werte unterscheiden. Die
+  // (mehrstufige) State-Kategorie – z. B. „Gerät / Kanal" – wird als Verzeichnispfad
+  // unter „Adapter: <Instanz>" übernommen, sodass der Wertekatalog denselben
+  // verschachtelten Baum wie der Adapter-State-Picker zeigt.
   const statesTree = await buildStatesTree(db);
+  const pushAdapterStates = (categories, pathParts, instanceName) => {
+    for (const category of categories || []) {
+      const nextPath = [...pathParts, category.name];
+      for (const state of category.states || []) {
+        entries.push({
+          id: state.topic,
+          label: `${instanceName} – ${state.name}`,
+          value: state.value,
+          display: state.display,
+          category: [`Adapter: ${instanceName}`, ...nextPath].join(' / '),
+        });
+      }
+      pushAdapterStates(category.children, nextPath, instanceName);
+    }
+  };
   for (const instance of statesTree) {
-    forEachState(instance.categories, (state) => entries.push({
-      id: state.topic,
-      label: `${instance.instanceName} – ${state.name}`,
-      value: state.value,
-      display: state.display,
-      category: `Adapter: ${instance.instanceName}`,
-    }));
+    pushAdapterStates(instance.categories, [], instance.instanceName);
   }
 
   entries.sort((a, b) => a.label.localeCompare(b.label, 'de'));

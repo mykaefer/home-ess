@@ -3,6 +3,27 @@
 Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [1.0.14] — 2026-07-04
+
+### Geändert
+
+- **Wertekatalog zeigt mehrere Verzeichnisebenen (wie der Adapter-State-Picker).**
+  Die Werteauswahl bei Outputs und Dashboard-Widgets gruppiert Kategorien der Form
+  „A / B / C" jetzt als eingerückten, einklappbaren Verzeichnisbaum. Adapter-States
+  erscheinen dadurch mit ihrer echten Hierarchie `Adapter: <Instanz> / <Gerät> /
+  <Kanal>` statt flach unter der Instanz.
+- **„Merken"-Funktion für die Werteauswahl.** Der Auf-/Zuklapp-Zustand jeder Ebene
+  wird – wie beim Topic-Picker – in `localStorage` gemerkt und beim erneuten Öffnen
+  des Dialogs wiederhergestellt (gemeinsam für Output- und Dashboard-Auswahl).
+
+### Behoben
+
+- **Wertekatalog-Suche: Zurücksetzen klappt den Baum wieder ein.** Beim Tippen
+  klappt die Suche Treffer-Kategorien samt Unterkategorien auf (Suche greift jetzt
+  auch über den Kategorie-Pfad); beim Leeren der Suchzeile wird der gemerkte
+  Ein-/Ausklapp-Zustand wiederhergestellt, statt alles offen zu lassen — dieselbe
+  Korrektur wie zuvor beim State-Picker.
+
 ## [1.0.13] — 2026-07-04
 
 ### Behoben

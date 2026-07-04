@@ -67,7 +67,9 @@ test('Adapter-States erscheinen automatisch im Wertekatalog (listInternalValues)
   const entry = values.find((v) => v.id === 'demo://simcat/messwerte/temperatur');
   assert.ok(entry, 'Adapter-State ist im Wertekatalog vorhanden');
   assert.equal(entry.label, 'simcat – Temperatur');
-  assert.equal(entry.category, 'Adapter: simcat');
+  // Die State-Kategorie „Messwerte" erscheint als Verzeichnisebene unter der
+  // Instanz, sodass der Wertekatalog denselben verschachtelten Baum zeigt.
+  assert.equal(entry.category, 'Adapter: simcat / Messwerte');
   assert.equal(entry.value, 21.5);
 
   await host.stopInstance(id);
