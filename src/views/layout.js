@@ -86,7 +86,7 @@ function renderLiveScript() {
         if (batNode && data.batterySoc != null) {
           var pct = Math.min(100, Math.max(0, data.batterySoc));
           batFill.style.width = pct.toFixed(0) + '%';
-          batFill.style.background = pct < 20 ? '#c53030' : pct < 50 ? '#c99a2e' : '#3f6fa5';
+          batFill.style.background = pct < 20 ? '#c53030' : pct < 50 ? '#c99a2e' : '#27ae60';
           batPct.textContent = pct.toFixed(0) + ' %';
           batNode.classList.add('bat-visible');
         }
@@ -100,6 +100,8 @@ function renderLiveScript() {
           Array.prototype.forEach.call(levelNode.querySelectorAll('.operating-level-bar'), function (bar) {
             bar.classList.toggle('is-active', Number(bar.getAttribute('data-level')) <= level);
           });
+          var numNode = document.getElementById('operating-level-num');
+          if (numNode) numNode.textContent = String(level);
         }
 
         var skyNode = document.getElementById('header-sky');
@@ -187,11 +189,14 @@ function renderLayout({ title, activePath = '', body = '', script = '' } = {}) {
           <span class="bat-pct" id="bat-pct"></span>
         </span>
         <span class="header-operating-level" id="header-operating-level" data-level="2" title="Betriebslevel 2">
-          <span class="operating-level-bar operating-level-bar--5" data-level="5"></span>
-          <span class="operating-level-bar operating-level-bar--4" data-level="4"></span>
-          <span class="operating-level-bar operating-level-bar--3" data-level="3"></span>
-          <span class="operating-level-bar operating-level-bar--2 is-active" data-level="2"></span>
-          <span class="operating-level-bar operating-level-bar--1 is-active" data-level="1"></span>
+          <span class="operating-level-bars">
+            <span class="operating-level-bar operating-level-bar--5" data-level="5"></span>
+            <span class="operating-level-bar operating-level-bar--4" data-level="4"></span>
+            <span class="operating-level-bar operating-level-bar--3" data-level="3"></span>
+            <span class="operating-level-bar operating-level-bar--2 is-active" data-level="2"></span>
+            <span class="operating-level-bar operating-level-bar--1 is-active" data-level="1"></span>
+          </span>
+          <span class="operating-level-num" id="operating-level-num">2</span>
         </span>
         <span class="header-sky" id="header-sky" title="Himmelszustand">🌙</span>
       </div>

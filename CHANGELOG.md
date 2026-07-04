@@ -3,6 +3,31 @@
 Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [1.0.12] — 2026-07-04
+
+### Behoben
+
+- **Akkuladung blähte die gelernten Stundenwerte nicht mehr auf.** Die
+  Batteriebereinigung des Eigenverbrauchs (`− Ladung + Entladung`) war korrekt
+  signiert, wurde aber in den kumulierten Tageszähler eingebaut, aus dem das
+  Lernmodell nur **positive** Stundendeltas bildet. Weil der Ladezähler bislang
+  nur in einem **eigenen, asynchronen Job** fortgeschrieben wurde, sägte der
+  bereinigte Wert minütlich hoch/runter; die Abwärtsspitzen wurden verworfen und
+  die Ladung fraß sich als Phantomverbrauch in die PV-/Ladestunden (real
+  ~14 kWh/Tag wurden als ~47 kWh gelernt, mit unmöglichen 10–12-kWh-Stunden
+  mittags). Der Akku-Energiezähler wird jetzt **im selben Snapshot-Takt** wie die
+  PV-/Netzzähler fortgeschrieben (`updateBatteryEnergy` in
+  `buildStromverbrauchSnapshot`), sodass die bereinigte Bilanz pro Intervall
+  konsistent ist und die Ladestunden nur noch den realen Hausverbrauch lernen.
+
+### Geändert
+
+- **Titelzeile: Akkuanzeige ≥ 50 % wieder grün** (statt blau), passend zur
+  Batterieseite; darunter unverändert gelb (< 50 %) und rot (< 20 %).
+- **Titelzeile: Betriebslevel zusätzlich als Zahl.** Neben den fünf Levelbalken
+  steht das aktive Level als weiße Ziffer in einem farbig umrandeten Kreis
+  (Randfarbe je Level, 1 rot → 5 grün); Balkenbreite unverändert.
+
 ## [1.0.11] — 2026-07-04
 
 > HM-RPC-Adapter auf **1.1.0** angehoben.

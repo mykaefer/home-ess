@@ -2085,14 +2085,43 @@ h2 .cmd-confirm { font-size: 13px; vertical-align: middle; }
 
 .header-operating-level {
     display: inline-flex;
-    flex-direction: column;
-    gap: 2px;
-    width: 24px;
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
     padding: 3px 5px;
     border-radius: 5px;
     border: 1px solid rgba(255,255,255,0.28);
     background: rgba(255,255,255,0.1);
 }
+
+.operating-level-bars {
+    display: inline-flex;
+    flex-direction: column;
+    gap: 2px;
+    width: 14px;
+}
+
+.operating-level-num {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    font-size: 15px;
+    font-weight: 700;
+    line-height: 1;
+    color: #fff;
+    background: transparent;
+    border: 2px solid #6b7280;
+}
+
+.header-operating-level[data-level="1"] .operating-level-num { border-color: #ef4444; }
+.header-operating-level[data-level="2"] .operating-level-num { border-color: #f97316; }
+.header-operating-level[data-level="3"] .operating-level-num { border-color: #eab308; }
+.header-operating-level[data-level="4"] .operating-level-num { border-color: #84cc16; }
+.header-operating-level[data-level="5"] .operating-level-num { border-color: #22c55e; }
 
 .operating-level-bar {
     display: block;

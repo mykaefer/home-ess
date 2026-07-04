@@ -37,6 +37,12 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   bereinigt: `PV + Import − Export − Ladung + Entladung`. Dazu liefert
   `batterie/energy.js` die integrierten Nettoflüsse für Tag, Woche, Jahr und
   Vorjahr; eine nächtliche Akkuentladung bleibt dadurch als Hausverbrauch erhalten.
+  Der Akku-Zähler wird **im selben Snapshot-Takt** wie die PV-/Netzzähler
+  fortgeschrieben (`updateBatteryEnergy` in `buildStromverbrauchSnapshot`), damit
+  die bereinigte Bilanz pro Intervall konsistent bleibt. Ohne diese Synchronität
+  sägt der sonst nur asynchron gepflegte Ladezähler den kumulierten Wert minütlich
+  hoch/runter; die auf Positiv-Deltas beruhende Verbrauchslernung verwirft dann die
+  Abwärtsspitzen und bläht die Ladestunden massiv auf.
   Die **Momentanleistung** stammt dagegen direkt aus den Eigenverbrauchs-Topics
   des Wechselrichters und wird ausschließlich um Leistung verbraucherseitig
   einspeisender PV-Anlagen ergänzt. Batterie und Glättung gehen nicht in diesen
@@ -112,7 +118,10 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   KPI-Kacheln nur wenn Topic gesetzt; SoC-Balken farbcodiert (grün/dunkelgelb/rot).
   Live-Updates via SSE. State-Definitionen integriert (kein Ad-hoc-System).
   **Titelzeile:** Batterie-Ladeanzeige als Icon mit Füllstand + Prozentzahl,
-  erscheint automatisch sobald `batterie.soc`-Wert im Cache vorhanden ist.
+  erscheint automatisch sobald `batterie.soc`-Wert im Cache vorhanden ist; der
+  Füllbalken ist farbcodiert (≥ 50 % grün, < 50 % gelb, < 20 % rot). Die
+  **Betriebslevel-Anzeige** zeigt die fünf Levelbalken und daneben das aktive
+  Level als Zahl in einem farbig umrandeten Kreis (Randfarbe je Level, weiße Ziffer).
   Zusätzlich: Mindest-SoC-Ziel-Topic mit 5-%-Regler und Batterieparameter
   (Typ, Zellzahl, Kapazität in Ah, untere/obere Gesamtspannung). Die Prognose
   leitet daraus über die zelltypspezifische Nennspannung die Energie in kWh ab.

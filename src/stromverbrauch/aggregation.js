@@ -23,7 +23,7 @@ const {
 const { loadMqttConfig } = require('../mqtt/config');
 const { localCalendar } = require('../local-time');
 const { recordDailyMetric, getDailyMetricValue } = require('../history/daily-metrics');
-const { readBatteryEnergyValues } = require('../batterie/energy');
+const { readBatteryEnergyValues, updateBatteryEnergy } = require('../batterie/energy');
 
 const IMPORT_COUNTER_KEYS = [
   { id: NETZBEZUG_ZAEHLER_L1_STATE_ID, key: 'import_l1' },
@@ -417,6 +417,12 @@ async function buildStromverbrauchSnapshot(db, cache) {
   const weekExport = summaryState.weekExportOffset + todayExport;
   const yearImport = summaryState.yearImportOffset + todayImport;
   const yearExport = summaryState.yearExportOffset + todayExport;
+  // Akku-Lade-/Entladezähler im selben Takt wie die PV-/Netzzähler
+  // fortschreiben, bevor er in die Bilanz eingeht. Sonst sägt der sonst nur
+  // asynchron gepflegte Ladezähler den batteriebereinigten Eigenverbrauch
+  // minütlich hoch und runter; die Positiv-Delta-Lernung (recordConsumptionSample)
+  // verwirft die Abwärtsspitzen und bläht die Ladestunden massiv auf.
+  await updateBatteryEnergy(db, cache);
   const batteryEnergy = await readBatteryEnergyValues(db);
 
   const todayBreakdown = buildBreakdown(
