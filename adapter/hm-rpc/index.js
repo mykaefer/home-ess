@@ -68,6 +68,11 @@ module.exports = function createHmRpcAdapter(host) {
   const descriptions = new Map();
   const channels = new Map();
   const states = new Map();
+  // State-Adresse -> zuletzt bekannter (normalisierter) Wert. Dient dem Steuerbefehl
+  // als Vergleichsbasis: Ein Schreibvorgang mit unverändertem Wert löst KEINEN
+  // erneuten setValue an die CCU aus (spart Funk/Duty-Cycle). Wird aus dem
+  // Event-/Refresh-Pfad gepflegt, also derselben Quelle wie die publizierten Werte.
+  const lastValues = new Map();
   // Kanal -> letzter getParamset-Refresh (ms). Bündelt die je-State-Refreshwünsche
   // eines Kanals, damit ein Live-Tick nicht mehrere getParamset pro Kanal auslöst.
   const readThrottle = new Map();
@@ -269,7 +274,10 @@ module.exports = function createHmRpcAdapter(host) {
       if (!event || event.length < 3) continue;
       for (const entry of eventValues(event[0], event[1], event[2])) latest.set(entry.address, entry);
     }
-    if (latest.size) host.publishStates(Array.from(latest.values()));
+    if (latest.size) {
+      for (const entry of latest.values()) lastValues.set(entry.address, entry.value);
+      host.publishStates(Array.from(latest.values()));
+    }
   }
 
   async function rpc(method, params) {
@@ -564,8 +572,16 @@ module.exports = function createHmRpcAdapter(host) {
         host.error(`State ${address} ist laut CCU nicht schreibbar`);
         return;
       }
+      const normalized = normalizeValue(value, description);
+      // Unveränderter Wert: kein erneuter Steuerbefehl an die CCU. ACTION-Parameter
+      // (Taster-/Trigger-Impulse) sind davon ausgenommen – dort ist das wiederholte
+      // Schreiben desselben „Werts" die eigentliche Aktion und muss durchgehen.
+      if (description.TYPE !== 'ACTION' && lastValues.has(address) && lastValues.get(address) === normalized) {
+        return;
+      }
       try {
-        await rpc('setValue', [channelAddress, parameter, normalizeValue(value, description)]);
+        await rpc('setValue', [channelAddress, parameter, normalized]);
+        lastValues.set(address, normalized); // optimistisch, bis das Readback-Event nachzieht
         // Steuerbefehl gesetzt – das Gerät jetzt kurz aktiv beobachten, damit ein
         // zugehöriges Status-Topic zeitnah nachzieht (auch ohne Push-Event).
         armActiveWatch(deviceOfChannel(channelAddress));

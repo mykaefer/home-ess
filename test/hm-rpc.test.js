@@ -108,8 +108,66 @@ test('HM-RPC hält Werte per Event aktuell, liest lokal und sperrt Schreiben bei
   assert.match(errors.at(-1), /Duty Cycle 85%/);
 
   await sendEvent('DUTY_CYCLE', 20);
-  await adapter.write('ABC%3A1/STATE', false);
+  // STATE steht (per Multicall-Event) auf false – ein geänderter Wert muss schreiben.
+  await adapter.write('ABC%3A1/STATE', true);
   assert.ok(calls.some((call) => call.method === 'setValue'));
+});
+
+test('HM-RPC schreibt keinen erneuten Steuerbefehl, wenn der Wert unverändert ist', async (t) => {
+  const calls = [];
+  let callbackUrl = '';
+  const ccu = http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => {
+      const request = xmlrpc.parseCall(Buffer.concat(chunks).toString('utf8'));
+      calls.push(request);
+      let result = '';
+      if (request.method === 'listDevices') result = [
+        { ADDRESS: 'ABC', TYPE: 'SWITCH', NAME: 'Lampe' },
+        { ADDRESS: 'ABC:1', TYPE: 'SWITCH_TRANSMITTER', PARENT: 'ABC', NAME: 'Kanal 1', PARAMSETS: ['VALUES'] },
+      ];
+      if (request.method === 'getParamsetDescription') result = {
+        STATE: { TYPE: 'BOOL', OPERATIONS: 7 },
+        PRESS: { TYPE: 'ACTION', OPERATIONS: 6 },
+      };
+      if (request.method === 'getParamset') result = { STATE: false };
+      if (request.method === 'init' && request.params[0]) callbackUrl = request.params[0];
+      res.writeHead(200, { 'Content-Type': 'text/xml' });
+      res.end(xmlrpc.methodResponse(result));
+    });
+  });
+  const port = await listen(ccu);
+  t.after(() => new Promise((resolve) => ccu.close(resolve)));
+
+  const errors = [];
+  const adapter = createAdapter({
+    name: 'test',
+    setStates() {}, setStorage() {}, publishState() {}, publishStates() {},
+    setConnected() {}, log() {}, error(message) { errors.push(message); },
+  });
+  await adapter.start({ host: '127.0.0.1', port, callbackHost: '127.0.0.1', reconnectInterval: 3600 });
+  t.after(() => adapter.stop());
+
+  const setValuesFor = (param) => calls.filter((c) => c.method === 'setValue' && c.params[1] === param).length;
+
+  // Aktueller Zustand (aus dem Initial-Sync): STATE = false.
+  // 1) Schreiben mit gleichem Wert (false) → KEIN setValue.
+  await adapter.write('ABC%3A1/STATE', false);
+  assert.equal(setValuesFor('STATE'), 0, 'unveränderter Wert löst keinen Steuerbefehl aus');
+
+  // 2) Geänderter Wert (true) → genau ein setValue.
+  await adapter.write('ABC%3A1/STATE', true);
+  assert.equal(setValuesFor('STATE'), 1, 'geänderter Wert wird geschrieben');
+
+  // 3) Erneut true (jetzt bereits true) → weiterhin nur ein setValue.
+  await adapter.write('ABC%3A1/STATE', true);
+  assert.equal(setValuesFor('STATE'), 1, 'zweites Schreiben mit gleichem Wert wird unterdrückt');
+
+  // 4) ACTION-Parameter (Tastimpuls) ist ausgenommen: jeder Schreibvorgang feuert.
+  await adapter.write('ABC%3A1/PRESS', true);
+  await adapter.write('ABC%3A1/PRESS', true);
+  assert.equal(setValuesFor('PRESS'), 2, 'ACTION-Impulse werden nicht dedupliziert');
 });
 
 test('HM-RPC verwendet den vergebenen Gerätenamen statt der Geräte-ID in den Kategorien', async (t) => {

@@ -2,8 +2,9 @@
   "id": "demo",
   "name": "Demo-Simulator",
   "prefix": "demo",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Beispiel-Adapter ohne externe Abhängigkeiten. Erzeugt periodisch simulierte Messwerte (Temperatur, Leistung) und einen schaltbaren Zustand. Dient als Vorlage für eigene Adapter (siehe ADAPTER.md).",
+  "copyright": "Copyright (C) 2026 Kevin Käfer",
   "multiInstance": true,
   "main": "index.js",
   "settings": [

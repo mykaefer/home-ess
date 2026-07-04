@@ -231,7 +231,17 @@ function statePickerScript() {
           if (match) any = true;
         }
         cats[i].style.display = any ? '' : 'none';
-        if (q && any) cats[i].classList.add('is-open');
+        if (q) {
+          // Während der Suche: Treffer-Kategorien (samt Unterkategorien) aufklappen.
+          if (any) cats[i].classList.add('is-open');
+        } else {
+          // Suche geleert: Auto-Aufklappen zurücknehmen und den persistierten
+          // Ein-/Ausklapp-Zustand wiederherstellen (alles wieder eingeklappt,
+          // außer vom Nutzer dauerhaft geöffnete Kategorien).
+          var key = cats[i].getAttribute('data-tree-key');
+          if (key && statePickerExpandedCache[key] === true) cats[i].classList.add('is-open');
+          else cats[i].classList.remove('is-open');
+        }
       }
     }
 

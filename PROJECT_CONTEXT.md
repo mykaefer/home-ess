@@ -189,6 +189,9 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   fälschlich. Ergänzend hält der Adapter Werte über einen optionalen, gleichmäßig
   verteilten Hintergrund-Refresh (Round-Robin, ein Kanal nach dem anderen) sowie
   ein 5-s-Beobachtungsfenster nach jedem Steuerbefehl aktuell (`adapter/hm-rpc`).
+  Ein Schreibvorgang mit **unverändertem Wert** löst dabei keinen erneuten
+  `setValue` an die CCU aus (Vergleich gegen den zuletzt bekannten Wert; Ausnahme:
+  `ACTION`-Parameter/Tastimpulse) — spart Funk und Duty-Cycle.
   Tasmota bündelt lokale Reads in einem maximal alle 3 s ausgelösten
   `STATUS 0`-Request.
   Die Oberfläche bewertet `receivedAt` der empfangenen Status-, Leistungs-
@@ -732,8 +735,10 @@ Quellcode. Vollständiges Regelwerk in [ADAPTER.md](ADAPTER.md); Vorlage:
 
 - **Verzeichnis** `config.ADAPTER_DIR` (Default `<repo>/adapter`, override
   `HOME_ESS_ADAPTER_DIR`). Je Adapter ein Unterordner mit `adapter.json`
-  (Manifest: `id`, `prefix`, `settings`-Schema, `main`) + Einstiegsdatei.
-  `src/adapters/registry.js` scannt und validiert.
+  (Manifest: `id`, `prefix`, `settings`-Schema, `main`, optional `copyright`) +
+  Einstiegsdatei. `src/adapters/registry.js` scannt und validiert. Da Adapter
+  eigenständige Anwendungen sind, führt jedes Manifest einen eigenen
+  `copyright`-Vermerk, der auf der Adapter-Seite angezeigt wird.
 - **Gemeinsamer Wert-Bus** `src/state-bus.js`: hält den zentralen `valueCache` +
   EventEmitter. Sowohl `mqtt/client.js` (Broker) als auch Adapter schreiben hier
   hinein; `mqttClient.getCache()/onValuesChanged()` sind Fassaden darauf — alle

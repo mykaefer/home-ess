@@ -2,8 +2,9 @@
   "id": "hm-rpc",
   "name": "HM-RPC",
   "prefix": "hm-rpc",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Bindet eine CCU per XML-RPC an, hält Gerätewerte ereignisbasiert aktuell und schützt Schreibzugriffe anhand des Duty Cycle.",
+  "copyright": "Copyright (C) 2026 Kevin Käfer",
   "multiInstance": true,
   "main": "index.js",
   "settings": [

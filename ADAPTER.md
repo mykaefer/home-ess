@@ -56,6 +56,7 @@ Pflicht je Adapter. Bestimmt Anzeigename, Prefix und Einstellungs-Schema.
   "prefix": "modbus",
   "version": "1.0.0",
   "description": "Verbindet homeESS mit Modbus-TCP-Geräten.",
+  "copyright": "Copyright (C) 2026 <Autor>",
   "multiInstance": true,
   "main": "index.js",
   "settings": [
@@ -73,6 +74,7 @@ Pflicht je Adapter. Bestimmt Anzeigename, Prefix und Einstellungs-Schema.
 | `name`          | nein   | Anzeigename auf der Adapter-Seite. |
 | `version`       | nein   | Anzeige/Doku. |
 | `description`   | nein   | Kurzbeschreibung. |
+| `copyright`     | nein   | Copyrightvermerk des jeweiligen Adapter-Autors. Wird auf der Adapter-Seite angezeigt. |
 | `multiInstance` | nein   | `false` = nur eine Instanz sinnvoll (rein informativ). Default `true`. |
 | `main`          | nein   | Einstiegsdatei. Default `index.js`. |
 | `settings`      | nein   | Schema der Instanz-Einstellungen (siehe unten). Leer = leere Einstellungsseite. |

@@ -106,6 +106,7 @@ function renderAdapterBlock(adapter, instances, statusById) {
                 <strong>${escapeHtml(adapter.name)}</strong>
                 <span class="adapter-prefix">${escapeHtml(adapter.prefix)}://</span>
                 <span class="muted">${escapeHtml(adapter.description)} · v${escapeHtml(adapter.version)}</span>
+${adapter.copyright ? `                <span class="adapter-copyright muted">${escapeHtml(adapter.copyright)}</span>` : ''}
               </div>
               <form action="/adapter/${escapeHtml(adapter.id)}/instances" method="POST" class="adapter-add-form">
                 <input type="text" name="name" placeholder="Neue Instanz" required>

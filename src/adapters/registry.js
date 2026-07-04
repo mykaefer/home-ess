@@ -116,6 +116,7 @@ function readManifest(dir, folderName) {
     prefix,
     version: parsed.version ? String(parsed.version) : '0.0.0',
     description: parsed.description ? String(parsed.description) : '',
+    copyright: parsed.copyright ? String(parsed.copyright) : '',
     multiInstance: parsed.multiInstance !== false,
     main,
     mainPath,

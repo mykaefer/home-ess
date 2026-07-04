@@ -3,6 +3,30 @@
 Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [1.0.13] — 2026-07-04
+
+### Behoben
+
+- **State-Picker: Suche zurücksetzen klappt den Baum wieder ein.** Beim Tippen
+  klappt die Suche Treffer-Kategorien samt Unterkategorien auf; beim Leeren der
+  Suchzeile wurde dieses Auto-Aufklappen bisher nicht zurückgenommen. Jetzt wird
+  der persistierte Ein-/Ausklapp-Zustand wiederhergestellt: nur durch die Suche
+  geöffnete Kategorien schließen wieder, vom Nutzer dauerhaft geöffnete bleiben
+  offen.
+- **HM-RPC: kein erneuter Steuerbefehl bei unverändertem Wert.** Ein Schreibvorgang
+  mit dem bereits gesetzten Wert (z. B. `true` auf einen schon `true`-Zustand)
+  löst keinen erneuten `setValue` an die CCU mehr aus und spart so Funk/Duty-Cycle.
+  Ausgenommen sind `ACTION`-Parameter (Taster-/Trigger-Impulse), bei denen das
+  wiederholte Schreiben die eigentliche Aktion ist.
+
+### Geändert
+
+- **Adapter tragen einen eigenen Copyrightvermerk.** Da die Adapter eigenständige
+  Anwendungen sind, führt jedes Manifest (`adapter.json`) nun ein `copyright`-Feld,
+  das auf der Adapter-Seite angezeigt wird – analog zum Vermerk im Menüfuß.
+  Adapterversionen entsprechend erhöht (hm-rpc 1.1.1, modbus 1.1.1, tasmota 1.0.2,
+  demo 1.0.1).
+
 ## [1.0.12] — 2026-07-04
 
 ### Behoben
