@@ -3,6 +3,33 @@
 Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [1.0.9] — 2026-07-04
+
+### Behoben
+
+- **Eigenverbrauchsenergie berücksichtigt den Hausakku korrekt.** Die zentrale
+  Stromverbrauchsbilanz zieht geladene Batterieenergie von den Energiezählerwerten
+  ab und rechnet entladene Energie wieder hinzu. Das gilt für Tages-, Wochen-,
+  Jahres- und Vorjahreswerte. Dadurch fällt
+  der Verbrauch bei nächtlicher Versorgung aus dem Akku nicht mehr auf null und
+  die Prognose lernt auch für die Nachtstunden eine reale Verbrauchskurve.
+- **Eigenverbrauchsleistung bleibt ein direkter Messwert.** Die Leistung wird
+  unverändert aus den Eigenverbrauchs-Topics des Wechselrichters übernommen und
+  nur um verbraucherseitig einspeisende PV-Anlagen ergänzt. Batteriefluss und
+  Glättung werden hier bewusst nicht angewendet.
+- **Keine doppelte Akkukorrektur in der Prognose.** Da bereits der zentrale
+  Eigenverbrauch batteriebereinigt ist, übernimmt das Lernmodell diese Bilanz
+  direkt und zieht Laden beziehungsweise Entladen nicht ein zweites Mal ab.
+
+### Geändert
+
+- **Batteriewirkungsgrade gehören zu den Batterieparametern.** Lade- und
+  Entladewirkungsgrad wurden von der Prognoseseite auf die Batterieseite
+  verschoben. Bestehende Werte werden bei der Datenbankmigration übernommen;
+  die Prognosesimulation verwendet weiterhin beide Wirkungsgrade. Die
+  Eigenverbrauchsenergie verwendet den gemessenen Batteriefluss ohne
+  zusätzlichen Wirkungsgrad; die Eigenverbrauchsleistung bleibt davon unabhängig.
+
 ## [1.0.8] — 2026-07-03
 
 ### Behoben
@@ -25,6 +52,13 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
   Punktnotation als JSON mit `ack:false`). Betrifft die Schaltbefehle von
   Messen + Schalten und der Poolsteuerung; alle anderen Topics behalten die
   bisherige Auffächerung.
+- **Passive Frischebewertung für Gerätewerte.** Status-, Leistungs- und
+  Zählerwerte tragen ihren bereits vorhandenen MQTT-Empfangszeitpunkt bis in
+  die Oberfläche. Nach fünf Minuten ohne passives Update werden sie sichtbar als
+  alt markiert, ohne `/get` oder Funkabfrage. Meldet ein schaltbares Gerät
+  bestätigt `AUS`, wird ein hängengebliebener Leistungswert als `0 W` behandelt;
+  dadurch bleiben etwa alte Homematic-POWER-Werte ausgeschalteter Leuchten
+  nicht mehr als laufender Verbrauch stehen.
 
 ## [1.0.7] — 2026-07-03
 

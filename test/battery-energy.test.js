@@ -83,6 +83,7 @@ test('Tageswechsel überführt Netto-Ladung in Woche/Monat/Jahr', async () => {
   assert.equal(Math.round(values.year.charge * 100) / 100, 0.6);
   assert.equal(Math.round(values.year.discharge * 100) / 100, 0.3);
   assert.equal(Math.round(values.year.netCharge * 100) / 100, 0.3);
+  assert.equal(Math.round(values.week.netCharge * 100) / 100, 0.3);
 });
 
 test('Jahreswechsel verschiebt die Netto-Ladung ins Vorjahr', async () => {

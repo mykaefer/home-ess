@@ -167,10 +167,20 @@ async function updateBatteryEnergy(db, cache, now = Date.now()) {
 // Entladen) für dieses und das vorherige Jahr.
 async function readBatteryEnergyValues(db) {
   const state = await loadState(db);
+  const weekCharge = state.weekChargeOffset + state.dayChargeKwh;
+  const weekDischarge = state.weekDischargeOffset + state.dayDischargeKwh;
+  const monthCharge = state.monthChargeOffset + state.dayChargeKwh;
+  const monthDischarge = state.monthDischargeOffset + state.dayDischargeKwh;
   const yearCharge = state.yearChargeOffset + state.dayChargeKwh;
   const yearDischarge = state.yearDischargeOffset + state.dayDischargeKwh;
   return {
-    today: { charge: state.dayChargeKwh, discharge: state.dayDischargeKwh },
+    today: {
+      charge: state.dayChargeKwh,
+      discharge: state.dayDischargeKwh,
+      netCharge: state.dayChargeKwh - state.dayDischargeKwh,
+    },
+    week: { charge: weekCharge, discharge: weekDischarge, netCharge: weekCharge - weekDischarge },
+    month: { charge: monthCharge, discharge: monthDischarge, netCharge: monthCharge - monthDischarge },
     year: { charge: yearCharge, discharge: yearDischarge, netCharge: yearCharge - yearDischarge },
     previousYear: {
       charge: state.previousYearChargeTotal,

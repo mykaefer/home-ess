@@ -16,6 +16,7 @@ const { listActors, cacheKey } = require('./actors');
 
 const STALL_MS = 10 * 60 * 1000;   // > 10 min ohne Zählerfortschritt ⇒ 0 W
 const POWER_ON_THRESHOLD_W = 1;    // ab dieser Leistung gilt ein Gerät als „an"
+const VALUE_STALE_MS = 5 * 60 * 1000; // nur passive Frischebewertung, kein /get
 
 function dbAll(db, sql, params = []) {
   return new Promise((resolve, reject) => db.all(sql, params, (err, rows) => (err ? reject(err) : resolve(rows || []))));
@@ -43,6 +44,14 @@ function getCacheNumber(cache, key) {
 function getCacheRaw(cache, key) {
   const entry = cache.get(key);
   return entry ? entry.value : undefined;
+}
+function getCacheEntry(cache, key) {
+  const entry = cache.get(key);
+  return entry ? { value: entry.value, receivedAt: Number(entry.receivedAt) || 0 } : null;
+}
+
+function isStale(entry, now) {
+  return !!entry && entry.receivedAt > 0 && now - entry.receivedAt > VALUE_STALE_MS;
 }
 
 function powerToWatt(value, unit) {
@@ -166,14 +175,22 @@ async function readActorValues(db, cache, actors, now = Date.now()) {
   const states = await loadStates(db);
   return list.map((actor) => {
     const state = states.get(actor.id) || null;
-    const switchOn = actor.switchTopic
-      ? (() => {
-          const raw = getCacheRaw(cache, cacheKey(actor.id, 'switch'));
-          return raw === undefined || raw == null || raw === '' ? null : parseBool(raw);
-        })()
-      : null;
-    const powerW = resolvePowerW(cache, actor, state, now);
+    const switchEntry = actor.switchTopic ? getCacheEntry(cache, cacheKey(actor.id, 'switch')) : null;
+    const statusEntry = actor.statusTopic ? getCacheEntry(cache, cacheKey(actor.id, 'status')) : switchEntry;
+    const powerEntry = actor.powerTopic ? getCacheEntry(cache, cacheKey(actor.id, 'power')) : null;
+    const counterEntry = actor.counterTopic ? getCacheEntry(cache, cacheKey(actor.id, 'counter')) : null;
+    const switchOn = switchEntry && switchEntry.value != null && switchEntry.value !== ''
+      ? parseBool(switchEntry.value) : null;
+    let powerW = resolvePowerW(cache, actor, state, now);
     const statusOn = resolveStatus(cache, actor, switchOn, powerW);
+    let powerInferredOff = false;
+    // Homematic meldet beim Ausschalten gelegentlich keinen neuen POWER-Wert.
+    // Ein bestätigtes AUS ist für ein schaltbares Gerät dennoch hinreichend
+    // sicher: Ein alter Messwert darf dann nicht weiter als Verbrauch erscheinen.
+    if (actor.powerTopic && statusOn === false && statusEntry) {
+      powerW = 0;
+      powerInferredOff = true;
+    }
     // Interner Zählerstand statt Roh-Topic-Wert. Altbestände ohne fortgeschriebenen
     // internen Zähler zeigen bis zum ersten Snapshot den Rohwert (wie bisher).
     const counterKwh = actor.counterTopic
@@ -189,6 +206,13 @@ async function readActorValues(db, cache, actors, now = Date.now()) {
       statusOn,
       powerW,
       counterKwh,
+      statusReceivedAt: statusEntry ? statusEntry.receivedAt : null,
+      powerReceivedAt: powerEntry ? powerEntry.receivedAt : (counterEntry ? counterEntry.receivedAt : null),
+      counterReceivedAt: counterEntry ? counterEntry.receivedAt : null,
+      statusStale: isStale(statusEntry, now),
+      powerStale: !powerInferredOff && isStale(powerEntry || counterEntry, now),
+      counterStale: isStale(counterEntry, now),
+      powerInferredOff,
       powerFromCounter: !actor.powerTopic && !!actor.counterTopic,
       hasSwitch: !!actor.switchTopic,
       alwaysOn: actor.alwaysOn,
@@ -215,7 +239,7 @@ function readGroupSums(groups, values) {
 }
 
 module.exports = {
-  STALL_MS, POWER_ON_THRESHOLD_W,
+  STALL_MS, VALUE_STALE_MS, POWER_ON_THRESHOLD_W,
   buildActorSnapshot, readActorValues, readGroupSums,
   derivedPowerFromState, resolvePowerW, resolveStatus,
   powerToWatt, counterToKwh, parseNumber, parseBool,

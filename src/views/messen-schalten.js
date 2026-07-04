@@ -53,6 +53,10 @@ function statusDotClass(statusOn) {
   return 'ms-status-dot is-unknown';
 }
 
+function staleClass(stale) {
+  return stale ? ' ms-value--stale' : '';
+}
+
 // Anzeigetext der aktiven (effektiven) Priorität eines Geräts.
 function priorityText(priority, fromGroup) {
   return `Priorität ${priority}${fromGroup ? ' (Gruppe)' : ''}`;
@@ -76,15 +80,15 @@ function renderActorRow(actor) {
     ? `<label class="ms-toggle" title="Ein-/Ausschalten (Einschalten nur bei freigegebener Priorität)"><input type="checkbox" id="ms-switch-${actor.id}" onchange="toggleActor(${actor.id}, this.checked)"${actor.statusOn === true ? ' checked' : ''}><span class="ms-toggle-slider"></span></label>`
     : '<span aria-hidden="true"></span>';
   const counter = actor.hasCounter
-    ? `<span class="ms-row-counter" id="ms-counter-${actor.id}">${escapeHtml(actor.counterDisplay)}</span>`
+    ? `<span class="ms-row-counter${staleClass(actor.counterStale)}" id="ms-counter-${actor.id}" title="Zähler · ${escapeHtml(actor.counterFreshness)}">${escapeHtml(actor.counterDisplay)}${actor.counterStale ? ' ⚠' : ''}</span>`
     : '<span class="ms-row-counter" aria-hidden="true"></span>';
   const muted = !actor.hasSwitch || (actor.hasSwitch && !actor.alwaysOn);
   return `              <div class="ms-row" data-id="${actor.id}">
                 <span class="widget-drag" title="Zum Verschieben ziehen" aria-hidden="true">⠿</span>
-                <span class="${statusDotClass(actor.statusOn)}" id="ms-status-${actor.id}" title="Status"></span>
+                <span class="${statusDotClass(actor.statusOn)}${staleClass(actor.statusStale)}" id="ms-status-${actor.id}" title="Status · ${escapeHtml(actor.statusFreshness)}"></span>
                 <span class="ms-row-name">${escapeHtml(actor.name)}</span>
                 <span class="ms-prio${muted ? ' ms-prio--muted' : ''}" id="ms-prio-${actor.id}" title="Betriebsart bzw. aktive Priorität, auf die dieses Gerät beim Betriebslevel reagiert">${escapeHtml(metaLabel(actor))}</span>
-                <span class="ms-row-power" id="ms-power-${actor.id}">${escapeHtml(actor.powerDisplay)}</span>
+                <span class="ms-row-power${staleClass(actor.powerStale)}" id="ms-power-${actor.id}" title="Leistung · ${escapeHtml(actor.powerFreshness)}">${escapeHtml(actor.powerDisplay)}${actor.powerStale ? ' ⚠' : ''}</span>
                 ${counter}
                 ${toggle}
                 <div class="widget-actions">
@@ -582,9 +586,10 @@ ${renderUngrouped(ungrouped)}
     }
 
     // --- Live-Aktualisierung ------------------------------------------------
-    function applyStatusDot(el, statusOn) {
+    function applyStatusDot(el, statusOn, stale, freshness) {
       if (!el) return;
-      el.className = 'ms-status-dot ' + (statusOn === true ? 'is-on' : statusOn === false ? 'is-off' : 'is-unknown');
+      el.className = 'ms-status-dot ' + (statusOn === true ? 'is-on' : statusOn === false ? 'is-off' : 'is-unknown') + (stale ? ' ms-value--stale' : '');
+      el.title = 'Status · ' + (freshness || 'noch kein Wert empfangen');
     }
 
     async function refreshValues() {
@@ -594,10 +599,18 @@ ${renderUngrouped(ungrouped)}
         var data = await res.json();
         (data.actors || []).forEach(function (a) {
           var power = document.getElementById('ms-power-' + a.id);
-          if (power) power.textContent = a.powerDisplay;
+          if (power) {
+            power.textContent = a.powerDisplay + (a.powerStale ? ' ⚠' : '');
+            power.classList.toggle('ms-value--stale', !!a.powerStale);
+            power.title = 'Leistung · ' + a.powerFreshness;
+          }
           var counter = document.getElementById('ms-counter-' + a.id);
-          if (counter && a.counterDisplay != null) counter.textContent = a.counterDisplay;
-          applyStatusDot(document.getElementById('ms-status-' + a.id), a.statusOn);
+          if (counter && a.counterDisplay != null) {
+            counter.textContent = a.counterDisplay + (a.counterStale ? ' ⚠' : '');
+            counter.classList.toggle('ms-value--stale', !!a.counterStale);
+            counter.title = 'Zähler · ' + a.counterFreshness;
+          }
+          applyStatusDot(document.getElementById('ms-status-' + a.id), a.statusOn, a.statusStale, a.statusFreshness);
           // Toggle (nur bei manuellen Geräten) spiegelt den Ist-Zustand, damit er
           // zum tatsächlichen Gerät passt. Beim Fokus/Bedienen nicht überschreiben.
           var sw = document.getElementById('ms-switch-' + a.id);

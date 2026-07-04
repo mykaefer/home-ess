@@ -2250,6 +2250,12 @@ h2 .cmd-confirm { font-size: 13px; vertical-align: middle; }
     grid-column: 1 / -1;
 }
 
+.ms-value--stale {
+    opacity: .62;
+    text-decoration: underline dotted;
+    text-underline-offset: 3px;
+}
+
 /* Höhere Spezifität (.topic-input-row .state-pick-btn) als generische Form-Button-
    Regeln (.settings-form button u. a.), damit der Picker-Button überall gleich
    aussieht und nicht das blaue Submit-Button-Styling erbt. */

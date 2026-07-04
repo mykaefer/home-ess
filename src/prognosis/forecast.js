@@ -4,7 +4,6 @@ const { listPvPlants } = require('../photovoltaik/plants');
 const { computePvForecast } = require('../photovoltaik/forecast');
 const { readStromverbrauchValues } = require('../stromverbrauch/aggregation');
 const { loadBatterieConfig, readBatterieData, batteryCapacityKwh } = require('../batterie/config');
-const { readBatteryEnergyValues } = require('../batterie/energy');
 const { loadPrognosisConfig } = require('./config');
 const operatingState = require('../operating-state');
 const metrics = require('../runtime-metrics');
@@ -303,7 +302,6 @@ async function buildConsumptionModelUncached(db, strom, config, cache, forecast 
     0,
     num(todayRow && todayRow.consumption_kwh) ?? rawToday
   );
-  const batteryEnergy = await readBatteryEnergyValues(db);
   const year = num(strom.breakdown.year.eigenverbrauch);
   const previousYear = num(strom.breakdown.previousYear.eigenverbrauch);
   const climateTotals = await dbAll(
@@ -315,15 +313,14 @@ async function buildConsumptionModelUncached(db, strom, config, cache, forecast 
     [String(local.date.year), String(local.date.year - 1)]
   ).catch(() => []);
   const functionsByYear = new Map(climateTotals.map((row) => [String(row.year_key), num(row.total) || 0]));
-  // Eigenverbrauch (PV+Import-Export) enthält auch die Akku- und Wallbox-
-  // Ladung sowie die separat statistisierten Funktionslasten mit; alle werden
-  // hier abgezogen, damit die Jahresbasis dieselbe "reine" Hausverbrauchsgröße
-  // abbildet wie der tagesweise angepasste Wert (siehe adjustedConsumptionDelta).
+  // Der Stromverbrauch ist zentral bereits um die Netto-Akkuladung bereinigt.
+  // Wallbox-, Pool- und Funktionslasten werden für den Haus-Grundverbrauch
+  // weiterhin separat herausgerechnet.
   const houseYear = year == null ? null
-    : Math.max(0, year - wallboxModel.yearKwh - poolModel.yearKwh - batteryEnergy.year.netCharge -
+    : Math.max(0, year - wallboxModel.yearKwh - poolModel.yearKwh -
       (functionsByYear.get(String(local.date.year)) || 0));
   const housePreviousYear = previousYear == null ? null
-    : Math.max(0, previousYear - wallboxModel.previousYearKwh - poolModel.previousYearKwh - batteryEnergy.previousYear.netCharge -
+    : Math.max(0, previousYear - wallboxModel.previousYearKwh - poolModel.previousYearKwh -
       (functionsByYear.get(String(local.date.year - 1)) || 0));
   const completedDays = elapsedDayCount(local.date);
   const annualAverage = completedDays > 0 && houseYear != null
@@ -611,8 +608,8 @@ function simulateDays({ forecast, model, config, batteryConfig, batteryData }) {
   const usableCapacity = capacity * (1 - minSoc / 100);
   let stored = clamp(capacity * (soc - minSoc) / 100, 0, usableCapacity);
   const initialStored = stored;
-  const chargeEfficiency = config.chargeEfficiency / 100;
-  const dischargeEfficiency = config.dischargeEfficiency / 100;
+  const chargeEfficiency = (num(batteryConfig.chargeEfficiency) ?? num(config.chargeEfficiency) ?? 95) / 100;
+  const dischargeEfficiency = (num(batteryConfig.dischargeEfficiency) ?? num(config.dischargeEfficiency) ?? 95) / 100;
   const currentHour = Number(model.local.time.hours) || 0;
   const currentMinute = Number(model.local.time.minutes) || 0;
   const forecastDays = forecast && Array.isArray(forecast.days) ? forecast.days.slice(0, 4) : [];
@@ -789,11 +786,16 @@ function simulateDays({ forecast, model, config, batteryConfig, batteryData }) {
 }
 
 async function computePrognosis(db, cache, { allowFetch = false } = {}) {
-  const [plants, config, batteryConfig, strom] = await Promise.all([
+  const [plants, prognosisConfig, batteryConfig, strom] = await Promise.all([
     listPvPlants(db), loadPrognosisConfig(db),
     new Promise((resolve) => loadBatterieConfig(db, resolve)),
     readStromverbrauchValues(db, cache),
   ]);
+  const config = {
+    ...prognosisConfig,
+    chargeEfficiency: batteryConfig.chargeEfficiency,
+    dischargeEfficiency: batteryConfig.dischargeEfficiency,
+  };
   const forecast = await computePvForecast(db, plants, { allowFetch, cache }).catch(() => null);
   const batteryData = readBatterieData(cache);
   const model = await buildConsumptionModel(db, strom, config, cache, forecast, {

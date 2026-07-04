@@ -41,7 +41,6 @@ const gridControlAutomation = require('./grid-control/automation');
 const operatingState = require('./operating-state');
 const operatingLevelHandler = require('./operating-level/handler');
 const { recordConsumptionSample } = require('./prognosis/forecast');
-const { readBatterieData } = require('./batterie/config');
 const { updateBatteryEnergy } = require('./batterie/energy');
 const prognosisBehavior = require('./prognosis/behavior');
 const jobs = require('./job-scheduler');
@@ -148,7 +147,9 @@ function createApp() {
       // Haus-Grundverbrauch herausgerechnet.
       const functionPower = await currentFunctionPowerW(db, cache).catch(() => 0);
       await recordConsumptionSample(db, snapshot.raw.today.eigenverbrauch, cache, {
-        batteryPower: readBatterieData(cache).power,
+        // Der Stromverbrauchs-Snapshot ist bereits um Laden/Entladen des
+        // Hausakkus bereinigt; hier darf die Korrektur nicht erneut erfolgen.
+        batteryPower: 0,
         wallboxPower: totalWallboxPowerWatt(cache, boxes),
         wallboxEnergyDelta: wallboxSample.hourlyDeltaKwh,
         poolPower: poolEnergy.currentPowerW,

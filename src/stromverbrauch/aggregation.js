@@ -23,6 +23,7 @@ const {
 const { loadMqttConfig } = require('../mqtt/config');
 const { localCalendar } = require('../local-time');
 const { recordDailyMetric, getDailyMetricValue } = require('../history/daily-metrics');
+const { readBatteryEnergyValues } = require('../batterie/energy');
 
 const IMPORT_COUNTER_KEYS = [
   { id: NETZBEZUG_ZAEHLER_L1_STATE_ID, key: 'import_l1' },
@@ -135,10 +136,18 @@ function deriveEigenverbrauchFromPv(pvValue, exportValue) {
   return value < 0 ? 0 : value;
 }
 
-function deriveEigenverbrauch(pvValue, importValue, exportValue) {
+function deriveEigenverbrauch(pvValue, importValue, exportValue, batteryEnergy = {}) {
   if (pvValue == null && importValue == null && exportValue == null) return null;
-  const value = (pvValue || 0) + (importValue || 0) - (exportValue || 0);
+  const charge = Math.max(0, parseNumber(batteryEnergy.charge) || 0);
+  const discharge = Math.max(0, parseNumber(batteryEnergy.discharge) || 0);
+  const value = (pvValue || 0) + (importValue || 0) - (exportValue || 0)
+    - charge + discharge;
   return value < 0 ? 0 : value;
+}
+
+function deriveEigenverbrauchPower(inverterValue, consumerSidePvValue) {
+  if (inverterValue == null && consumerSidePvValue == null) return null;
+  return (inverterValue || 0) + (consumerSidePvValue || 0);
 }
 
 function deriveNetzbezug(importValue, exportValue) {
@@ -387,10 +396,13 @@ async function buildStromverbrauchSnapshot(db, cache) {
 
   const pvSnapshot = await buildPhotovoltaikSnapshot(db, cache, await listPvPlants(db));
   const consumerSidePvValue = getConsumerSidePvCurrentTotal(pvSnapshot);
-  const eigenverbrauchPowerValue =
-    eigenverbrauchMeterValue == null && consumerSidePvValue == null
-      ? null
-      : (eigenverbrauchMeterValue || 0) + (consumerSidePvValue || 0);
+  // Die Momentanleistung kommt bereits direkt vom Wechselrichter. Anders als
+  // die Energiezähler-Bilanz braucht sie keine Batteriekorrektur; lediglich
+  // verbraucherseitig einspeisende PV-Anlagen werden ergänzt.
+  const eigenverbrauchPowerValue = deriveEigenverbrauchPower(
+    eigenverbrauchMeterValue,
+    consumerSidePvValue
+  );
 
   const counterUpdate = await updateCounterStates(db, cache, calendar);
   const todayImport = counterUpdate.dayTotals.import || 0;
@@ -405,24 +417,26 @@ async function buildStromverbrauchSnapshot(db, cache) {
   const weekExport = summaryState.weekExportOffset + todayExport;
   const yearImport = summaryState.yearImportOffset + todayImport;
   const yearExport = summaryState.yearExportOffset + todayExport;
+  const batteryEnergy = await readBatteryEnergyValues(db);
 
   const todayBreakdown = buildBreakdown(
-    deriveEigenverbrauch(pvSnapshot.totals.raw.today, todayImport, todayExport),
+    deriveEigenverbrauch(pvSnapshot.totals.raw.today, todayImport, todayExport, batteryEnergy.today),
     deriveNetzbezug(todayImport, todayExport)
   );
   const weekBreakdown = buildBreakdown(
-    deriveEigenverbrauch(pvSnapshot.totals.raw.week, weekImport, weekExport),
+    deriveEigenverbrauch(pvSnapshot.totals.raw.week, weekImport, weekExport, batteryEnergy.week),
     deriveNetzbezug(weekImport, weekExport)
   );
   const yearBreakdown = buildBreakdown(
-    deriveEigenverbrauch(pvSnapshot.totals.raw.year, yearImport, yearExport),
+    deriveEigenverbrauch(pvSnapshot.totals.raw.year, yearImport, yearExport, batteryEnergy.year),
     deriveNetzbezug(yearImport, yearExport)
   );
   const previousYearBreakdown = buildBreakdown(
     deriveEigenverbrauch(
       pvSnapshot.totals.raw.previousYear,
       summaryState.previousYearImportTotal,
-      summaryState.previousYearExportTotal
+      summaryState.previousYearExportTotal,
+      batteryEnergy.previousYear
     ),
     deriveNetzbezug(
       summaryState.previousYearImportTotal,
@@ -490,10 +504,10 @@ async function readStromverbrauchValues(db, cache) {
     }
   }
   const consumerSidePvValue = hasConsumer ? consumerCurrent : null;
-  const eigenverbrauchPowerValue =
-    eigenverbrauchMeterValue == null && consumerSidePvValue == null
-      ? null
-      : (eigenverbrauchMeterValue || 0) + (consumerSidePvValue || 0);
+  const eigenverbrauchPowerValue = deriveEigenverbrauchPower(
+    eigenverbrauchMeterValue,
+    consumerSidePvValue
+  );
 
   const counters = await loadCounterStates(db);
   const sumDayTotals = (keys) => {
@@ -518,10 +532,11 @@ async function readStromverbrauchValues(db, cache) {
   const yearExport = summary.yearExportOffset + todayExport;
   const prevImport = summary.previousYearImportTotal;
   const prevExport = summary.previousYearExportTotal;
+  const batteryEnergy = await readBatteryEnergyValues(db);
 
-  const breakdown = (pvEnergy, importValue, exportValue) =>
+  const breakdown = (pvEnergy, importValue, exportValue, batteryPeriod) =>
     buildBreakdown(
-      deriveEigenverbrauch(pvEnergy, importValue, exportValue),
+      deriveEigenverbrauch(pvEnergy, importValue, exportValue, batteryPeriod),
       deriveNetzbezug(importValue, exportValue)
     );
 
@@ -529,10 +544,10 @@ async function readStromverbrauchValues(db, cache) {
     eigenverbrauchPower: eigenverbrauchPowerValue,
     netzbezugPower: netzbezugPowerValue,
     breakdown: {
-      today: breakdown(pvValues.totals.today, todayImport, todayExport),
-      week: breakdown(pvValues.totals.week, weekImport, weekExport),
-      year: breakdown(pvValues.totals.year, yearImport, yearExport),
-      previousYear: breakdown(pvValues.totals.previousYear, prevImport, prevExport),
+      today: breakdown(pvValues.totals.today, todayImport, todayExport, batteryEnergy.today),
+      week: breakdown(pvValues.totals.week, weekImport, weekExport, batteryEnergy.week),
+      year: breakdown(pvValues.totals.year, yearImport, yearExport, batteryEnergy.year),
+      previousYear: breakdown(pvValues.totals.previousYear, prevImport, prevExport, batteryEnergy.previousYear),
     },
     counterSums: {
       today: { import: todayImport, export: todayExport },
@@ -551,4 +566,6 @@ module.exports = {
   updateSummaryState,
   updateCounterStates,
   resetCountersForChangedTopics,
+  deriveEigenverbrauch,
+  deriveEigenverbrauchPower,
 };

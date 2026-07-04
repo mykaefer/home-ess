@@ -384,8 +384,8 @@ async function buildInternalValues(db, cache) {
     capacityKwh: batteryCapacityKwh(batCfg),
     minSoc: Number.isFinite(Number(bat.minSoc)) ? Number(bat.minSoc) : Number(batCfg.minSoc),
     soc: Number.isFinite(Number(bat.soc)) ? Number(bat.soc) : Number(batCfg.minSoc),
-    chargeEfficiency: prognosisConfig.chargeEfficiency / 100,
-    dischargeEfficiency: prognosisConfig.dischargeEfficiency / 100,
+    chargeEfficiency: batCfg.chargeEfficiency / 100,
+    dischargeEfficiency: batCfg.dischargeEfficiency / 100,
   });
   const gridState = getGridControlState();
   const currentSoc = Number(String(bat.soc == null ? '' : bat.soc).replace(',', '.'));

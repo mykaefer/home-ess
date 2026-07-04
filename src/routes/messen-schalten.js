@@ -34,6 +34,14 @@ function powerDisplay(watt) {
 function counterDisplay(kwh) {
   return kwh == null ? '— kWh' : `${numberFmt2.format(kwh)} kWh`;
 }
+function freshnessDisplay(receivedAt) {
+  if (!receivedAt) return 'noch kein Wert empfangen';
+  const seconds = Math.max(0, Math.floor((Date.now() - receivedAt) / 1000));
+  if (seconds < 60) return `vor ${seconds} s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `vor ${minutes} min`;
+  return `vor ${Math.floor(minutes / 60)} h`;
+}
 
 // Live-Werte je Gerät in Anzeigefelder überführen (für Initial-Render und /data).
 function toViewActor(actor, value, groupsById) {
@@ -50,6 +58,12 @@ function toViewActor(actor, value, groupsById) {
     statusOn: v.statusOn == null ? null : !!v.statusOn,
     powerDisplay: powerDisplay(v.powerW),
     counterDisplay: counterDisplay(v.counterKwh),
+    statusStale: v.statusStale === true,
+    powerStale: v.powerStale === true,
+    counterStale: v.counterStale === true,
+    statusFreshness: freshnessDisplay(v.statusReceivedAt),
+    powerFreshness: v.powerInferredOff ? '0 W aus bestätigtem AUS-Zustand abgeleitet' : freshnessDisplay(v.powerReceivedAt),
+    counterFreshness: freshnessDisplay(v.counterReceivedAt),
     priority: effectivePriority(actor, groupsById),
     priorityFromGroup: fromGroup,
     loadShedEnabled: actor.loadShedEnabled === true,

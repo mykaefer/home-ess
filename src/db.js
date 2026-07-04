@@ -178,7 +178,9 @@ function openDatabase() {
         battery_type TEXT NOT NULL DEFAULT 'lifepo4',
         cell_count INTEGER NOT NULL DEFAULT 16,
         lower_voltage REAL NOT NULL DEFAULT 44.8,
-        upper_voltage REAL NOT NULL DEFAULT 55.2
+        upper_voltage REAL NOT NULL DEFAULT 55.2,
+        charge_efficiency REAL NOT NULL DEFAULT 95,
+        discharge_efficiency REAL NOT NULL DEFAULT 95
       )`
     );
     db.run(
@@ -891,6 +893,8 @@ function migrateBatterieConfig(db) {
       { name: 'cell_count', sql: 'ALTER TABLE batterie_config ADD COLUMN cell_count INTEGER NOT NULL DEFAULT 16' },
       { name: 'lower_voltage', sql: 'ALTER TABLE batterie_config ADD COLUMN lower_voltage REAL NOT NULL DEFAULT 44.8' },
       { name: 'upper_voltage', sql: 'ALTER TABLE batterie_config ADD COLUMN upper_voltage REAL NOT NULL DEFAULT 55.2' },
+      { name: 'charge_efficiency', sql: 'ALTER TABLE batterie_config ADD COLUMN charge_efficiency REAL NOT NULL DEFAULT 95' },
+      { name: 'discharge_efficiency', sql: 'ALTER TABLE batterie_config ADD COLUMN discharge_efficiency REAL NOT NULL DEFAULT 95' },
     ];
     for (const addition of additions) {
       if (!existing.has(addition.name)) {
@@ -909,6 +913,17 @@ function migrateBatterieConfig(db) {
                       ELSE (lower_voltage + upper_voltage) / 2
                     END,
                     capacity_ah
+                  )
+                WHERE id = 1`
+            );
+          } else if (addition.name === 'charge_efficiency' || addition.name === 'discharge_efficiency') {
+            // Bestehende Werte von der Prognose- auf die Batteriekonfiguration
+            // übernehmen; die alten Spalten bleiben für DB-Abwärtskompatibilität bestehen.
+            db.run(
+              `UPDATE batterie_config
+                  SET ${addition.name} = COALESCE(
+                    (SELECT ${addition.name} FROM prognosis_config WHERE id = 1),
+                    ${addition.name}
                   )
                 WHERE id = 1`
             );

@@ -20,6 +20,7 @@ const BATTERY_PRESETS = {
 const DEFAULTS = {
   socTopic: '', powerTopic: '', voltageTopic: '', temperaturTopic: '', minSocTopic: '',
   minSoc: 20, capacityAh: 200, batteryType: 'lifepo4', cellCount: 16, lowerVoltage: 44.8, upperVoltage: 55.2,
+  chargeEfficiency: 95, dischargeEfficiency: 95,
 };
 let configCacheDb = null;
 let configCache = null;
@@ -49,6 +50,8 @@ function loadBatterieConfig(db, callback) {
       cellCount: row.cell_count == null ? DEFAULTS.cellCount : row.cell_count,
       lowerVoltage: row.lower_voltage == null ? DEFAULTS.lowerVoltage : row.lower_voltage,
       upperVoltage: row.upper_voltage == null ? DEFAULTS.upperVoltage : row.upper_voltage,
+      chargeEfficiency: clamp(row.charge_efficiency, 50, 100, DEFAULTS.chargeEfficiency),
+      dischargeEfficiency: clamp(row.discharge_efficiency, 50, 100, DEFAULTS.dischargeEfficiency),
     };
     configCacheDb = db;
     configCache = cfg;
@@ -70,6 +73,8 @@ function saveBatterieConfig(db, input, callback) {
     cellCount: Math.round(clamp(input.cellCount, 1, 100, DEFAULTS.cellCount)),
     lowerVoltage: clamp(input.lowerVoltage, 0.1, 1000, DEFAULTS.lowerVoltage),
     upperVoltage: clamp(input.upperVoltage, 0.1, 1000, DEFAULTS.upperVoltage),
+    chargeEfficiency: clamp(input.chargeEfficiency, 50, 100, DEFAULTS.chargeEfficiency),
+    dischargeEfficiency: clamp(input.dischargeEfficiency, 50, 100, DEFAULTS.dischargeEfficiency),
   };
   if (cfg.lowerVoltage >= cfg.upperVoltage) {
     const error = new Error('Die obere Batteriespannung muss über der unteren liegen.');
@@ -78,17 +83,21 @@ function saveBatterieConfig(db, input, callback) {
   db.run(
     `INSERT INTO batterie_config
       (id, soc_topic, power_topic, voltage_topic, temperatur_topic, min_soc_topic,
-       min_soc, capacity_ah, battery_type, cell_count, lower_voltage, upper_voltage)
-     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       min_soc, capacity_ah, battery_type, cell_count, lower_voltage, upper_voltage,
+       charge_efficiency, discharge_efficiency)
+     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
        soc_topic=excluded.soc_topic, power_topic=excluded.power_topic,
        voltage_topic=excluded.voltage_topic, temperatur_topic=excluded.temperatur_topic,
        min_soc_topic=excluded.min_soc_topic, min_soc=excluded.min_soc,
        capacity_ah=excluded.capacity_ah,
        battery_type=excluded.battery_type, cell_count=excluded.cell_count,
-       lower_voltage=excluded.lower_voltage, upper_voltage=excluded.upper_voltage`,
+       lower_voltage=excluded.lower_voltage, upper_voltage=excluded.upper_voltage,
+       charge_efficiency=excluded.charge_efficiency,
+       discharge_efficiency=excluded.discharge_efficiency`,
     [cfg.socTopic, cfg.powerTopic, cfg.voltageTopic, cfg.temperaturTopic, cfg.minSocTopic,
-      cfg.minSoc, cfg.capacityAh, cfg.batteryType, cfg.cellCount, cfg.lowerVoltage, cfg.upperVoltage],
+      cfg.minSoc, cfg.capacityAh, cfg.batteryType, cfg.cellCount, cfg.lowerVoltage, cfg.upperVoltage,
+      cfg.chargeEfficiency, cfg.dischargeEfficiency],
     (err) => {
       if (!err) { configCacheDb = db; configCache = cfg; }
       callback(err, cfg);

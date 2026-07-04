@@ -24,7 +24,12 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
   Jahres- oder **Vorjahressumme** (Netzbezug + Einspeisung) sowie das **Minimum/
   Maximum** von Netzbezug bzw. Eigenverbrauch (Wert + Datum). Wird ein Zähler-Topic
   gewechselt (z. B. Zählertausch), gilt der erste neue Rohwert als Ist-Stand und
-  wird nicht als Zählersprung gezählt.
+  wird nicht als Zählersprung gezählt. Die Eigenverbrauchsenergie wird als
+  `PV + Netzbezug − Einspeisung − Batterieladung + Batterieentladung` berechnet;
+  damit bleibt insbesondere der nächtliche Hausverbrauch aus dem Akku sichtbar.
+  Die aktuelle Eigenverbrauchsleistung kommt dagegen direkt aus den
+  Wechselrichter-Topics und wird nur um verbraucherseitig einspeisende
+  PV-Anlagen ergänzt — ohne Batterieeinfluss oder Glättung.
 - ☀️ **Photovoltaik** — PV-Anlagenverwaltung mit MQTT-Topics und Metadaten
   (Zelltyp, **Konverter-/Reglertyp**); je Anlage **aktuelle Leistung groß,
   Idealwert (Clear-Sky-Modell) klein**. Idealwert berücksichtigt Zelltyp- und
@@ -58,6 +63,7 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
     Füllstand und Prozentzahl, erscheint automatisch sobald SoC-Daten
     vorliegen, live aktualisiert via SSE.
   - Mindest-SoC mit MQTT-Ziel-Topic und 5-%-Schieberegler sowie Batterietyp,
+    Lade- und Entladewirkungsgrad,
     Zellzahl, Kapazität in Ah und manuell anpassbaren unteren/oberen Spannungsgrenzen.
 - 🔌 **Messen + Schalten** (Menü unter Batterie) — Seite für schaltbare/messbare
   Geräte.
@@ -110,9 +116,9 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
   ab dem Folgetag sichtbaren Ladebeginn. Bei Dunkelflaute wird über weitere
   Open-Meteo-Prognosetage kumuliert. Ein erwartetes Erreichen des Mindest-SoC
   wird mit Tag und Uhrzeit ausgewiesen; Tagesend-SoC bleibt als Zusatzwert sichtbar.
-  Für jeden Wochentag wird eine eigene Verbrauchskurve gelernt. Da der aus
-  Netzbezug und PV abgeleitete Gesamtverbrauch auch Akkuladung enthält, wird die
-  signierte Batterieleistung vor dem Lernen herausgerechnet. Wallbox, Poolpumpen
+  Für jeden Wochentag wird eine eigene Verbrauchskurve gelernt. Grundlage ist
+  der bereits zentral um Batterieladung und -entladung bereinigte Eigenverbrauch.
+  Wallbox, Poolpumpen
   und funktionszugeordnete Messen-+-Schalten-Geräte (Licht, Waschen, Warmwasser,
   Heizung / Klima, Kochen) werden ebenfalls aus dem reinen Hausbedarf entfernt und
   anschließend separat eingeplant — Heizung / Klima über Stundenprofile je

@@ -6,7 +6,7 @@ const sqlite3 = require('sqlite3').verbose();
 
 const { cacheKey, createActor, updateActor } = require('../src/messen-schalten/actors');
 const {
-  buildActorSnapshot, readActorValues, readGroupSums, derivedPowerFromState, STALL_MS,
+  buildActorSnapshot, readActorValues, readGroupSums, derivedPowerFromState, STALL_MS, VALUE_STALE_MS,
 } = require('../src/messen-schalten/aggregation');
 
 function dbRun(db, sql, params = []) {
@@ -86,6 +86,28 @@ test('readActorValues: dediziertes Status-Topic hat Vorrang', async () => {
   const values = await readActorValues(db, cache, null);
   assert.equal(values[0].switchOn, true);
   assert.equal(values[0].statusOn, false); // Status-Topic übersteuert Schalt-Topic
+  await new Promise((resolve) => db.close(resolve));
+});
+
+test('Neueres AUS setzt alten Leistungswert passiv auf 0 und markiert alte Werte', async () => {
+  const db = await freshDb();
+  await dbRun(db, "INSERT INTO mess_schalt_actors (id, name, switch_topic, power_topic) VALUES (1, 'Licht', 's.1', 'p.1')");
+  const now = 3_000_000_000_000;
+  const cache = new Map([
+    [cacheKey(1, 'power'), { value: 68, receivedAt: now - VALUE_STALE_MS - 1000 }],
+    [cacheKey(1, 'switch'), { value: false, receivedAt: now - 1000 }],
+  ]);
+  const [value] = await readActorValues(db, cache, null, now);
+  assert.equal(value.statusOn, false);
+  assert.equal(value.powerW, 0);
+  assert.equal(value.powerInferredOff, true);
+  assert.equal(value.powerStale, false); // 0 W ist durch das neuere AUS abgesichert
+
+  cache.set(cacheKey(1, 'switch'), { value: true, receivedAt: now - VALUE_STALE_MS - 2000 });
+  const [stale] = await readActorValues(db, cache, null, now);
+  assert.equal(stale.powerW, 68);
+  assert.equal(stale.powerStale, true);
+  assert.equal(stale.statusStale, true);
   await new Promise((resolve) => db.close(resolve));
 });
 

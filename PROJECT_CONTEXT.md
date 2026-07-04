@@ -33,6 +33,14 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   Datum); Jahreswechsel → Vorjahr. Ein **Zähler-Topic-Wechsel verwirft den
   gemerkten Rohstand** (`resetCountersForChangedTopics`), damit der erste Wert eines
   neuen/getauschten Zählers als Ist-Stand gilt und kein Sprung gezählt wird.
+  Die **Energiesummen** des Eigenverbrauchs sind zentral um den Hausakku
+  bereinigt: `PV + Import − Export − Ladung + Entladung`. Dazu liefert
+  `batterie/energy.js` die integrierten Nettoflüsse für Tag, Woche, Jahr und
+  Vorjahr; eine nächtliche Akkuentladung bleibt dadurch als Hausverbrauch erhalten.
+  Die **Momentanleistung** stammt dagegen direkt aus den Eigenverbrauchs-Topics
+  des Wechselrichters und wird ausschließlich um Leistung verbraucherseitig
+  einspeisender PV-Anlagen ergänzt. Batterie und Glättung gehen nicht in diesen
+  Leistungspfad ein.
 - **Photovoltaik**: verwaltet mehrere PV-Anlagen (Stammdaten, Zelltyp,
   **Konverter-/Reglertyp**, MQTT-Topics). Je Anlage **aktuelle Leistung groß,
   Clear-Sky-Idealwert klein**.
@@ -167,6 +175,10 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   Broker-/Homematic-Topics werden niemals per `/get` gepollt, da dies reale
   Funkabfragen und Duty-Cycle-Last auslösen kann. Tasmota bündelt lokale Reads
   in einem maximal alle 3 s ausgelösten `STATUS 0`-Request.
+  Die Oberfläche bewertet `receivedAt` der passiv empfangenen Status-, Leistungs-
+  und Zählerwerte ohne aktive Abfrage: Nach 5 min wird ein Wert als veraltet
+  markiert. Ein bestätigtes `AUS` setzt einen eventuell älteren/hängengebliebenen
+  direkten Leistungswert des schaltbaren Geräts auf 0 W.
   Je Geräte-Zeile wird die **Betriebsart** angezeigt: „Immer an · Priorität N",
   „manuell" oder „nur Messen".
   Optional kann ein Gerät für den **Lastabwurf** des optionalen Grid-Control-Moduls
@@ -194,8 +206,9 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   und werden aus dem gelernten Haus-Grundverbrauch herausgerechnet.
 - **Systemprognose** (`/prognose`, `prognosis/forecast.js`): simuliert heute +
   drei Folgetage stündlich aus PV-Wetterprognose, Verbrauch und Batterie. Die
-  nutzbare Batterie endet am Mindest-SoC; Lade- und Entladewirkungsgrad werden
-  getrennt gerechnet. Ungelernte Wochentage übernehmen **ausschließlich die
+  nutzbare Batterie endet am Mindest-SoC; die unter den Batterieparametern
+  gepflegten Lade- und Entladewirkungsgrade werden getrennt gerechnet.
+  Ungelernte Wochentage übernehmen **ausschließlich die
   Lernkurve des jüngsten abgeschlossenen Tages (Vortag)** als Vorlage — Kurvenform
   und Tagesziel (`previousDayKey`/`previousDayKwh`, `selectUnlearnedDailyTarget`);
   danach folgen gleitender Mittelwert und Jahresmittel, eine Hochrechnung des
@@ -241,22 +254,19 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   letzter Stunde, Gesamtbedarf inklusive Akkufüllung, verfügbare, fehlende und
   freie Energie. Der Sonnenaufgang folgt der Standortgeometrie; ohne Koordinaten
   dient 06:00 Uhr als definierter Ersatz.
-  Verbrauchssampling speichert neben dem physischen Eigenverbrauch aus
-  **Netzbezug + PV-Ertrag** den um Batterieenergie, Wallbox und Pool bereinigten
-  Hausverbrauch: `DeltaVerbrauch − BatterieLeistung × Zeit`, wobei
-  positive Batterieleistung Laden und negative Entladen bedeutet. Lässt sich ein
+  Verbrauchssampling übernimmt den zentral bereits um Batterieenergie bereinigten
+  Eigenverbrauch und entfernt zusätzlich Wallbox, Pool und zugeordnete
+  Funktionslasten für den Haus-Grundverbrauch. Lässt sich ein
   Intervall nicht als plausibel einstufen (z. B. veralteter Zeitstempel nach
   einem Neustart oder ein Sprung im Quellzähler), wird das Intervall verworfen;
   auch plausible Minutensamples sind auf 2 kWh begrenzt. Damit kann kein einzelner
   Ausreißer als Tagesverbrauch stehen bleiben und die Prognose der Folgetage
   verzerren. Die
-  Jahresbasis (`annualAverage`) zieht zusätzlich zur Wallbox-Energie die per
-  Leistungsintegration erfasste **Netto-Akkuladung** ab (`battery_energy_state`,
-  Tag/Woche/Monat/Jahr + Vorjahr, `batterie/energy.js`, 60-s-Job): Der
-  Eigenverbrauch (PV + Netzbezug) enthält die Hausakku-Ladung
-  physikalisch mit, ohne Bereinigung verschiebt sie den prognostizierten
-  Tagesbedarf nach oben; ebenso werden die per `mess_schalt_function_hourly`
-  erfassten Funktionslasten je Jahr abgezogen. Aus den bereinigten Stundenwerten
+  Jahresbasis (`annualAverage`) nutzt dieselbe zentrale Batteriebereinigung
+  (`battery_energy_state`, Tag/Woche/Monat/Jahr + Vorjahr,
+  `batterie/energy.js`, 60-s-Job), ohne die Netto-Akkuladung nochmals abzuziehen;
+  Wallbox-, Pool- und die per `mess_schalt_function_hourly` erfassten
+  Funktionslasten werden weiterhin separat entfernt. Aus den bereinigten Stundenwerten
   entstehen sieben getrennte, weich gelernte Wochentagsprofile samt
   wochentagsabhängigem Tagesniveau; bei wenig Daten wird zur Vortageskurve
   zurückgeblendet. Die **Funktions-Statistik** (`messen-schalten/functions.js`)
@@ -615,10 +625,10 @@ MQTT.md                   Referenz: ioBroker-MQTT-Regeln
 - `dashboard_groups(id, title, width, position)`
 - `dashboard_widgets(id, source_id, group_id, position)`
 - `batterie_config(id=1, soc/power/voltage/temperatur/min_soc_topic, min_soc,
-  capacity_ah, battery_type, cell_count, lower_voltage, upper_voltage)`
+  capacity_ah, battery_type, cell_count, lower_voltage, upper_voltage,
+  charge/discharge_efficiency)`
 - `battery_daily_state(id=1, day_key, charged_today)`
-- `prognosis_config(id=1, charge/discharge_efficiency, history_days,
-  behavior_model, behavior_active)`
+- `prognosis_config(id=1, history_days, behavior_model, behavior_active)`
 - `prognosis_daily_consumption(day_key, consumption_kwh, raw_consumption_kwh,
   max_temperature, completed, updated_at)`
 - `prognosis_hourly_consumption(day_key, hour, consumption_kwh)`

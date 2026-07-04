@@ -12,7 +12,19 @@ const assert = require('node:assert/strict');
 
 const { openDatabase } = require('../src/db');
 const { updateCounterStates, resetCountersForChangedTopics } = require('../src/stromverbrauch/aggregation');
+const { deriveEigenverbrauch, deriveEigenverbrauchPower } = require('../src/stromverbrauch/aggregation');
 const { EINSPEISUNG_ZAEHLER_L2_STATE_ID } = require('../src/stromverbrauch/config');
+
+test('Eigenverbrauch zieht Akkuladung ab und rechnet Akkuentladung hinzu', () => {
+  assert.equal(deriveEigenverbrauch(10, 2, 1, { charge: 3, discharge: 0 }), 8);
+  assert.equal(deriveEigenverbrauch(0, 0, 0, { charge: 0, discharge: 1.5 }), 1.5);
+});
+
+test('Eigenverbrauchsleistung übernimmt den Wechselrichterwert und ergänzt nur Verbraucher-PV', () => {
+  assert.equal(deriveEigenverbrauchPower(1200, null), 1200);
+  assert.equal(deriveEigenverbrauchPower(1200, 350), 1550);
+  assert.equal(deriveEigenverbrauchPower(null, 350), 350);
+});
 
 function freshDb() {
   fs.rmSync(process.env.HOME_ESS_DB, { force: true });

@@ -6,7 +6,7 @@ const { BATTERY_PRESETS } = require('../batterie/config');
 function brokerValue(id, value) { return `<span class="topic-current">Broker: <strong id="${id}">${escapeHtml(value == null ? '—' : value)}</strong></span>`; }
 
 function renderBatterie({
-  config = { socTopic: '', powerTopic: '', voltageTopic: '', temperaturTopic: '', minSocTopic: '', minSoc: 20, capacityAh: 200, batteryType: 'lifepo4', cellCount: 16, lowerVoltage: 44.8, upperVoltage: 55.2 },
+  config = { socTopic: '', powerTopic: '', voltageTopic: '', temperaturTopic: '', minSocTopic: '', minSoc: 20, capacityAh: 200, batteryType: 'lifepo4', cellCount: 16, lowerVoltage: 44.8, upperVoltage: 55.2, chargeEfficiency: 95, dischargeEfficiency: 95 },
   data = { soc: null, power: null, voltage: null, temperatur: null },
   message = '',
   error = '',
@@ -155,6 +155,14 @@ function renderBatterie({
               <div class="field">
                 <label for="upperVoltage">Obere Batteriespannung (V)</label>
                 <input type="number" id="upperVoltage" name="upperVoltage" min="0.1" step="0.1" value="${escapeHtml(config.upperVoltage)}">
+              </div>
+              <div class="field">
+                <label for="chargeEfficiency">Ladewirkungsgrad (%)</label>
+                <input type="number" id="chargeEfficiency" name="chargeEfficiency" min="50" max="100" step="1" value="${escapeHtml(config.chargeEfficiency)}">
+              </div>
+              <div class="field">
+                <label for="dischargeEfficiency">Entladewirkungsgrad (%)</label>
+                <input type="number" id="dischargeEfficiency" name="dischargeEfficiency" min="50" max="100" step="1" value="${escapeHtml(config.dischargeEfficiency)}">
               </div>
             </div>
           </div>

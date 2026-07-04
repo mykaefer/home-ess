@@ -203,11 +203,9 @@ function renderPrognosis({ prognosis, message = '', error = '' } = {}) {
           </section>
 
           <form action="/prognose/config" method="POST" class="settings-card forecast-config">
-            <div class="settings-card-head"><h2>Modellparameter</h2><p class="settings-card-hint">Batteriekapazität und Mindest-SoC werden auf der Batterieseite gepflegt.</p></div>
+            <div class="settings-card-head"><h2>Modellparameter</h2><p class="settings-card-hint">Batteriekapazität, Mindest-SoC und Wirkungsgrade werden auf der Batterieseite gepflegt.</p></div>
             <div class="field-grid">
               <div class="field"><label for="historyDays">Lernzeitraum (Tage)</label><input id="historyDays" name="historyDays" type="number" min="7" max="90" step="1" value="${escapeHtml(config.historyDays)}"></div>
-              <div class="field"><label for="chargeEfficiency">Ladewirkungsgrad (%)</label><input id="chargeEfficiency" name="chargeEfficiency" type="number" min="50" max="100" step="1" value="${escapeHtml(config.chargeEfficiency)}"></div>
-              <div class="field"><label for="dischargeEfficiency">Entladewirkungsgrad (%)</label><input id="dischargeEfficiency" name="dischargeEfficiency" type="number" min="50" max="100" step="1" value="${escapeHtml(config.dischargeEfficiency)}"></div>
             </div>
             <div class="forecast-topic-section">
               <h3>Autarkie-Zähler per MQTT</h3>
