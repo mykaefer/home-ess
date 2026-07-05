@@ -169,6 +169,7 @@ async function buildSchaltgruppenData(db) {
       name: group.name,
       remoteTopic: group.remoteTopic,
       switchAsUnit: group.switchAsUnit,
+      timerMinutes: group.timerMinutes,
       // Eine Gruppe gilt als AN, sobald ein Gerät an ist; als AUS erst, wenn
       // alle aus sind. Ohne bekannten Gerätezustand bleibt der Zustand offen.
       on: members.some((a) => a.statusOn === true) ? true

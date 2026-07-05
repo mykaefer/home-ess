@@ -500,13 +500,15 @@ function openDatabase() {
     // Schaltzustand sich aus den zugeordneten Geräten ableitet (an, sobald ein
     // Gerät an ist). Optionales Remote-Topic hält den Zustand bidirektional
     // synchron; switch_as_unit = 1 ⇒ jede Ein-/Ausschaltflanke zieht die
-    // übrigen Geräte der Gruppe in denselben Zustand mit.
+    // übrigen Geräte der Gruppe in denselben Zustand mit; timer_minutes > 0
+    // schaltet die Gruppe nach der Laufzeit wieder aus.
     db.run(
       `CREATE TABLE IF NOT EXISTS mess_schalt_switch_groups (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL DEFAULT '',
         remote_topic TEXT NOT NULL DEFAULT '',
-        switch_as_unit INTEGER NOT NULL DEFAULT 0
+        switch_as_unit INTEGER NOT NULL DEFAULT 0,
+        timer_minutes REAL NOT NULL DEFAULT 0
       )`
     );
     // Funktions-Statistik (Licht, Waschen, Warmwasser, Heizung / Klima, Kochen):
@@ -1070,6 +1072,13 @@ function migrateMessSchaltActors(db) {
     }
     if (!existing.has('offset_total_consumption')) {
       db.run('ALTER TABLE mess_schalt_groups ADD COLUMN offset_total_consumption INTEGER NOT NULL DEFAULT 1');
+    }
+  });
+  db.all('PRAGMA table_info(mess_schalt_switch_groups)', (err, rows) => {
+    if (err || !Array.isArray(rows) || rows.length === 0) return;
+    const existing = new Set(rows.map((r) => r.name));
+    if (!existing.has('timer_minutes')) {
+      db.run('ALTER TABLE mess_schalt_switch_groups ADD COLUMN timer_minutes REAL NOT NULL DEFAULT 0');
     }
   });
   // Interner Zählerstand (Delta-Fortschreibung des Zähler-Topics). NULL heißt

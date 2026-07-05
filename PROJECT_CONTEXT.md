@@ -662,7 +662,8 @@ src/
                           (buildActorSnapshot, 60-s-Job), Gruppen-Verbrauchssummen
     automation.js         Steuerschleife: Level-Handler-Gate je Gerät mit Schalt-Topic
     schaltgruppen.js      Schaltgruppen-CRUD (Name/Remote-Topic/„als Einheit"),
-                          Geräte-Zuordnung (switch_group_id), State-Definitionen,
+                          optionaler AUS-Timer, Geräte-Zuordnung (switch_group_id),
+                          State-Definitionen,
                           States-Block (virtuelle Instanz schaltgruppe://gruppen)
     schaltgruppen-automation.js  Gruppenzustand (an, sobald ein Gerät an),
                           „als Einheit"-Mitschalten beider Schaltflanken,
@@ -799,10 +800,12 @@ MQTT.md                   Referenz: ioBroker-MQTT-Regeln
   Toggle, direkt am Schalt-Topic). `desired_on` ist ungenutzter Altbestand.
   `switch_group_id` = Zuordnung zu einer Schaltgruppe (nur über die
   Schaltgruppen-Unterseite gepflegt).
-- `mess_schalt_switch_groups(id, name, remote_topic, switch_as_unit)` —
+- `mess_schalt_switch_groups(id, name, remote_topic, switch_as_unit, timer_minutes)` —
   Schaltgruppen der Unterseite `/messen-schalten/schaltgruppen`; Zustand wird
   nicht persistiert, sondern je Tick aus den Geräten abgeleitet und als
-  virtueller State `schaltgruppe://gruppen/<id>` veröffentlicht.
+  virtueller State `schaltgruppe://gruppen/<id>` veröffentlicht. Ein Wert
+  `timer_minutes > 0` startet beim Wechsel auf AN einen Laufzeittimer, der alle
+  Mitglieder anschließend ausschaltet.
 - `mess_schalt_actor_state(actor_id, last_counter_raw, last_progress_ts,
   derived_power_w)` — Ableitungszustand für „Leistung aus Zählerfortschritt"
   (0 W nach über 10 min ohne Fortschritt).

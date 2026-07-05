@@ -39,11 +39,36 @@ function groupState(id) {
       remoteSeenOn: null,
       pendingRemote: null,
       remoteMirroredOn: null,
+      groupSeenOn: null,
+      timerMinutes: 0,
+      timerDueAt: null,
+      timerHandle: null,
       memberSeenOn: new Map(), // actorId -> zuletzt gesehener Ist-Zustand
     };
     state.set(id, s);
   }
   return s;
+}
+
+function clearGroupTimer(s) {
+  if (s.timerHandle) clearTimeout(s.timerHandle);
+  s.timerHandle = null;
+  s.timerDueAt = null;
+}
+
+function armGroupTimer(db, group, s) {
+  clearGroupTimer(s);
+  s.timerMinutes = group.timerMinutes;
+  if (!(group.timerMinutes > 0)) return;
+  const delay = group.timerMinutes * 60 * 1000;
+  s.timerDueAt = Date.now() + delay;
+  s.timerHandle = setTimeout(() => {
+    s.timerHandle = null;
+    s.timerDueAt = null;
+    pendingCommands.set(group.id, false);
+    runNow(db).catch(() => {});
+  }, delay);
+  if (typeof s.timerHandle.unref === 'function') s.timerHandle.unref();
 }
 
 function readCachedBool(cache, key) {
@@ -161,6 +186,15 @@ async function tick(db) {
     // 4) Gruppenzustand veröffentlichen: in den State-Bus (kanonisches Topic samt
     // registrierter Abonnenten) …
     const groupOn = anyOn;
+    const turnedOn = groupOn && s.groupSeenOn !== true;
+    const timerChanged = s.timerMinutes !== group.timerMinutes;
+    if (!groupOn) {
+      clearGroupTimer(s);
+      s.timerMinutes = group.timerMinutes;
+    } else if (turnedOn || timerChanged) {
+      armGroupTimer(db, group, s);
+    }
+    s.groupSeenOn = groupOn;
     adapterRouter.ingestFromInstance(INSTANCE, String(group.id), groupOn ? 1 : 0);
 
     // 5) Abgeleiteter Gruppenzustand geändert: Remote-Topic sofort mitziehen.
@@ -177,7 +211,10 @@ async function tick(db) {
 
   // Runtime gelöschter Gruppen aufräumen.
   for (const id of [...state.keys()]) {
-    if (!seen.has(id)) state.delete(id);
+    if (!seen.has(id)) {
+      clearGroupTimer(state.get(id));
+      state.delete(id);
+    }
   }
 }
 
@@ -249,6 +286,7 @@ function init(db) {
 }
 
 function resetForTests() {
+  for (const s of state.values()) clearGroupTimer(s);
   state.clear();
   relevantMemberTopics.clear();
   pendingCommands.clear();

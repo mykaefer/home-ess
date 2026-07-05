@@ -126,7 +126,9 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
     Geräte aus sind; „als Einheit" zieht jede Ein-/Ausschaltflanke eines Geräts
     auf alle übrigen. Einschalten der Gruppe (Schalter, Remote-Topic
     oder State) schaltet **alle Geräte ein**, Ausschalten **alle aus** — je
-    Gerät weiterhin durch die Priorität gegatet. Die Schaltzustände stehen als
+    Gerät weiterhin durch die Priorität gegatet. Optional schaltet ein
+    **Gruppentimer** nach einer konfigurierbaren Laufzeit in Minuten wieder alle
+    Geräte aus; vorzeitiges Ausschalten beendet den Timer. Die Schaltzustände stehen als
     beschreibbare States (`schaltgruppe://gruppen/<id>`) unter der Kategorie
     **Schaltgruppen** in der States-Liste und damit automatisch im Wertekatalog
     und State-Picker zur Weiterverarbeitung bereit.

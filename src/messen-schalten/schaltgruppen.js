@@ -4,8 +4,9 @@
 // ist ein benannter Container für Geräte (Aktoren), deren gemeinsamer
 // Schaltzustand sich aus den Mitgliedern ableitet: an, sobald ein Gerät an ist;
 // aus erst, wenn alle Geräte aus sind. Das optionale Remote-Topic hält den
-// Zustand bidirektional synchron; „Gruppe schaltet als Einheit" schaltet beim
-// Einschalten eines Geräts die übrigen automatisch mit ein. Der Zustand jeder
+// Zustand bidirektional synchron; „Gruppe schaltet als Einheit" zieht
+// Schaltflanken auf alle Mitglieder. Ein optionaler Timer schaltet die gesamte
+// Gruppe nach der konfigurierten Laufzeit wieder aus. Der Zustand jeder
 // Gruppe steht als beschreibbarer State (schaltgruppe://gruppen/<id>) in der
 // States-Liste und damit automatisch im Wertekatalog und State-Picker.
 
@@ -40,27 +41,30 @@ function normalizeRow(row = {}) {
     name: row.name || '',
     remoteTopic: row.remote_topic || '',
     switchAsUnit: Number(row.switch_as_unit) === 1,
+    timerMinutes: Math.max(0, Number(row.timer_minutes) || 0),
   };
 }
 
 // Feste alphanumerische Sortierung nach Name (wie die Verbrauchsgruppen).
 async function listSwitchGroups(db) {
-  const rows = await dbAll(db, 'SELECT id, name, remote_topic, switch_as_unit FROM mess_schalt_switch_groups');
+  const rows = await dbAll(db, 'SELECT id, name, remote_topic, switch_as_unit, timer_minutes FROM mess_schalt_switch_groups');
   return rows
     .map(normalizeRow)
     .sort((a, b) => a.name.localeCompare(b.name, 'de', { numeric: true, sensitivity: 'base' }) || a.id - b.id);
 }
 
 async function getSwitchGroup(db, id) {
-  const row = await dbGet(db, 'SELECT id, name, remote_topic, switch_as_unit FROM mess_schalt_switch_groups WHERE id = ?', [id]);
+  const row = await dbGet(db, 'SELECT id, name, remote_topic, switch_as_unit, timer_minutes FROM mess_schalt_switch_groups WHERE id = ?', [id]);
   return row ? normalizeRow(row) : null;
 }
 
 function normalizeInput(input = {}) {
+  const rawTimer = Number(String(input.timerMinutes == null ? '' : input.timerMinutes).replace(',', '.'));
   return {
     name: String(input.name || '').trim(),
     remoteTopic: normalizeMqttTopic(input.remoteTopic || ''),
     switchAsUnit: input.switchAsUnit === true || ['on', '1', 'true'].includes(String(input.switchAsUnit || '').toLowerCase()),
+    timerMinutes: Number.isFinite(rawTimer) && rawTimer > 0 ? Math.min(rawTimer, 525600) : 0,
   };
 }
 
@@ -77,8 +81,8 @@ async function createSwitchGroup(db, rawInput) {
   ensureName(group);
   const result = await dbRun(
     db,
-    'INSERT INTO mess_schalt_switch_groups (name, remote_topic, switch_as_unit) VALUES (?, ?, ?)',
-    [group.name, group.remoteTopic, group.switchAsUnit ? 1 : 0]
+    'INSERT INTO mess_schalt_switch_groups (name, remote_topic, switch_as_unit, timer_minutes) VALUES (?, ?, ?, ?)',
+    [group.name, group.remoteTopic, group.switchAsUnit ? 1 : 0, group.timerMinutes]
   );
   return getSwitchGroup(db, result.lastID);
 }
@@ -86,8 +90,8 @@ async function createSwitchGroup(db, rawInput) {
 async function updateSwitchGroup(db, id, rawInput) {
   const group = normalizeInput(rawInput);
   ensureName(group);
-  await dbRun(db, 'UPDATE mess_schalt_switch_groups SET name = ?, remote_topic = ?, switch_as_unit = ? WHERE id = ?', [
-    group.name, group.remoteTopic, group.switchAsUnit ? 1 : 0, id,
+  await dbRun(db, 'UPDATE mess_schalt_switch_groups SET name = ?, remote_topic = ?, switch_as_unit = ?, timer_minutes = ? WHERE id = ?', [
+    group.name, group.remoteTopic, group.switchAsUnit ? 1 : 0, group.timerMinutes, id,
   ]);
   return getSwitchGroup(db, id);
 }

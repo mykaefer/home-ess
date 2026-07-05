@@ -25,6 +25,8 @@ die ereignisbasierte Homematic-Anbindung stabilisiert.
   alle Mitglieder aus sind.
 - Optionales **„Schaltet als Einheit“** zieht jede Ein- oder Ausschaltflanke auf
   alle Gruppenmitglieder.
+- Optionaler Gruppentimer startet beim Wechsel auf AN und schaltet nach der
+  konfigurierten Laufzeit in Minuten wieder die gesamte Gruppe aus.
 - Toggle, beschreibbarer virtueller State und optionales Remote-Topic arbeiten
   bidirektional. Externe Remote-Änderungen schalten die Gruppe; Änderungen des
   Gruppen-Istzustands werden unmittelbar zurückgespiegelt.
@@ -69,7 +71,8 @@ die ereignisbasierte Homematic-Anbindung stabilisiert.
 
 Bestehende Installationen werden automatisch erweitert:
 
-- `mess_schalt_switch_groups` und `mess_schalt_actors.switch_group_id`
+- `mess_schalt_switch_groups` (inkl. `timer_minutes`) und
+  `mess_schalt_actors.switch_group_id`
 - `mess_schalt_groups.offset_total_consumption`
 - `batterie_config.remote_topic`
 - `stromverbrauch_config.eigenverbrauch_zaehler_l1..3_topic`
@@ -90,4 +93,3 @@ geladen werden.
   optisch stehen, obwohl der Statuspunkt bereits den neuen Zustand zeigte.
 - Das Speichern von Adaptereinstellungen konnte parallel aktualisierte
   Gerätelisten überschreiben.
-

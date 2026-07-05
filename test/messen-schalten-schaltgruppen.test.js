@@ -55,7 +55,8 @@ async function freshDb() {
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL DEFAULT '',
     remote_topic TEXT NOT NULL DEFAULT '',
-    switch_as_unit INTEGER NOT NULL DEFAULT 0)`);
+    switch_as_unit INTEGER NOT NULL DEFAULT 0,
+    timer_minutes REAL NOT NULL DEFAULT 0)`);
   await dbRun(db, 'CREATE TABLE modules (key TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 0)');
   return db;
 }
@@ -89,15 +90,17 @@ function withPublishCapture(fn) {
 
 test('CRUD: anlegen, ändern, löschen – Löschen löst die Gerätezuordnung', async () => {
   const db = await freshDb();
-  const created = await createSwitchGroup(db, { name: 'Wohnzimmer', remoteTopic: ' licht.remote ', switchAsUnit: 'on' });
+  const created = await createSwitchGroup(db, { name: 'Wohnzimmer', remoteTopic: ' licht.remote ', switchAsUnit: 'on', timerMinutes: '15' });
   assert.equal(created.name, 'Wohnzimmer');
   assert.equal(created.remoteTopic, 'licht.remote');
   assert.equal(created.switchAsUnit, true);
+  assert.equal(created.timerMinutes, 15);
 
-  const updated = await updateSwitchGroup(db, created.id, { name: 'Wohnzimmer Licht', remoteTopic: '', switchAsUnit: '' });
+  const updated = await updateSwitchGroup(db, created.id, { name: 'Wohnzimmer Licht', remoteTopic: '', switchAsUnit: '', timerMinutes: '' });
   assert.equal(updated.name, 'Wohnzimmer Licht');
   assert.equal(updated.remoteTopic, '');
   assert.equal(updated.switchAsUnit, false);
+  assert.equal(updated.timerMinutes, 0);
 
   await dbRun(db, "INSERT INTO mess_schalt_actors (id, name, switch_topic, switch_group_id) VALUES (1, 'Lampe', 'lampe.0.state', ?)", [created.id]);
   await deleteSwitchGroup(db, created.id);
@@ -190,6 +193,48 @@ test('Ohne „als Einheit" bleibt das Einschalten eines Geräts folgenlos für d
     assert.ok(!published.some((p) => p[0] === 'lb.state'));
     // Gruppe gilt trotzdem als an.
     assert.equal(mqttClient.getCache().get(stateTopic(group.id)).value, 1);
+  });
+  await closeDb(db);
+});
+
+test('Optionaler Timer schaltet nach Ablauf die gesamte Gruppe aus', async () => {
+  const db = await freshDb();
+  const group = await createSwitchGroup(db, { name: 'Timer', timerMinutes: 0.001 });
+  await dbRun(db, "INSERT INTO mess_schalt_actors (id, name, switch_topic, switch_group_id) VALUES (32, 'A', 'timer-a.state', ?)", [group.id]);
+  await dbRun(db, "INSERT INTO mess_schalt_actors (id, name, switch_topic, switch_group_id) VALUES (33, 'B', 'timer-b.state', ?)", [group.id]);
+
+  await withPublishCapture(async (published) => {
+    setActual(32, false);
+    setActual(33, false);
+    await sgAutomation.tick(db);
+    setActual(32, true);
+    setActual(33, true);
+    await sgAutomation.tick(db);
+    published.length = 0;
+
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    assert.ok(published.some((p) => p[0] === 'timer-a.state' && p[1] === '0'));
+    assert.ok(published.some((p) => p[0] === 'timer-b.state' && p[1] === '0'));
+  });
+  await closeDb(db);
+});
+
+test('Vorzeitiges Ausschalten löscht den Gruppentimer', async () => {
+  const db = await freshDb();
+  const group = await createSwitchGroup(db, { name: 'Timer aus', timerMinutes: 0.001 });
+  await dbRun(db, "INSERT INTO mess_schalt_actors (id, name, switch_topic, switch_group_id) VALUES (34, 'A', 'timer-c.state', ?)", [group.id]);
+
+  await withPublishCapture(async (published) => {
+    setActual(34, false);
+    await sgAutomation.tick(db);
+    setActual(34, true);
+    await sgAutomation.tick(db);
+    setActual(34, false);
+    await sgAutomation.tick(db);
+    published.length = 0;
+
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    assert.equal(published.length, 0);
   });
   await closeDb(db);
 });

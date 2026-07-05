@@ -21,13 +21,17 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
   gehalten (externe Wertänderung = Schaltwunsch, jede Änderung des abgeleiteten
   Gruppen-Istzustands wird unmittelbar zurückgespiegelt; ein beim Start
   gelieferter retained Wert ist nur Baseline und kein Schaltbefehl).
+  Optional lässt sich eine Laufzeit in Minuten setzen: Mit dem Wechsel der
+  Gruppe auf AN startet der Timer, bei vorzeitigem AUS wird er gelöscht und nach
+  Ablauf werden alle Gruppenmitglieder gemeinsam ausgeschaltet.
   Die Schaltzustände stehen als beschreibbare States
   (`schaltgruppe://gruppen/<id>`) unter der neuen Kategorie **Schaltgruppen**
   in der States-Liste und damit automatisch im Wertekatalog und State-Picker
   zur Weiterverarbeitung bereit (neue Tabelle `mess_schalt_switch_groups`,
   neue Spalte `mess_schalt_actors.switch_group_id`;
   `messen-schalten/schaltgruppen.js` + `schaltgruppen-automation.js`,
-  virtuelle States-Instanzen in `adapters/router.js`/`adapters/states.js`).
+  virtuelle States-Instanzen in `adapters/router.js`/`adapters/states.js`; Spalte
+  `mess_schalt_switch_groups.timer_minutes`).
 - **Messen + Schalten: Verrechnung je Gruppe steuerbar.** Im Gruppendialog legt
   die neue, standardmäßig aktivierte Checkbox **„Verbrauchssumme mit
   Gesamtverbrauch verrechnen“** fest, ob die Verbrauchssumme der Gruppe bei

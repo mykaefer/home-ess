@@ -41,6 +41,9 @@ function renderGroupCard(group) {
   const remoteBadge = group.remoteTopic
     ? `<span class="sg-badge sg-badge--remote" title="Remote-Topic: ${escapeHtml(group.remoteTopic)}">Remote</span>`
     : '';
+  const timerBadge = group.timerMinutes > 0
+    ? `<span class="sg-badge" title="Schaltet die ganze Gruppe nach ${escapeHtml(group.timerMinutes)} Minuten aus">Timer ${escapeHtml(group.timerMinutes)} min</span>`
+    : '';
   return `          <div class="sg-group" data-group-id="${group.id}">
             <div class="sg-group-head">
               <span class="${statusDotClass(group.on)}" id="sg-group-status-${group.id}" title="Schaltzustand der Gruppe (an, sobald ein Gerät an ist)"></span>
@@ -48,6 +51,7 @@ function renderGroupCard(group) {
               <span class="sg-group-count" id="sg-group-count-${group.id}">${group.actors.length}</span>
               ${unitBadge}
               ${remoteBadge}
+              ${timerBadge}
               <label class="ms-toggle" title="Gruppe schalten: Einschalten schaltet alle Geräte ein, Ausschalten alle aus."><input type="checkbox" id="sg-switch-${group.id}" onchange="toggleGroup(${group.id}, this.checked)"${group.on === true ? ' checked' : ''}><span class="ms-toggle-slider"></span></label>
               <div class="widget-actions">
                 <button type="button" class="widget-icon-btn" title="Schaltgruppe bearbeiten" onclick="openGroupDialog('edit', ${group.id})">✎</button>
@@ -72,6 +76,9 @@ function renderGroupDialog() {
               <label class="remember-row remember-row--boxed" for="sgSwitchAsUnit">
                 <input type="checkbox" id="sgSwitchAsUnit" name="switchAsUnit" value="on">
                 <span>Gruppe schaltet als Einheit</span></label>
+              <label class="field-block" for="sgTimerMinutes"><span>Timer (Minuten) <span class="pool-optional">(optional)</span></span>
+                <input type="number" id="sgTimerMinutes" name="timerMinutes" min="0" max="525600" step="1" placeholder="0 = aus">
+                <small class="muted">Nach Ablauf wird die gesamte Gruppe ausgeschaltet.</small></label>
               <p class="muted">Als Einheit: Wird ein Gerät ein- oder ausgeschaltet, werden die übrigen in denselben Zustand mitgezogen. Ohne diese Option gilt die Gruppe als an, sobald mindestens ein Gerät an ist.</p>
             </div>
             <div class="button-row">
@@ -160,12 +167,14 @@ ${groupBlocks}
         document.getElementById('sgName').value = cfg ? cfg.name : '';
         document.getElementById('sgRemote').value = cfg ? cfg.remoteTopic : '';
         document.getElementById('sgSwitchAsUnit').checked = !!(cfg && cfg.switchAsUnit);
+        document.getElementById('sgTimerMinutes').value = cfg && cfg.timerMinutes > 0 ? cfg.timerMinutes : '';
       } else {
         form.action = '/messen-schalten/schaltgruppen';
         title.textContent = 'Schaltgruppe hinzufügen';
         document.getElementById('sgName').value = '';
         document.getElementById('sgRemote').value = '';
         document.getElementById('sgSwitchAsUnit').checked = false;
+        document.getElementById('sgTimerMinutes').value = '';
       }
       if (typeof dialog.showModal === 'function') dialog.showModal();
     }
