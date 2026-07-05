@@ -74,6 +74,18 @@ function normalizeStateEditor(raw) {
   };
 }
 
+// Optionaler, generischer Geräte-Browser. Der Adapter persistiert seine erkannten
+// Geräte via host.setStorage(storageKey, [...]); homeESS zeigt und benennt sie,
+// ohne adapterspezifische Routen oder Views zu benötigen.
+function normalizeDevicePage(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  return {
+    storageKey: raw.storageKey ? String(raw.storageKey) : 'devices',
+    label: raw.label ? String(raw.label) : 'Geräte',
+    emptyText: raw.emptyText ? String(raw.emptyText) : 'Noch keine Geräte erkannt.',
+  };
+}
+
 function readManifest(dir, folderName) {
   const manifestPath = path.join(dir, folderName, 'adapter.json');
   let raw;
@@ -122,6 +134,7 @@ function readManifest(dir, folderName) {
     mainPath,
     settings,
     stateEditor: normalizeStateEditor(parsed.stateEditor),
+    devicePage: normalizeDevicePage(parsed.devicePage),
     presetsDir: path.join(dir, folderName, 'presets'),
   };
 }

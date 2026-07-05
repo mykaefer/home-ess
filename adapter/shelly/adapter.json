@@ -1,0 +1,21 @@
+{
+  "id": "shelly",
+  "name": "Shelly Cloud",
+  "prefix": "shelly",
+  "version": "1.0.0",
+  "description": "Bindet Shelly-Cloud-Geräte aller Generationen an, erkennt deren Statusstruktur automatisch und stellt Werte nach Gerät und Komponente sortiert bereit.",
+  "copyright": "Copyright (C) 2026 Kevin Käfer",
+  "multiInstance": true,
+  "main": "index.js",
+  "devicePage": {
+    "storageKey": "devices",
+    "label": "Geräte",
+    "emptyText": "Noch keine Shelly-Geräte erkannt. Cloud-Server und Authorization Key prüfen und die Instanz aktivieren."
+  },
+  "settings": [
+    { "key": "serverUri", "label": "Shelly Cloud Server", "type": "text", "default": "", "hint": "Server-URI aus der Shelly App, z. B. shelly-123-eu.shelly.cloud. Kein allgemeiner API-Host: Der Server ist kontogebunden." },
+    { "key": "authKey", "label": "Authorization Cloud Key", "type": "password", "default": "", "hint": "In der Shelly App unter Benutzereinstellungen erzeugen. Der Key erlaubt auch das Steuern der Geräte." },
+    { "key": "pollInterval", "label": "Aktualisierungsintervall (s)", "type": "number", "default": 30, "hint": "Mindestens 5 Sekunden. Die Cloud erlaubt höchstens eine API-Anfrage pro Sekunde." },
+    { "key": "deviceIds", "label": "Geräte-IDs (optional)", "type": "text", "default": "", "hint": "Komma- oder leerzeichengetrennte IDs. Normalerweise wird die Geräteliste automatisch aus der Cloud geladen; dieses Feld dient als Fallback." }
+  ]
+}

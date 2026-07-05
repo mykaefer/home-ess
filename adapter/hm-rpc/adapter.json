@@ -2,11 +2,16 @@
   "id": "hm-rpc",
   "name": "HM-RPC",
   "prefix": "hm-rpc",
-  "version": "1.1.2",
+  "version": "1.1.3",
   "description": "Bindet eine CCU per XML-RPC an, hält Gerätewerte ereignisbasiert aktuell und schützt Schreibzugriffe anhand des Duty Cycle.",
   "copyright": "Copyright (C) 2026 Kevin Käfer",
   "multiInstance": true,
   "main": "index.js",
+  "devicePage": {
+    "storageKey": "devices",
+    "label": "Geräte",
+    "emptyText": "Noch keine Geräte erkannt. Der Adapter muss dazu mit der CCU verbunden sein."
+  },
   "settings": [
     { "key": "host", "label": "CCU-Adresse", "type": "text", "default": "", "hint": "IP-Adresse oder Hostname der CCU, ohne Protokoll." },
     { "key": "port", "label": "RPC-Port", "type": "number", "default": 2010, "hint": "HmIP-RF: 2010, BidCos-RF: 2001, virtuelle Geräte: 9292." },

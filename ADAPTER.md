@@ -126,6 +126,15 @@ abzutippen. Das Preset-Dateiformat beschreibt der Adapter selbst in einer
 Nach jeder Änderung (Zeile gespeichert/gelöscht, Preset geladen) startet homeESS die
 Instanz neu, damit der Adapter die geänderte State-Liste übernimmt.
 
+### Optional: `devicePage` (erkannte Geräte)
+
+Mit `"devicePage": { "storageKey": "devices", "label": "Geräte" }` aktiviert
+ein Adapter eine generische Geräteseite. Er persistiert dort anzuzeigende Geräte
+per `host.setStorage(storageKey, devices)`. Jeder Eintrag besitzt `address`, `name`,
+`customName`, optional `type`, `generation`, `online` und `channels`; ein Kanal hat
+`address`, `name` und `states` (State-Metadaten mit mindestens `address`). homeESS
+stellt Live-Werte dar und speichert frei vergebene Gerätenamen in `customName`.
+
 ## Die Einstiegsdatei (`index.js`)
 
 Exportiert eine **Factory** `createAdapter(host)`, die ein Adapter-Objekt mit

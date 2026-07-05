@@ -46,7 +46,8 @@ function writeAdapter(id, prefix, extra = {}) {
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(
     path.join(dir, 'adapter.json'),
-    JSON.stringify({ id, name: `${id} Adapter`, prefix, main: 'index.js', settings: extra.settings || [] })
+    JSON.stringify({ id, name: `${id} Adapter`, prefix, main: 'index.js', settings: extra.settings || [],
+      ...(extra.devicePage ? { devicePage: extra.devicePage } : {}) })
   );
   fs.writeFileSync(path.join(dir, 'index.js'), 'module.exports = () => ({ start() {} });');
 }
@@ -558,11 +559,11 @@ test('Tasmota-Gerätename überschreibt FriendlyName in Katalog und Geräteansic
   assert.match(html, /value="Boiler Keller"/);
 });
 
-const renderHmRpcDevices = require('../src/views/hm-rpc-devices');
+const renderAdapterDevices = require('../src/views/adapter-devices');
 
-test('HM-RPC-Geräteseite zeigt die Geräte-ID und bietet Umbenennen an', () => {
-  const html = renderHmRpcDevices({
-    adapter: { name: 'HM-RPC', prefix: 'hm-rpc' },
+test('Generische HM-RPC-Geräteseite zeigt die Geräte-ID und bietet Umbenennen an', () => {
+  const html = renderAdapterDevices({
+    adapter: { name: 'HM-RPC', prefix: 'hm-rpc', devicePage: { label: 'Geräte', emptyText: 'Keine Geräte' } },
     instance: { id: 3, name: 'ccu' },
     devices: [{
       address: 'ABC0000001',
@@ -573,7 +574,7 @@ test('HM-RPC-Geräteseite zeigt die Geräte-ID und bietet Umbenennen an', () => 
   });
   assert.match(html, />Wohnzimmerlampe</);
   assert.match(html, />ABC0000001</); // Geräte-ID bleibt sichtbar
-  assert.match(html, /hm-rpc-devices\/rename/);
+  assert.match(html, /devices\/rename/);
   assert.match(html, /value="Wohnzimmerlampe"/);
 });
 
@@ -583,7 +584,7 @@ test('HM-RPC-Umbenennen speichert Klarnamen und stellt die State-Kategorie um', 
   const adapterRoutes = require('../src/routes/adapters');
 
   const db = await freshDb();
-  writeAdapter('hm-rpc', 'hm-rpc');
+  writeAdapter('hm-rpc', 'hm-rpc', { devicePage: { storageKey: 'devices', label: 'Geräte' } });
   registry.loadRegistry();
   const id = await instancesRepo.createInstance(db, 'hm-rpc', 'ccu');
   await instancesRepo.updateSettings(db, id, {
@@ -609,7 +610,7 @@ test('HM-RPC-Umbenennen speichert Klarnamen und stellt die State-Kategorie um', 
 
   await new Promise((resolve, reject) => {
     const data = 'address=ABC0000001&name=Wohnzimmerlampe';
-    const req = http.request({ method: 'POST', port, path: `/adapter/instance/${id}/hm-rpc-devices/rename`,
+    const req = http.request({ method: 'POST', port, path: `/adapter/instance/${id}/devices/rename`,
       headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(data) } },
       (res) => { res.resume(); res.on('end', resolve); });
     req.on('error', reject);
