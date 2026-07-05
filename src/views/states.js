@@ -80,10 +80,16 @@ function renderInstanceBlock(inst) {
     ? inst.categories.map((cat) => renderCategory(cat, 0, `${inst.prefix}://${inst.instanceName}`, '')).join('\n')
     : '          <p class="muted" style="margin:6px 0;">Dieser Adapter hat noch keine States gemeldet.</p>';
 
+  // Virtuelle Blöcke (interne Module wie die Schaltgruppen) haben keinen
+  // Adapter-Prozess: sprechender Name statt prefix://instanz, kein Status-Badge.
+  const title = inst.virtual
+    ? escapeHtml(inst.adapterName || inst.instanceName)
+    : `${escapeHtml(inst.prefix)}://${escapeHtml(inst.instanceName)}`;
+  const status = inst.virtual ? '' : `
+              <span class="module-status ${statusClass}">${statusLabel}</span>`;
   return `          <div class="states-inst">
             <div class="states-inst-head">
-              <span class="states-inst-name">${escapeHtml(inst.prefix)}://${escapeHtml(inst.instanceName)}</span>
-              <span class="module-status ${statusClass}">${statusLabel}</span>
+              <span class="states-inst-name">${title}</span>${status}
             </div>
 ${cats}
           </div>`;

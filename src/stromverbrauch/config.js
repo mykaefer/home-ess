@@ -15,6 +15,9 @@ const DEFAULTS = {
   einspeisungZaehlerL1Topic: '',
   einspeisungZaehlerL2Topic: '',
   einspeisungZaehlerL3Topic: '',
+  eigenverbrauchZaehlerL1Topic: '',
+  eigenverbrauchZaehlerL2Topic: '',
+  eigenverbrauchZaehlerL3Topic: '',
 };
 
 const EIGENVERBRAUCH_L1_STATE_ID = 'stromverbrauch_eigenverbrauch_l1';
@@ -29,6 +32,9 @@ const NETZBEZUG_ZAEHLER_L3_STATE_ID = 'stromverbrauch_netzbezug_zaehler_l3';
 const EINSPEISUNG_ZAEHLER_L1_STATE_ID = 'stromverbrauch_einspeisung_zaehler_l1';
 const EINSPEISUNG_ZAEHLER_L2_STATE_ID = 'stromverbrauch_einspeisung_zaehler_l2';
 const EINSPEISUNG_ZAEHLER_L3_STATE_ID = 'stromverbrauch_einspeisung_zaehler_l3';
+const EIGENVERBRAUCH_ZAEHLER_L1_STATE_ID = 'stromverbrauch_eigenverbrauch_zaehler_l1';
+const EIGENVERBRAUCH_ZAEHLER_L2_STATE_ID = 'stromverbrauch_eigenverbrauch_zaehler_l2';
+const EIGENVERBRAUCH_ZAEHLER_L3_STATE_ID = 'stromverbrauch_eigenverbrauch_zaehler_l3';
 let configCacheDb = null;
 let configCache = null;
 
@@ -50,7 +56,10 @@ function loadStromverbrauchConfig(db, callback) {
       netzbezug_zaehler_l3_topic AS netzbezugZaehlerL3Topic,
       einspeisung_zaehler_l1_topic AS einspeisungZaehlerL1Topic,
       einspeisung_zaehler_l2_topic AS einspeisungZaehlerL2Topic,
-      einspeisung_zaehler_l3_topic AS einspeisungZaehlerL3Topic
+      einspeisung_zaehler_l3_topic AS einspeisungZaehlerL3Topic,
+      eigenverbrauch_zaehler_l1_topic AS eigenverbrauchZaehlerL1Topic,
+      eigenverbrauch_zaehler_l2_topic AS eigenverbrauchZaehlerL2Topic,
+      eigenverbrauch_zaehler_l3_topic AS eigenverbrauchZaehlerL3Topic
      FROM stromverbrauch_config
      WHERE id = 1`,
     (err, row) => {
@@ -67,6 +76,9 @@ function loadStromverbrauchConfig(db, callback) {
         einspeisungZaehlerL1Topic: row.einspeisungZaehlerL1Topic || '',
         einspeisungZaehlerL2Topic: row.einspeisungZaehlerL2Topic || '',
         einspeisungZaehlerL3Topic: row.einspeisungZaehlerL3Topic || '',
+        eigenverbrauchZaehlerL1Topic: row.eigenverbrauchZaehlerL1Topic || '',
+        eigenverbrauchZaehlerL2Topic: row.eigenverbrauchZaehlerL2Topic || '',
+        eigenverbrauchZaehlerL3Topic: row.eigenverbrauchZaehlerL3Topic || '',
       };
       configCacheDb = db;
       configCache = config;
@@ -89,6 +101,9 @@ function saveStromverbrauchConfig(db, input, callback) {
     einspeisungZaehlerL1Topic: normalizeMqttTopic(input.einspeisungZaehlerL1Topic || ''),
     einspeisungZaehlerL2Topic: normalizeMqttTopic(input.einspeisungZaehlerL2Topic || ''),
     einspeisungZaehlerL3Topic: normalizeMqttTopic(input.einspeisungZaehlerL3Topic || ''),
+    eigenverbrauchZaehlerL1Topic: normalizeMqttTopic(input.eigenverbrauchZaehlerL1Topic || ''),
+    eigenverbrauchZaehlerL2Topic: normalizeMqttTopic(input.eigenverbrauchZaehlerL2Topic || ''),
+    eigenverbrauchZaehlerL3Topic: normalizeMqttTopic(input.eigenverbrauchZaehlerL3Topic || ''),
   };
 
   db.run(
@@ -96,7 +111,8 @@ function saveStromverbrauchConfig(db, input, callback) {
      SET eigenverbrauch_l1_topic = ?, eigenverbrauch_l2_topic = ?, eigenverbrauch_l3_topic = ?,
          netzbezug_l1_topic = ?, netzbezug_l2_topic = ?, netzbezug_l3_topic = ?,
          netzbezug_zaehler_l1_topic = ?, netzbezug_zaehler_l2_topic = ?, netzbezug_zaehler_l3_topic = ?,
-         einspeisung_zaehler_l1_topic = ?, einspeisung_zaehler_l2_topic = ?, einspeisung_zaehler_l3_topic = ?
+         einspeisung_zaehler_l1_topic = ?, einspeisung_zaehler_l2_topic = ?, einspeisung_zaehler_l3_topic = ?,
+         eigenverbrauch_zaehler_l1_topic = ?, eigenverbrauch_zaehler_l2_topic = ?, eigenverbrauch_zaehler_l3_topic = ?
      WHERE id = 1`,
     [
       config.eigenverbrauchL1Topic,
@@ -111,6 +127,9 @@ function saveStromverbrauchConfig(db, input, callback) {
       config.einspeisungZaehlerL1Topic,
       config.einspeisungZaehlerL2Topic,
       config.einspeisungZaehlerL3Topic,
+      config.eigenverbrauchZaehlerL1Topic,
+      config.eigenverbrauchZaehlerL2Topic,
+      config.eigenverbrauchZaehlerL3Topic,
     ],
     (err) => {
       if (!err) { configCacheDb = db; configCache = config; }
@@ -133,6 +152,9 @@ function buildStromverbrauchStateDefinitions(cfg = DEFAULTS) {
   pushTopic(defs, EINSPEISUNG_ZAEHLER_L1_STATE_ID, cfg.einspeisungZaehlerL1Topic);
   pushTopic(defs, EINSPEISUNG_ZAEHLER_L2_STATE_ID, cfg.einspeisungZaehlerL2Topic);
   pushTopic(defs, EINSPEISUNG_ZAEHLER_L3_STATE_ID, cfg.einspeisungZaehlerL3Topic);
+  pushTopic(defs, EIGENVERBRAUCH_ZAEHLER_L1_STATE_ID, cfg.eigenverbrauchZaehlerL1Topic);
+  pushTopic(defs, EIGENVERBRAUCH_ZAEHLER_L2_STATE_ID, cfg.eigenverbrauchZaehlerL2Topic);
+  pushTopic(defs, EIGENVERBRAUCH_ZAEHLER_L3_STATE_ID, cfg.eigenverbrauchZaehlerL3Topic);
   return defs;
 }
 
@@ -156,5 +178,8 @@ module.exports = {
   EINSPEISUNG_ZAEHLER_L1_STATE_ID,
   EINSPEISUNG_ZAEHLER_L2_STATE_ID,
   EINSPEISUNG_ZAEHLER_L3_STATE_ID,
+  EIGENVERBRAUCH_ZAEHLER_L1_STATE_ID,
+  EIGENVERBRAUCH_ZAEHLER_L2_STATE_ID,
+  EIGENVERBRAUCH_ZAEHLER_L3_STATE_ID,
   DEFAULTS,
 };

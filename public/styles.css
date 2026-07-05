@@ -2244,6 +2244,29 @@ h2 .cmd-confirm { font-size: 13px; vertical-align: middle; }
 .fh-key--ist { background: #0d9488; }
 .fh-key--soll { background: #2563eb; }
 .fh-key--plan { height: 3px; border-radius: 1px; background: #334155; }
+
+/* Datenbasis-Diagramm: je Stunde zwei Balken (Selbstzählung vs. Bilanz/Messung) */
+.db-chart { margin-top: 4px; }
+.db-chart-bars { display: flex; align-items: flex-end; gap: 3px; height: 120px; border-bottom: 1px solid #e2e8f0; }
+.db-cell { position: relative; flex: 1 1 0; height: 100%; display: flex; align-items: flex-end; justify-content: center; gap: 2px; }
+.db-bar { display: block; width: 45%; max-width: 12px; min-height: 1px; border-radius: 2px 2px 0 0; }
+.db-bar--self { background: #0d9488; }
+.db-bar--primary { background: #2563eb; }
+.db-cell--current .db-bar { opacity: 0.55; }
+.db-cell--current::after { content: ''; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: #f59e0b; }
+/* Noch offene Stunden: reservierter Platz ohne Balken, dezent getönt. */
+.db-cell--future { background: repeating-linear-gradient(135deg, rgba(148,163,184,0.06) 0 4px, transparent 4px 8px); border-radius: 3px; }
+.db-cell--future .db-bar { display: none; }
+.db-cell--replaced .db-bar--primary { background: #cbd5e1; }
+.db-mark { position: absolute; left: 10%; right: 10%; height: 0; border-top: 2px solid #b45309; z-index: 2; pointer-events: none; }
+.db-chart-axis { display: flex; justify-content: space-between; margin-top: 3px; font-size: 10px; color: #94a3b8; }
+.db-legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 8px; font-size: 11px; color: #64748b; }
+.db-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.db-key { display: inline-block; width: 9px; height: 9px; border-radius: 2px; }
+.db-key--self { background: #0d9488; }
+.db-key--primary { background: #2563eb; }
+.db-key--mark { height: 3px; border-radius: 1px; background: #b45309; }
+
 .forecast-details { margin-top: 20px; align-items: start; }
 .forecast-facts { margin: 0; }
 .forecast-facts div { display: flex; justify-content: space-between; gap: 16px; padding: 9px 0; border-bottom: 1px solid #eef2f6; }
@@ -2836,6 +2859,195 @@ h2 .cmd-confirm { font-size: 13px; vertical-align: middle; }
 }
 
 /* -------------------------------------------------------------------------
+   Schaltgruppen (Unterseite von Messen + Schalten)
+   Zwei unabhängig scrollbare Spalten: links die Schaltgruppen mit ihren
+   Geräten, rechts schmaler die noch nicht zugeordneten Geräte. Geräte werden
+   per Drag & Drop zwischen den Spalten bzw. in Gruppen gezogen.
+   ---------------------------------------------------------------------- */
+.sg-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(240px, 340px);
+    gap: 14px;
+    align-items: start;
+    margin-top: 4px;
+    /* Beide Spalten scrollen unabhängig innerhalb der Seitenhöhe. */
+    height: calc(100vh - 220px);
+    min-height: 320px;
+}
+
+.sg-col {
+    min-height: 0;
+    height: 100%;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding-right: 2px;
+}
+
+.sg-col--pool {
+    background: #fff;
+    border: 1px solid #e2e6ea;
+    border-radius: 8px;
+    padding: 0;
+    gap: 0;
+}
+
+.sg-pool-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: #eef2f7;
+    font-size: 13px;
+    font-weight: 700;
+    color: #0f172a;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+}
+
+.sg-pool-hint {
+    padding: 6px 12px 2px;
+    font-size: 12px;
+    margin: 0;
+}
+
+.sg-group {
+    background: #fff;
+    border: 1px solid #e2e6ea;
+    border-radius: 8px;
+    overflow: hidden;
+    flex: 0 0 auto;
+}
+
+.sg-group-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 5px 12px;
+    min-height: 36px;
+    background: #eef2f7;
+    font-size: 13px;
+    font-weight: 700;
+    color: #0f172a;
+    user-select: none;
+}
+
+.sg-group-head:hover .widget-actions,
+.sg-group-head:focus-within .widget-actions {
+    opacity: 1;
+}
+
+.sg-group-title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.sg-group-count {
+    background: #dbe2ec;
+    color: #475569;
+    border-radius: 999px;
+    padding: 0 7px;
+    font-size: 11px;
+    font-weight: 600;
+    margin-right: auto;
+}
+
+.sg-badge {
+    font-size: 11px;
+    font-weight: 600;
+    color: #475569;
+    background: #e2e8f0;
+    border-radius: 999px;
+    padding: 2px 8px;
+    white-space: nowrap;
+}
+
+.sg-badge--remote {
+    color: #1d4ed8;
+    background: #dbeafe;
+}
+
+.sg-group-head .ms-toggle {
+    margin-top: 0;
+}
+
+.sg-group-body {
+    display: block;
+}
+
+.sg-dropzone {
+    display: flex;
+    flex-direction: column;
+    min-height: 40px;
+}
+
+/* Leere Dropzone bleibt als Drop-Ziel erkennbar. */
+.sg-dropzone:empty::after {
+    content: 'Keine Geräte – zum Zuordnen hierher ziehen.';
+    display: block;
+    padding: 10px 12px;
+    font-size: 12px;
+    color: #94a3b8;
+}
+
+.sg-dropzone.drag-over {
+    outline: 2px dashed #3b82f6;
+    outline-offset: -3px;
+    background: #eff6ff;
+}
+
+/* Kompakte Geräte-Zeile: Drag-Fläche · Status · Name · Leistung. */
+.sg-row {
+    display: grid;
+    grid-template-columns: 24px 12px minmax(0, 1fr) 90px;
+    align-items: center;
+    gap: 10px;
+    padding: 2px 12px 2px 6px;
+    min-height: 36px;
+    background: #fff;
+    border-top: 1px solid #eef1f4;
+    font-size: 13px;
+    line-height: 1.4;
+}
+
+.sg-dropzone .sg-row:first-child {
+    border-top: none;
+}
+
+.sg-row.dragging {
+    opacity: 0.45;
+}
+
+.sg-row .widget-drag {
+    cursor: grab;
+}
+
+.sg-row-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 600;
+    color: #0f172a;
+}
+
+.sg-row-power {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    color: #475569;
+    white-space: nowrap;
+}
+
+.sg-empty-hint {
+    padding: 10px 2px;
+}
+
+/* -------------------------------------------------------------------------
    Farbthema
    Die Bedienoberflaeche bleibt neutral; kraeftigere Farben tragen nur
    Interaktionen, Zustaende oder die vier fachlichen Energiearten.
@@ -3035,3 +3247,680 @@ body,
 .ms-caret { color: #c8d3cf; }
 .ms-row-name,
 .ms-row-power { color: var(--color-text); }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   MOBILE-LAYER (≤ 768px) — Grundkonstrukt für die Smartphone-Ansicht.
+   Konzept siehe MOBILE.md. Aufbau:
+   1. Utilities (only-mobile / only-desktop)
+   2. Shell: kompakter Header, Sidebar aus, Tab-Bar unten, Menü-Sheet
+   3. Framework: KPI-Raster, Bottom-Sheet-Dialoge, Touch-Ziele, Formulare
+   4. Seiten-Abschnitte (je Seite ein kommentierter Block)
+   Dieser Layer steht bewusst am Dateiende und gewinnt damit die Kaskade
+   gegen alle älteren max-width-Regeln (640/720/760/900px).
+   ─────────────────────────────────────────────────────────────────────── */
+
+/* Mobile Navigation existiert im DOM jeder Seite, ist aber Desktop unsichtbar. */
+.mobile-tabbar,
+.mobile-nav-sheet { display: none; }
+.only-mobile { display: none; }
+
+@media (max-width: 768px) {
+    /* ── 1. Utilities ─────────────────────────────────────────────────── */
+    .only-desktop { display: none !important; }
+    .only-mobile { display: revert; }
+
+    /* ── 2. Shell ─────────────────────────────────────────────────────── */
+    /* Kompakter Header: sticky statt fixed — er darf dadurch bei Platzmangel
+       gefahrlos in eine zweite Zeile umbrechen (kein horizontales Scrollen).
+       Überschreibt die älteren 900px-/640px-Regeln. */
+    .dashboard-header {
+        position: sticky;
+        top: 0;
+        flex-direction: row;
+        align-items: center;
+        flex-wrap: wrap;
+        height: auto;
+        min-height: 48px;
+        padding: 6px 12px;
+        gap: 6px 10px;
+    }
+
+    .app-shell { padding-top: 0; }
+    .app-body { min-height: 0; }
+    .header-logo { height: 24px; }
+
+    .header-statusbar {
+        max-width: none;
+        margin-left: auto;
+        justify-content: flex-end;
+        gap: 6px;
+    }
+
+    /* Zeit/Datum zeigt das Smartphone selbst — Pills entfallen. Das
+       Temperatur-Label entfällt ebenfalls, der °C-Wert spricht für sich. */
+    .header-status-pill--time,
+    .header-status-pill--date { display: none; }
+
+    .header-status-pill--temperature strong { display: none; }
+
+    /* Batterie-Icon reicht — die Prozentzahl steckt im Füllstand (und im
+       Tooltip), so bleibt der Header einzeilig neben dem Logo. */
+    .header-battery .bat-pct { display: none; }
+
+    .header-status-pill {
+        min-height: 28px;
+        padding: 3px 9px;
+        gap: 6px;
+        font-size: 12px;
+    }
+
+    /* Sidebar weg, Inhalt volle Breite; unten Platz für die Tab-Bar. */
+    .sidebar { display: none; }
+
+    .main-content {
+        margin-left: 0;
+        padding: 14px 12px calc(74px + env(safe-area-inset-bottom));
+    }
+
+    /* Untere Tab-Bar: vier Kernseiten + Menü, Touch-Ziele ≥ 44px. */
+    .mobile-tabbar {
+        display: flex;
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 1100;
+        background: var(--color-shell);
+        padding-bottom: env(safe-area-inset-bottom);
+        box-shadow: 0 -2px 10px rgba(15, 23, 42, 0.25);
+    }
+
+    .mobile-tab {
+        flex: 1 1 0;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 3px;
+        padding: 8px 2px 9px;
+        min-height: 56px;
+        border: 0;
+        background: none;
+        color: #9fb0aa;
+        text-decoration: none;
+        font-family: inherit;
+        font-size: 10.5px;
+        line-height: 1;
+        cursor: pointer;
+        -webkit-tap-highlight-color: transparent;
+    }
+
+    .mobile-tab.active { color: #fff; }
+    .mobile-tab-icon { font-size: 20px; line-height: 1; }
+    .mobile-tab-label { white-space: nowrap; }
+
+    /* Vollflächiges Menü-Sheet: alle Seiten inkl. Module + Abmelden. */
+    .mobile-nav-sheet.is-open {
+        display: flex;
+        flex-direction: column;
+        position: fixed;
+        inset: 0;
+        z-index: 1050;
+        background: var(--color-shell);
+        color: #fff;
+        overflow-y: auto;
+        padding: 12px 16px calc(74px + env(safe-area-inset-bottom));
+    }
+
+    body.mobile-nav-open { overflow: hidden; }
+
+    .mobile-nav-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 8px;
+    }
+
+    .mobile-nav-logo { height: 26px; width: auto; }
+
+    .mobile-nav-close {
+        width: 44px;
+        height: 44px;
+        border: 0;
+        border-radius: 10px;
+        background: var(--color-shell-hover);
+        color: #dbe4e0;
+        font-size: 18px;
+        cursor: pointer;
+    }
+
+    .mobile-nav-links {
+        display: flex;
+        flex-direction: column;
+        flex: 1;
+    }
+
+    .mobile-nav-link {
+        display: block;
+        padding: 13px 12px;
+        border-radius: 10px;
+        color: #dbe4e0;
+        text-decoration: none;
+        font-size: 16px;
+    }
+
+    .mobile-nav-link--sub {
+        padding-left: 32px;
+        font-size: 14.5px;
+        color: #b5c2bd;
+    }
+
+    .mobile-nav-link.active {
+        background: var(--color-shell-active);
+        color: #fff;
+        font-weight: 700;
+    }
+
+    .mobile-nav-divider {
+        height: 1px;
+        margin: 10px 4px;
+        background: rgba(255, 255, 255, 0.14);
+    }
+
+    .mobile-nav-foot { margin-top: 16px; }
+
+    .mobile-nav-foot .logout-button {
+        width: 100%;
+        min-height: 46px;
+        border-radius: 10px;
+    }
+
+    .mobile-nav-foot .sidebar-copyright {
+        padding: 14px 4px 0;
+        text-align: center;
+    }
+
+    /* ── 3. Framework: wiederkehrende Bausteine ───────────────────────── */
+    h1 { font-size: 1.45em; }
+
+    /* KPI-Kacheln: festes 2er-Raster statt gequetschter Flex-Umbrüche. */
+    .kpi-row {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+        margin-bottom: 16px;
+    }
+
+    .kpi-card {
+        min-width: 0;
+        padding: 12px 14px;
+    }
+
+    .kpi-value { font-size: 1.4em; }
+
+    .panel-card { padding: 14px; }
+    .content-grid { gap: 14px; }
+    .content-grid--split { grid-template-columns: 1fr; }
+
+    /* Dialoge werden Bottom-Sheets: volle Breite, unten angedockt,
+       innen scrollbar. Gilt automatisch für alle <dialog class="value-dialog">. */
+    .value-dialog {
+        width: 100vw;
+        max-width: 100vw;
+        margin: auto 0 0;
+        border-radius: 18px 18px 0 0;
+        max-height: calc(100dvh - 32px);
+        overflow-y: auto;
+    }
+
+    .value-dialog .dialog-form {
+        padding: 16px 16px calc(16px + env(safe-area-inset-bottom));
+    }
+
+    .dialog-grid--two,
+    .dialog-grid--three,
+    .dialog-grid--four,
+    .dialog-grid--2-1-1 { grid-template-columns: 1fr; }
+
+    /* Formulare: 16px verhindert den iOS-Auto-Zoom, 44px = Touch-Ziel. */
+    input[type="text"],
+    input[type="number"],
+    input[type="password"],
+    input[type="time"],
+    select,
+    textarea {
+        font-size: 16px;
+        min-height: 44px;
+    }
+
+    .settings-form button,
+    .grid-control-form button,
+    .dialog-form button,
+    .button-row button,
+    .secondary-button,
+    .button-danger { min-height: 44px; }
+
+    .icon-button {
+        width: 44px;
+        height: 44px;
+    }
+
+    .button-row { gap: 10px; }
+
+    /* ── 4. Seiten ────────────────────────────────────────────────────── */
+
+    /* ── Prognose ─────────────────────────────────────────────────────── */
+    .forecast-page-head {
+        flex-direction: column;
+        gap: 12px;
+    }
+
+    /* Verhaltensmodell-Steuerung: Status oben, darunter Auswahl + Button. */
+    .forecast-behavior-form {
+        width: 100%;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 10px;
+        padding: 10px;
+    }
+
+    .forecast-behavior-status {
+        grid-column: 1 / -1;
+        flex-direction: row;
+        align-items: baseline;
+        justify-content: space-between;
+        font-size: 12px;
+    }
+
+    .forecast-behavior-form select {
+        min-width: 0;
+        width: 100%;
+    }
+
+    /* Statuskarte: Ampelpunkt oben rechts, Kennzahlen als Zeilenliste
+       (Label links, Wert rechts) statt dreier schmaler Spalten. */
+    .forecast-hero {
+        position: relative;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 10px;
+        padding: 14px;
+        padding-right: 40px;
+    }
+
+    .forecast-signal {
+        position: absolute;
+        top: 16px;
+        right: 16px;
+    }
+
+    .forecast-hero-metrics {
+        width: 100%;
+        margin-left: 0;
+        flex-direction: column;
+        gap: 0;
+        border-top: 1px solid rgba(100, 116, 139, 0.2);
+        margin-top: 2px;
+    }
+
+    .forecast-hero-metrics .forecast-hero-soc {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        column-gap: 14px;
+        align-items: center;
+        min-width: 0;
+        padding: 9px 0;
+        border-right: 0;
+        border-bottom: 1px solid rgba(100, 116, 139, 0.14);
+        text-align: left;
+        white-space: normal;
+    }
+
+    .forecast-hero-metrics .forecast-hero-soc:last-child { border-bottom: 0; }
+
+    .forecast-hero-metrics .forecast-hero-soc strong {
+        grid-column: 2;
+        grid-row: 1 / span 2;
+        margin-top: 0;
+        font-size: 19px;
+    }
+
+    .forecast-hero-metrics .forecast-hero-soc span,
+    .forecast-hero-metrics .forecast-hero-soc small { grid-column: 1; }
+
+    /* Autark-Kachel trägt zwei Jahreszähler → volle Breite im KPI-Raster. */
+    .forecast-kpis .forecast-autark-card { grid-column: 1 / -1; }
+
+    /* Prognosetage: einspaltig, kompakter, Stundenprofil volle Breite. */
+    .forecast-day { padding: 12px; }
+    .forecast-day-body {
+        grid-template-columns: 1fr;
+        gap: 12px;
+    }
+
+    .forecast-day-head { flex-wrap: wrap; gap: 6px 12px; }
+
+    .forecast-bar-row {
+        grid-template-columns: 44px minmax(0, 1fr) auto;
+        gap: 8px;
+    }
+
+    .forecast-hours-chart { height: 72px; }
+
+    /* Verbrauchsmodell-Fakten: lange Labels dürfen umbrechen. */
+    .forecast-facts div { flex-wrap: wrap; gap: 2px 16px; }
+    .forecast-facts dd { margin-left: auto; }
+
+    .forecast-topic-grid { grid-template-columns: 1fr; }
+    .forecast-config .button-row button { width: 100%; }
+
+    /* ── Querschnitt: Seitenköpfe, Karten, Drag & Drop, Wertekatalog ──── */
+    .panel-head {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 10px;
+    }
+
+    .page-head--split { flex-direction: column; }
+    .settings-card { padding: 16px; }
+
+    /* Drag & Drop ist Maus-only: Griffe ausblenden; die am Desktop erst
+       beim Hover sichtbaren Aktions-Buttons sind auf Touch immer sichtbar. */
+    .widget-drag,
+    .widget-group-drag { display: none; }
+
+    .widget-actions,
+    .widget-group-actions { opacity: 1; }
+
+    .widget-icon-btn {
+        padding: 8px;
+        font-size: 15px;
+    }
+
+    /* Wertekatalog (Dialoge + States-Seite): größere Touch-Zeilen, lange
+       Adapter-Pfade dürfen umbrechen statt abgeschnitten zu werden. */
+    .value-cat-head { min-height: 42px; }
+
+    .value-row {
+        min-height: 38px;
+        padding-top: 4px;
+        padding-bottom: 4px;
+    }
+
+    .value-row-label {
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+
+    .state-picker-pop { max-width: calc(100vw - 12px); }
+
+    /* ── Login ────────────────────────────────────────────────────────── */
+    .login-card { width: min(360px, calc(100vw - 28px)); }
+
+    /* ── Dashboard ────────────────────────────────────────────────────── */
+    .widget-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+    }
+
+    .widget-card--info { grid-column: 1 / -1; }
+    .widget-value { font-size: 1.3em; }
+    .dashboard-toolbar button { flex: 1 1 auto; }
+
+    /* ── Stromverbrauch ───────────────────────────────────────────────── */
+    /* Energie-Tabelle wird je Bereich eine Karte: Titel + Aktuell-Wert oben,
+       darunter die vier Zeiträume als beschriftetes 2er-Raster (die Labels
+       kommen per ::before, der Tabellenkopf entfällt). */
+    .energy-overview { overflow-x: visible; }
+    .energy-overview-head { display: none; }
+
+    .energy-overview-row {
+        min-width: 0;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px 14px;
+    }
+
+    .energy-overview-row strong { font-size: 15px; }
+
+    .energy-overview-row span:nth-child(2) {
+        text-align: right;
+        font-size: 16px;
+    }
+
+    .energy-overview-row span:nth-child(n+3) {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 8px;
+        font-size: 13px;
+    }
+
+    .energy-overview-row span:nth-child(n+3)::before {
+        font-size: 12px;
+        font-weight: 400;
+        color: var(--color-text-soft);
+    }
+
+    .energy-overview-row span:nth-child(3)::before { content: 'Heute'; }
+    .energy-overview-row span:nth-child(4)::before { content: 'Diese Woche'; }
+    .energy-overview-row span:nth-child(5)::before { content: 'Dieses Jahr'; }
+    .energy-overview-row span:nth-child(6)::before { content: 'Vorjahr'; }
+
+    .energy-overview-actions { flex-wrap: wrap; }
+    .energy-overview-actions button { flex: 1 1 auto; }
+
+    .strom-layout,
+    .topic-columns { grid-template-columns: 1fr; }
+
+    .raw-counter-head,
+    .raw-counter-row {
+        grid-template-columns: 1fr repeat(3, minmax(0, 1fr));
+        gap: 6px;
+    }
+
+    /* ── Photovoltaik + Wallbox (gemeinsame plant-Bausteine) ──────────── */
+    .plant-main {
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    .plant-power-stack {
+        flex-direction: row;
+        align-items: baseline;
+        gap: 10px;
+    }
+
+    .plant-meta {
+        flex-wrap: wrap;
+        gap: 8px 14px;
+    }
+
+    .plant-calibration { margin-right: 0; }
+
+    .plant-actions { width: 100%; }
+    .plant-actions .secondary-button { flex: 1 1 auto; }
+
+    /* PV-Prognosestreifen: 2er-Raster statt gequetschter Kachelreihe. */
+    .forecast-row {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+    }
+
+    .forecast-card { min-width: 0; }
+
+    /* ── Messen + Schalten ────────────────────────────────────────────── */
+    /* Gerätezeile wird zweizeilig: oben Name + Leistung + Schalter, unten
+       Betriebsart + Zählerstand + Aktionen. Statuspunkt läuft über beide
+       Zeilen; der Drag-Griff entfällt (Maus-only). */
+    .ms-row {
+        grid-template-columns: 12px minmax(0, 1fr) auto auto;
+        grid-template-areas:
+            'dot name power toggle'
+            'dot meta count actions';
+        gap: 2px 10px;
+        padding: 8px 12px 8px 10px;
+    }
+
+    .ms-status-dot { grid-area: dot; }
+
+    .ms-row-name {
+        grid-area: name;
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+
+    .ms-row .ms-prio {
+        grid-area: meta;
+        display: block;
+        font-size: 12px;
+    }
+
+    .ms-row-power { grid-area: power; }
+
+    .ms-row-counter {
+        grid-area: count;
+        display: block;
+    }
+
+    .ms-row .ms-toggle {
+        grid-area: toggle;
+        justify-self: end;
+    }
+
+    .ms-row .widget-actions {
+        grid-area: actions;
+        justify-self: end;
+    }
+
+    .ms-group-head {
+        flex-wrap: wrap;
+        row-gap: 4px;
+    }
+
+    /* ── Adapter (Übersicht + Instanzen) ──────────────────────────────── */
+    .adapter-filter-toggle {
+        width: 100%;
+        justify-content: flex-start;
+        margin-left: 0;
+    }
+
+    .adapter-row,
+    .adapter-row--head {
+        grid-template-columns: 1fr 1fr;
+        row-gap: 4px;
+        padding: 10px 14px;
+    }
+
+    .adapter-row--head { display: none; }
+    .adapter-col-addr { grid-column: 1 / -1; }
+
+    .adapter-row-actions {
+        grid-column: 1 / -1;
+        justify-content: flex-start;
+    }
+
+    /* ── Adapter-States / State-Editor (auch HM-RPC/Tasmota-Geräte) ───── */
+    /* Register-Tabellen sind echte Tabellen — sie scrollen im eigenen
+       Container, die Seite selbst bleibt scrollfrei. */
+    .states-edit-table {
+        display: block;
+        overflow-x: auto;
+    }
+
+    /* ── States-Seite ─────────────────────────────────────────────────── */
+    .states-inst-head { flex-wrap: wrap; }
+
+    /* ── Output ───────────────────────────────────────────────────────── */
+    .output-row {
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 4px 10px;
+        padding: 8px 12px;
+    }
+
+    .output-row-label { white-space: normal; }
+    .output-row-topic { grid-column: 1 / -1; }
+    .output-row-value { text-align: left; }
+
+    .output-row .cmd-confirm {
+        grid-column: 1 / -1;
+        justify-self: start;
+    }
+
+    .output-row-actions {
+        grid-column: 1 / -1;
+        justify-self: start;
+    }
+
+    .output-row-actions .secondary-button {
+        padding: 6px 12px;
+        font-size: 12px;
+    }
+
+    .output-row-actions .icon-button {
+        width: 38px;
+        height: 34px;
+    }
+
+    /* ── Module ───────────────────────────────────────────────────────── */
+    .module-card {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 12px;
+        padding: 16px;
+    }
+
+    .module-card-action { width: 100%; }
+
+    .module-card-action .module-toggle-btn {
+        width: 100%;
+        min-height: 44px;
+    }
+
+    /* ── Pool + Wallbox: Modus-Buttons als vollbreite Segmente ────────── */
+    .pump-mode-btns {
+        display: flex;
+        width: 100%;
+    }
+
+    .pump-mode-btn {
+        flex: 1 1 0;
+        min-height: 42px;
+    }
+
+    .pool-time-grid { max-width: none; }
+    .wallbox-switch-label { width: 100%; }
+
+    /* ── Grid-Control ─────────────────────────────────────────────────── */
+    .gc-log-row {
+        flex-wrap: wrap;
+        white-space: normal;
+        row-gap: 2px;
+    }
+
+    .gc-log-msg { flex: 1 1 auto; }
+
+    .gc-log-vals {
+        flex: 1 1 100%;
+        margin-left: 0;
+        padding-left: 0;
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+
+    .gc-log-legend { white-space: normal; }
+
+    /* ── Schaltgruppen ────────────────────────────────────────────────── */
+    /* Mobil stapeln sich die Spalten; gescrollt wird die Seite selbst. */
+    .sg-layout {
+        grid-template-columns: 1fr;
+        height: auto;
+        min-height: 0;
+    }
+
+    .sg-col {
+        height: auto;
+        overflow-y: visible;
+    }
+}

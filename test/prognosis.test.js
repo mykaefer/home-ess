@@ -92,7 +92,7 @@ test('bereinigte Verbrauchssamples werden stündlich und täglich persistiert', 
     completed INTEGER, updated_at INTEGER
   )`);
   await dbRun(db, `CREATE TABLE prognosis_hourly_consumption (
-    day_key TEXT, hour INTEGER, consumption_kwh REAL, PRIMARY KEY(day_key, hour)
+    day_key TEXT, hour INTEGER, consumption_kwh REAL, primary_kwh REAL, self_kwh REAL, reconciled INTEGER DEFAULT 0, PRIMARY KEY(day_key, hour)
   )`);
   const start = new Date('2026-06-29T10:00:00Z');
   await recordConsumptionSample(db, 0, new Map(), { batteryPower: 0 }, start);
@@ -117,7 +117,7 @@ test('verspäteter Tageszähler-Reset übernimmt den Vortag nicht in den neuen L
     completed INTEGER, updated_at INTEGER
   )`);
   await dbRun(db, `CREATE TABLE prognosis_hourly_consumption (
-    day_key TEXT, hour INTEGER, consumption_kwh REAL, PRIMARY KEY(day_key, hour)
+    day_key TEXT, hour INTEGER, consumption_kwh REAL, primary_kwh REAL, self_kwh REAL, reconciled INTEGER DEFAULT 0, PRIMARY KEY(day_key, hour)
   )`);
 
   const midnight = new Date('2026-06-29T22:00:00Z'); // 00:00 Europe/Berlin
@@ -144,7 +144,7 @@ test('ein ungültiges Intervall mit riesigem Zählersprung überschwemmt den Tag
     completed INTEGER, updated_at INTEGER
   )`);
   await dbRun(db, `CREATE TABLE prognosis_hourly_consumption (
-    day_key TEXT, hour INTEGER, consumption_kwh REAL, PRIMARY KEY(day_key, hour)
+    day_key TEXT, hour INTEGER, consumption_kwh REAL, primary_kwh REAL, self_kwh REAL, reconciled INTEGER DEFAULT 0, PRIMARY KEY(day_key, hour)
   )`);
 
   const start = new Date('2026-06-29T10:00:00Z');
@@ -172,7 +172,7 @@ test('aufgeblähter Tageswert wird aus plausiblen Stundenwerten selbst geheilt',
     completed INTEGER, updated_at INTEGER
   )`);
   await dbRun(db, `CREATE TABLE prognosis_hourly_consumption (
-    day_key TEXT, hour INTEGER, consumption_kwh REAL, PRIMARY KEY(day_key, hour)
+    day_key TEXT, hour INTEGER, consumption_kwh REAL, primary_kwh REAL, self_kwh REAL, reconciled INTEGER DEFAULT 0, PRIMARY KEY(day_key, hour)
   )`);
   const start = new Date('2026-06-29T10:00:00Z');
   await recordConsumptionSample(db, 0, new Map(), { batteryPower: 0 }, start);
@@ -351,7 +351,7 @@ test('ungelernte Wochentage erhalten Kurve und Ziel des jüngsten Lerntags', asy
     completed INTEGER, updated_at INTEGER
   )`);
   await dbRun(db, `CREATE TABLE prognosis_hourly_consumption (
-    day_key TEXT, hour INTEGER, consumption_kwh REAL, PRIMARY KEY(day_key, hour)
+    day_key TEXT, hour INTEGER, consumption_kwh REAL, primary_kwh REAL, self_kwh REAL, reconciled INTEGER DEFAULT 0, PRIMARY KEY(day_key, hour)
   )`);
   await dbRun(db, `CREATE TABLE battery_energy_state (
     id INTEGER PRIMARY KEY CHECK (id = 1), last_power_ts INTEGER,
@@ -371,7 +371,7 @@ test('ungelernte Wochentage erhalten Kurve und Ziel des jüngsten Lerntags', asy
   // Jüngster Lerntag: 02.07.2026 (Donnerstag) mit 24 kWh und flacher Kurve.
   await dbRun(db, "INSERT INTO prognosis_daily_consumption VALUES ('2026-07-02', 24, 24, NULL, 1, 0)");
   for (let hour = 0; hour < 24; hour += 1) {
-    await dbRun(db, "INSERT INTO prognosis_hourly_consumption VALUES ('2026-07-02', ?, 1)", [hour]);
+    await dbRun(db, "INSERT INTO prognosis_hourly_consumption (day_key, hour, consumption_kwh) VALUES ('2026-07-02', ?, 1)", [hour]);
   }
   await dbRun(db, "INSERT INTO prognosis_daily_consumption VALUES ('2026-07-03', 8, 8, NULL, 0, 0)");
 

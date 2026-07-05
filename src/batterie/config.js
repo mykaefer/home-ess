@@ -8,6 +8,7 @@ const STATE_IDS = {
   voltage: 'batterie.voltage',
   temperatur: 'batterie.temperatur',
   minSoc: 'batterie.minSoc',
+  minSocRemote: 'batterie.minSocRemote',
 };
 
 const BATTERY_PRESETS = {
@@ -18,7 +19,7 @@ const BATTERY_PRESETS = {
 };
 
 const DEFAULTS = {
-  socTopic: '', powerTopic: '', voltageTopic: '', temperaturTopic: '', minSocTopic: '',
+  socTopic: '', powerTopic: '', voltageTopic: '', temperaturTopic: '', minSocTopic: '', remoteTopic: '',
   minSoc: 20, capacityAh: 200, batteryType: 'lifepo4', cellCount: 16, lowerVoltage: 44.8, upperVoltage: 55.2,
   chargeEfficiency: 95, dischargeEfficiency: 95,
 };
@@ -44,6 +45,7 @@ function loadBatterieConfig(db, callback) {
       voltageTopic: row.voltage_topic || '',
       temperaturTopic: row.temperatur_topic || '',
       minSocTopic: row.min_soc_topic || '',
+      remoteTopic: row.remote_topic || '',
       minSoc: row.min_soc == null ? DEFAULTS.minSoc : row.min_soc,
       capacityAh: row.capacity_ah == null ? DEFAULTS.capacityAh : row.capacity_ah,
       batteryType: BATTERY_PRESETS[row.battery_type] ? row.battery_type : DEFAULTS.batteryType,
@@ -67,6 +69,7 @@ function saveBatterieConfig(db, input, callback) {
     voltageTopic: normalizeMqttTopic(input.voltageTopic || ''),
     temperaturTopic: normalizeMqttTopic(input.temperaturTopic || ''),
     minSocTopic: normalizeMqttTopic(input.minSocTopic || ''),
+    remoteTopic: normalizeMqttTopic(input.remoteTopic || ''),
     minSoc: Math.round(clamp(input.minSoc, 0, 100, DEFAULTS.minSoc) / 5) * 5,
     capacityAh: clamp(input.capacityAh, 0.1, 100000, DEFAULTS.capacityAh),
     batteryType,
@@ -82,20 +85,21 @@ function saveBatterieConfig(db, input, callback) {
   }
   db.run(
     `INSERT INTO batterie_config
-      (id, soc_topic, power_topic, voltage_topic, temperatur_topic, min_soc_topic,
+      (id, soc_topic, power_topic, voltage_topic, temperatur_topic, min_soc_topic, remote_topic,
        min_soc, capacity_ah, battery_type, cell_count, lower_voltage, upper_voltage,
        charge_efficiency, discharge_efficiency)
-     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
        soc_topic=excluded.soc_topic, power_topic=excluded.power_topic,
        voltage_topic=excluded.voltage_topic, temperatur_topic=excluded.temperatur_topic,
-       min_soc_topic=excluded.min_soc_topic, min_soc=excluded.min_soc,
+       min_soc_topic=excluded.min_soc_topic, remote_topic=excluded.remote_topic,
+       min_soc=excluded.min_soc,
        capacity_ah=excluded.capacity_ah,
        battery_type=excluded.battery_type, cell_count=excluded.cell_count,
        lower_voltage=excluded.lower_voltage, upper_voltage=excluded.upper_voltage,
        charge_efficiency=excluded.charge_efficiency,
        discharge_efficiency=excluded.discharge_efficiency`,
-    [cfg.socTopic, cfg.powerTopic, cfg.voltageTopic, cfg.temperaturTopic, cfg.minSocTopic,
+    [cfg.socTopic, cfg.powerTopic, cfg.voltageTopic, cfg.temperaturTopic, cfg.minSocTopic, cfg.remoteTopic,
       cfg.minSoc, cfg.capacityAh, cfg.batteryType, cfg.cellCount, cfg.lowerVoltage, cfg.upperVoltage,
       cfg.chargeEfficiency, cfg.dischargeEfficiency],
     (err) => {
@@ -211,6 +215,7 @@ function buildBatterieStateDefinitions(cfg) {
     { id: STATE_IDS.voltage, topic: cfg.voltageTopic },
     { id: STATE_IDS.temperatur, topic: cfg.temperaturTopic },
     { id: STATE_IDS.minSoc, topic: cfg.minSocTopic },
+    { id: STATE_IDS.minSocRemote, topic: cfg.remoteTopic },
   ].filter((entry) => entry.topic);
 }
 
@@ -219,7 +224,7 @@ function readBatterieData(cache) {
   return {
     soc: get(STATE_IDS.soc), power: get(STATE_IDS.power),
     voltage: get(STATE_IDS.voltage), temperatur: get(STATE_IDS.temperatur),
-    minSoc: get(STATE_IDS.minSoc),
+    minSoc: get(STATE_IDS.minSoc), minSocRemote: get(STATE_IDS.minSocRemote),
   };
 }
 

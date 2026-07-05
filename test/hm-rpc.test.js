@@ -76,6 +76,19 @@ test('HM-RPC hält Werte per Event aktuell, liest lokal und sperrt Schreiben bei
   assert.ok(calls.some((call) => call.method === 'init' && call.params[1] === 'homeESS-test'));
   assert.equal(batches.length, 1, 'alle Initialwerte werden in einem Bus-Batch publiziert');
 
+  const callbackTarget = new URL(callbackUrl);
+  const methods = await xmlrpc.call(
+    { host: callbackTarget.hostname, port: Number(callbackTarget.port) },
+    'system.listMethods', ['homeESS-test']
+  );
+  assert.ok(methods.value.includes('listDevices'), 'Callback meldet die vorgeschriebene listDevices-Methode');
+  const knownDevices = await xmlrpc.call(
+    { host: callbackTarget.hostname, port: Number(callbackTarget.port) },
+    'listDevices', ['homeESS-test']
+  );
+  assert.ok(knownDevices.value.some((entry) => entry.ADDRESS === 'ABC:1' && entry.VERSION === 0),
+    'Callback liefert der CCU ADDRESS und VERSION des bekannten Bestands');
+
   const sendEvent = async (key, value) => {
     const target = new URL(callbackUrl);
     const response = await xmlrpc.call({ host: target.hostname, port: Number(target.port) }, 'event', ['test', 'ABC:1', key, value]);

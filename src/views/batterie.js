@@ -6,8 +6,8 @@ const { BATTERY_PRESETS } = require('../batterie/config');
 function brokerValue(id, value) { return `<span class="topic-current">Broker: <strong id="${id}">${escapeHtml(value == null ? '—' : value)}</strong></span>`; }
 
 function renderBatterie({
-  config = { socTopic: '', powerTopic: '', voltageTopic: '', temperaturTopic: '', minSocTopic: '', minSoc: 20, capacityAh: 200, batteryType: 'lifepo4', cellCount: 16, lowerVoltage: 44.8, upperVoltage: 55.2, chargeEfficiency: 95, dischargeEfficiency: 95 },
-  data = { soc: null, power: null, voltage: null, temperatur: null },
+  config = { socTopic: '', powerTopic: '', voltageTopic: '', temperaturTopic: '', minSocTopic: '', remoteTopic: '', minSoc: 20, capacityAh: 200, batteryType: 'lifepo4', cellCount: 16, lowerVoltage: 44.8, upperVoltage: 55.2, chargeEfficiency: 95, dischargeEfficiency: 95 },
+  data = { soc: null, power: null, voltage: null, temperatur: null, minSocRemote: null },
   message = '',
   error = '',
 } = {}) {
@@ -116,6 +116,14 @@ function renderBatterie({
                        value="${escapeHtml(config.minSocTopic)}">
                 ${brokerValue('broker-battery-min-soc', data.minSoc)}
               </div>
+              <div class="field">
+                <label for="remoteTopic">Mindest-Ladezustand – Remote-Topic (bidirektionale Synchronisierung)</label>
+                <input type="text" id="remoteTopic" name="remoteTopic"
+                       placeholder="z.B. 0_userdata.0.homeESS.MindestSoc"
+                       value="${escapeHtml(config.remoteTopic)}">
+                <small>Änderungen am Mindest-Ladezustand werden hierhin gespiegelt; ändert sich dieses Topic extern, wird der Mindest-Ladezustand mitgezogen.</small>
+                ${brokerValue('broker-battery-min-soc-remote', data.minSocRemote)}
+              </div>
             </div>
           </div>
           <div class="settings-card">
@@ -217,7 +225,7 @@ function renderBatterie({
           var brokerMap = {
             'broker-battery-soc': 'soc', 'broker-battery-power': 'power',
             'broker-battery-voltage': 'voltage', 'broker-battery-temperature': 'temperatur',
-            'broker-battery-min-soc': 'minSoc'
+            'broker-battery-min-soc': 'minSoc', 'broker-battery-min-soc-remote': 'minSocRemote'
           };
           Object.keys(brokerMap).forEach(function(id) {
             var value = d[brokerMap[id]];

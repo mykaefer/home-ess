@@ -23,6 +23,20 @@ function setHost(nextHost) {
   host = nextHost;
 }
 
+// Virtuelle Instanzen: interne Module (z. B. die Schaltgruppen von Messen +
+// Schalten) stellen eigene Scheme-Topics bereit, ohne ein Adapter-Prozess zu
+// sein. write/read solcher Topics laufen an die registrierten Handler statt an
+// den Host; Werte melden die Module selbst über ingestFromInstance.
+const virtualInstances = new Map(); // instanceName -> { write?, read? }
+function registerVirtualInstance(instanceName, scheme, handlers) {
+  virtualInstances.set(String(instanceName), handlers || {});
+  setInstanceScheme(instanceName, scheme);
+}
+function unregisterVirtualInstance(instanceName) {
+  virtualInstances.delete(String(instanceName));
+  removeInstanceScheme(instanceName);
+}
+
 function registerScheme(scheme, adapterId) {
   schemes.set(String(scheme).toLowerCase(), adapterId);
 }
@@ -86,6 +100,11 @@ function unregisterRoute(topic, cacheKey) {
 function write(topic, value) {
   const parsed = parseSchemeTopic(topic);
   if (!parsed) return false;
+  const virtual = virtualInstances.get(parsed.instance);
+  if (virtual) {
+    if (typeof virtual.write === 'function') virtual.write(parsed.address, value);
+    return true;
+  }
   if (host) host.write(parsed.instance, parsed.address, value);
   return true;
 }
@@ -94,6 +113,11 @@ function write(topic, value) {
 function requestValue(topic) {
   const parsed = parseSchemeTopic(topic);
   if (!parsed) return false;
+  const virtual = virtualInstances.get(parsed.instance);
+  if (virtual) {
+    if (typeof virtual.read === 'function') virtual.read(parsed.address);
+    return true;
+  }
   if (host) host.read(parsed.instance, parsed.address);
   return true;
 }
@@ -139,6 +163,8 @@ function schemeForInstance(instanceName) {
 
 module.exports = {
   setHost,
+  registerVirtualInstance,
+  unregisterVirtualInstance,
   registerScheme,
   clearSchemes,
   adapterIdForScheme,

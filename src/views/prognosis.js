@@ -77,6 +77,70 @@ function renderHourProfile(day, model, isToday) {
       </div>`;
 }
 
+// Transparenz der Prognose-Datenbasis: je Stunde des heutigen Tages zwei Balken
+// nebeneinander — die Selbstzählung (aus der Eigenverbrauch-Leistung integriert)
+// und die zähler-/bilanzbasierte Quelle. Eine Marke zeigt, welcher Wert in die
+// Prognose eingeflossen ist (nach dem Guard). Die aktuelle Stunde wächst live
+// (die Seite lädt minütlich neu).
+function renderDataBasisChart(model = {}) {
+  const toNum = (value) => (Number.isFinite(Number(value)) ? Number(value) : null);
+  const currentHour = model.local && model.local.time
+    ? Math.max(0, Math.min(23, Number(model.local.time.hours) || 0))
+    : 23;
+  const selfSeries = model.todaySelfByHour || [];
+  const primarySeries = model.todayPrimaryByHour || [];
+  const chosenSeries = model.todayByHour || [];
+  const hasAny = selfSeries.some((v) => v != null) || primarySeries.some((v) => v != null);
+  if (!hasAny) {
+    return `<section class="panel-card">
+          <div class="panel-head"><div><h2>Datenbasis der Prognose (heute)</h2><p class="muted">Selbstzählung vs. Bilanz je Stunde. Sammelt ab dem nächsten Messintervall Werte.</p></div></div>
+        </section>`;
+  }
+  // Festes 24-Stunden-Raster: die Platzbreite bleibt über den Tag konstant,
+  // die Balken füllen sich fortlaufend. Zukünftige Stunden bleiben leer.
+  let max = 0.1;
+  for (let h = 0; h < 24; h += 1) {
+    max = Math.max(max, toNum(selfSeries[h]) || 0, toNum(primarySeries[h]) || 0, toNum(chosenSeries[h]) || 0);
+  }
+  const cells = [];
+  for (let h = 0; h < 24; h += 1) {
+    const selfValue = toNum(selfSeries[h]);
+    const primaryValue = toNum(primarySeries[h]);
+    const chosenValue = toNum(chosenSeries[h]);
+    const isCurrent = h === currentHour;
+    const isFuture = h > currentHour;
+    const selfPct = selfValue == null ? 0 : Math.min(100, selfValue / max * 100);
+    const primaryPct = primaryValue == null ? 0 : Math.min(100, primaryValue / max * 100);
+    const replaced = !isCurrent && !isFuture && chosenValue != null && primaryValue != null
+      && Math.abs(chosenValue - primaryValue) > 0.001;
+    const chosenPct = chosenValue == null ? null : Math.min(100, chosenValue / max * 100);
+    const marker = !isCurrent && !isFuture && chosenPct != null
+      ? `<i class="db-mark" style="bottom:${chosenPct.toFixed(1)}%"></i>` : '';
+    const fmt = (v) => (v == null ? '—' : `${v.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} kWh`);
+    const title = isFuture
+      ? `${String(h).padStart(2, '0')} Uhr · noch offen`
+      : `${String(h).padStart(2, '0')} Uhr${isCurrent ? ' (läuft)' : ''} · Selbstzählung ${fmt(selfValue)} · Bilanz/Messung ${fmt(primaryValue)}${replaced ? ` · in Prognose: ${fmt(chosenValue)} (ersetzt)` : ''}`;
+    const cls = `db-cell${isCurrent ? ' db-cell--current' : ''}${isFuture ? ' db-cell--future' : ''}${replaced ? ' db-cell--replaced' : ''}`;
+    cells.push(`<div class="${cls}" title="${escapeHtml(title)}">
+          <span class="db-bar db-bar--self" style="height:${selfPct.toFixed(1)}%"></span>
+          <span class="db-bar db-bar--primary" style="height:${primaryPct.toFixed(1)}%"></span>
+          ${marker}
+        </div>`);
+  }
+  return `<section class="panel-card">
+          <div class="panel-head"><div><h2>Datenbasis der Prognose (heute)</h2><p class="muted">Selbstzählung (Eigenverbrauch-Leistung) vs. zähler-/bilanzbasierte Quelle je Stunde. Die aktuelle Stunde wächst bis zum Stundenende; die Marke zeigt den in die Prognose übernommenen Wert.</p></div></div>
+          <div class="db-chart">
+            <div class="db-chart-bars">${cells.join('')}</div>
+            <div class="db-chart-axis"><span>0</span><span>6</span><span>12</span><span>18</span><span>24 Uhr</span></div>
+            <div class="db-legend">
+              <span><i class="db-key db-key--self"></i>Selbstzählung</span>
+              <span><i class="db-key db-key--primary"></i>Bilanz/Messung</span>
+              <span><i class="db-key db-key--mark"></i>in Prognose übernommen</span>
+            </div>
+          </div>
+        </section>`;
+}
+
 function renderDays(days = [], model = {}) {
   if (!days.length) return '<p class="muted">Noch keine PV-Wetterprognose verfügbar. Bitte Standort und PV-Anlagen prüfen.</p>';
   const max = Math.max(1, ...days.flatMap((day) => [day.pvKwh || 0, day.loadKwh || 0]));
@@ -183,6 +247,8 @@ function renderPrognosis({ prognosis, message = '', error = '' } = {}) {
           <div class="panel-head"><div><h2>Energiebilanz</h2><p class="muted">PV-Ertrag, dynamischer Verbrauch und Batterieverlauf für heute plus drei Tage.</p></div></div>
           <div class="forecast-days">${renderDays(simulation.days, model)}</div>
         </section>
+
+        ${renderDataBasisChart(model)}
 
         <div class="content-grid content-grid--split forecast-details">
           <section class="info-card">

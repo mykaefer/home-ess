@@ -223,11 +223,12 @@ async function recordConsumptionSample(db, totalKwh, cache, options = {}, now = 
     if (adjustedDelta > 0 && adjustedDelta <= MAX_SAMPLE_DELTA_KWH) {
       await dbRun(
         db,
-        `INSERT INTO prognosis_hourly_consumption (day_key, hour, consumption_kwh)
-         VALUES (?, ?, ?)
+        `INSERT INTO prognosis_hourly_consumption (day_key, hour, consumption_kwh, primary_kwh)
+         VALUES (?, ?, ?, ?)
          ON CONFLICT(day_key, hour) DO UPDATE SET
-          consumption_kwh=prognosis_hourly_consumption.consumption_kwh + excluded.consumption_kwh`,
-        [key, hour, adjustedDelta]
+          consumption_kwh=prognosis_hourly_consumption.consumption_kwh + excluded.consumption_kwh,
+          primary_kwh=COALESCE(prognosis_hourly_consumption.primary_kwh, 0) + excluded.primary_kwh`,
+        [key, hour, adjustedDelta, adjustedDelta]
       );
     }
   }
@@ -274,13 +275,21 @@ async function buildConsumptionModelUncached(db, strom, config, cache, forecast 
   // Kalibrierung und der Ist/Soll-Darstellung auf der Prognoseseite.
   const todayHourRows = await dbAll(
     db,
-    'SELECT hour, consumption_kwh FROM prognosis_hourly_consumption WHERE day_key = ?',
+    'SELECT hour, consumption_kwh, primary_kwh, self_kwh FROM prognosis_hourly_consumption WHERE day_key = ?',
     [key]
   );
   const todayByHour = Array(24).fill(null);
+  // Transparenz-Serien: in die Prognose eingeflossener Wert (chosen), die
+  // zähler-/bilanzbasierte Quelle (primary) und die Selbstzählung (self).
+  const todayPrimaryByHour = Array(24).fill(null);
+  const todaySelfByHour = Array(24).fill(null);
   for (const row of todayHourRows) {
     const hourIndex = clamp(Number(row.hour) || 0, 0, 23);
     todayByHour[hourIndex] = (todayByHour[hourIndex] || 0) + (num(row.consumption_kwh) || 0);
+    const primaryValue = num(row.primary_kwh);
+    if (primaryValue != null) todayPrimaryByHour[hourIndex] = (todayPrimaryByHour[hourIndex] || 0) + primaryValue;
+    const selfValue = num(row.self_kwh);
+    if (selfValue != null) todaySelfByHour[hourIndex] = (todaySelfByHour[hourIndex] || 0) + selfValue;
   }
   const previousHourRow = previousHour.date && dateKey(previousHour.date) === key
     ? todayHourRows.find((row) => Number(row.hour) === Number(previousHour.time.hours))
@@ -481,6 +490,7 @@ async function buildConsumptionModelUncached(db, strom, config, cache, forecast 
     weekdayProfileDays: weekdayProfileDays.map((days) => days.size), weekdayDailyCounts,
     currentWeekday, previousDayKey, previousDayKwh,
     wallboxModel, poolModel, functionModels, todayByHour,
+    todayPrimaryByHour, todaySelfByHour,
     remainingByHour, recentHourKwh, hoursToSunrise, consumptionToSunrise: null,
     _wallboxPlanningSlots: wallboxPlanningSlots,
     historyDays: dailyRows.length,

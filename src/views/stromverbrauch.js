@@ -17,6 +17,9 @@ function renderStromverbrauch({
     einspeisungZaehlerL1Topic: '',
     einspeisungZaehlerL2Topic: '',
     einspeisungZaehlerL3Topic: '',
+    eigenverbrauchZaehlerL1Topic: '',
+    eigenverbrauchZaehlerL2Topic: '',
+    eigenverbrauchZaehlerL3Topic: '',
   },
   metrics = {
     formatted: {
@@ -91,6 +94,13 @@ function renderStromverbrauch({
             <input type="text" id="einspeisungZaehlerL2Topic" name="einspeisungZaehlerL2Topic" value="${escapeHtml(config.einspeisungZaehlerL2Topic)}">
             <label for="einspeisungZaehlerL3Topic">Einspeisung L3</label>
             <input type="text" id="einspeisungZaehlerL3Topic" name="einspeisungZaehlerL3Topic" value="${escapeHtml(config.einspeisungZaehlerL3Topic)}">
+            <label for="eigenverbrauchZaehlerL1Topic">Eigenverbrauch L1 <span class="topic-hint">(optional, echter Zähler)</span></label>
+            <input type="text" id="eigenverbrauchZaehlerL1Topic" name="eigenverbrauchZaehlerL1Topic" value="${escapeHtml(config.eigenverbrauchZaehlerL1Topic)}">
+            <label for="eigenverbrauchZaehlerL2Topic">Eigenverbrauch L2 <span class="topic-hint">(optional, echter Zähler)</span></label>
+            <input type="text" id="eigenverbrauchZaehlerL2Topic" name="eigenverbrauchZaehlerL2Topic" value="${escapeHtml(config.eigenverbrauchZaehlerL2Topic)}">
+            <label for="eigenverbrauchZaehlerL3Topic">Eigenverbrauch L3 <span class="topic-hint">(optional, echter Zähler)</span></label>
+            <input type="text" id="eigenverbrauchZaehlerL3Topic" name="eigenverbrauchZaehlerL3Topic" value="${escapeHtml(config.eigenverbrauchZaehlerL3Topic)}">
+            <p class="muted topic-note">Sind diese drei Zähler gesetzt und liefern Werte, gilt ihr Tageszuwachs (plus verbraucherseitig eingespeiste PV) als tatsächlicher Eigenverbrauch – statt der Bilanz aus PV, Netz und Batterie.</p>
           </div>
             </div>
           </form>

@@ -15,9 +15,15 @@ const {
 const {
   listGroups, createGroup, updateGroup, deleteGroup,
 } = require('../messen-schalten/groups');
+const {
+  listSwitchGroups, createSwitchGroup, updateSwitchGroup, deleteSwitchGroup,
+  assignActorToSwitchGroup,
+} = require('../messen-schalten/schaltgruppen');
 const { readActorValues, readGroupSums } = require('../messen-schalten/aggregation');
 const automation = require('../messen-schalten/automation');
+const schaltgruppenAutomation = require('../messen-schalten/schaltgruppen-automation');
 const renderMessenSchalten = require('../views/messen-schalten');
+const renderSchaltgruppen = require('../views/schaltgruppen');
 const { isEnabled } = require('../modules');
 
 async function refreshMqttDefinitions(db) {
@@ -92,6 +98,7 @@ async function buildLiveData(db) {
     title: group.title,
     priority: group.priority,
     functionKey: group.functionKey,
+    offsetTotalConsumption: group.offsetTotalConsumption,
     sumDisplay: powerDisplay(sums.get(group.id) ? sums.get(group.id).powerW : null),
   }));
   return { actors, groups, viewActors, viewGroups };
@@ -135,11 +142,63 @@ async function renderPage(db, res, options = {}) {
   }));
 }
 
+// Daten der Schaltgruppen-Unterseite: Gruppen mit ihren zugeordneten Geräten
+// (Schaltzustand aus den Ist-Werten abgeleitet) plus die noch nicht zugeordneten
+// Geräte für die rechte Spalte.
+async function buildSchaltgruppenData(db) {
+  const cache = mqttClient.getCache();
+  const actors = await listActors(db);
+  const groups = await listSwitchGroups(db);
+  const values = await readActorValues(db, cache, actors);
+  const valueById = new Map(values.map((v) => [v.id, v]));
+  const viewActors = actors.map((actor) => {
+    const v = valueById.get(actor.id) || {};
+    return {
+      id: actor.id,
+      name: actor.name,
+      switchGroupId: actor.switchGroupId,
+      statusOn: v.statusOn == null ? null : !!v.statusOn,
+      powerDisplay: powerDisplay(v.powerW),
+    };
+  });
+  const groupIds = new Set(groups.map((g) => g.id));
+  const viewGroups = groups.map((group) => {
+    const members = viewActors.filter((a) => a.switchGroupId === group.id);
+    return {
+      id: group.id,
+      name: group.name,
+      remoteTopic: group.remoteTopic,
+      switchAsUnit: group.switchAsUnit,
+      // Eine Gruppe gilt als AN, sobald ein Gerät an ist; als AUS erst, wenn
+      // alle aus sind. Ohne bekannten Gerätezustand bleibt der Zustand offen.
+      on: members.some((a) => a.statusOn === true) ? true
+        : members.length && members.every((a) => a.statusOn === false) ? false : null,
+      actors: members,
+    };
+  });
+  const unassigned = viewActors.filter((a) => a.switchGroupId == null || !groupIds.has(a.switchGroupId));
+  return { groups: viewGroups, unassigned, groupConfigs: groups };
+}
+
+async function renderSchaltgruppenPage(db, res, options = {}) {
+  const { groups, unassigned, groupConfigs } = await buildSchaltgruppenData(db);
+  res.send(renderSchaltgruppen({
+    groups,
+    unassigned,
+    groupConfigs,
+    formMessage: options.formMessage || '',
+    formError: options.formError || '',
+    groupDialogOpen: options.groupDialogOpen || false,
+    groupDialogError: options.groupDialogError || '',
+  }));
+}
+
 function messenSchaltenRoutes(db) {
   const router = express.Router();
 
-  // Steuerschleife starten (läuft beim Boot, unabhängig von Seitenaufrufen).
+  // Steuerschleifen starten (laufen beim Boot, unabhängig von Seitenaufrufen).
   automation.init(db);
+  schaltgruppenAutomation.init(db);
 
   router.get('/messen-schalten', requireAuth, async (req, res, next) => {
     try {
@@ -215,7 +274,10 @@ function messenSchaltenRoutes(db) {
   // --- Gruppen ------------------------------------------------------------
   router.post('/messen-schalten/groups', requireAuth, async (req, res, next) => {
     try {
-      await createGroup(db, req.body);
+      await createGroup(db, {
+        ...req.body,
+        offsetTotalConsumption: req.body.offsetTotalConsumption || false,
+      });
       await automation.runNow(db).catch(() => {});
       await renderPage(db, res, { formMessage: 'Gruppe hinzugefügt.' });
     } catch (err) {
@@ -228,7 +290,10 @@ function messenSchaltenRoutes(db) {
 
   router.post('/messen-schalten/groups/:id', requireAuth, async (req, res, next) => {
     try {
-      await updateGroup(db, Number(req.params.id), req.body);
+      await updateGroup(db, Number(req.params.id), {
+        ...req.body,
+        offsetTotalConsumption: req.body.offsetTotalConsumption || false,
+      });
       await automation.runNow(db).catch(() => {});
       await renderPage(db, res, { formMessage: 'Gruppe gespeichert.' });
     } catch (err) {
@@ -244,6 +309,87 @@ function messenSchaltenRoutes(db) {
       await deleteGroup(db, Number(req.params.id));
       await automation.runNow(db).catch(() => {});
       await renderPage(db, res, { formMessage: 'Gruppe gelöscht.' });
+    } catch (err) { next(err); }
+  });
+
+  // --- Schaltgruppen (Unterseite) ------------------------------------------
+  router.get('/messen-schalten/schaltgruppen', requireAuth, async (req, res, next) => {
+    try {
+      await renderSchaltgruppenPage(db, res, {});
+    } catch (err) { next(err); }
+  });
+
+  router.get('/messen-schalten/schaltgruppen/data', requireAuth, async (req, res, next) => {
+    try {
+      // Anzeige und Remote-Synchronisation aus demselben Snapshot ableiten. Wenn
+      // die UI eine Gruppe als AN/AUS meldet, ist ihr Remote-Topic zuvor bereits
+      // durch denselben Automations-Tick abgeglichen worden.
+      await schaltgruppenAutomation.runNow(db);
+      const { groups, unassigned } = await buildSchaltgruppenData(db);
+      const actors = [...unassigned, ...groups.flatMap((g) => g.actors)];
+      res.json({
+        groups: groups.map((g) => ({ id: g.id, on: g.on })),
+        actors: actors.map((a) => ({ id: a.id, statusOn: a.statusOn, powerDisplay: a.powerDisplay })),
+      });
+    } catch (err) { next(err); }
+  });
+
+  router.post('/messen-schalten/schaltgruppen', requireAuth, async (req, res, next) => {
+    try {
+      await createSwitchGroup(db, req.body);
+      await refreshMqttDefinitions(db);
+      await schaltgruppenAutomation.runNow(db).catch(() => {});
+      await renderSchaltgruppenPage(db, res, { formMessage: 'Schaltgruppe hinzugefügt.' });
+    } catch (err) {
+      if (err.validation) {
+        return renderSchaltgruppenPage(db, res, { groupDialogOpen: true, groupDialogError: err.message });
+      }
+      next(err);
+    }
+  });
+
+  // Drag&Drop-Zuordnung: Gerät einer Schaltgruppe zuordnen bzw. lösen (groupId null).
+  router.post('/messen-schalten/schaltgruppen/assign', requireAuth, async (req, res, next) => {
+    try {
+      const body = req.body || {};
+      await assignActorToSwitchGroup(db, body.actorId, body.groupId);
+      await schaltgruppenAutomation.runNow(db).catch(() => {});
+      res.json({ ok: true });
+    } catch (err) { next(err); }
+  });
+
+  // Gruppe schalten (UI-Toggle): Einschalten schaltet alle Geräte der Gruppe ein
+  // (je Gerät durch die effektive Priorität gegatet), Ausschalten alle aus.
+  router.post('/messen-schalten/schaltgruppen/:id/switch/:state', requireAuth, async (req, res, next) => {
+    try {
+      const on = req.params.state === '1' || req.params.state === 'on' || req.params.state === 'true';
+      const ok = await schaltgruppenAutomation.commandGroup(db, Number(req.params.id), on);
+      if (!ok) return res.status(404).json({ error: 'Schaltgruppe nicht gefunden.' });
+      await schaltgruppenAutomation.runNow(db).catch(() => {});
+      res.json({ ok: true });
+    } catch (err) { next(err); }
+  });
+
+  router.post('/messen-schalten/schaltgruppen/:id', requireAuth, async (req, res, next) => {
+    try {
+      await updateSwitchGroup(db, Number(req.params.id), req.body);
+      await refreshMqttDefinitions(db);
+      await schaltgruppenAutomation.runNow(db).catch(() => {});
+      await renderSchaltgruppenPage(db, res, { formMessage: 'Schaltgruppe gespeichert.' });
+    } catch (err) {
+      if (err.validation) {
+        return renderSchaltgruppenPage(db, res, { groupDialogOpen: true, groupDialogError: err.message });
+      }
+      next(err);
+    }
+  });
+
+  router.post('/messen-schalten/schaltgruppen/:id/delete', requireAuth, async (req, res, next) => {
+    try {
+      await deleteSwitchGroup(db, Number(req.params.id));
+      await refreshMqttDefinitions(db);
+      await schaltgruppenAutomation.runNow(db).catch(() => {});
+      await renderSchaltgruppenPage(db, res, { formMessage: 'Schaltgruppe gelöscht.' });
     } catch (err) { next(err); }
   });
 

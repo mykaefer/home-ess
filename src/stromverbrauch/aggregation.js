@@ -13,12 +13,16 @@ const {
   EINSPEISUNG_ZAEHLER_L1_STATE_ID,
   EINSPEISUNG_ZAEHLER_L2_STATE_ID,
   EINSPEISUNG_ZAEHLER_L3_STATE_ID,
+  EIGENVERBRAUCH_ZAEHLER_L1_STATE_ID,
+  EIGENVERBRAUCH_ZAEHLER_L2_STATE_ID,
+  EIGENVERBRAUCH_ZAEHLER_L3_STATE_ID,
 } = require('./config');
 const { listPvPlants } = require('../photovoltaik/plants');
 const {
   buildPhotovoltaikSnapshot,
   readPhotovoltaikValues,
   getConsumerSidePvCurrentTotal,
+  getConsumerSidePvTodayTotal,
 } = require('../photovoltaik/aggregation');
 const { loadMqttConfig } = require('../mqtt/config');
 const { localCalendar } = require('../local-time');
@@ -37,6 +41,15 @@ const EXPORT_COUNTER_KEYS = [
   { id: EINSPEISUNG_ZAEHLER_L3_STATE_ID, key: 'export_l3' },
 ];
 
+// Optionaler echter Eigenverbrauchszähler (3 Phasen). Ist er verbaut und liefert
+// Werte, gilt sein Tageszuwachs (plus verbraucherseitige PV) als tatsächlicher
+// Eigenverbrauch – ohne die sonst nötige Bilanzierung.
+const SELF_COUNTER_KEYS = [
+  { id: EIGENVERBRAUCH_ZAEHLER_L1_STATE_ID, key: 'self_l1' },
+  { id: EIGENVERBRAUCH_ZAEHLER_L2_STATE_ID, key: 'self_l2' },
+  { id: EIGENVERBRAUCH_ZAEHLER_L3_STATE_ID, key: 'self_l3' },
+];
+
 // Zuordnung Konfig-Feld (Zähler-Topic) -> Zähler-Schlüssel. Ändert sich das Topic
 // eines Zählers (z. B. Umstellung auf einen anderen Adapter oder Zählertausch),
 // muss der gemerkte Rohstand verworfen werden, damit der erste Wert des neuen
@@ -48,6 +61,9 @@ const COUNTER_TOPIC_FIELDS = [
   { field: 'einspeisungZaehlerL1Topic', key: 'export_l1' },
   { field: 'einspeisungZaehlerL2Topic', key: 'export_l2' },
   { field: 'einspeisungZaehlerL3Topic', key: 'export_l3' },
+  { field: 'eigenverbrauchZaehlerL1Topic', key: 'self_l1' },
+  { field: 'eigenverbrauchZaehlerL2Topic', key: 'self_l2' },
+  { field: 'eigenverbrauchZaehlerL3Topic', key: 'self_l3' },
 ];
 
 function dbAll(db, sql, params = []) {
@@ -241,15 +257,20 @@ async function saveCounterState(db, key, state) {
 async function updateCounterStates(db, cache, calendar) {
   const dayKey = calendar.dateKey;
   const existing = await loadCounterStates(db);
-  const previousDayTotals = { import: 0, export: 0 };
-  const dayTotals = { import: 0, export: 0 };
+  const previousDayTotals = { import: 0, export: 0, self: 0 };
+  const dayTotals = { import: 0, export: 0, self: 0 };
+  const selfHasReading = { value: false };
   const rawValues = {
     import: { l1: null, l2: null, l3: null },
     export: { l1: null, l2: null, l3: null },
+    self: { l1: null, l2: null, l3: null },
   };
 
-  for (const entry of [...IMPORT_COUNTER_KEYS, ...EXPORT_COUNTER_KEYS]) {
-    const bucket = entry.key.startsWith('import') ? 'import' : 'export';
+  const bucketOf = (key) =>
+    key.startsWith('import') ? 'import' : key.startsWith('export') ? 'export' : 'self';
+
+  for (const entry of [...IMPORT_COUNTER_KEYS, ...EXPORT_COUNTER_KEYS, ...SELF_COUNTER_KEYS]) {
+    const bucket = bucketOf(entry.key);
     const phase = entry.key.endsWith('_l1') ? 'l1' : entry.key.endsWith('_l2') ? 'l2' : 'l3';
     const rawValue = getCacheValue(cache, entry.id);
     const state = existing.get(entry.key) || normalizeCounterState();
@@ -263,6 +284,7 @@ async function updateCounterStates(db, cache, calendar) {
     }
 
     if (rawValue != null) {
+      if (bucket === 'self') selfHasReading.value = true;
       if (state.lastRawValue == null) {
         state.lastRawValue = rawValue;
       } else {
@@ -277,7 +299,7 @@ async function updateCounterStates(db, cache, calendar) {
     await saveCounterState(db, entry.key, state);
   }
 
-  return { previousDayTotals, dayTotals, rawValues, dayKey };
+  return { previousDayTotals, dayTotals, rawValues, dayKey, selfMeterPresent: selfHasReading.value };
 }
 
 // Sicherheitsschranke gegen Zählersprünge beim Topic-Wechsel: Für jedes Zähler-
@@ -425,8 +447,17 @@ async function buildStromverbrauchSnapshot(db, cache) {
   await updateBatteryEnergy(db, cache);
   const batteryEnergy = await readBatteryEnergyValues(db);
 
+  // Eigenverbrauch heute: liegt ein echter Eigenverbrauchszähler an (3 Phasen,
+  // liefert Werte), gilt sein Tageszuwachs plus die verbraucherseitig ins
+  // Hausnetz einspeisende PV als tatsächlicher Eigenverbrauch. Sonst bilanzieren.
+  const balanceEigenverbrauchToday =
+    deriveEigenverbrauch(pvSnapshot.totals.raw.today, todayImport, todayExport, batteryEnergy.today);
+  const consumerPvToday = getConsumerSidePvTodayTotal(pvSnapshot);
+  const meterEigenverbrauchToday = counterUpdate.selfMeterPresent
+    ? (counterUpdate.dayTotals.self || 0) + (consumerPvToday || 0)
+    : null;
   const todayBreakdown = buildBreakdown(
-    deriveEigenverbrauch(pvSnapshot.totals.raw.today, todayImport, todayExport, batteryEnergy.today),
+    meterEigenverbrauchToday != null ? meterEigenverbrauchToday : balanceEigenverbrauchToday,
     deriveNetzbezug(todayImport, todayExport)
   );
   const weekBreakdown = buildBreakdown(
@@ -459,6 +490,10 @@ async function buildStromverbrauchSnapshot(db, cache) {
       year: yearBreakdown,
       previousYear: previousYearBreakdown,
       rawCounters: counterUpdate.rawValues,
+      // Transparenz/Guard: gemessene vs. bilanzierte Ist-Quelle für heute.
+      selfMeterPresent: !!counterUpdate.selfMeterPresent,
+      eigenverbrauchTodayMeter: meterEigenverbrauchToday,
+      eigenverbrauchTodayBalance: balanceEigenverbrauchToday,
     },
     formatted: {
       eigenverbrauchPower: formatPower(eigenverbrauchPowerValue),

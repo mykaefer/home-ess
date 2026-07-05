@@ -47,6 +47,13 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   des Wechselrichters und wird ausschließlich um Leistung verbraucherseitig
   einspeisender PV-Anlagen ergänzt. Batterie und Glättung gehen nicht in diesen
   Leistungspfad ein.
+  **Optionaler echter Eigenverbrauchszähler** (3 Phasen, Felder
+  `eigenverbrauch_zaehler_l1..3_topic`, Zähler-Schlüssel `self_l1..3`): sind die
+  Topics gesetzt und liefern Werte (`counterUpdate.selfMeterPresent`), gilt der
+  **Tageszuwachs dieser Zähler plus verbraucherseitige PV-Tagesenergie**
+  (`getConsumerSidePvTodayTotal`) als tatsächlicher Eigenverbrauch heute – **statt
+  der Bilanz**. Der Snapshot liefert zusätzlich `eigenverbrauchTodayMeter` und
+  `eigenverbrauchTodayBalance` (Transparenz/Guard).
 - **Photovoltaik**: verwaltet mehrere PV-Anlagen (Stammdaten, Zelltyp,
   **Konverter-/Reglertyp**, MQTT-Topics). Je Anlage **aktuelle Leistung groß,
   Clear-Sky-Idealwert klein**.
@@ -131,6 +138,20 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   Reserve endet bei 30 %, Good beginnt bei 25 % und HalfCharged bei 50 % des
   nutzbaren Bereichs bis 100 %; High gilt über 90 %, Full über 98 %. Charged
   today wird persistent bis zum lokalen Tageswechsel gehalten.
+  Neben dem **Mindest-SoC-Ziel-Topic** (Steuer-Topic: wir schreiben den Wert
+  dorthin und nutzen ihn als Live-Override für die abgeleiteten Zustände) gibt es
+  ein optionales, separates **Mindest-SoC-Remote-Topic** (`remote_topic`,
+  `batterie/min-soc-sync.js`, Vorbild: Schalt- + Remote-Topic der
+  Messen-+-Schalten-Geräte). Es ist **bidirektional mit der
+  Mindest-SoC-Einstellung** verknüpft (nicht mit dem Live-SoC): Speichern der
+  Einstellung spiegelt den Wert an das Remote-Topic (`routes/batterie.js`);
+  ändert ein externes System den Wert auf dem Remote-Topic, wird er (auf
+  5-%-Schritte gerundet) als neue Mindest-SoC-**Einstellung** übernommen
+  ("mitgezogen"), persistiert und zusätzlich an das Steuer-Topic weitergegeben.
+  Ein `receivedAt`-Vergleich plus `noteLocalChange` beim Speichern verhindern,
+  dass ein noch im Cache liegender älterer Remote-Wert eine gerade gespeicherte
+  Einstellung zurückdreht. Läuft reaktiv bei Wertänderung (entprellt) sowie
+  einmalig beim Start.
 - **Messen + Schalten** (`/messen-schalten`, Kernseite, Menü unter Batterie):
   Gruppen als **einklappbare Abschnitte über die volle Seitenbreite** (Vorbild
   Output-Kategorien: Standard zugeklappt, Auf/Zu-Zustand je Gruppe in
@@ -189,6 +210,12 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   fälschlich. Ergänzend hält der Adapter Werte über einen optionalen, gleichmäßig
   verteilten Hintergrund-Refresh (Round-Robin, ein Kanal nach dem anderen) sowie
   ein 5-s-Beobachtungsfenster nach jedem Steuerbefehl aktuell (`adapter/hm-rpc`).
+  Die primäre Aktualisierung ist ereignisbasiert: HM-RPC 1.1.2 registriert eine
+  vollständige XML-RPC-Logikschicht einschließlich `listDevices(interface_id)`;
+  die CCU liefert Änderungen unmittelbar über `event` bzw. `system.multicall`.
+  Beim Stop erfolgt die spezifikationskonforme Abmeldung mit gleicher Callback-URL
+  und leerer `interface_id`. Es gibt keinen HM-spezifischen Sekunden-Poll im
+  Hauptsystem; Adapter und Kern bleiben über `read()`/`publishState(s)` entkoppelt.
   Ein Schreibvorgang mit **unverändertem Wert** löst dabei keinen erneuten
   `setValue` an die CCU aus (Vergleich gegen den zuletzt bekannten Wert; Ausnahme:
   `ACTION`-Parameter/Tastimpulse) — spart Funk und Duty-Cycle.
@@ -215,7 +242,12 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   Wertekatalog in Kategorie **Geräte** (`geraet.<id>.schalten/status/leistung/zaehler`),
   die Leistungssummen der Gruppen in Kategorie **Verbrauchssummen**
   (`verbrauchssumme.<id>.leistung`); jede Gruppe zeigt ihre Summe zusätzlich in der
-  Titelzeile. Live-Refresh über `GET /messen-schalten/data`. Gruppen **und** Geräte
+  Titelzeile. Die Gruppen-Checkbox **„Verbrauchssumme mit Gesamtverbrauch
+  verrechnen“** (`offset_total_consumption`, Default `1`) steuert, ob die jeweilige
+  Gruppensumme in `output/internal-values.js` vom Eigenverbrauch abgezogen wird,
+  um **„Sonstige Verbraucher“** zu bilden. Der Gruppenwert selbst bleibt unabhängig
+  davon im Wertekatalog sichtbar. Live-Refresh über
+  `GET /messen-schalten/data`. Gruppen **und** Geräte
   besitzen zusätzlich ein Dropdown **Funktion** (Licht, Waschen, Warmwasser,
   Heizung / Klima, Kochen; Geräte ohne eigene Funktion erben die der Gruppe,
   `messen-schalten/functions.js`). Je zugeordneter Funktion entstehen zwei
@@ -223,6 +255,30 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   `funktion.<key>.verbrauchHeute`); die minütlich integrierten Stundenenergien
   (`mess_schalt_function_hourly`) liefern der Prognose Stundenprofile je Funktion
   und werden aus dem gelernten Haus-Grundverbrauch herausgerechnet.
+  **Unterseite „Schaltgruppen"** (`/messen-schalten/schaltgruppen`, klappt im
+  Menü unter Messen + Schalten aus): zwei unabhängig scrollbare Spalten — links
+  die Schaltgruppen (Name, optionales **Remote-Topic**, Checkbox **„Gruppe
+  schaltet als Einheit"**; Tabelle `mess_schalt_switch_groups`), rechts schmaler
+  alle Geräte ohne Schaltgruppe; Zuordnung per **Drag & Drop**
+  (`mess_schalt_actors.switch_group_id`, nur über diese Seite gepflegt). Eine
+  Gruppe gilt als **an, sobald ein Gerät an ist**, und erst als aus, wenn alle
+  Geräte aus sind; nur „als Einheit" schaltet die Einschalt-Flanke eines Geräts
+  die übrigen automatisch mit ein. Einschalten der Gruppe (UI-Toggle,
+  Remote-Topic oder State-Write) schaltet alle Geräte ein, Ausschalten alle aus
+  — je Gerät durch die effektive Priorität gegatet (`commandManual`; „Immer
+  an"-Geräte bleiben levelgeführt). Das Remote-Topic
+  (`schaltgruppe:<id>:remote`) wird bidirektional synchron gehalten: externe
+  Wertänderung = Schaltwunsch, ein neuerer lokaler Zustand wird
+  zurückgespiegelt, der erste Wert nach einem Neustart ist nur Baseline (kein
+  Massenschalten aus retained Werten). Der Schaltzustand jeder Gruppe ist ein
+  **beschreibbarer State** `schaltgruppe://gruppen/<id>` über eine **virtuelle
+  States-Instanz** (`adapterRouter.registerVirtualInstance`, Provider-Hook
+  `registerStatesProvider` in `adapters/states.js`): er erscheint unter der
+  Kategorie **Schaltgruppen** auf der States-Seite, im State-Picker und im
+  Wertekatalog (Kategorie „Schaltgruppen") und kann so in beliebigen
+  Topic-Feldern weiterverarbeitet werden
+  (`messen-schalten/schaltgruppen.js` + `schaltgruppen-automation.js`,
+  30-s-Tick + entprellte Reaktion auf `messschalt:`/`schaltgruppe:`-Änderungen).
 - **Systemprognose** (`/prognose`, `prognosis/forecast.js`): simuliert heute +
   drei Folgetage stündlich aus PV-Wetterprognose, Verbrauch und Batterie. Die
   nutzbare Batterie endet am Mindest-SoC; die unter den Batterieparametern
@@ -238,7 +294,21 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   nur noch als Kaltstart ohne einen einzigen abgeschlossenen Tag; der heutige
   Verlauf kalibriert die Restprognose begrenzt nach. 60-s-Sampling persistiert
   Tagesstände in `prognosis_daily_consumption` und Zählerdifferenzen stündlich in
-  `prognosis_hourly_consumption`. Wallbox-Zählerdelta und Haus-Sample laufen im
+  `prognosis_hourly_consumption`.
+  **Abgehärtete Datenbasis** (`prognosis/self-count.js`): parallel zum
+  zähler-/bilanzbasierten Stundenwert (`primary_kwh`) wird die
+  **Eigenverbrauch-Leistung** (≥ 0, ohne Nulldurchgänge) stundenweise zur
+  **Selbstzählung** integriert (`self_kwh`, `integrateSelfCount`). Nach Abschluss
+  einer Stunde ersetzt `reconcileCompletedHours` die Bilanz durch die Selbstzählung,
+  wenn beide **relativ > 25 % UND absolut > 0,2 kWh** auseinanderliegen (Konstanten
+  `GUARD_REL`/`GUARD_ABS_KWH`); mit echtem Eigenverbrauchszähler greift der Guard
+  nicht (Zähler ist maßgeblich). Bewusst **kein Glätten** – echte Verbrauchsspitzen
+  bleiben; nur bei belegbarer Divergenz wird ersetzt (`reconciled`-Flag je Stunde,
+  Tageswert wird aus der Stundensumme neu gebildet). Die Prognose-Seite zeigt dazu
+  ein **Transparenz-Diagramm** (je Stunde Selbstzählung vs. Bilanz/Messung, laufende
+  aktuelle Stunde, Marke des übernommenen Werts; `todaySelfByHour`/
+  `todayPrimaryByHour`/`todayByHour`).
+  Wallbox-Zählerdelta und Haus-Sample laufen im
   selben Takt; E-Auto-Energie wird nur aus angeschlossenem Fahrzeug, Live-SoC und
   Ladestrategie geplant, nicht aus historischen Ladezeiten. Heizung / Klima wird
   separat nach energiegewichteter Stundentemperatur in 5-°C-Fenstern gelernt und
@@ -494,6 +564,14 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   Batterie-SoC über `/live/header`.
 - **systemd-Service** `home-ess` — startet automatisch beim Systemstart.
 
+## Mobile Ansicht
+
+Parallel zur Desktop-Ansicht entsteht eine vollwertige Smartphone-Ansicht
+(ein Breakpoint ≤ 768px, **Mobile-Layer am Ende von `public/styles.css`**,
+Shell-Bausteine Tab-Bar + Menü-Sheet in `views/layout.js`). Konzept,
+Framework-Regeln und Arbeitsstand je Seite: **[MOBILE.md](MOBILE.md)** —
+bei jeder mobil umgesetzten Seite dort die Checkliste pflegen.
+
 ## Leitprinzipien (vom Auftraggeber vorgegeben)
 
 1. **Keine statischen Seiten.** Jede Seite wird serverseitig dynamisch
@@ -543,6 +621,8 @@ src/
                           readPhotovoltaikValues (read-only); gemeinsame Helfer
                           solarGeometryAt/transposePlaneIrradiance/
                           idealPowerFromIrradiance (von Live + Prognose genutzt)
+    self-count.js         Abgehärtete Datenbasis: Selbstzählung (Eigenverbrauch-
+                          Leistung) + Guard (Ersatzwert bei Divergenz zur Bilanz)
     forecast.js           PV-Prognose: Open-Meteo-Strahlung → Tageserträge (kWh)
     calibration.js        Selbstkalibrierung: 15-min-Kalibrierfaktor je Anlage/Bucket
                           (gemessen vs. Open-Meteo-Strahlung, EMA, Gates SoC/Sonne)
@@ -553,6 +633,8 @@ src/
   batterie/
     config.js             Topics laden/speichern, buildBatterieStateDefinitions,
                           readBatterieData
+    min-soc-sync.js       Bidirektionale Mindest-SoC-Synchronisierung über das
+                          separate Remote-Topic (Einstellung <-> Remote, kein Aktor)
   pool/
     config.js             Topics laden/speichern, rowToConfig, subscribePoolTopics,
                           readPoolValue
@@ -573,14 +655,20 @@ src/
     automation.js         Steuerschleife: Tick, Level-Handler-Registrierung, Modus-Sync,
                           Überschussberechnung, Schalten via mqttClient.publish
   messen-schalten/
-    groups.js             Gruppen-CRUD (Titel/Priorität/Position) + reorder
+    groups.js             Gruppen-CRUD (Titel/Priorität/Funktion/Verrechnung)
     actors.js             Geräte-CRUD + Validierung (min. 1 Topic), effectivePriority,
                           buildMessSchaltStateDefinitions, cacheKey, setDesiredOn
     aggregation.js        Live-Werte je Gerät, Leistung aus Zählerfortschritt
                           (buildActorSnapshot, 60-s-Job), Gruppen-Verbrauchssummen
     automation.js         Steuerschleife: Level-Handler-Gate je Gerät mit Schalt-Topic
+    schaltgruppen.js      Schaltgruppen-CRUD (Name/Remote-Topic/„als Einheit"),
+                          Geräte-Zuordnung (switch_group_id), State-Definitionen,
+                          States-Block (virtuelle Instanz schaltgruppe://gruppen)
+    schaltgruppen-automation.js  Gruppenzustand (an, sobald ein Gerät an),
+                          „als Einheit"-Mitschalten beider Schaltflanken,
+                          ereignisbasierte Remote-/State-Synchronisierung
   output/
-    internal-values.js    Katalog (PV, Strom, Batterie, Pool, Wallbox, Sonne)
+    internal-values.js    Katalog inkl. gruppengesteuerter Berechnung „Sonstige Verbraucher“
     outputs.js            Output-CRUD
     engine.js             Publish-Engine (diff, debounced)
   dashboard/
@@ -604,6 +692,8 @@ src/
                           + GET /wallbox/data
     messen-schalten.js    GET /messen-schalten + Gruppen-/Geräte-CRUD + /layout
                           + POST /messen-schalten/actor/:id/switch/:state + /data
+                          + Unterseite /messen-schalten/schaltgruppen (CRUD,
+                          /assign, /:id/switch/:state, /data)
   views/
     components.js         escapeHtml, statusText
     value-catalog.js      Zentrale Wertekatalog-Routine (Liste + Client-Script)
@@ -621,6 +711,8 @@ src/
                           Protokoll-Panel (live Seite 1, paginiert)
     wallbox.js            Wallbox — Boxenliste (KPI je Box), Modus-Buttons, Config-Dialog
     messen-schalten.js    Messen + Schalten — Gruppen/Geräte-Kacheln, Drag&Drop, Dialoge
+    schaltgruppen.js      Schaltgruppen — zwei unabhängig scrollbare Spalten
+                          (Gruppen | nicht zugeordnete Geräte), Drag&Drop-Zuordnung
 public/styles.css         Einziges statisches Asset
 data/app.db               SQLite (gitignored)
 MQTT.md                   Referenz: ioBroker-MQTT-Regeln
@@ -633,7 +725,9 @@ MQTT.md                   Referenz: ioBroker-MQTT-Regeln
   dst_enabled, outdoor_temperature_topic, clock_time_topic, clock_date_topic)`
 - `sessions(id, expires_at)`
 - `stromverbrauch_config(id=1, eigenverbrauch_l1-3_topic, netzbezug_l1-3_topic,
-  netzbezug_zaehler_l1-3_topic, einspeisung_zaehler_l1-3_topic)`
+  netzbezug_zaehler_l1-3_topic, einspeisung_zaehler_l1-3_topic,
+  eigenverbrauch_zaehler_l1-3_topic)` — die drei `eigenverbrauch_zaehler_*` sind der
+  optionale echte Eigenverbrauchszähler (siehe Stromverbrauch-Abschnitt oben).
 - `stromverbrauch_aggregation(id=1, week/year_import/export_offset, previous_year_*, ...)`
 - `stromverbrauch_counter_state(counter_key, last_raw_value, day_total, last_day_key)`
 - `pv_plants(id, name, kw_peak, efficiency, orientation, tilt, is_consumer_side,
@@ -649,14 +743,18 @@ MQTT.md                   Referenz: ioBroker-MQTT-Regeln
 - `outputs(id, source_id, target_topic)`
 - `dashboard_groups(id, title, width, position)`
 - `dashboard_widgets(id, source_id, group_id, position)`
-- `batterie_config(id=1, soc/power/voltage/temperatur/min_soc_topic, min_soc,
-  capacity_ah, battery_type, cell_count, lower_voltage, upper_voltage,
-  charge/discharge_efficiency)`
+- `batterie_config(id=1, soc/power/voltage/temperatur/min_soc_topic, remote_topic,
+  min_soc, capacity_ah, battery_type, cell_count, lower_voltage, upper_voltage,
+  charge/discharge_efficiency)` — `remote_topic` ist bidirektional mit der
+  Mindest-SoC-Einstellung synchronisiert (siehe Abschnitt Batterie oben).
 - `battery_daily_state(id=1, day_key, charged_today)`
 - `prognosis_config(id=1, history_days, behavior_model, behavior_active)`
 - `prognosis_daily_consumption(day_key, consumption_kwh, raw_consumption_kwh,
   max_temperature, completed, updated_at)`
-- `prognosis_hourly_consumption(day_key, hour, consumption_kwh)`
+- `prognosis_hourly_consumption(day_key, hour, consumption_kwh, primary_kwh,
+  self_kwh, reconciled)` — `consumption_kwh` = in die Prognose eingeflossener Wert;
+  `primary_kwh` = zähler-/bilanzbasiert, `self_kwh` = integrierte Selbstzählung,
+  `reconciled` = Guard für diese Stunde gelaufen (siehe `prognosis/self-count.js`).
 - `modules(key TEXT PRIMARY KEY, enabled INTEGER)` — aktivierte optionale Module.
 - `pool_config(id=1, temperature_topic, solar_pump_status_topic,
   solar_pump_command_topic, solar_pump_priority, solar_pump_max_temp,
@@ -687,14 +785,24 @@ MQTT.md                   Referenz: ioBroker-MQTT-Regeln
 - `wallbox_daily_consumption(wallbox_id, day_key, consumption_kwh, completed, updated_at)`
 - `wallbox_hourly_consumption(wallbox_id, day_key, hour, consumption_kwh)` —
   getrennte Lernhistorie für Wochentagsbedarf und Ladezeit je Box.
-- `mess_schalt_groups(id, title, priority 1–5, position, function_key)` —
+- `mess_schalt_groups(id, title, priority 1–5, position, function_key,
+  offset_total_consumption)` —
   Messen-+-Schalten-Gruppen; Priorität wird von Geräten mit `use_group_priority`
-  übernommen, `function_key` von Geräten ohne eigene Funktion geerbt.
+  übernommen, `function_key` von Geräten ohne eigene Funktion geerbt;
+  `offset_total_consumption` ist standardmäßig `1` und bestimmt, ob die
+  Gruppensumme von „Sonstige Verbraucher“ abgezogen wird.
 - `mess_schalt_actors(id, name, group_id, position, switch_topic, status_topic,
   power_topic, power_unit 'W'|'kW', counter_topic, counter_unit 'Wh'|'kWh',
-  priority 1–5, use_group_priority, always_on, desired_on, function_key)` — je
+  priority 1–5, use_group_priority, always_on, desired_on, function_key,
+  switch_group_id)` — je
   Gerät eine Zeile; `always_on` = automatisch übers Betriebslevel (sonst manueller
   Toggle, direkt am Schalt-Topic). `desired_on` ist ungenutzter Altbestand.
+  `switch_group_id` = Zuordnung zu einer Schaltgruppe (nur über die
+  Schaltgruppen-Unterseite gepflegt).
+- `mess_schalt_switch_groups(id, name, remote_topic, switch_as_unit)` —
+  Schaltgruppen der Unterseite `/messen-schalten/schaltgruppen`; Zustand wird
+  nicht persistiert, sondern je Tick aus den Geräten abgeleitet und als
+  virtueller State `schaltgruppe://gruppen/<id>` veröffentlicht.
 - `mess_schalt_actor_state(actor_id, last_counter_raw, last_progress_ts,
   derived_power_w)` — Ableitungszustand für „Leistung aus Zählerfortschritt"
   (0 W nach über 10 min ohne Fortschritt).

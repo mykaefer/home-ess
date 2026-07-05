@@ -11,6 +11,17 @@ const instancesRepo = require('./instances');
 const host = require('./host');
 const { buildSchemeTopic } = require('../mqtt/topics');
 
+// Zusätzliche States-Blöcke interner Module (z. B. Schaltgruppen): ein Provider
+// liefert pro Aufruf 0..n Blöcke in derselben Form wie eine Adapter-Instanz
+// (virtual: true). Sie erscheinen damit automatisch auf der States-Seite, im
+// State-Picker und im Wertekatalog.
+const statesProviders = [];
+function registerStatesProvider(provider) {
+  if (typeof provider === 'function' && !statesProviders.includes(provider)) {
+    statesProviders.push(provider);
+  }
+}
+
 function loadStateRows(db) {
   return new Promise((resolve) => {
     db.all('SELECT * FROM adapter_states ORDER BY category, name, address', (err, rows) => {
@@ -54,7 +65,7 @@ async function buildStatesTree(db) {
     rowsByInstance.get(row.instance_id).push(row);
   }
 
-  return instances.map((instance) => {
+  const blocks = instances.map((instance) => {
     const manifest = registry.getManifest(instance.adapterId);
     const prefix = manifest ? manifest.prefix : instance.adapterId;
     const categoryRoot = new Map();
@@ -91,6 +102,13 @@ async function buildStatesTree(db) {
       categories,
     };
   });
+
+  for (const provider of statesProviders) {
+    const provided = await Promise.resolve().then(() => provider(db, cache)).catch(() => null);
+    if (Array.isArray(provided)) blocks.push(...provided.filter(Boolean));
+    else if (provided) blocks.push(provided);
+  }
+  return blocks;
 }
 
-module.exports = { buildStatesTree, displayValue, forEachState, categoryParts };
+module.exports = { buildStatesTree, registerStatesProvider, displayValue, forEachState, categoryParts };

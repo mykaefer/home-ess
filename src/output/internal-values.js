@@ -54,6 +54,7 @@ const VALUE_CATEGORIES = [
   'Geräte',
   'Funktionen',
   'Verbrauchssummen',
+  'Schaltgruppen',
   'Betrieb',
   'Sonstiges',
 ];
@@ -633,7 +634,7 @@ async function buildInternalValues(db, cache) {
     for (const group of messSchaltGroups) {
       const sum = groupSums.get(group.id);
       const powerW = sum ? sum.powerW : null;
-      if (powerW != null) verbrauchssummeGroupTotal += powerW;
+      if (powerW != null && group.offsetTotalConsumption) verbrauchssummeGroupTotal += powerW;
       entries.push(powerEntry(
         `verbrauchssumme.${group.id}.leistung`,
         `${group.title} – Verbrauch (Leistung)`,
@@ -670,24 +671,31 @@ async function buildInternalValues(db, cache) {
   // (mehrstufige) State-Kategorie – z. B. „Gerät / Kanal" – wird als Verzeichnispfad
   // unter „Adapter: <Instanz>" übernommen, sodass der Wertekatalog denselben
   // verschachtelten Baum wie der Adapter-State-Picker zeigt.
+  // Virtuelle Blöcke interner Module (z. B. Schaltgruppen) landen flach unter
+  // ihrem Blocknamen als Kategorie (ohne „Adapter:"-Präfix und ohne den
+  // gleichnamigen inneren Pfad zu doppeln); catalogLabel erlaubt sprechendere
+  // Katalog-Beschriftungen als der reine State-Name.
   const statesTree = await buildStatesTree(db);
-  const pushAdapterStates = (categories, pathParts, instanceName) => {
+  const pushAdapterStates = (categories, pathParts, instance) => {
+    const rootCategory = instance.virtual ? instance.adapterName : `Adapter: ${instance.instanceName}`;
     for (const category of categories || []) {
-      const nextPath = [...pathParts, category.name];
+      const nextPath = instance.virtual && category.name === rootCategory
+        ? pathParts
+        : [...pathParts, category.name];
       for (const state of category.states || []) {
         entries.push({
           id: state.topic,
-          label: `${instanceName} – ${state.name}`,
+          label: state.catalogLabel || `${instance.instanceName} – ${state.name}`,
           value: state.value,
           display: state.display,
-          category: [`Adapter: ${instanceName}`, ...nextPath].join(' / '),
+          category: [rootCategory, ...nextPath].join(' / '),
         });
       }
-      pushAdapterStates(category.children, nextPath, instanceName);
+      pushAdapterStates(category.children, nextPath, instance);
     }
   };
   for (const instance of statesTree) {
-    pushAdapterStates(instance.categories, [], instance.instanceName);
+    pushAdapterStates(instance.categories, [], instance);
   }
 
   entries.sort((a, b) => a.label.localeCompare(b.label, 'de'));

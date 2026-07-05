@@ -10,6 +10,10 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
 
 ## Features (aktuell)
 
+- 📱 **Mobile Ansicht** — parallel zur Desktop-Ansicht eine vollwertige
+  Smartphone-Darstellung (≤ 768px): kompakter Header, untere Tab-Bar mit
+  Menü-Sheet statt Seitenleiste, Dialoge als Bottom-Sheets und pro Seite eine
+  eigene, touchtaugliche Anordnung (kein bloßes Zusammenquetschen der Kacheln).
 - 🔐 **Login** mit Passwort und „Passwort merken" (persistentes Cookie).
 - 🖥️ **Dashboard** — frei konfigurierbare **Widgets** in zwei Sorten (Dialog mit
   Tabs): **Wert-Kachel** (jeder berechnete Wert als Live-Kachel, Auswahl über den
@@ -30,6 +34,10 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
   Die aktuelle Eigenverbrauchsleistung kommt dagegen direkt aus den
   Wechselrichter-Topics und wird nur um verbraucherseitig einspeisende
   PV-Anlagen ergänzt — ohne Batterieeinfluss oder Glättung.
+  Optional lassen sich unter „Zähler-Rohdaten" drei Topics für einen **echten
+  Eigenverbrauchszähler** (L1–L3) hinterlegen. Liefert er Werte, gilt sein
+  Tageszuwachs plus verbraucherseitige PV als tatsächlicher Eigenverbrauch statt
+  der Bilanz (die Jahres-/Wochensummen bleiben weiterhin bilanzbasiert).
 - ☀️ **Photovoltaik** — PV-Anlagenverwaltung mit MQTT-Topics und Metadaten
   (Zelltyp, **Konverter-/Reglertyp**); je Anlage **aktuelle Leistung groß,
   Idealwert (Clear-Sky-Modell) klein**. Idealwert berücksichtigt Zelltyp- und
@@ -65,6 +73,9 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
   - Mindest-SoC mit MQTT-Ziel-Topic und 5-%-Schieberegler sowie Batterietyp,
     Lade- und Entladewirkungsgrad,
     Zellzahl, Kapazität in Ah und manuell anpassbaren unteren/oberen Spannungsgrenzen.
+    Zusätzlich ein optionales **Remote-Topic** für den Mindest-SoC: Änderungen
+    werden dorthin gespiegelt, und eine externe Änderung des Topics zieht die
+    Einstellung mit (bidirektional).
 - 🔌 **Messen + Schalten** (Menü unter Batterie) — Seite für schaltbare/messbare
   Geräte.
   - Frei anlegbare **Gruppen** als einklappbare Abschnitte über die volle
@@ -103,6 +114,22 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
     **„Lastabwurf · Priorität N"** angezeigt.
   - Die Werte der gesetzten Topics stehen im Wertekatalog (Kategorie **Geräte**);
     die Gruppen bilden **Verbrauchssummen** und zeigen sie in der Titelzeile.
+    Pro Gruppe legt die standardmäßig aktivierte Option **„Verbrauchssumme mit
+    Gesamtverbrauch verrechnen“** fest, ob ihre Leistung bei der Berechnung von
+    **„Sonstige Verbraucher“** vom Eigenverbrauch abgezogen wird.
+  - Unterseite **Schaltgruppen** (klappt im Menü unter Messen + Schalten aus):
+    zwei unabhängig scrollbare Spalten — links die Schaltgruppen (Name,
+    optionales **Remote-Topic**, Häkchen **„Gruppe schaltet als Einheit"**),
+    rechts schmaler alle noch nicht zugeordneten Geräte, die per **Drag & Drop**
+    in eine Gruppe gezogen (bzw. wieder gelöst) werden. Eine Gruppe gilt als
+    **eingeschaltet, sobald ein Gerät an ist**, und erst als aus, wenn alle
+    Geräte aus sind; „als Einheit" zieht jede Ein-/Ausschaltflanke eines Geräts
+    auf alle übrigen. Einschalten der Gruppe (Schalter, Remote-Topic
+    oder State) schaltet **alle Geräte ein**, Ausschalten **alle aus** — je
+    Gerät weiterhin durch die Priorität gegatet. Die Schaltzustände stehen als
+    beschreibbare States (`schaltgruppe://gruppen/<id>`) unter der Kategorie
+    **Schaltgruppen** in der States-Liste und damit automatisch im Wertekatalog
+    und State-Picker zur Weiterverarbeitung bereit.
 - 📈 **Prognose** — Energiebilanz für heute plus drei Tage direkt unterhalb der
   Batterie im Menü. Kombiniert PV-Wetterprognose, nutzbare Batterieladung und ein
   selbstlernendes Verbrauchsmodell (bereinigter Tagesverlauf, gewichteter 28-Tage-Mittelwert,
@@ -132,6 +159,13 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
   nächsten. Je Prognosetag zeigt ein 24-h-Balkendiagramm das erwartete
   Stundenprofil; bereits gelernte Stunden des laufenden Tages erscheinen in
   abweichender Farbe samt Soll-Marke, sodass Abweichungen sofort sichtbar sind.
+  Damit die Lern-Datenbasis robust bleibt, wird der bilanzierte Eigenverbrauch
+  je Stunde gegen eine **Selbstzählung** aus der Eigenverbrauch-Leistung geprüft;
+  weicht die Bilanz zu stark ab (z. B. durch Zähler-Desynchronisation beim
+  Akku-Lade-Übergang), fließt die Selbstzählung als Ersatzwert ein — echte
+  Verbrauchsspitzen bleiben aber erhalten. Ein Diagramm **„Datenbasis der
+  Prognose"** stellt beide Serien je Stunde nebeneinander und macht Abweichungen
+  früh sichtbar.
   Oben rechts lässt sich ein Verhaltensmodell aktivieren: **Netzparallelbetrieb**
   bewertet ausschließlich die Versorgung bis zum nächsten Ladebeginn und nutzt
   danach das Netz als Reserve; **Autarkbetrieb** bewertet mehrere Prognosetage
@@ -267,6 +301,11 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
   per Schalter umstellen. Zusammenhängende Register gleicher Unit-ID,
   Registerart und Pollrate werden blockweise gelesen und als gemeinsamer
   State-Batch verteilt; Pollintervalle und State-Adressen bleiben gleich.
+  Der mitgelieferte **HM-RPC-Adapter 1.1.2** registriert eine vollständige
+  XML-RPC-Logikschicht bei der CCU (`listDevices`, `newDevices`, `event`,
+  `system.multicall`) und übernimmt Geräteänderungen unmittelbar als Push-Events.
+  Ein optionaler, gleichmäßig verteilter CCU-Cache-Refresh bleibt als
+  adaptereigene Absicherung verfügbar und erzeugt keine Funkabfragen.
 - 🗂️ **States** — klappt als Unterpunkt unter **Adapter** auf: Baumansicht aller
   von Adaptern gemeldeten Werte (Instanz → Kategorie → State) mit Live-Werten;
   hinter Topic-Feldern direkt per Auswahldialog übernehmbar. Alle States sind

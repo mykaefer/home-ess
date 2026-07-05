@@ -138,6 +138,7 @@ function adapterRoutes(db) {
       // Bestehende Settings als Basis behalten – sonst gingen nicht im settings-Schema
       // enthaltene Werte (v. a. der State-Editor-Speicher wie modbus-Register) verloren.
       const settings = { ...instance.settings };
+      const changedSettings = {};
       for (const field of manifest.settings) {
         if (field.type === 'checkbox') {
           settings[field.key] = req.body[field.key] === '1' || req.body[field.key] === 'on';
@@ -147,8 +148,11 @@ function adapterRoutes(db) {
         } else {
           settings[field.key] = req.body[field.key] == null ? '' : String(req.body[field.key]);
         }
+        changedSettings[field.key] = settings[field.key];
       }
-      await instancesRepo.updateSettings(db, instance.id, settings);
+      // Nur die Formularfelder atomar patchen. Vom Adapter parallel persistierte
+      // Metadaten wie HM-RPC settings.devices bleiben dadurch sicher erhalten.
+      await instancesRepo.updateSettingKeys(db, instance.id, changedSettings);
       await reload(instance.id);
       const hints = [];
       if (manifest.id === 'tasmota' && !host.getStatus(instance.id).running) {

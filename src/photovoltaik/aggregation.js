@@ -762,6 +762,22 @@ function getConsumerSidePvCurrentTotal(snapshot) {
   return hasValue ? total : null;
 }
 
+// Tagesertrag (kWh) der verbraucherseitig ins Hausnetz einspeisenden PV-Anlagen.
+// Ein echter Eigenverbrauchszähler misst diese Energie nicht (sie fließt hinter
+// dem Zähler direkt zu den Lasten), daher wird sie zum Zählerstand addiert.
+function getConsumerSidePvTodayTotal(snapshot) {
+  let total = 0;
+  let hasValue = false;
+  for (const plant of snapshot.plants || []) {
+    if (!plant.isConsumerSide) continue;
+    const value = plant.metrics.raw.today;
+    if (value == null) continue;
+    total += value;
+    hasValue = true;
+  }
+  return hasValue ? total : null;
+}
+
 async function touchPhotovoltaikAggregation(db, cache, plants) {
   return buildPhotovoltaikSnapshot(db, cache, plants);
 }
@@ -807,6 +823,7 @@ module.exports = {
   buildPhotovoltaikSnapshot,
   readPhotovoltaikValues,
   getConsumerSidePvCurrentTotal,
+  getConsumerSidePvTodayTotal,
   setManualOffset,
   touchPhotovoltaikAggregation,
   assessHeaderSkyState,

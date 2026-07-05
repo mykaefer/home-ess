@@ -44,6 +44,8 @@ function normalizeGroupRow(row = {}) {
     position: row.position == null ? 0 : row.position,
     // Geräte ohne eigene Funktion übernehmen die Funktion ihrer Gruppe.
     functionKey: normalizeFunctionKey(row.function_key),
+    // Bestehende Gruppen werden durch den DB-Default weiterhin verrechnet.
+    offsetTotalConsumption: row.offset_total_consumption !== 0,
   };
 }
 
@@ -51,7 +53,7 @@ function normalizeGroupRow(row = {}) {
 async function listGroups(db) {
   const rows = await dbAll(
     db,
-    'SELECT id, title, priority, position, function_key FROM mess_schalt_groups'
+    'SELECT id, title, priority, position, function_key, offset_total_consumption FROM mess_schalt_groups'
   );
   return rows
     .map(normalizeGroupRow)
@@ -61,17 +63,19 @@ async function listGroups(db) {
 async function getGroup(db, id) {
   const row = await dbGet(
     db,
-    'SELECT id, title, priority, position, function_key FROM mess_schalt_groups WHERE id = ?',
+    'SELECT id, title, priority, position, function_key, offset_total_consumption FROM mess_schalt_groups WHERE id = ?',
     [id]
   );
   return row ? normalizeGroupRow(row) : null;
 }
 
 function normalizeGroupInput(input = {}) {
+  const hasOffsetSetting = Object.prototype.hasOwnProperty.call(input, 'offsetTotalConsumption');
   return {
     title: String(input.title || '').trim(),
     priority: clampPriority(input.priority, 4),
     functionKey: normalizeFunctionKey(input.functionKey),
+    offsetTotalConsumption: !hasOffsetSetting || input.offsetTotalConsumption === true || input.offsetTotalConsumption === 'on' || input.offsetTotalConsumption === '1',
   };
 }
 
@@ -88,8 +92,8 @@ async function createGroup(db, input) {
   ensureTitle(group);
   const result = await dbRun(
     db,
-    'INSERT INTO mess_schalt_groups (title, priority, function_key) VALUES (?, ?, ?)',
-    [group.title, group.priority, group.functionKey]
+    'INSERT INTO mess_schalt_groups (title, priority, function_key, offset_total_consumption) VALUES (?, ?, ?, ?)',
+    [group.title, group.priority, group.functionKey, group.offsetTotalConsumption ? 1 : 0]
   );
   return getGroup(db, result.lastID);
 }
@@ -97,10 +101,11 @@ async function createGroup(db, input) {
 async function updateGroup(db, id, input) {
   const group = normalizeGroupInput(input);
   ensureTitle(group);
-  await dbRun(db, 'UPDATE mess_schalt_groups SET title = ?, priority = ?, function_key = ? WHERE id = ?', [
+  await dbRun(db, 'UPDATE mess_schalt_groups SET title = ?, priority = ?, function_key = ?, offset_total_consumption = ? WHERE id = ?', [
     group.title,
     group.priority,
     group.functionKey,
+    group.offsetTotalConsumption ? 1 : 0,
     id,
   ]);
   return getGroup(db, id);

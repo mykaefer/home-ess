@@ -65,6 +65,7 @@ module.exports = function createHmRpcAdapter(host) {
   let rpcOptions = null;
   let callbackUrl = '';
   let latestDutyCycle = null;
+  let callbackCount = 0;
   const descriptions = new Map();
   const channels = new Map();
   const states = new Map();
@@ -472,8 +473,23 @@ module.exports = function createHmRpcAdapter(host) {
   }
 
   function handleCallback(method, params) {
+    callbackCount += 1;
+    // Die ersten Calls nach jeder Registrierung sichtbar machen. So lässt sich
+    // unterscheiden, ob die CCU den Callback gar nicht erreicht oder Events erst
+    // später ausbleiben, ohne das Log dauerhaft mit Geräteevents zu fluten.
+    if (callbackCount <= 5) host.log(`XML-RPC Callback ${callbackCount}: ${method}`);
     if (method === 'system.listMethods') {
-      return ['event', 'newDevices', 'deleteDevices', 'updateDevice', 'system.multicall', 'system.listMethods'];
+      return ['event', 'listDevices', 'newDevices', 'deleteDevices', 'updateDevice',
+        'system.multicall', 'system.listMethods'];
+    }
+    // Laut Homematic-XML-RPC-Spezifikation gleicht der Schnittstellenprozess
+    // direkt nach init() seinen Bestand mit der Logikschicht ab. ADDRESS und
+    // VERSION reichen dafür aus.
+    if (method === 'listDevices') {
+      return Array.from(channels.values()).map((entry) => ({
+        ADDRESS: entry.ADDRESS,
+        VERSION: Number(entry.VERSION) || 0,
+      }));
     }
     if (method === 'system.multicall') {
       const calls = Array.isArray(params[0]) ? params[0] : [];
@@ -508,6 +524,7 @@ module.exports = function createHmRpcAdapter(host) {
     async start(config) {
       cfg = config || {};
       stopped = false;
+      callbackCount = 0;
       customNames.clear();
       // Zuerst die persistierte Geräteliste wiederherstellen, damit der folgende
       // publishCatalog() den Bestand NICHT auf die zwei Statuswerte eindampft und
@@ -551,7 +568,8 @@ module.exports = function createHmRpcAdapter(host) {
       if (dripTimer) clearTimeout(dripTimer);
       if (activeWatchTimer) clearTimeout(activeWatchTimer);
       if (registered) {
-        try { await rpc('init', ['', interfaceId()]); } catch (_) { /* CCU ggf. weg */ }
+        // Abmeldung: gleiche Callback-URL, leere interface_id (HM XML-RPC API).
+        try { await rpc('init', [callbackUrl, '']); } catch (_) { /* CCU ggf. weg */ }
       }
       registered = false;
       if (server) await new Promise((resolve) => server.close(resolve));

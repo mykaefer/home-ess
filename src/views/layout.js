@@ -20,7 +20,12 @@ const NAV_CORE = [
   { path: '/stromverbrauch', label: 'Stromverbrauch', section: 'main' },
   { path: '/photovoltaik', label: 'Photovoltaik', section: 'main' },
   { path: '/batterie', label: 'Batterie', section: 'main' },
-  { path: '/messen-schalten', label: 'Messen + Schalten', section: 'main' },
+  {
+    path: '/messen-schalten',
+    label: 'Messen + Schalten',
+    section: 'main',
+    children: [{ path: '/messen-schalten/schaltgruppen', label: 'Schaltgruppen' }],
+  },
   { path: '/prognose', label: 'Prognose', section: 'main' },
   {
     path: '/adapter',
@@ -36,6 +41,15 @@ const NAV_CORE = [
 // NAV wird von außen noch als Array erwartet (z. B. in Tests) — exportieren wir
 // die Kern-Liste unter dem alten Namen.
 const NAV = NAV_CORE;
+
+// Mobile Tab-Bar (≤ 768px): die vier wichtigsten Seiten als Direktzugriff,
+// alles Weitere über den Menü-Tab (vollflächiges Navigations-Sheet).
+const MOBILE_TABS = [
+  { path: '/dashboard', label: 'Dashboard', icon: '🏠' },
+  { path: '/stromverbrauch', label: 'Strom', icon: '⚡' },
+  { path: '/batterie', label: 'Batterie', icon: '🔋' },
+  { path: '/prognose', label: 'Prognose', icon: '📈' },
+];
 
 function renderNavItem(item, activePath) {
   const children = item.children || [];
@@ -64,6 +78,76 @@ function renderNavLinks(section, activePath) {
   return [...NAV_CORE.filter((item) => item.section === section), ...extra]
     .map((item) => renderNavItem(item, activePath))
     .join('\n          ');
+}
+
+// Mobile Navigation: untere Tab-Bar + Menü-Sheet mit allen Seiten (inkl.
+// aktivierter Module, Footer-Seiten, Abmelden und Version). Wird immer
+// gerendert, aber nur im Mobile-Layer (styles.css, ≤ 768px) sichtbar.
+function renderMobileNav(activePath) {
+  const tabs = MOBILE_TABS.map((tab) => {
+    const active = tab.path === activePath ? ' active' : '';
+    return `<a class="mobile-tab${active}" href="${tab.path}"><span class="mobile-tab-icon" aria-hidden="true">${tab.icon}</span><span class="mobile-tab-label">${escapeHtml(tab.label)}</span></a>`;
+  }).join('\n      ');
+
+  const flatLinks = [];
+  const mainItems = [...NAV_CORE.filter((item) => item.section === 'main'), ...getEnabledNavItems()];
+  for (const item of mainItems) {
+    flatLinks.push({ path: item.path, label: item.label, sub: false });
+    for (const child of item.children || []) {
+      flatLinks.push({ path: child.path, label: child.label, sub: true });
+    }
+  }
+  const renderSheetLink = (link) => {
+    const classes = ['mobile-nav-link'];
+    if (link.sub) classes.push('mobile-nav-link--sub');
+    if (link.path === activePath) classes.push('active');
+    return `<a class="${classes.join(' ')}" href="${link.path}">${escapeHtml(link.label)}</a>`;
+  };
+  const mainLinks = flatLinks.map(renderSheetLink).join('\n        ');
+  const footerLinks = NAV_CORE.filter((item) => item.section === 'footer')
+    .map((item) => renderSheetLink({ path: item.path, label: item.label, sub: false }))
+    .join('\n        ');
+
+  return `    <div class="mobile-nav-sheet" id="mobile-nav-sheet" aria-label="Hauptmenü">
+      <div class="mobile-nav-head">
+        <img src="/homeESS.png" alt="homeESS" class="mobile-nav-logo">
+        <button type="button" class="mobile-nav-close" id="mobile-nav-close" aria-label="Menü schließen">✕</button>
+      </div>
+      <nav class="mobile-nav-links">
+        ${mainLinks}
+        <div class="mobile-nav-divider"></div>
+        ${footerLinks}
+      </nav>
+      <div class="mobile-nav-foot">
+        <button class="logout-button" onclick="window.location.href='/logout'">Abmelden</button>
+        <div class="sidebar-copyright">
+          Copyright (C) 2026 Kevin Käfer | <a class="sidebar-copyright-link" href="https://apps.mykaefer.net" target="_blank" rel="noopener noreferrer">MyKaefer Apps</a><br>
+          Version: ${escapeHtml(pkgVersion)}
+        </div>
+      </div>
+    </div>
+    <nav class="mobile-tabbar" aria-label="Hauptnavigation">
+      ${tabs}
+      <button type="button" class="mobile-tab" id="mobile-menu-button" aria-controls="mobile-nav-sheet"><span class="mobile-tab-icon" aria-hidden="true">☰</span><span class="mobile-tab-label">Menü</span></button>
+    </nav>`;
+}
+
+function mobileNavScript() {
+  return `    (function () {
+      var button = document.getElementById('mobile-menu-button');
+      var sheet = document.getElementById('mobile-nav-sheet');
+      if (!button || !sheet) return;
+      function setOpen(open) {
+        sheet.classList.toggle('is-open', open);
+        button.classList.toggle('active', open);
+        document.body.classList.toggle('mobile-nav-open', open);
+      }
+      button.addEventListener('click', function () {
+        setOpen(!sheet.classList.contains('is-open'));
+      });
+      var closeButton = document.getElementById('mobile-nav-close');
+      if (closeButton) closeButton.addEventListener('click', function () { setOpen(false); });
+    })();`;
 }
 
 function renderLiveScript() {
@@ -163,7 +247,7 @@ function renderLayout({ title, activePath = '', body = '', script = '' } = {}) {
 <html lang="de">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>${escapeHtml(title || 'homeESS')}</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
@@ -172,15 +256,15 @@ function renderLayout({ title, activePath = '', body = '', script = '' } = {}) {
     <header class="dashboard-header">
       <img src="/homeESS.png" alt="homeESS" class="header-logo">
       <div class="header-statusbar" aria-label="Umgebungswerte">
-        <span class="header-status-pill">
+        <span class="header-status-pill header-status-pill--temperature">
           <strong>Aussen</strong>
           <span id="header-temperature">-- °C</span>
         </span>
-        <span class="header-status-pill">
+        <span class="header-status-pill header-status-pill--time">
           <strong>Zeit</strong>
           <span id="header-time">--:--</span>
         </span>
-        <span class="header-status-pill">
+        <span class="header-status-pill header-status-pill--date">
           <strong>Datum</strong>
           <span id="header-date">--.--.----</span>
         </span>
@@ -221,10 +305,12 @@ function renderLayout({ title, activePath = '', body = '', script = '' } = {}) {
 ${body}
       </main>
     </div>
+${renderMobileNav(activePath)}
 ${statePickerModal()}
   </div>
 ${renderLiveScript()}
   <script>
+${mobileNavScript()}
 ${statePickerScript()}
 ${statePickerAutoAttach()}
   </script>

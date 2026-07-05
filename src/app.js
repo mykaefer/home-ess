@@ -41,7 +41,9 @@ const gridControlAutomation = require('./grid-control/automation');
 const operatingState = require('./operating-state');
 const operatingLevelHandler = require('./operating-level/handler');
 const { recordConsumptionSample } = require('./prognosis/forecast');
+const { integrateSelfCount, reconcileCompletedHours } = require('./prognosis/self-count');
 const { updateBatteryEnergy } = require('./batterie/energy');
+const batterieMinSocSync = require('./batterie/min-soc-sync');
 const prognosisBehavior = require('./prognosis/behavior');
 const jobs = require('./job-scheduler');
 const { updatePoolEnergyModel } = require('./pool/energy-model');
@@ -112,11 +114,13 @@ function createApp() {
     .then(() => {
       operatingLevelHandler.init();
       gridControlAutomation.init(db);
+      batterieMinSocSync.init(db);
       return prognosisBehavior.init(db);
     })
     .catch(() => {
       operatingLevelHandler.init();
       gridControlAutomation.init(db);
+      batterieMinSocSync.init(db);
       prognosisBehavior.init(db).catch(() => {});
     });
 
@@ -146,15 +150,27 @@ function createApp() {
       // statistisiert und deshalb – wie Wallbox und Pool – aus dem gelernten
       // Haus-Grundverbrauch herausgerechnet.
       const functionPower = await currentFunctionPowerW(db, cache).catch(() => 0);
+      const wallboxPower = totalWallboxPowerWatt(cache, boxes);
+      // Unabhängige Selbstzählung: Eigenverbrauch-Leistung (Wechselrichter-Ausgang
+      // + verbraucherseitige PV) abzüglich Wallbox/Pool/Funktionen = Haus-Grundlast.
+      // Diese Leistung ist ≥ 0 und sägezahnfrei; sie sichert die Bilanz je Stunde ab.
+      const eigenverbrauchPower = Number(snapshot.raw.eigenverbrauchPower);
+      if (Number.isFinite(eigenverbrauchPower)) {
+        const netHousePower = eigenverbrauchPower - wallboxPower - (poolEnergy.currentPowerW || 0) - functionPower;
+        await integrateSelfCount(db, cache, netHousePower).catch(() => {});
+      }
       await recordConsumptionSample(db, snapshot.raw.today.eigenverbrauch, cache, {
         // Der Stromverbrauchs-Snapshot ist bereits um Laden/Entladen des
         // Hausakkus bereinigt; hier darf die Korrektur nicht erneut erfolgen.
         batteryPower: 0,
-        wallboxPower: totalWallboxPowerWatt(cache, boxes),
+        wallboxPower,
         wallboxEnergyDelta: wallboxSample.hourlyDeltaKwh,
         poolPower: poolEnergy.currentPowerW,
         functionPower,
       });
+      // Abgeschlossene Stunden absichern: Bilanz ggf. durch die Selbstzählung
+      // ersetzen (nur ohne echten Eigenverbrauchszähler).
+      await reconcileCompletedHours(db, cache, { selfMeterPresent: snapshot.raw.selfMeterPresent }).catch(() => {});
     } catch (_) {
       // Der nächste Minutentakt versucht es erneut.
     }

@@ -97,13 +97,24 @@ function updateSettings(db, id, settings) {
   });
 }
 
-function updateSettingKey(db, id, key, value) {
-  return getInstance(db, id).then((instance) => {
-    if (!instance) return;
-    const settings = { ...(instance.settings || {}) };
-    settings[String(key)] = value;
-    return updateSettings(db, id, settings);
+// Einzelne Konfigurationswerte atomar in das vorhandene Settings-JSON mergen.
+// Damit können dynamische Adapterdaten (z. B. HM-RPC settings.devices) nicht
+// durch einen zeitgleich gespeicherten Einstellungsdialog verloren gehen.
+function updateSettingKeys(db, id, values) {
+  const patch = values && typeof values === 'object' ? values : {};
+  return new Promise((resolve, reject) => {
+    db.run(
+      `UPDATE adapter_instances
+       SET settings = json_patch(CASE WHEN json_valid(settings) THEN settings ELSE '{}' END, json(?))
+       WHERE id = ?`,
+      [JSON.stringify(patch), id],
+      (err) => (err ? reject(err) : resolve())
+    );
   });
+}
+
+function updateSettingKey(db, id, key, value) {
+  return updateSettingKeys(db, id, { [String(key)]: value });
 }
 
 function deleteInstance(db, id) {
@@ -125,6 +136,7 @@ module.exports = {
   renameInstance,
   setEnabled,
   updateSettings,
+  updateSettingKeys,
   updateSettingKey,
   deleteInstance,
 };

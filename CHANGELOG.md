@@ -3,6 +3,129 @@
 Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [1.1.0] — 2026-07-05
+
+### Hinzugefügt
+
+- **Messen + Schalten: neue Unterseite „Schaltgruppen".** Die Seite klappt im
+  Menü unter Messen + Schalten aus und ist in zwei unabhängig scrollbare
+  Spalten geteilt: links die Schaltgruppen (Name, optionales **Remote-Topic**,
+  Checkbox **„Gruppe schaltet als Einheit"**), rechts schmaler alle Geräte aus
+  Messen + Schalten ohne Schaltgruppe; per **Drag & Drop** werden Geräte
+  zugeordnet bzw. wieder gelöst. Eine Gruppe gilt als **eingeschaltet, sobald
+  ein Gerät an ist**, und erst als aus, wenn alle Geräte aus sind; „als
+  Einheit" zieht jede Ein-/Ausschaltflanke eines Mitglieds auf alle übrigen.
+  Einschalten der Gruppe (Toggle, Remote-Topic oder State) schaltet **alle
+  Geräte ein**, Ausschalten **alle aus** — je Gerät weiterhin durch die
+  effektive Priorität gegatet. Das Remote-Topic wird bidirektional synchron
+  gehalten (externe Wertänderung = Schaltwunsch, jede Änderung des abgeleiteten
+  Gruppen-Istzustands wird unmittelbar zurückgespiegelt; ein beim Start
+  gelieferter retained Wert ist nur Baseline und kein Schaltbefehl).
+  Die Schaltzustände stehen als beschreibbare States
+  (`schaltgruppe://gruppen/<id>`) unter der neuen Kategorie **Schaltgruppen**
+  in der States-Liste und damit automatisch im Wertekatalog und State-Picker
+  zur Weiterverarbeitung bereit (neue Tabelle `mess_schalt_switch_groups`,
+  neue Spalte `mess_schalt_actors.switch_group_id`;
+  `messen-schalten/schaltgruppen.js` + `schaltgruppen-automation.js`,
+  virtuelle States-Instanzen in `adapters/router.js`/`adapters/states.js`).
+- **Messen + Schalten: Verrechnung je Gruppe steuerbar.** Im Gruppendialog legt
+  die neue, standardmäßig aktivierte Checkbox **„Verbrauchssumme mit
+  Gesamtverbrauch verrechnen“** fest, ob die Verbrauchssumme der Gruppe bei
+  **„Sonstige Verbraucher“** vom Eigenverbrauch abgezogen wird. Bestehende Gruppen
+  bleiben durch den aktivierten Datenbank-Default unverändert verrechnet.
+- **Prognose: abgehärtete und transparente Verbrauchs-Datenbasis.** Der stündliche
+  Lernwert stützt sich nicht mehr allein auf die (beim Akku-Lade-Übergang
+  sägezahnanfällige) Bilanz:
+  - **Optionaler echter Eigenverbrauchszähler** (3 Phasen) unter „Zähler-Rohdaten"
+    auf der Stromverbrauch-Seite. Ist er gesetzt und liefert Werte, gilt sein
+    Tageszuwachs plus verbraucherseitige PV als tatsächlicher Eigenverbrauch – ohne
+    Bilanzierung. Neue Spalten `eigenverbrauch_zaehler_l1..3_topic`.
+  - **Selbstzählung als Kontrollwert:** Die Eigenverbrauch-Leistung (am
+    Wechselrichter-Ausgang gemessen, ≥ 0 und ohne Nulldurchgänge) wird stundenweise
+    integriert (`prognosis/self-count.js`). Nach Abschluss einer Stunde ersetzt ein
+    **Guard** die Bilanz durch die Selbstzählung, wenn beide zu stark voneinander
+    abweichen (Schwelle relativ 25 % **und** absolut 0,2 kWh; ohne echten Zähler).
+    Echte Verbrauchsspitzen (Kochen o. Ä.) bleiben erhalten – es wird **nicht
+    geglättet**, nur bei belegbarer Divergenz ersetzt.
+  - **Transparenz-Diagramm** auf der Prognose-Seite: festes 24-Stunden-Raster mit
+    je zwei Balken (Selbstzählung vs. Bilanz/Messung), das sich über den Tag füllt
+    (konstante Platzbreite); die aktuelle Stunde wächst bis zum Stundenende, eine
+    Marke zeigt den in die Prognose übernommenen Wert. Neue Stundenspalten
+    `primary_kwh`, `self_kwh`, `reconciled`.
+- **Batterie: Remote-Topic für den Mindest-Ladezustand.** Zusätzlich zum
+  bestehenden Ziel-/Steuer-Topic kann ein separates Remote-Topic konfiguriert
+  werden — analog zum Schalt- + Remote-Topic der Messen-+-Schalten-Geräte. Es ist
+  bidirektional mit der **Mindest-SoC-Einstellung** verknüpft: Speichern spiegelt
+  den Wert an das Remote-Topic; ändert ein externes System den Wert dort, wird er
+  als neue Einstellung übernommen ("mitgezogen"), gespeichert und zusätzlich an
+  das Steuer-Topic weitergegeben. Ein `receivedAt`-Vergleich verhindert, dass ein
+  noch nicht aktualisierter Cache-Wert eine gerade gespeicherte Änderung sofort
+  wieder zurückdreht (`batterie/min-soc-sync.js`). Bestehende Datenbanken erhalten
+  die neue Spalte `remote_topic` automatisch.
+- **Mobile Ansicht: Grundkonstrukt + Prognose-Seite.** Beginn der vollwertigen
+  Smartphone-Ansicht (Konzept und Arbeitsstand in [MOBILE.md](MOBILE.md)):
+  - **Mobile Shell** (≤ 768px): kompakter einzeiliger Header (Zeit/Datum-Pills
+    entfallen, Batterie/Level/Himmel bleiben sichtbar), Sidebar ersetzt durch
+    eine **untere Tab-Bar** (Dashboard, Strom, Batterie, Prognose, Menü) und
+    ein vollflächiges **Menü-Sheet** mit allen Seiten inkl. Modulen, Abmelden
+    und Version.
+  - **Mobile-Framework** in `styles.css` (Mobile-Layer am Dateiende): Dialoge
+    als Bottom-Sheets, KPI-Kacheln im 2er-Raster, einspaltige Dialog-Raster,
+    16px-Eingabefelder (kein iOS-Auto-Zoom), Touch-Ziele ≥ 44px, Utilities
+    `only-mobile`/`only-desktop`.
+  - **Prognose** als erste mobil gestaltete Seite: Statuskarte mit
+    Kennzahlen-Zeilenliste, Verhaltensmodell-Steuerung gestapelt, Autark-Kachel
+    über volle Breite, einspaltige Prognosetage mit Stundenprofil in voller
+    Breite, umbruchfähige Verbrauchsmodell-Fakten.
+  - **Header ohne horizontales Scrollen:** mobil sticky statt fixiert, darf
+    bei Platzmangel in eine zweite Zeile umbrechen; kompaktere Status-Pills,
+    das „Aussen"-Label entfällt, die Batterie zeigt nur das Icon mit
+    Füllstand (ohne Prozentzahl).
+  - **Alle übrigen Seiten mobil aufgearbeitet** (Details in MOBILE.md):
+    Dashboard (2er-Widget-Raster, Info-Widgets volle Breite, Kachel-Aktionen
+    auf Touch immer sichtbar, Drag-Griffe ausgeblendet), Stromverbrauch
+    (Energie-Übersicht als Karten mit beschrifteten Zeitraum-Werten statt
+    seitlich scrollender Tabelle), Photovoltaik/Wallbox (Anlagen-/Box-Karten
+    gestapelt, PV-Prognosestreifen als 2er-Raster), Messen + Schalten
+    (Gerätezeile zweizeilig: Name/Leistung/Schalter oben, Betriebsart/Zähler/
+    Aktionen darunter), Adapter (Instanz-Zeilen zweispaltig), Adapter-States/
+    HM-RPC/Tasmota (Register-Tabellen scrollen im eigenen Container), Output
+    (gestapelte Zeilen, größere Touch-Buttons), Module (vollbreite
+    Aktivieren-Buttons), Pool (Modus-Buttons als vollbreite Segmente),
+    Grid-Control (umbruchfähige Protokollzeilen), Login sowie Wertekatalog/
+    State-Picker (größere, umbruchfähige Touch-Zeilen).
+
+### Geändert
+
+- **HM-RPC-Adapter 1.1.2: vollständige XML-RPC-Logikschicht.** Der Callbackserver
+  meldet und implementiert nun das von der Homematic-Spezifikation geforderte
+  `listDevices(interface_id)` und liefert der CCU `ADDRESS`/`VERSION` des bekannten
+  Bestands. Die Abmeldung verwendet korrekt dieselbe Callback-URL mit leerer
+  `interface_id`. Damit kommen `event`/`system.multicall` wieder unmittelbar an;
+  die ersten fünf Callbackmethoden nach einer Registrierung werden zur Diagnose
+  protokolliert. Der zuvor vorübergehend eingebaute sekündliche HM-Sonderabruf im
+  Hauptsystem wurde entfernt — Adapter und Kern bleiben gemäß `ADAPTER.md`
+  entkoppelt. Der optionale, adaptereigene CCU-Cache-Hintergrundrefresh bleibt.
+- **Adapter-Einstellungen werden atomar zusammengeführt.** Formularänderungen
+  patchen nur ihre eigenen Schlüssel per SQLite-JSON statt das vollständige
+  Settings-Objekt zu überschreiben. Parallel vom Adapter persistierte Metadaten
+  wie die HM-RPC-Geräteliste bleiben auch beim Speichern und Instanzneustart
+  sicher erhalten.
+
+### Behoben
+
+- **Schaltgruppen synchronisieren Status, Remote-Topic und virtuellen State
+  bidirektional.** Direkte Geräteänderungen, Gruppen-/State-Schaltungen und echte
+  externe Remote-Änderungen werden ereignisbasiert in beide Richtungen
+  weitergereicht. Eigene MQTT-Echos lösen keine Rückkopplung aus; Boolean-States
+  werden typgetreu publiziert. Kanonische Adapter-Eventschlüssel (insbesondere
+  HM-RPC-Batches) starten den Gruppentick ebenfalls, sodass kein Seitenaufruf zum
+  Aktualisieren nötig ist.
+- **Live-Schalter folgen dem bestätigten Istzustand.** Auf „Messen + Schalten"
+  und der Schaltgruppen-Seite aktualisieren sich nicht nur die Statuspunkte,
+  sondern auch die Toggle-Schalter sofort. Der Browserfokus blockiert das
+  Live-Update nach einem Klick nicht mehr.
+
 ## [1.0.15] — 2026-07-04
 
 ### Hinzugefügt

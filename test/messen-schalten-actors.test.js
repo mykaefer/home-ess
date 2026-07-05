@@ -26,7 +26,8 @@ async function freshDb() {
     always_on INTEGER NOT NULL DEFAULT 0,
     function_key TEXT NOT NULL DEFAULT '',
     load_shed_enabled INTEGER NOT NULL DEFAULT 0,
-    load_shed_phase TEXT NOT NULL DEFAULT 'l1')`);
+    load_shed_phase TEXT NOT NULL DEFAULT 'l1',
+    switch_group_id INTEGER)`);
   await dbRun(db, 'CREATE TABLE mess_schalt_actor_state (actor_id INTEGER PRIMARY KEY, last_counter_raw REAL, last_progress_ts INTEGER, derived_power_w REAL, counter_total_kwh REAL)');
   return db;
 }

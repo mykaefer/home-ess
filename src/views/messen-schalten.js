@@ -118,7 +118,7 @@ function renderGroup(group) {
               <span class="ms-group-prio" title="Priorität der Gruppe (Geräte mit „Priorität der Gruppe verwenden" erben sie)">Priorität ${Number(group.priority)}</span>
               <span class="ms-group-sum" id="ms-group-sum-${group.id}" title="Verbrauchssumme (Leistung)">${escapeHtml(group.sumDisplay)}</span>
               <div class="widget-group-actions">
-                <button type="button" class="widget-icon-btn" title="Gruppe bearbeiten" onclick="event.stopPropagation(); openGroupDialog('edit', ${group.id}, ${toJsStringLiteral(group.title)}, ${Number(group.priority)}, ${toJsStringLiteral(group.functionKey || '')})">✎</button>
+                <button type="button" class="widget-icon-btn" title="Gruppe bearbeiten" onclick="event.stopPropagation(); openGroupDialog('edit', ${group.id}, ${toJsStringLiteral(group.title)}, ${Number(group.priority)}, ${toJsStringLiteral(group.functionKey || '')}, ${group.offsetTotalConsumption !== false ? 'true' : 'false'})">✎</button>
                 <button type="button" class="widget-icon-btn" title="Gruppe entfernen" onclick="event.stopPropagation(); openDeleteGroupDialog(${group.id}, ${toJsStringLiteral(group.title)})">🗑</button>
               </div>
             </div>
@@ -242,6 +242,9 @@ function renderGroupDialog() {
                 <select id="groupPriority" name="priority">${priorityOptions(4, 4)}</select></label>
               <label class="field-block" for="groupFunction"><span>Funktion <span class="pool-optional">(Geräte ohne eigene Funktion erben sie)</span></span>
                 <select id="groupFunction" name="functionKey">${functionOptions('', 'Keine Funktion')}</select></label>
+              <label class="remember-row remember-row--boxed" for="groupOffsetTotalConsumption" style="align-self:end;">
+                <input type="checkbox" id="groupOffsetTotalConsumption" name="offsetTotalConsumption" value="on" checked>
+                <span>Verbrauchssumme mit Gesamtverbrauch verrechnen</span></label>
             </div>
             <div class="button-row">
               <button type="submit">Speichern</button>
@@ -371,7 +374,7 @@ ${renderUngrouped(ungrouped)}
     }
     function closeActorDialog() { var d = document.getElementById('actorDialog'); if (d) d.close(); }
 
-    function openGroupDialog(mode, groupId, groupTitle, groupPriority, groupFunction) {
+    function openGroupDialog(mode, groupId, groupTitle, groupPriority, groupFunction, groupOffsetTotalConsumption) {
       var dialog = document.getElementById('groupDialog');
       if (!dialog) return;
       var form = document.getElementById('groupForm');
@@ -382,12 +385,14 @@ ${renderUngrouped(ungrouped)}
         document.getElementById('groupTitle').value = groupTitle || '';
         document.getElementById('groupPriority').value = groupPriority || 4;
         document.getElementById('groupFunction').value = groupFunction || '';
+        document.getElementById('groupOffsetTotalConsumption').checked = groupOffsetTotalConsumption !== false;
       } else {
         form.action = '/messen-schalten/groups';
         title.textContent = 'Gruppe hinzufügen';
         document.getElementById('groupTitle').value = '';
         document.getElementById('groupPriority').value = 4;
         document.getElementById('groupFunction').value = '';
+        document.getElementById('groupOffsetTotalConsumption').checked = true;
       }
       if (typeof dialog.showModal === 'function') dialog.showModal();
     }
@@ -611,10 +616,11 @@ ${renderUngrouped(ungrouped)}
             counter.title = 'Zähler · ' + a.counterFreshness;
           }
           applyStatusDot(document.getElementById('ms-status-' + a.id), a.statusOn, a.statusStale, a.statusFreshness);
-          // Toggle (nur bei manuellen Geräten) spiegelt den Ist-Zustand, damit er
-          // zum tatsächlichen Gerät passt. Beim Fokus/Bedienen nicht überschreiben.
+          // Toggle (nur bei manuellen Geräten) spiegelt immer den bestätigten
+          // Ist-Zustand. Ein angeklicktes Element behält sonst den Browserfokus
+          // und würde bis zum Neuladen nicht mehr aktualisiert.
           var sw = document.getElementById('ms-switch-' + a.id);
-          if (sw && document.activeElement !== sw) sw.checked = a.statusOn === true;
+          if (sw) sw.checked = a.statusOn === true;
           var prio = document.getElementById('ms-prio-' + a.id);
           if (prio) {
             prio.textContent = !a.hasSwitch ? 'nur Messen'

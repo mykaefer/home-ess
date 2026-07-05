@@ -48,7 +48,7 @@ function openDatabase() {
       'CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, expires_at INTEGER NOT NULL)'
     );
     db.run(
-      'CREATE TABLE IF NOT EXISTS stromverbrauch_config (id INTEGER PRIMARY KEY CHECK (id = 1), current_topic TEXT, eigenverbrauch_l1_topic TEXT, eigenverbrauch_l2_topic TEXT, eigenverbrauch_l3_topic TEXT, netzbezug_l1_topic TEXT, netzbezug_l2_topic TEXT, netzbezug_l3_topic TEXT, today_topic TEXT, netzbezug_zaehler_l1_topic TEXT, netzbezug_zaehler_l2_topic TEXT, netzbezug_zaehler_l3_topic TEXT, einspeisung_zaehler_l1_topic TEXT, einspeisung_zaehler_l2_topic TEXT, einspeisung_zaehler_l3_topic TEXT)'
+      'CREATE TABLE IF NOT EXISTS stromverbrauch_config (id INTEGER PRIMARY KEY CHECK (id = 1), current_topic TEXT, eigenverbrauch_l1_topic TEXT, eigenverbrauch_l2_topic TEXT, eigenverbrauch_l3_topic TEXT, netzbezug_l1_topic TEXT, netzbezug_l2_topic TEXT, netzbezug_l3_topic TEXT, today_topic TEXT, netzbezug_zaehler_l1_topic TEXT, netzbezug_zaehler_l2_topic TEXT, netzbezug_zaehler_l3_topic TEXT, einspeisung_zaehler_l1_topic TEXT, einspeisung_zaehler_l2_topic TEXT, einspeisung_zaehler_l3_topic TEXT, eigenverbrauch_zaehler_l1_topic TEXT, eigenverbrauch_zaehler_l2_topic TEXT, eigenverbrauch_zaehler_l3_topic TEXT)'
     );
     db.run(
       'CREATE TABLE IF NOT EXISTS stromverbrauch_aggregation (id INTEGER PRIMARY KEY CHECK (id = 1), week_offset REAL NOT NULL DEFAULT 0, month_offset REAL NOT NULL DEFAULT 0, year_offset REAL NOT NULL DEFAULT 0, previous_year_total REAL NOT NULL DEFAULT 0, last_today_value REAL NOT NULL DEFAULT 0, last_rollover_date TEXT NOT NULL DEFAULT \'\', week_key TEXT NOT NULL DEFAULT \'\', month_key TEXT NOT NULL DEFAULT \'\', year_key TEXT NOT NULL DEFAULT \'\', week_import_offset REAL NOT NULL DEFAULT 0, week_export_offset REAL NOT NULL DEFAULT 0, year_import_offset REAL NOT NULL DEFAULT 0, year_export_offset REAL NOT NULL DEFAULT 0, previous_year_import_total REAL NOT NULL DEFAULT 0, previous_year_export_total REAL NOT NULL DEFAULT 0)'
@@ -173,6 +173,7 @@ function openDatabase() {
         voltage_topic TEXT NOT NULL DEFAULT '',
         temperatur_topic TEXT NOT NULL DEFAULT '',
         min_soc_topic TEXT NOT NULL DEFAULT '',
+        remote_topic TEXT NOT NULL DEFAULT '',
         min_soc INTEGER NOT NULL DEFAULT 20,
         capacity_ah REAL NOT NULL DEFAULT 200,
         battery_type TEXT NOT NULL DEFAULT 'lifepo4',
@@ -241,6 +242,9 @@ function openDatabase() {
         day_key TEXT NOT NULL,
         hour INTEGER NOT NULL,
         consumption_kwh REAL NOT NULL DEFAULT 0,
+        primary_kwh REAL,
+        self_kwh REAL,
+        reconciled INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (day_key, hour)
       )`
     );
@@ -448,7 +452,8 @@ function openDatabase() {
         title TEXT NOT NULL,
         priority INTEGER NOT NULL DEFAULT 4,
         position INTEGER NOT NULL DEFAULT 0,
-        function_key TEXT NOT NULL DEFAULT ''
+        function_key TEXT NOT NULL DEFAULT '',
+        offset_total_consumption INTEGER NOT NULL DEFAULT 1
       )`
     );
     // Messen + Schalten: je Gerät (Aktor) bis zu vier MQTT-Topics (schalten/status/
@@ -474,7 +479,8 @@ function openDatabase() {
         always_on INTEGER NOT NULL DEFAULT 0,
         function_key TEXT NOT NULL DEFAULT '',
         load_shed_enabled INTEGER NOT NULL DEFAULT 0,
-        load_shed_phase TEXT NOT NULL DEFAULT 'l1'
+        load_shed_phase TEXT NOT NULL DEFAULT 'l1',
+        switch_group_id INTEGER
       )`
     );
     // Ableitungszustand für „Leistung aus Zählerfortschritt": zuletzt gesehener
@@ -488,6 +494,19 @@ function openDatabase() {
         derived_power_w REAL,
         counter_total_kwh REAL,
         FOREIGN KEY (actor_id) REFERENCES mess_schalt_actors(id) ON DELETE CASCADE
+      )`
+    );
+    // Schaltgruppen (Unterseite von Messen + Schalten): benannte Gruppen, deren
+    // Schaltzustand sich aus den zugeordneten Geräten ableitet (an, sobald ein
+    // Gerät an ist). Optionales Remote-Topic hält den Zustand bidirektional
+    // synchron; switch_as_unit = 1 ⇒ jede Ein-/Ausschaltflanke zieht die
+    // übrigen Geräte der Gruppe in denselben Zustand mit.
+    db.run(
+      `CREATE TABLE IF NOT EXISTS mess_schalt_switch_groups (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL DEFAULT '',
+        remote_topic TEXT NOT NULL DEFAULT '',
+        switch_as_unit INTEGER NOT NULL DEFAULT 0
       )`
     );
     // Funktions-Statistik (Licht, Waschen, Warmwasser, Heizung / Klima, Kochen):
@@ -614,6 +633,16 @@ function migratePrognosisDailyConsumption(db) {
       db.run('ALTER TABLE prognosis_daily_consumption ADD COLUMN max_temperature REAL');
     }
   });
+  // Stundentabelle: Vergleichsserien für die abgehärtete Datenbasis.
+  // primary_kwh = zähler-/bilanzbasierter Wert, self_kwh = aus der
+  // Eigenverbrauch-Leistung integrierte Selbstzählung, reconciled = Guard gelaufen.
+  db.all('PRAGMA table_info(prognosis_hourly_consumption)', (err, rows) => {
+    if (err || !Array.isArray(rows) || rows.length === 0) return;
+    const existing = new Set(rows.map((row) => row.name));
+    if (!existing.has('primary_kwh')) db.run('ALTER TABLE prognosis_hourly_consumption ADD COLUMN primary_kwh REAL');
+    if (!existing.has('self_kwh')) db.run('ALTER TABLE prognosis_hourly_consumption ADD COLUMN self_kwh REAL');
+    if (!existing.has('reconciled')) db.run('ALTER TABLE prognosis_hourly_consumption ADD COLUMN reconciled INTEGER NOT NULL DEFAULT 0');
+  });
 }
 
 function migratePrognosisConfig(db) {
@@ -714,6 +743,9 @@ function migrateStromverbrauchConfig(db) {
       'einspeisung_zaehler_l1_topic',
       'einspeisung_zaehler_l2_topic',
       'einspeisung_zaehler_l3_topic',
+      'eigenverbrauch_zaehler_l1_topic',
+      'eigenverbrauch_zaehler_l2_topic',
+      'eigenverbrauch_zaehler_l3_topic',
     ];
 
     for (const column of neededColumns) {
@@ -887,6 +919,7 @@ function migrateBatterieConfig(db) {
     const existing = new Set(rows.map((row) => row.name));
     const additions = [
       { name: 'min_soc_topic', sql: "ALTER TABLE batterie_config ADD COLUMN min_soc_topic TEXT NOT NULL DEFAULT ''" },
+      { name: 'remote_topic', sql: "ALTER TABLE batterie_config ADD COLUMN remote_topic TEXT NOT NULL DEFAULT ''" },
       { name: 'min_soc', sql: 'ALTER TABLE batterie_config ADD COLUMN min_soc INTEGER NOT NULL DEFAULT 20' },
       { name: 'capacity_ah', sql: 'ALTER TABLE batterie_config ADD COLUMN capacity_ah REAL NOT NULL DEFAULT 200' },
       { name: 'battery_type', sql: "ALTER TABLE batterie_config ADD COLUMN battery_type TEXT NOT NULL DEFAULT 'lifepo4'" },
@@ -1024,12 +1057,19 @@ function migrateMessSchaltActors(db) {
     if (!existing.has('load_shed_phase')) {
       db.run("ALTER TABLE mess_schalt_actors ADD COLUMN load_shed_phase TEXT NOT NULL DEFAULT 'l1'");
     }
+    // Zuordnung zu einer Schaltgruppe (Unterseite Schaltgruppen, per Drag & Drop).
+    if (!existing.has('switch_group_id')) {
+      db.run('ALTER TABLE mess_schalt_actors ADD COLUMN switch_group_id INTEGER');
+    }
   });
   db.all('PRAGMA table_info(mess_schalt_groups)', (err, rows) => {
     if (err || !Array.isArray(rows) || rows.length === 0) return;
     const existing = new Set(rows.map((r) => r.name));
     if (!existing.has('function_key')) {
       db.run("ALTER TABLE mess_schalt_groups ADD COLUMN function_key TEXT NOT NULL DEFAULT ''");
+    }
+    if (!existing.has('offset_total_consumption')) {
+      db.run('ALTER TABLE mess_schalt_groups ADD COLUMN offset_total_consumption INTEGER NOT NULL DEFAULT 1');
     }
   });
   // Interner Zählerstand (Delta-Fortschreibung des Zähler-Topics). NULL heißt

@@ -179,6 +179,7 @@ Das an die Factory übergebene `host`-Objekt:
 | `host.publishState(address, value)` | Meldet den **aktuellen Wert** einer Adresse. Erscheint im Bus unter `prefix://instanz/adresse`. |
 | `host.publishStates(values)` | Meldet mehrere Werte gemeinsam als `[{ address, value }]`. Frische und Werte werden je State aktualisiert, abhängige Regeln erhalten aber nur ein gemeinsames Änderungsereignis. |
 | `host.setConnected(bool, detail?)` | Meldet den **Verbindungszustand** zum Gerät/Dienst (Anzeige auf der Adapter-Seite). `detail` ist ein optionaler Tooltip-Text. |
+| `host.setStorage(key, value)` | Persistiert dynamische Instanzmetadaten unter `settings[key]` (z. B. erkannte Geräte). Der Schlüssel wird atomar in die vorhandenen Einstellungen gemergt und bleibt beim Speichern anderer Formularfelder erhalten. |
 | `host.getConfig()` | Liefert die aktuellen **Instanz-Einstellungen** (Objekt). |
 | `host.log(...args)` | Info-Log in die homeESS-Konsole (mit Adapter-/Instanz-Präfix). |
 | `host.error(...args)` | Fehler-Log. |
@@ -245,6 +246,10 @@ Adapters wird automatisch und fortlaufend an alle Bezüge dieses Topics verteilt
   auf **dieselben Adapterdateien** zu.
 - Die Einstellungsseite einer Instanz wird **generisch aus dem `settings`-Schema**
   des Manifests gerendert. Ohne Schema bleibt sie leer.
+- Dynamische, nicht im Formularschema enthaltene Daten dürfen Adapter über
+  `host.setStorage(key, value)` persistieren. Hauptsystem und Adapter schreiben
+  dabei nur ihre jeweiligen Schlüssel; dadurch gehen z. B. erkannte Gerätelisten
+  bei einer Einstellungsänderung und dem anschließenden Neustart nicht verloren.
 - Aktivieren startet die Instanz (Kindprozess), Deaktivieren stoppt sie. Das
   Speichern von Einstellungen oder Umbenennen startet die Instanz neu.
 

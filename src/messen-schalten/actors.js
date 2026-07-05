@@ -91,12 +91,15 @@ function normalizeRow(row = {}) {
     functionKey: normalizeFunctionKey(row.function_key),
     loadShedEnabled: Number(row.load_shed_enabled) === 1,
     loadShedPhase: normalizeLoadShedPhase(row.load_shed_phase),
+    // Zuordnung zu einer Schaltgruppe: wird nur über die Schaltgruppen-Seite
+    // (Drag & Drop, schaltgruppen.js) gepflegt, nicht über den Geräte-Dialog.
+    switchGroupId: row.switch_group_id == null ? null : row.switch_group_id,
   };
 }
 
 const COLUMNS = `id, name, group_id, position, switch_topic, remote_topic, status_topic, power_topic,
   power_unit, counter_topic, counter_unit, priority, use_group_priority, always_on,
-  function_key, load_shed_enabled, load_shed_phase`;
+  function_key, load_shed_enabled, load_shed_phase, switch_group_id`;
 
 async function listActors(db) {
   const rows = await dbAll(

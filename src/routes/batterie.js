@@ -11,6 +11,7 @@ const {
 } = require('../batterie/config');
 const renderBatterie = require('../views/batterie');
 const gridControlAutomation = require('../grid-control/automation');
+const batterieMinSocSync = require('../batterie/min-soc-sync');
 
 function batterieRoutes(db) {
   const router = express.Router();
@@ -33,7 +34,15 @@ function batterieRoutes(db) {
       loadAllStateDefinitions(db)
         .then((defs) => mqttClient.setStateDefinitions(defs))
         .then(() => {
+          // Der gespeicherte Mindest-SoC geht an das Steuer-Topic und (als
+          // gespiegelte Einstellung) an das Remote-Topic. noteLocalChange sorgt
+          // dafür, dass ein noch im Cache liegender älterer Remote-Wert die
+          // gerade gespeicherte Einstellung nicht sofort wieder zurückdreht.
           if (config.minSocTopic) mqttClient.publish(config.minSocTopic, config.minSoc);
+          if (config.remoteTopic) {
+            batterieMinSocSync.noteLocalChange();
+            mqttClient.publish(config.remoteTopic, config.minSoc);
+          }
         })
         .then(() => gridControlAutomation.runNow(db))
         .catch(() => {})

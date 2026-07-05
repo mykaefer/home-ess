@@ -393,6 +393,41 @@ test('Einstellungen speichern behält den State-Editor-Speicher (Register)', asy
   db.close();
 });
 
+test('Einstellungen speichern behält die persistierte HM-RPC-Geräteliste', async () => {
+  const express = require('express');
+  const http = require('http');
+  const adapterRoutes = require('../src/routes/adapters');
+
+  const db = await freshDb();
+  writeAdapter('hm-rpc-safe', 'hm-rpc-safe', { settings: [{ key: 'host', type: 'text', default: '' }] });
+  registry.loadRegistry();
+  const id = await instancesRepo.createInstance(db, 'hm-rpc-safe', 'ccu');
+  const devices = [{ address: 'ABC', customName: 'Flurlampe', channels: [] }];
+  await instancesRepo.updateSettings(db, id, { host: 'alt', devices });
+
+  const app = express();
+  app.use(express.urlencoded({ extended: false }));
+  app.use((req, _res, next) => { req.session = { user: 'test' }; next(); });
+  app.use(adapterRoutes(db));
+  const server = http.createServer(app).listen(0);
+  await new Promise((resolve) => server.once('listening', resolve));
+
+  await new Promise((resolve, reject) => {
+    const data = 'host=neu';
+    const req = http.request({ method: 'POST', port: server.address().port, path: `/adapter/instance/${id}/settings`,
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(data) } },
+    (res) => { res.resume(); res.on('end', resolve); });
+    req.on('error', reject);
+    req.end(data);
+  });
+  await new Promise((resolve) => server.close(resolve));
+
+  const instance = await instancesRepo.getInstance(db, id);
+  assert.equal(instance.settings.host, 'neu');
+  assert.deepEqual(instance.settings.devices, devices, 'HM-RPC-Geräteliste bleibt vollständig erhalten');
+  db.close();
+});
+
 test('Tasmota-Adapter nimmt MQTT-Verbindung an, fragt STATUS an und publiziert Werte', async () => {
   const mqtt = require('mqtt');
   const port = await getFreePort();

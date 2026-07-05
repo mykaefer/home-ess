@@ -33,7 +33,11 @@ function statesRoutes(db) {
       const tree = await buildStatesTree(db);
       const values = {};
       for (const inst of tree) {
-        forEachState(inst.categories, (st) => { values[st.topic] = displayValue(st.value, st.unit); });
+        // Virtuelle Blöcke (z. B. Schaltgruppen) liefern eine eigene Darstellung
+        // („Ein"/„Aus"); Adapter-States werden weiterhin generisch formatiert.
+        forEachState(inst.categories, (st) => {
+          values[st.topic] = st.display != null ? st.display : displayValue(st.value, st.unit);
+        });
       }
       res.json({ values });
     } catch (_) {
