@@ -30,6 +30,14 @@ const DEFAULT_PROFILE = [
 // also für den ganzen Tag bestehen und würde als "gelernter" Verbrauch in die
 // Prognose folgender Tage einfließen.
 const MAX_SAMPLE_DELTA_KWH = 2;
+// Kleine NEGATIVE Deltas des kumulierten Bilanz-Eigenverbrauchs sind kein
+// Zähler-Reset, sondern der Sägezahn der Bilanz beim Akku-Laden (PV-, Netz- und
+// Akkuzähler schreiten nicht exakt synchron fort). Sie müssen gegengerechnet
+// werden: Eine reine Positiv-Delta-Lernung wirkt sonst als Gleichrichter und
+// pumpt das Pendeln als Schein-Verbrauch in die Tagesstunden (real beobachtet:
+// Bilanz-Stunden > 2× Selbstzählung). Erst größere Rücksprünge gelten als
+// verspäteter Reset des Quellzählers und werden nur neu basiert.
+const MAX_NEGATIVE_SAMPLE_DELTA_KWH = 0.5;
 
 function dbAll(db, sql, params = []) {
   return new Promise((resolve, reject) => db.all(sql, params, (err, rows) => (err ? reject(err) : resolve(rows || []))));
@@ -134,7 +142,7 @@ function adjustedConsumptionDelta(
   rawDelta, batteryPower, durationMs, wallboxPower = 0, poolPower = 0, functionPower = 0,
   wallboxEnergyDelta = null
 ) {
-  const raw = Math.max(0, num(rawDelta) || 0);
+  const raw = num(rawDelta) || 0;
   const power = num(batteryPower) || 0;
   const duration = Math.max(0, Number(durationMs) || 0);
   // Batterie-Leistung: positiv = laden, negativ = entladen.
@@ -147,7 +155,10 @@ function adjustedConsumptionDelta(
   const wallboxCorrection = measuredWallboxKwh == null
     ? wallbox * duration / 3600000000
     : Math.max(0, measuredWallboxKwh);
-  return Math.max(0, raw - powerBasedCorrection - wallboxCorrection);
+  // Bewusst NICHT bei 0 kappen: kleine negative Deltas (Bilanz-Sägezahn beim
+  // Akku-Laden) müssen die zuvor gelernten Aufwärtsspitzen wieder ausgleichen.
+  // Die Stunden-/Tagessummen werden erst beim Aufsummieren bei 0 begrenzt.
+  return raw - powerBasedCorrection - wallboxCorrection;
 }
 
 // Tagesziel eines Wochentags ohne eigene Lerntage: Vorlage ist ausschließlich
@@ -203,10 +214,12 @@ async function recordConsumptionSample(db, totalKwh, cache, options = {}, now = 
     const hourlyTotal = num(hourly && hourly.total) || 0;
     if (previousAdjusted - hourlyTotal > MAX_SAMPLE_DELTA_KWH) previousAdjusted = hourlyTotal;
     const batteryPower = num(options.batteryPower) || 0;
-    const validInterval = rawDelta >= 0 && rawDelta < 2 && age > 0 && age <= 5 * 60 * 1000;
-    // Ein negativer Delta ist der verspätete Reset eines Quellzählers. Dabei
-    // wird raw_consumption_kwh unten auf den neuen Stand basiert, der bereits
-    // integrierte heutige Verbrauch bleibt jedoch unverändert.
+    // Kleine negative Deltas (Bilanz-Sägezahn) sind gültig und werden
+    // gegengerechnet. Ein großer Rücksprung ist der verspätete Reset eines
+    // Quellzählers: raw_consumption_kwh wird unten auf den neuen Stand basiert,
+    // der bereits integrierte heutige Verbrauch bleibt unverändert.
+    const validInterval = rawDelta > -MAX_NEGATIVE_SAMPLE_DELTA_KWH && rawDelta < 2 &&
+      age > 0 && age <= 5 * 60 * 1000;
     const candidateDelta = validInterval
       ? adjustedConsumptionDelta(
         rawDelta, batteryPower, age, options.wallboxPower, options.poolPower,
@@ -216,19 +229,22 @@ async function recordConsumptionSample(db, totalKwh, cache, options = {}, now = 
     // Auch bei einem formal gültigen Rohintervall kann ein fehlerhafter oder
     // falsch skalierter Leistungswert die Akku-Korrektur explodieren lassen.
     // In diesem Fall bleibt der begrenzte Rohfortschritt die sicherere Näherung.
-    const adjustedDelta = candidateDelta <= MAX_SAMPLE_DELTA_KWH
-      ? candidateDelta
+    // Nach unten symmetrisch begrenzen: mehr als der zulässige Sägezahn wird
+    // nie gegengerechnet.
+    const boundedCandidate = Math.max(candidateDelta, -MAX_NEGATIVE_SAMPLE_DELTA_KWH);
+    const adjustedDelta = boundedCandidate <= MAX_SAMPLE_DELTA_KWH
+      ? boundedCandidate
       : Math.min(Math.max(0, rawDelta), MAX_SAMPLE_DELTA_KWH);
-    adjustedTotal = previousAdjusted + adjustedDelta;
-    if (adjustedDelta > 0 && adjustedDelta <= MAX_SAMPLE_DELTA_KWH) {
+    adjustedTotal = Math.max(0, previousAdjusted + adjustedDelta);
+    if (adjustedDelta !== 0 && adjustedDelta <= MAX_SAMPLE_DELTA_KWH) {
       await dbRun(
         db,
         `INSERT INTO prognosis_hourly_consumption (day_key, hour, consumption_kwh, primary_kwh)
-         VALUES (?, ?, ?, ?)
+         VALUES (?, ?, MAX(0, ?), MAX(0, ?))
          ON CONFLICT(day_key, hour) DO UPDATE SET
-          consumption_kwh=prognosis_hourly_consumption.consumption_kwh + excluded.consumption_kwh,
-          primary_kwh=COALESCE(prognosis_hourly_consumption.primary_kwh, 0) + excluded.primary_kwh`,
-        [key, hour, adjustedDelta, adjustedDelta]
+          consumption_kwh=MAX(0, prognosis_hourly_consumption.consumption_kwh + ?),
+          primary_kwh=MAX(0, COALESCE(prognosis_hourly_consumption.primary_kwh, 0) + ?)`,
+        [key, hour, adjustedDelta, adjustedDelta, adjustedDelta, adjustedDelta]
       );
     }
   }
@@ -829,6 +845,6 @@ module.exports = {
   computePrognosis, recordConsumptionSample, buildConsumptionModel,
   invalidateConsumptionModel, materializeConsumptionModel,
   normalizedProfile, adjustedConsumptionDelta, simulateDays,
-  selectUnlearnedDailyTarget,
+  selectUnlearnedDailyTarget, MAX_NEGATIVE_SAMPLE_DELTA_KWH,
   hoursUntilNextSunrise, projectedConsumptionForHours, buildWallboxPlanningSlots,
 };

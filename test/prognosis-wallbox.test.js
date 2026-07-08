@@ -133,6 +133,29 @@ test('historischer Wallbox-Verbrauch erzeugt ohne tatsächlichen Fahrzeugbedarf 
   assert.equal(wallboxForecastForDay(model, '2026-07-03', 0).totalKwh, 0);
 });
 
+test('„nicht angesteckt" verwirft den Ladebedarf nicht (Fahrzeug erkennt Stecker erst nach Freigabe)', () => {
+  const profile = Array(24).fill(0);
+  profile[8] = 1;
+  const model = {
+    boxes: [{
+      id: 1, name: 'Auto', mode: 1, priority: 5, maxPowerW: 11000,
+      batteryCapacityKwh: 50, minChargePercent: 30, businessDays: [],
+      soc: 50, plugged: false, todayRemainingKwh: 0,
+      dailyByWeekday: Array(7).fill(0),
+      profilesByWeekday: Array.from({ length: 7 }, () => profile),
+      samplesByWeekday: Array(7).fill(4),
+    }],
+  };
+  const slots = [8, 9].map((hour) => ({
+    dateKey: '2026-07-03', dayIndex: 0, hour, durationHours: 1,
+    startMs: Date.UTC(2026, 6, 3, hour), pvKwh: 20, houseKwh: 1,
+  }));
+
+  planWallboxSchedule(model, slots);
+  assert.ok(model.boxes[0].plannedFlexibleEnergyByDate['2026-07-03'] > 0);
+  assert.ok(model.boxes[0].nextCharge);
+});
+
 test('Privat-Restbedarf wird über den Tageswechsel in morgigen Überschuss getragen', () => {
   const box = {
     id: 1, name: 'Privat', mode: 1, priority: 5, maxPowerW: 3000,

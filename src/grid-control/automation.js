@@ -176,6 +176,9 @@ function updateLoadSwitchDelayed(loads, onThresholds, offThresholds, previous, o
 let runtimeDb = null;
 let runtimeLoaded = false;
 let runtimeInitialized = false;
+// Ist-Übernahme nach Prozessstart: einmalig den vom Broker gemeldeten
+// Schaltzustand übernehmen, bevor gesteuert wird (siehe tick()).
+let startupAdopted = false;
 
 function loadRuntimeState(db) {
   if (runtimeDb === db && runtimeLoaded) return Promise.resolve();
@@ -185,6 +188,17 @@ function loadRuntimeState(db) {
     runtimeInitialized = false;
     state.load = false;
     state.loadOffSince = 0;
+    // Datenbankwechsel = Neustart-Semantik (Prozess bzw. Test): ohne Vorwissen
+    // beginnen und die Ist-Übernahme vom Broker erneut durchlaufen.
+    startupAdopted = false;
+    state.socLow = false;
+    state.socHigh = false;
+    state.voltageLow = false;
+    state.voltageHigh = false;
+    state.temperature = false;
+    state.gridPublished = null;
+    state.feedInPublished = null;
+    state.gridZeroSince = 0;
   }
   return new Promise((resolve) => {
     db.get('SELECT load_active, load_off_since, initialized FROM grid_control_runtime WHERE id = 1', (err, row) => {
@@ -342,6 +356,22 @@ async function tick(db) {
     .map((id) => parseNumber(cache.get(id)?.value));
   state.gridFrequencies = frequencies;
   state.inverterLoads = loads;
+  const brokerGridValue = cache.get(STATE_IDS.gridCommand)?.value;
+  const brokerFeedInValue = cache.get(STATE_IDS.feedInCommand)?.value;
+
+  // Ist-Übernahme nach Neustart: bevor gesteuert wird, den vom Broker
+  // zurückgemeldeten Schaltzustand übernehmen. Meldet der Broker das Netz als
+  // EIN, gelten die Hysteresefenster als „ausgelöst" — Messwerte innerhalb des
+  // Hysteresebands halten das Netz dann wie vor dem Neustart, statt es kurz
+  // aus- und wieder einzuschalten (Schützschonung). Werte außerhalb des Bands
+  // lösen die Fenster im selben Tick regulär wieder.
+  if (!startupAdopted && brokerGridValue != null) {
+    if (comparable(brokerGridValue) === '1') {
+      if (cfg.socEnabled) { state.socLow = true; state.socHigh = true; }
+      if (cfg.voltageEnabled) { state.voltageLow = true; state.voltageHigh = true; }
+    }
+    startupAdopted = true;
+  }
 
   const oldVoltageLow = state.voltageLow;
   const oldTemperature = state.temperature;
@@ -349,11 +379,19 @@ async function tick(db) {
 
   const lowSocThreshold = Number(batteryCfg.minSoc) + Number(cfg.socLowerOffset);
   const highSocThreshold = 100 - Number(cfg.socUpperOffset);
+  // Fehlender Messwert (z. B. direkt nach Neustart oder Adapterausfall) hält den
+  // letzten Fensterzustand, statt ihn auf „aus" zu kippen — sonst würde ein
+  // eingeschaltetes Netz aus Unkenntnis ab- und beim Eintreffen des Werts
+  // wieder zugeschaltet.
   const socWindows = cfg.socEnabled
-    ? updateExtremeWindows(soc, lowSocThreshold, highSocThreshold, cfg.socHysteresis, state.socLow, state.socHigh)
+    ? (soc == null
+      ? { low: state.socLow, high: state.socHigh, available: false }
+      : updateExtremeWindows(soc, lowSocThreshold, highSocThreshold, cfg.socHysteresis, state.socLow, state.socHigh))
     : { low: false, high: false, available: false };
   const voltageWindows = cfg.voltageEnabled
-    ? updateExtremeWindows(voltage, Number(batteryCfg.lowerVoltage), Number(batteryCfg.upperVoltage), cfg.voltageHysteresis, state.voltageLow, state.voltageHigh)
+    ? (voltage == null
+      ? { low: state.voltageLow, high: state.voltageHigh, available: false }
+      : updateExtremeWindows(voltage, Number(batteryCfg.lowerVoltage), Number(batteryCfg.upperVoltage), cfg.voltageHysteresis, state.voltageLow, state.voltageHigh))
     : { low: false, high: false, available: false };
 
   state.socLow = socWindows.low;
@@ -363,7 +401,6 @@ async function tick(db) {
   state.temperature = !!(cfg.temperatureEnabled && warningValue != null && comparable(warningValue) === comparable(cfg.temperatureWarningValue));
   const previousLoad = state.load;
   const previousLoadOffSince = state.loadOffSince;
-  const brokerGridValue = cache.get(STATE_IDS.gridCommand)?.value;
   if (cfg.loadEnabled) {
     // Bei einer noch nicht initialisierten Runtime (erstes Upgrade) übernimmt
     // eine aktive Broker-Rückmeldung den Schaltzustand. Damit startet bei einem
@@ -423,6 +460,23 @@ async function tick(db) {
   state.gridActual = baseGridActual || globalState.emergencyMode;
   state.feedInActual = !!(cfg.feedInAllowed && cfg.feedInCommandTopic && high && !lowOrTemperature && !globalState.emergencyMode);
 
+  // Neustart-/Ausfallschutz: Solange nicht alle aktivierten Ist-Werte bekannt
+  // sind, wird ein vom Broker als EIN gemeldetes Ziel nicht ausgeschaltet —
+  // erst Ist-Werte kennen, dann steuern. Die Übersteuerung endet von selbst,
+  // sobald die Entscheidungsgrundlage vollständig ist.
+  const inputsKnown =
+    (!cfg.socEnabled || soc != null) &&
+    (!cfg.voltageEnabled || voltage != null) &&
+    (!cfg.temperatureEnabled || warningValue != null) &&
+    (!cfg.loadEnabled || loads.every((value) => value != null));
+  if (!inputsKnown) {
+    if (!state.gridActual && comparable(brokerGridValue) === '1') state.gridActual = true;
+    if (!state.feedInActual && !lowOrTemperature && !globalState.emergencyMode &&
+        cfg.feedInAllowed && cfg.feedInCommandTopic && comparable(brokerFeedInValue) === '1') {
+      state.feedInActual = true;
+    }
+  }
+
   // Ein expliziter Frequenzwert 0 auf einer beliebigen Phase startet die
   // Erkennungszeit. Danach bleibt die Verriegelung bis zur Rückkehr aller Phasen.
   if (!globalState.emergencyMode && cfg.gridCommandTopic && state.gridActual && hasPhaseFailure(frequencies)) {
@@ -448,14 +502,15 @@ async function tick(db) {
   // Geschlossene Regelschleife: Soll-Werte gegen die tatsächliche Broker-Rückmeldung
   // abgleichen und bei Abweichung erneut schreiben (statt fire-and-forget).
   const ctx = { cache, connected, cfg, now, hasMeasurement };
-  // Beim allerersten Start nach dem Upgrade ist noch kein persistierter
-  // Lastzustand vorhanden. Bis die Broker-Rückmeldung eintrifft (oder eine
-  // Überlast einschaltet), senden wir daher keinen vorschnellen Aus-Befehl.
-  const gridHasMeasurement = hasMeasurement && !(
-    cfg.loadEnabled && !runtimeInitialized && brokerGridValue == null && !state.gridActual
-  );
+  // Kein Aus-Befehl, solange der Ist-Zustand des Ziel-Schützes unbekannt ist
+  // (Broker-Rückmeldung z. B. direkt nach einem Neustart noch nicht
+  // eingetroffen): erst Ist-Werte abfragen, dann steuern. Ein-Befehle bleiben
+  // erlaubt — sie sind sicherheitsgerichtet und takten kein Schütz, das laut
+  // Auslösern ohnehin einschalten muss.
+  const gridHasMeasurement = hasMeasurement && !(brokerGridValue == null && !state.gridActual);
+  const feedInHasMeasurement = hasMeasurement && !(brokerFeedInValue == null && !state.feedInActual);
   state.gridConfirmed = reconcileCommand('grid', cfg.gridCommandTopic, STATE_IDS.gridCommand, state.gridActual, { ...ctx, hasMeasurement: gridHasMeasurement, label: 'Netzschaltung' });
-  state.feedInConfirmed = reconcileCommand('feedIn', cfg.feedInCommandTopic, STATE_IDS.feedInCommand, state.feedInActual, { ...ctx, label: 'Überschusseinspeisung' });
+  state.feedInConfirmed = reconcileCommand('feedIn', cfg.feedInCommandTopic, STATE_IDS.feedInCommand, state.feedInActual, { ...ctx, hasMeasurement: feedInHasMeasurement, label: 'Überschusseinspeisung' });
   // Anhaltende (≥ Timeout) Divergenz für das Audit-Log – siehe recordLog.
   state.gridWarned = !!commandTracks.get('grid')?.warned;
   state.feedInWarned = !!commandTracks.get('feedIn')?.warned;

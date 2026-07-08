@@ -272,6 +272,8 @@ function renderPrognosis({ prognosis, message = '', error = '' } = {}) {
             <div class="settings-card-head"><h2>Modellparameter</h2><p class="settings-card-hint">Batteriekapazität, Mindest-SoC und Wirkungsgrade werden auf der Batterieseite gepflegt.</p></div>
             <div class="field-grid">
               <div class="field"><label for="historyDays">Lernzeitraum (Tage)</label><input id="historyDays" name="historyDays" type="number" min="7" max="90" step="1" value="${escapeHtml(config.historyDays)}"></div>
+              <div class="field"><label for="selfCountGuardPercent">Max. Abweichung Bilanz ↔ Selbstzählung (%)</label><input id="selfCountGuardPercent" name="selfCountGuardPercent" type="number" min="1" max="100" step="1" value="${escapeHtml(config.selfCountGuardPercent)}"><span class="topic-current">Weicht die Bilanz einer abgeschlossenen Stunde stärker ab, übernimmt die Selbstzählung.</span></div>
+              <div class="field"><label for="selfCountGuardMinKwh">Mindest-Abweichung (kWh)</label><input id="selfCountGuardMinKwh" name="selfCountGuardMinKwh" type="number" min="0" max="5" step="0.05" value="${escapeHtml(config.selfCountGuardMinKwh)}"><span class="topic-current">Unterhalb dieser absoluten Abweichung greift der Guard nie (Rauschschutz kleiner Stunden).</span></div>
             </div>
             <div class="forecast-topic-section">
               <h3>Autarkie-Zähler per MQTT</h3>

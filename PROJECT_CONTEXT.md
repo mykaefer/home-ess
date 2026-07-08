@@ -294,15 +294,25 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   nur noch als Kaltstart ohne einen einzigen abgeschlossenen Tag; der heutige
   Verlauf kalibriert die Restprognose begrenzt nach. 60-s-Sampling persistiert
   Tagesstände in `prognosis_daily_consumption` und Zählerdifferenzen stündlich in
-  `prognosis_hourly_consumption`.
+  `prognosis_hourly_consumption`. Die Delta-Lernung ist **vorzeichenbehaftet**:
+  kleine negative Deltas der kumulierten Bilanz (Sägezahn beim Akku-Laden, weil
+  PV-/Netz-/Akkuzähler nicht exakt synchron fortschreiten) werden gegengerechnet
+  (`MAX_NEGATIVE_SAMPLE_DELTA_KWH`, Stunden-/Tagessummen bei 0 begrenzt) — eine
+  reine Positiv-Delta-Lernung wirkte als Gleichrichter und blähte die
+  Bilanz-Stunden tagsüber massiv auf (real: > 2× Selbstzählung); große
+  Rücksprünge gelten weiterhin als verspäteter Zähler-Reset (nur Neubasierung).
   **Abgehärtete Datenbasis** (`prognosis/self-count.js`): parallel zum
   zähler-/bilanzbasierten Stundenwert (`primary_kwh`) wird die
   **Eigenverbrauch-Leistung** (≥ 0, ohne Nulldurchgänge) stundenweise zur
   **Selbstzählung** integriert (`self_kwh`, `integrateSelfCount`). Nach Abschluss
   einer Stunde ersetzt `reconcileCompletedHours` die Bilanz durch die Selbstzählung,
-  wenn beide **relativ > 25 % UND absolut > 0,2 kWh** auseinanderliegen (Konstanten
-  `GUARD_REL`/`GUARD_ABS_KWH`); mit echtem Eigenverbrauchszähler greift der Guard
-  nicht (Zähler ist maßgeblich). Bewusst **kein Glätten** – echte Verbrauchsspitzen
+  wenn beide **relativ UND absolut** zu weit auseinanderliegen. Beide Schwellen
+  sind als **Modellparameter** auf der Prognoseseite konfigurierbar:
+  `self_count_guard_percent` (Standard 25 %, 1–100 %) und
+  `self_count_guard_min_kwh` (Standard 0,2 kWh, 0–5; 0 = allein die relative
+  Schwelle entscheidet); `GUARD_REL`/`GUARD_ABS_KWH` sind die
+  Fallback-Konstanten. Mit echtem Eigenverbrauchszähler greift der Guard nicht
+  (Zähler ist maßgeblich). Bewusst **kein Glätten** – echte Verbrauchsspitzen
   bleiben; nur bei belegbarer Divergenz wird ersetzt (`reconciled`-Flag je Stunde,
   Tageswert wird aus der Stundensumme neu gebildet). Die Prognose-Seite zeigt dazu
   ein **Transparenz-Diagramm** (je Stunde Selbstzählung vs. Bilanz/Messung, laufende
@@ -400,6 +410,19 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
     (selbstheilend nach verlorenem Write/Reconnect); bleibt die Bestätigung > 20 s
     aus, wird gewarnt. Bestätigt gilt nur, wenn verbunden **und** der Broker den
     Soll-Wert (`ack:true`/Rohwert) zurückmeldet. Status je Befehl im UI als Badge.
+  - **Ist-Übernahme nach Neustart** (Schützschonung): erst Ist-Werte kennen,
+    dann steuern. (1) **Kein Aus-Befehl**, solange die Broker-Rückmeldung des
+    Ziel-Schützes unbekannt ist (Ein-Befehle bleiben erlaubt —
+    sicherheitsgerichtet). (2) Meldet der Broker das Netz als EIN, werden die
+    SoC-/Spannungs-**Hysteresefenster einmalig als „ausgelöst" übernommen**:
+    Messwerte im Hystereseband halten das Netz wie vor dem Neustart, Werte
+    außerhalb lösen regulär. (3) Solange nicht **alle aktivierten Messgrößen**
+    (SoC, Spannung, Temperaturwarnung, Lasten L1–L3) bekannt sind, wird ein laut
+    Broker eingeschaltetes Netz **gehalten**, nie ausgeschaltet; fehlende
+    SoC-/Spannungswerte halten außerdem den letzten Fensterzustand statt ihn auf
+    „aus" zu kippen. (4) Die **Ausschaltverzögerung der Lastschaltung** gilt auch
+    über Neustarts (persistierte `grid_control_runtime`: `load_active`,
+    `load_off_since`).
   - **Protokoll** (`grid-control/log.js`, Tabelle `grid_control_log`, max. 2000):
     nur **Schwellen-Übertritte mit Aktionen** (gelb) und **kritische Zustände**
     (rot), einzeilig mit Zeitstempel + Werte-Schnappschuss; paginiert
@@ -511,11 +534,15 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
       (hängt die Ist-Leistung trotz Befehl nach `stall_timeout_seconds` unter
       `stall_power_w`, 1 Minute aus/ein, gedeckelte Versuche — **nur bei `plugged === true`**,
       damit ohne eingestecktes Auto kein Aus/Ein-Takten entsteht); **manuell EIN am Broker** →
-      einmalige Volladung bis Leistungsabfall unter Leerlaufschwelle oder Abziehen;
+      einmalige Volladung bis Leistungsabfall unter Leerlaufschwelle;
       **manuell AUS am Broker** → aus bis Folgetag mit PV größer als Eigenverbrauch plus
-      Wallboxleistung und ausreichender Hausakku-Reserve; das **„angesteckt"-Signal
-      sperrt nicht** (Mobilfunk-Signal, möglich falsch-negativ — bei Ladewunsch wird trotzdem
-      eingeschaltet). Manuelle Schaltungen werden ausschließlich über das Steuer-Topic
+      Wallboxleistung und ausreichender Hausakku-Reserve; das **„angesteckt"-Signal dient
+      ausschließlich der Ladeüberwachung** (Stall-/Neustart-Schleife: angesteckt + Ladung
+      aktiv + SoC unter Voll ⇒ Leistung muss fließen) und darf weder Ladefreigabe noch
+      Volladung noch Prognose-Ladebedarf sperren — manche Fahrzeuge melden „angesteckt"
+      erst, nachdem die Ladung freigegeben wurde (Henne-Ei), zudem ist das Mobilfunk-Signal
+      möglich falsch-negativ. Ist laut Plan oder Anforderung eine Ladung erforderlich, wird
+      immer eingeschaltet. Manuelle Schaltungen werden ausschließlich über das Steuer-Topic
       erkannt. Erwartete Readbacks eigener Automatikbefehle werden konsumiert und nicht
       als Nutzerwunsch gewertet; das Status-Topic ist reiner Ist-Zustand.
     - *Nächster Ladebeginn*: wird gerade nicht geladen, übernimmt die Automatik den

@@ -153,7 +153,7 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
   anschließend separat eingeplant — Heizung / Klima über Stundenprofile je
   energiegewichteter Stundentemperatur in 5-°C-Schritten, die übrigen Funktionen
   je Wochentag. E-Auto-Ladung wird ausschließlich aus dem aktuellen Fahrzeugbedarf
-  (angesteckt + SoC) und der gewählten Ladestrategie geplant; historische
+  (Fahrzeug-SoC) und der gewählten Ladestrategie geplant; historische
   Ladezeiten erzeugen keine Lastprognose.
   Ungelernte Wochentage übernehmen ausschließlich die Lernkurve des jüngsten
   abgeschlossenen Tages (Vortag) als Vorlage; die Tageskalibrierung passt sie an
@@ -161,11 +161,15 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
   nächsten. Je Prognosetag zeigt ein 24-h-Balkendiagramm das erwartete
   Stundenprofil; bereits gelernte Stunden des laufenden Tages erscheinen in
   abweichender Farbe samt Soll-Marke, sodass Abweichungen sofort sichtbar sind.
-  Damit die Lern-Datenbasis robust bleibt, wird der bilanzierte Eigenverbrauch
-  je Stunde gegen eine **Selbstzählung** aus der Eigenverbrauch-Leistung geprüft;
-  weicht die Bilanz zu stark ab (z. B. durch Zähler-Desynchronisation beim
-  Akku-Lade-Übergang), fließt die Selbstzählung als Ersatzwert ein — echte
-  Verbrauchsspitzen bleiben aber erhalten. Ein Diagramm **„Datenbasis der
+  Damit die Lern-Datenbasis robust bleibt, verrechnet die Bilanz-Lernung auch
+  kleine Rückwärtsbewegungen des kumulierten Werts (Sägezahn beim Akku-Laden),
+  statt nur Aufwärtsdeltas zu übernehmen. Zusätzlich wird der bilanzierte
+  Eigenverbrauch je Stunde gegen eine **Selbstzählung** aus der
+  Eigenverbrauch-Leistung geprüft; weicht die Bilanz stärker ab als die in den
+  Modellparametern einstellbaren Schwellen (**maximale Abweichung** in Prozent,
+  Standard 25 %, und **Mindest-Abweichung** in kWh, Standard 0,2), fließt
+  die Selbstzählung als Ersatzwert ein — echte Verbrauchsspitzen bleiben aber
+  erhalten. Ein Diagramm **„Datenbasis der
   Prognose"** stellt beide Serien je Stunde nebeneinander und macht Abweichungen
   früh sichtbar.
   Oben rechts lässt sich ein Verhaltensmodell aktivieren: **Netzparallelbetrieb**
@@ -206,6 +210,12 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
   - **Verifizierte Schaltung:** Jeder Schaltbefehl wird gegen die tatsächliche
     Broker-Rückmeldung geprüft und bei Abweichung selbstheilend wiederholt; je
     Befehls-Topic ein Badge „bestätigt"/„nicht bestätigt!" plus Verbindungsanzeige.
+  - **Ist-Übernahme nach Neustart:** Erst Ist-Werte kennen, dann steuern. Ohne
+    bekannte Broker-Rückmeldung des Schützes geht kein Aus-Befehl raus; meldet
+    der Broker das Netz als eingeschaltet, halten Messwerte im Hystereseband und
+    unvollständige Messgrößen das Netz an, statt es kurz aus- und wieder
+    einzuschalten. Die Ausschaltverzögerung der Lastschaltung gilt auch über
+    Neustarts (persistiert).
   - **Protokoll:** scrollbares Audit-Log unten — nur Schwellen-Übertritte mit
     Aktionen (gelb) und kritische Zustände (rot), einzeilig mit Zeitstempel und
     Werten; paginiert, Seite 1 live, ab Seite 2 statisch.
@@ -259,10 +269,11 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
     freigegeben.
   - **Sonderfälle**: hängt der Ladestart trotz Befehl unter der Leerlaufschwelle, wird
     nach einer konfigurierbaren Vorgabezeit kurz aus-/eingeschaltet; manuelles Einschalten
-    am Broker löst eine einmalige Volladung bis Leistungsabfall oder Abziehen aus;
+    am Broker löst eine einmalige Volladung bis zum Leistungsabfall aus;
     manuelles Ausschalten hält bis zum Folgetag mit vollständiger PV-Deckung und
-    ausreichender Hausakku-Reserve an; das unzuverlässige
-    „angesteckt"-Signal sperrt das Laden nicht.
+    ausreichender Hausakku-Reserve an; das „angesteckt"-Signal dient ausschließlich
+    der Ladeüberwachung (Neustart-Schleife) und sperrt weder Ladefreigabe noch
+    Planung — manche Fahrzeuge erkennen den Stecker erst nach der Freigabe.
   - Die Prognose führt je Wallbox getrennte Tages- und Stundenstatistiken nach
     Wochentag. Gemessene Ladeenergie wird aus dem allgemeinen Hausverbrauch
     herausgerechnet und anschließend als eigener Wallboxbedarf eingeplant. Der

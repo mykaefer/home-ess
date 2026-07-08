@@ -208,11 +208,15 @@ function planWallboxSchedule(model, slots = [], storage = null) {
     const energyToMinimum = soc == null ? 0
       : capacity * Math.max(0, (Number(box.minChargePercent) || 0) - soc) / 100;
 
-    const hasActualDemand = energyToFull != null && box.plugged !== false;
+    // „angesteckt" darf den Bedarf NICHT verwerfen: manche Fahrzeuge melden erst
+    // dann angesteckt, wenn die Ladung bereits freigegeben ist (Henne-Ei). Das
+    // Signal dient ausschließlich der Stall-Überwachung in der Automatik.
+    // Bedarf besteht, sobald ein SoC unter Voll bekannt ist.
+    const hasActualDemand = energyToFull != null;
     if (!hasActualDemand) {
       // Historische Ladungen beschreiben kein wiederkehrendes Haushaltsprofil.
-      // Ohne aktuell angeschlossenes Fahrzeug mit bekanntem SoC gibt es keinen
-      // belastbaren Ladebedarf und deshalb auch keine E-Auto-Prognoselast.
+      // Ohne bekannten Fahrzeug-SoC gibt es keinen belastbaren Ladebedarf und
+      // deshalb auch keine E-Auto-Prognoselast.
     } else if (box.mode === 1) {
       // Der aktuelle Fahrzeugbedarf endet nicht am Tageswechsel. Mindestladung
       // ist verbindlich; der restliche Bedarf darf über den gesamten sichtbaren

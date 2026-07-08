@@ -104,6 +104,64 @@ test('bereinigte Verbrauchssamples werden stündlich und täglich persistiert', 
   await new Promise((resolve) => db.close(resolve));
 });
 
+test('Bilanz-Sägezahn wird gegengerechnet statt gleichgerichtet', async () => {
+  const db = new sqlite3.Database(':memory:');
+  await dbRun(db, `CREATE TABLE mqtt_config (
+    id INTEGER PRIMARY KEY, host TEXT, port INTEGER, username TEXT, password TEXT,
+    latitude REAL, longitude REAL, timezone TEXT, dst_enabled INTEGER,
+    outdoor_temperature_topic TEXT, clock_time_topic TEXT, clock_date_topic TEXT
+  )`);
+  await dbRun(db, "INSERT INTO mqtt_config VALUES (1, '', 1883, '', '', NULL, NULL, 'Europe/Berlin', 1, '', '', '')");
+  await dbRun(db, `CREATE TABLE prognosis_daily_consumption (
+    day_key TEXT PRIMARY KEY, consumption_kwh REAL, raw_consumption_kwh REAL, max_temperature REAL,
+    completed INTEGER, updated_at INTEGER
+  )`);
+  await dbRun(db, `CREATE TABLE prognosis_hourly_consumption (
+    day_key TEXT, hour INTEGER, consumption_kwh REAL, primary_kwh REAL, self_kwh REAL, reconciled INTEGER DEFAULT 0, PRIMARY KEY(day_key, hour)
+  )`);
+  const start = new Date('2026-06-29T10:00:00Z');
+  // Kumulierte Bilanz pendelt beim Akku-Laden: 0 → 0.05 → 0.02 → 0.07.
+  // Tatsächlicher Fortschritt: 0.07 kWh. Eine reine Positiv-Delta-Lernung
+  // würde 0.10 lernen (Gleichrichter-Effekt).
+  await recordConsumptionSample(db, 0, new Map(), { batteryPower: 0 }, start);
+  await recordConsumptionSample(db, 0.05, new Map(), { batteryPower: 0 }, new Date(start.getTime() + 60000));
+  await recordConsumptionSample(db, 0.02, new Map(), { batteryPower: 0 }, new Date(start.getTime() + 120000));
+  await recordConsumptionSample(db, 0.07, new Map(), { batteryPower: 0 }, new Date(start.getTime() + 180000));
+  const day = await dbGet(db, 'SELECT consumption_kwh FROM prognosis_daily_consumption');
+  assert.ok(Math.abs(day.consumption_kwh - 0.07) < 1e-9, `Tageswert ${day.consumption_kwh} ≠ 0.07`);
+  const hour = await dbGet(db, 'SELECT consumption_kwh, primary_kwh FROM prognosis_hourly_consumption');
+  assert.ok(Math.abs(hour.consumption_kwh - 0.07) < 1e-9, `Stundenwert ${hour.consumption_kwh} ≠ 0.07`);
+  assert.ok(Math.abs(hour.primary_kwh - 0.07) < 1e-9);
+  await new Promise((resolve) => db.close(resolve));
+});
+
+test('negatives Delta drückt Stunden- und Tageswert nie unter 0', async () => {
+  const db = new sqlite3.Database(':memory:');
+  await dbRun(db, `CREATE TABLE mqtt_config (
+    id INTEGER PRIMARY KEY, host TEXT, port INTEGER, username TEXT, password TEXT,
+    latitude REAL, longitude REAL, timezone TEXT, dst_enabled INTEGER,
+    outdoor_temperature_topic TEXT, clock_time_topic TEXT, clock_date_topic TEXT
+  )`);
+  await dbRun(db, "INSERT INTO mqtt_config VALUES (1, '', 1883, '', '', NULL, NULL, 'Europe/Berlin', 1, '', '', '')");
+  await dbRun(db, `CREATE TABLE prognosis_daily_consumption (
+    day_key TEXT PRIMARY KEY, consumption_kwh REAL, raw_consumption_kwh REAL, max_temperature REAL,
+    completed INTEGER, updated_at INTEGER
+  )`);
+  await dbRun(db, `CREATE TABLE prognosis_hourly_consumption (
+    day_key TEXT, hour INTEGER, consumption_kwh REAL, primary_kwh REAL, self_kwh REAL, reconciled INTEGER DEFAULT 0, PRIMARY KEY(day_key, hour)
+  )`);
+  const start = new Date('2026-06-29T10:00:00Z');
+  await recordConsumptionSample(db, 0.1, new Map(), { batteryPower: 0 }, start);
+  // Rücksprung unterhalb der Basis: mehr Abwärts- als zuvor Aufwärtsbewegung.
+  await recordConsumptionSample(db, 0.05, new Map(), { batteryPower: 0 }, new Date(start.getTime() + 60000));
+  const day = await dbGet(db, 'SELECT consumption_kwh FROM prognosis_daily_consumption');
+  assert.equal(day.consumption_kwh, 0);
+  const hour = await dbGet(db, 'SELECT consumption_kwh, primary_kwh FROM prognosis_hourly_consumption');
+  assert.equal(hour.consumption_kwh, 0);
+  assert.equal(hour.primary_kwh, 0);
+  await new Promise((resolve) => db.close(resolve));
+});
+
 test('verspäteter Tageszähler-Reset übernimmt den Vortag nicht in den neuen Lerntag', async () => {
   const db = new sqlite3.Database(':memory:');
   await dbRun(db, `CREATE TABLE mqtt_config (

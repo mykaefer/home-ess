@@ -3,6 +3,76 @@
 Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [1.1.1] — 2026-07-08
+
+### Behoben
+
+- **Wallbox: „nicht angesteckt" blockiert die Ladefreigabe nicht mehr.** Manche
+  Fahrzeuge erkennen den Stecker erst, nachdem die Wallbox die Ladung freigegeben
+  hat (Henne-Ei-Problem). Das „angesteckt"-Signal dient jetzt ausschließlich der
+  Ladeüberwachung: angesteckt + Ladung aktiv + SoC unter Voll ⇒ Leistung muss
+  fließen, sonst greift die bestehende Aus-/Ein-Neustart-Schleife. Konkret behoben:
+  - Der gemeinsame Vorausplan (`planWallboxSchedule`) verwarf bei
+    `plugged === false` den kompletten Ladebedarf; dadurch war
+    `plannedFlexibleEnergyByDate` = 0 und die Privat-/Überschussladung blieb mit
+    „Prognose ohne nicht speicherbaren Überschuss" dauerhaft aus. Der Bedarf
+    richtet sich jetzt allein nach dem bekannten Fahrzeug-SoC.
+  - Die einmalige Volladung nach manuellem Einschalten wurde durch
+    `plugged === false` sofort abgebrochen, bevor das Fahrzeug den Stecker
+    erkennen konnte. Sie endet jetzt nur noch über den Leistungsabfall nach
+    gesehener Ladung (ein echtes Abziehen fällt genau darunter).
+
+  Ist laut Plan oder Anforderung eine Ladung erforderlich, wird immer
+  eingeschaltet — unabhängig vom „angesteckt"-Status. Die Neustart-Schleife
+  läuft unverändert nur bei bestätigt angestecktem Fahrzeug.
+
+- **Prognose: Bilanz-Datenbasis tagsüber massiv überhöht (Gleichrichter-Effekt
+  behoben).** Der kumulierte bilanzbasierte Eigenverbrauch pendelt beim
+  Akku-Laden minütlich auf und ab, weil PV-, Netz- und Akkuzähler nicht exakt
+  synchron fortschreiten (Sägezahn). Die Stundenlernung übernahm bisher **nur
+  positive Deltas** und verwarf jede Abwärtsbewegung — sie wirkte wie ein
+  Gleichrichter und pumpte das Pendeln als Schein-Verbrauch in die
+  PV-/Ladestunden (real belegt: Bilanz-Stunden bis > 2,5× der Selbstzählung,
+  ca. +4 kWh/Tag gegenüber dem tatsächlichen kumulierten Tagesendstand).
+  Kleine negative Deltas (bis 0,5 kWh) werden jetzt gegengerechnet; Stunden-
+  und Tageswerte sind bei 0 nach unten begrenzt. Große Rücksprünge gelten
+  unverändert als verspäteter Reset des Quellzählers und werden nur neu
+  basiert. Die Bilanz folgt damit wieder dem tatsächlichen Verbrauch; der
+  Selbstzählungs-Guard bleibt als Absicherung dahinter bestehen.
+
+- **Grid-Control: kein Aus-/Ein-Takten des Netz-Schützes nach einem Neustart.**
+  Bisher konnte ein eingeschaltetes Netz direkt nach dem Neustart kurz aus- und
+  sofort wieder eingeschaltet werden (unnötige Schützbelastung). Jetzt gilt:
+  erst Ist-Werte abfragen, dann steuern.
+  - **Kein Aus-Befehl bei unbekanntem Ist-Zustand**: solange die
+    Broker-Rückmeldung des Ziel-Schützes (Netz wie Überschusseinspeisung) noch
+    nicht eingetroffen ist, wird kein Aus-Befehl gesendet. Ein-Befehle bleiben
+    erlaubt (sicherheitsgerichtet).
+  - **Hysteresefenster aus dem Ist-Zustand übernehmen**: meldet der Broker das
+    Netz beim Start als EIN, gelten die SoC-/Spannungsfenster als „ausgelöst".
+    Messwerte innerhalb des Hysteresebands halten das Netz wie vor dem
+    Neustart; Werte außerhalb lösen regulär im selben Tick.
+  - **Unvollständige Messwerte schalten nicht aus**: solange nicht alle
+    aktivierten Messgrößen (SoC, Spannung, Temperaturwarnung, Lasten L1–L3)
+    bekannt sind, wird ein laut Broker eingeschaltetes Netz gehalten. Fehlende
+    SoC-/Spannungswerte halten zudem den letzten Fensterzustand, statt ihn auf
+    „aus" zu kippen (gilt auch bei Sensor-/Adapterausfall im laufenden Betrieb).
+  - Die **Ausschaltverzögerung der Wechselrichterlast** wird in jedem Fall auch
+    über Neustarts eingehalten (persistierter Laufzeitzustand; bereits zuvor
+    vorhanden, jetzt zusätzlich durch die Ist-Übernahme abgesichert).
+
+### Hinzugefügt
+
+- **Prognose: Guard-Schwellen Bilanz ↔ Selbstzählung als Modellparameter.** Die
+  maximale relative Abweichung, ab der eine abgeschlossene Bilanz-Stunde durch
+  die Selbstzählung ersetzt wird, war fest auf 25 % verdrahtet, die absolute
+  Mindest-Abweichung auf 0,2 kWh. Beide sind jetzt in den **Modellparametern**
+  der Prognoseseite einstellbar: „Max. Abweichung Bilanz ↔ Selbstzählung"
+  (1–100 %, Standard 25 %; Spalte `prognosis_config.self_count_guard_percent`)
+  und „Mindest-Abweichung" (0–5 kWh, Standard 0,2; Spalte
+  `prognosis_config.self_count_guard_min_kwh`, 0 = allein die relative Schwelle
+  entscheidet).
+
 ## [1.1.0] — 2026-07-05
 
 ### Hinzugefügt

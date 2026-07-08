@@ -220,10 +220,12 @@ function decideWallboxAction(box, state, ctx) {
     if (ctx.powerW != null && ctx.powerW >= box.stallPowerW) {
       state.manualFullSawCharging = true;
     }
+    // „angesteckt = false" beendet die Volladung bewusst NICHT: manche Fahrzeuge
+    // melden erst dann angesteckt, wenn die Ladung freigegeben ist. Ein echtes
+    // Abziehen fängt finishedByPower ab (Leistung fällt nach gesehener Ladung weg).
     const finishedByPower = state.manualFullSawCharging && box.powerTopic &&
       ctx.powerW != null && ctx.powerW < box.stallPowerW;
-    const finishedByUnplug = ctx.plugged === false;
-    if (finishedByPower || finishedByUnplug) {
+    if (finishedByPower) {
       state.manualFull = false;
       state.manualFullSawCharging = false;
     } else {

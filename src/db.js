@@ -224,7 +224,9 @@ function openDatabase() {
         history_days INTEGER NOT NULL DEFAULT 28,
         behavior_model TEXT NOT NULL DEFAULT 'grid_parallel',
         behavior_active INTEGER NOT NULL DEFAULT 0,
-        wallbox_learning_version INTEGER NOT NULL DEFAULT 1
+        wallbox_learning_version INTEGER NOT NULL DEFAULT 1,
+        self_count_guard_percent REAL NOT NULL DEFAULT 25,
+        self_count_guard_min_kwh REAL NOT NULL DEFAULT 0.2
       )`
     );
     db.run(
@@ -666,6 +668,15 @@ function migratePrognosisConfig(db) {
           )
         )
       );
+    }
+    // Guard-Schwellen Bilanz ↔ Selbstzählung (Modellparameter): relative
+    // Schwelle in Prozent (Standard 25) und absolute Mindest-Abweichung in kWh
+    // (Standard 0,2).
+    if (!existing.has('self_count_guard_percent')) {
+      db.run('ALTER TABLE prognosis_config ADD COLUMN self_count_guard_percent REAL NOT NULL DEFAULT 25');
+    }
+    if (!existing.has('self_count_guard_min_kwh')) {
+      db.run('ALTER TABLE prognosis_config ADD COLUMN self_count_guard_min_kwh REAL NOT NULL DEFAULT 0.2');
     }
   });
 }

@@ -434,11 +434,19 @@ test('Manuelles Vollladen endet nach echter Ladeleistung beim Abfall unter Leerl
   assert.equal(d.on, false);
 });
 
-test('Manuelles Vollladen endet beim Abziehen des Fahrzeugs', () => {
+test('Manuelles Vollladen überlebt „nicht angesteckt" (Fahrzeug erkennt Stecker erst nach Freigabe)', () => {
   const box = { id: 1, maxPowerW: 3000, setpointTopic: '', powerTopic: 'p', stallPowerW: 20 };
   const s = freshState();
   s.manualFull = true;
-  const d = decideWallboxAction(box, s, baseDecideCtx({ plugged: false, powerW: 0 }));
+  // plugged=false darf die Volladung nicht beenden – das Signal dient nur der
+  // Stall-Überwachung. Erst der Leistungsabfall nach gesehener Ladung beendet sie.
+  let d = decideWallboxAction(box, s, baseDecideCtx({ plugged: false, powerW: 0 }));
+  assert.equal(s.manualFull, true);
+  assert.equal(d.on, true);
+
+  d = decideWallboxAction(box, s, baseDecideCtx({ plugged: true, powerW: 2300, now: 1_030_000 }));
+  assert.equal(s.manualFullSawCharging, true);
+  d = decideWallboxAction(box, s, baseDecideCtx({ plugged: false, powerW: 0, now: 1_060_000 }));
   assert.equal(s.manualFull, false);
   assert.equal(d.on, false);
 });

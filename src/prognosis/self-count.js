@@ -19,9 +19,12 @@
 const { loadMqttConfig } = require('../mqtt/config');
 const { localCalendar } = require('../local-time');
 const { invalidateConsumptionModel } = require('./forecast');
+const { loadPrognosisConfig } = require('./config');
 
-// Guard-Schwelle (bewusst als Konstante, damit leicht nachjustierbar): die
-// Bilanz wird nur ersetzt, wenn sie **relativ** UND **absolut** deutlich abweicht.
+// Guard-Schwellen: die Bilanz wird nur ersetzt, wenn sie **relativ** UND
+// **absolut** deutlich abweicht. Beide Schwellen sind als Modellparameter
+// konfigurierbar (Prognoseseite; Standard 25 % bzw. 0,2 kWh); GUARD_REL und
+// GUARD_ABS_KWH sind ihre Fallbacks.
 const GUARD_REL = 0.25;
 const GUARD_ABS_KWH = 0.2;
 
@@ -74,17 +77,28 @@ async function integrateSelfCount(db, cache, netHousePowerW, now = Date.now()) {
   );
 }
 
-function divergesTooMuch(primary, self) {
+function divergesTooMuch(primary, self, guardRel = GUARD_REL, guardAbsKwh = GUARD_ABS_KWH) {
   const diff = Math.abs(primary - self);
-  if (diff <= GUARD_ABS_KWH) return false;
+  // 0 kWh ist eine gültige Mindest-Abweichung; nur fehlende/ungültige Werte
+  // fallen auf den Standard zurück (Number(null) wäre fälschlich 0).
+  const abs = guardAbsKwh == null ? GUARD_ABS_KWH : Number(guardAbsKwh);
+  if (diff <= (Number.isFinite(abs) && abs >= 0 ? abs : GUARD_ABS_KWH)) return false;
   const base = Math.max(Math.abs(primary), Math.abs(self), 1e-6);
-  return diff / base > GUARD_REL;
+  const rel = Number(guardRel);
+  return diff / base > (Number.isFinite(rel) && rel > 0 ? rel : GUARD_REL);
 }
 
 // Abgeschlossene Stunden absichern: Bilanz ggf. durch die Selbstzählung ersetzen.
 // Läuft nach jedem Sample; verarbeitet jede Stunde genau einmal (reconciled).
 async function reconcileCompletedHours(db, cache, { selfMeterPresent = false } = {}, now = Date.now()) {
   const calendar = await calendarFor(db, cache, new Date(now));
+  // Konfigurierbare Guard-Schwellen (Modellparameter): relativ in Prozent,
+  // absolut in kWh.
+  const guardConfig = await loadPrognosisConfig(db).catch(() => null);
+  const guardRel = guardConfig?.selfCountGuardPercent / 100 || GUARD_REL;
+  const guardAbsKwh = Number.isFinite(guardConfig?.selfCountGuardMinKwh)
+    ? guardConfig.selfCountGuardMinKwh
+    : GUARD_ABS_KWH;
   const dayKey = calendar.dateKey;
   const currentHour = Math.max(0, Math.min(23, Number(calendar.hours) || 0));
   // Alle noch nicht abgesicherten, bereits abgeschlossenen Stunden (heute vor der
@@ -105,7 +119,8 @@ async function reconcileCompletedHours(db, cache, { selfMeterPresent = false } =
     let replaced = false;
     // Kein echter Zähler + beide Serien vorhanden + zu große Abweichung
     // ⇒ Selbstzählung als Ersatzwert in die Prognose übernehmen.
-    if (!selfMeterPresent && primary != null && self != null && divergesTooMuch(primary, self)) {
+    if (!selfMeterPresent && primary != null && self != null &&
+        divergesTooMuch(primary, self, guardRel, guardAbsKwh)) {
       await dbRun(
         db,
         'UPDATE prognosis_hourly_consumption SET consumption_kwh = ?, reconciled = 1 WHERE day_key = ? AND hour = ?',

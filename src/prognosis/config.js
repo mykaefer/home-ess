@@ -4,6 +4,12 @@ const DEFAULTS = {
   historyDays: 28,
   behaviorModel: 'grid_parallel',
   behaviorActive: false,
+  // Maximale relative Abweichung der Bilanz von der Selbstzählung (in %),
+  // bevor der Guard die abgeschlossene Stunde durch die Selbstzählung ersetzt.
+  selfCountGuardPercent: 25,
+  // Absolute Mindest-Abweichung (kWh): darunter greift der Guard nie, egal wie
+  // groß die relative Abweichung ist (schützt kleine Stunden vor Rauschen).
+  selfCountGuardMinKwh: 0.2,
 };
 
 const BEHAVIOR_MODELS = {
@@ -24,6 +30,12 @@ function loadPrognosisConfig(db) {
         historyDays: Math.round(numberInRange(row.history_days, 7, 90, DEFAULTS.historyDays)),
         behaviorModel: BEHAVIOR_MODELS[row.behavior_model] ? row.behavior_model : DEFAULTS.behaviorModel,
         behaviorActive: !!row.behavior_active,
+        selfCountGuardPercent: numberInRange(
+          row.self_count_guard_percent, 1, 100, DEFAULTS.selfCountGuardPercent
+        ),
+        selfCountGuardMinKwh: numberInRange(
+          row.self_count_guard_min_kwh, 0, 5, DEFAULTS.selfCountGuardMinKwh
+        ),
       });
     });
   });
@@ -32,14 +44,22 @@ function loadPrognosisConfig(db) {
 function savePrognosisConfig(db, input) {
   const config = {
     historyDays: Math.round(numberInRange(input.historyDays, 7, 90, DEFAULTS.historyDays)),
+    selfCountGuardPercent: numberInRange(
+      input.selfCountGuardPercent, 1, 100, DEFAULTS.selfCountGuardPercent
+    ),
+    selfCountGuardMinKwh: numberInRange(
+      input.selfCountGuardMinKwh, 0, 5, DEFAULTS.selfCountGuardMinKwh
+    ),
   };
   return new Promise((resolve, reject) => {
     db.run(
-      `INSERT INTO prognosis_config (id, history_days)
-       VALUES (1, ?)
+      `INSERT INTO prognosis_config (id, history_days, self_count_guard_percent, self_count_guard_min_kwh)
+       VALUES (1, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
-        history_days=excluded.history_days`,
-      [config.historyDays],
+        history_days=excluded.history_days,
+        self_count_guard_percent=excluded.self_count_guard_percent,
+        self_count_guard_min_kwh=excluded.self_count_guard_min_kwh`,
+      [config.historyDays, config.selfCountGuardPercent, config.selfCountGuardMinKwh],
       (err) => (err ? reject(err) : resolve(config))
     );
   });

@@ -41,6 +41,77 @@ test('divergesTooMuch verlangt relative UND absolute Abweichung', () => {
   assert.equal(divergesTooMuch(5.0, 5.3), false);
 });
 
+test('divergesTooMuch respektiert eine abweichende konfigurierte Schwelle', () => {
+  // 1.0 vs 1.5: absolut 0.5 > 0.2, relativ 0.33 — bei 25 % ersetzt, bei 60 % nicht.
+  assert.equal(divergesTooMuch(1.0, 1.5, 0.25), true);
+  assert.equal(divergesTooMuch(1.0, 1.5, 0.6), false);
+  // Ungültige Schwelle fällt auf den Standard (25 %) zurück.
+  assert.equal(divergesTooMuch(1.0, 1.5, null), true);
+  assert.equal(divergesTooMuch(1.0, 1.5, 0), true);
+});
+
+test('divergesTooMuch respektiert eine konfigurierte Mindest-Abweichung (kWh)', () => {
+  // 1.0 vs 1.5: absolut 0.5 — bei Mindest-Abweichung 0.6 kWh greift der Guard nicht.
+  assert.equal(divergesTooMuch(1.0, 1.5, 0.25, 0.6), false);
+  assert.equal(divergesTooMuch(1.0, 1.5, 0.25, 0.4), true);
+  // 0 kWh ist gültig: allein die relative Schwelle entscheidet.
+  assert.equal(divergesTooMuch(1.0, 1.15, 0.1, 0), true);
+  // Ungültige Mindest-Abweichung fällt auf den Standard (0,2 kWh) zurück.
+  assert.equal(divergesTooMuch(1.0, 1.1, 0.05, null), false);
+  assert.equal(divergesTooMuch(1.0, 1.1, 0.05, -1), false);
+});
+
+test('Guard nutzt die in den Modellparametern konfigurierte Schwelle', async () => {
+  const db = await freshDb();
+  await dbRun(db, `CREATE TABLE prognosis_config (
+    id INTEGER PRIMARY KEY, history_days INTEGER, behavior_model TEXT,
+    behavior_active INTEGER, self_count_guard_percent REAL)`);
+  await dbRun(db, "INSERT INTO prognosis_config VALUES (1, 28, 'grid_parallel', 0, 60)");
+  // Abweichung 29 % (2.25 vs 1.6): bei Standard 25 % würde ersetzt,
+  // bei konfigurierten 60 % bleibt die Bilanz maßgeblich.
+  await dbRun(db, "INSERT INTO prognosis_hourly_consumption (day_key, hour, consumption_kwh, primary_kwh, self_kwh) VALUES ('2026-07-05', 7, 2.25, 2.25, 1.6)");
+  const now = Date.parse('2026-07-05T09:30:00Z');
+  const res = await reconcileCompletedHours(db, new Map(), { selfMeterPresent: false }, now);
+  assert.equal(res.replaced, 0);
+  const row = await dbGet(db, "SELECT round(consumption_kwh,2) c, reconciled r FROM prognosis_hourly_consumption WHERE hour=7");
+  assert.equal(row.c, 2.25);
+  assert.equal(row.r, 1);
+
+  // Engere Schwelle (10 %): dieselbe Abweichung wird jetzt ersetzt.
+  await dbRun(db, 'UPDATE prognosis_config SET self_count_guard_percent = 10 WHERE id = 1');
+  await dbRun(db, 'UPDATE prognosis_hourly_consumption SET reconciled = 0 WHERE hour = 7');
+  await dbRun(db, "INSERT INTO prognosis_daily_consumption (day_key, consumption_kwh, completed) VALUES ('2026-07-05', 2.25, 0)");
+  const res2 = await reconcileCompletedHours(db, new Map(), { selfMeterPresent: false }, now);
+  assert.equal(res2.replaced, 1);
+  const row2 = await dbGet(db, "SELECT round(consumption_kwh,2) c FROM prognosis_hourly_consumption WHERE hour=7");
+  assert.equal(row2.c, 1.6);
+  await new Promise((r) => db.close(r));
+});
+
+test('Guard nutzt die konfigurierte Mindest-Abweichung (kWh)', async () => {
+  const db = await freshDb();
+  await dbRun(db, `CREATE TABLE prognosis_config (
+    id INTEGER PRIMARY KEY, history_days INTEGER, behavior_model TEXT,
+    behavior_active INTEGER, self_count_guard_percent REAL, self_count_guard_min_kwh REAL)`);
+  // Abweichung 0.65 kWh / 29 %: relative Schwelle 25 % wäre gerissen, aber die
+  // konfigurierte Mindest-Abweichung von 1 kWh schützt die Stunde.
+  await dbRun(db, "INSERT INTO prognosis_config VALUES (1, 28, 'grid_parallel', 0, 25, 1.0)");
+  await dbRun(db, "INSERT INTO prognosis_hourly_consumption (day_key, hour, consumption_kwh, primary_kwh, self_kwh) VALUES ('2026-07-05', 7, 2.25, 2.25, 1.6)");
+  const now = Date.parse('2026-07-05T09:30:00Z');
+  const res = await reconcileCompletedHours(db, new Map(), { selfMeterPresent: false }, now);
+  assert.equal(res.replaced, 0);
+
+  // Kleinere Mindest-Abweichung (0,5 kWh): dieselbe Stunde wird jetzt ersetzt.
+  await dbRun(db, 'UPDATE prognosis_config SET self_count_guard_min_kwh = 0.5 WHERE id = 1');
+  await dbRun(db, 'UPDATE prognosis_hourly_consumption SET reconciled = 0 WHERE hour = 7');
+  await dbRun(db, "INSERT INTO prognosis_daily_consumption (day_key, consumption_kwh, completed) VALUES ('2026-07-05', 2.25, 0)");
+  const res2 = await reconcileCompletedHours(db, new Map(), { selfMeterPresent: false }, now);
+  assert.equal(res2.replaced, 1);
+  const row = await dbGet(db, "SELECT round(consumption_kwh,2) c FROM prognosis_hourly_consumption WHERE hour=7");
+  assert.equal(row.c, 1.6);
+  await new Promise((r) => db.close(r));
+});
+
 test('integrateSelfCount integriert Leistung stundenweise (kein Sprung beim ersten Tick)', async () => {
   const db = await freshDb();
   const t0 = Date.parse('2026-07-05T07:10:00Z');
