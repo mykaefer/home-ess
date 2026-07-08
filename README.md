@@ -254,9 +254,13 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
     Ladezustand aus der seit Einstecken geladenen Energie geschätzt.
   - **Drei Lademodi** (Privat / Beruflich / Immer voll) mit je eigener Priorität:
     Privat lädt bis zum Mindest-Ladestand, darüber nur prognostizierten, vom
-    Hausakku nicht mehr speicherbaren PV-Überschuss; Beruflich berechnet aus
-    Fahrzeug-SoC, Akkugröße und Ladeleistung den rechtzeitigen Start für 06:00 Uhr
-    an gewählten Arbeitstagen; Immer voll lässt das Ladegerät aktiviert. Mit
+    Hausakku nicht mehr speicherbaren PV-Überschuss; Beruflich stellt an
+    gewählten Arbeitstagen bis 06:00 Uhr den **Mindest-Ladestand Beruflich**
+    bereit (rechtzeitiger Start aus Fahrzeug-SoC, Akkugröße und Ladeleistung
+    berechnet; darüber nur Überschuss wie Privat). Fällt der Ladestand an einem
+    Arbeitstag darunter, wird sofort nachgeladen; vor einem freien Folgetag gilt
+    ab einer einstellbaren Uhrzeit nur noch die Privatregel. Immer voll lässt
+    das Ladegerät aktiviert. Mit
     Soll-Leistungs-Topic wird vorsichtig gegen den Live-Überschuss moduliert;
     ohne Sollwert startet die Box erst bei vollständig gedeckter Ladeleistung.
     Optionaler **Modus-Sync** über ein eigenes Topic. Jede Box besitzt zusätzlich

@@ -518,6 +518,39 @@ async function buildStromverbrauchSnapshot(db, cache) {
   };
 }
 
+// Reine Cache-Momentanwerte für die Kopfzeile: Netzsaldo (positiv = Bezug,
+// negativ = Einspeisung) und Eigenverbrauchsleistung inkl. verbraucherseitiger
+// PV. Optional werden bereits gelesene PV-Werte (readPhotovoltaikValues)
+// übergeben, damit der Aufrufer sie nicht doppelt ermittelt.
+function readLivePowerValues(cache, pvValues = null) {
+  const eigenverbrauchMeterValue = sumCacheValues(cache, [
+    EIGENVERBRAUCH_L1_STATE_ID,
+    EIGENVERBRAUCH_L2_STATE_ID,
+    EIGENVERBRAUCH_L3_STATE_ID,
+  ]);
+  const netzbezugPowerValue = sumCacheValues(cache, [
+    NETZBEZUG_L1_STATE_ID,
+    NETZBEZUG_L2_STATE_ID,
+    NETZBEZUG_L3_STATE_ID,
+  ]);
+  let consumerSidePvValue = null;
+  if (pvValues && Array.isArray(pvValues.plants)) {
+    let total = 0;
+    let has = false;
+    for (const plant of pvValues.plants) {
+      if (plant.isConsumerSide && plant.current != null) {
+        total += plant.current;
+        has = true;
+      }
+    }
+    if (has) consumerSidePvValue = total;
+  }
+  return {
+    eigenverbrauchPower: deriveEigenverbrauchPower(eigenverbrauchMeterValue, consumerSidePvValue),
+    netzbezugPower: netzbezugPowerValue,
+  };
+}
+
 // Schreibfreie Variante: liefert die aktuellen berechneten Strom-Werte (Leistungen,
 // Eigenverbrauch/Netzbezug/Summen je Zeitraum sowie die Zählersummen Bezug/Einspeisung)
 // ohne die DB-schreibende Zähler-/Summen-Fortschreibung. Die persistierten Tageswerte
@@ -602,6 +635,7 @@ async function readStromverbrauchValues(db, cache) {
 module.exports = {
   buildStromverbrauchSnapshot,
   readStromverbrauchValues,
+  readLivePowerValues,
   setManualOffset,
   parseNumber,
   updateSummaryState,

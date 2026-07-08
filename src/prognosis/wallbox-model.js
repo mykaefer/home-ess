@@ -2,7 +2,9 @@
 
 const { listWallboxes } = require('../wallbox/boxes');
 const { readWallboxValues } = require('../wallbox/aggregation');
-const { priorityForMode, FULL_SOC, BUSINESS_FORCE_HOUR } = require('../wallbox/planner');
+const {
+  priorityForMode, businessTargetSoc, businessEndHour, FULL_SOC, BUSINESS_FORCE_HOUR,
+} = require('../wallbox/planner');
 
 const DEFAULT_PROFILE = Array(24).fill(1 / 24);
 
@@ -99,7 +101,9 @@ async function buildWallboxModel(db, currentDayKey, historyDays = 28, currentHou
       maxPowerW: box.maxPowerW,
       batteryCapacityKwh: box.batteryCapacityKwh,
       minChargePercent: box.minChargePercent,
+      minChargeBusinessPercent: box.minChargeBusinessPercent,
       businessDays: box.businessDays,
+      businessEndHour: box.businessEndHour,
       hasSetpoint: !!box.setpointTopic,
       soc: live.soc == null ? null : Number(live.soc),
       plugged: live.plugged == null ? null : !!live.plugged,
@@ -230,24 +234,43 @@ function planWallboxSchedule(model, slots = [], storage = null) {
     } else if (box.mode === 3) {
       addPlannedEnergy(box, slots, energyToFull, false);
     } else {
-      // Beruflich: den tatsächlichen Restbedarf zunächst mit Überschuss decken.
-      // Vor dem nächsten Arbeitstag wird ein verbliebener Bedarf ab der
-      // Garantiezeit erzwungen. Die Fahrzeugenergie wird dabei nur einmal geplant.
-      const deadlineIndex = dateKeys.findIndex((key, index) => {
-        const nextKey = dateKeys[index + 1];
-        return isBusinessDay(box, key) || (nextKey && isBusinessDay(box, nextKey));
-      });
-      const eligible = deadlineIndex >= 0
-        ? slots.filter((slot) => slot.dayIndex <= deadlineIndex)
-        : slots;
-      let remaining = addPlannedEnergy(box, eligible, energyToFull, true);
-      if (remaining > 0 && deadlineIndex >= 0) {
-        const deadlineSlots = eligible.filter(
-          (slot) => slot.dayIndex === deadlineIndex && slot.hour >= BUSINESS_FORCE_HOUR
+      // Beruflich: Pflicht ist nur die Energie bis zum Mindest-Ladestand beruflich.
+      // AN einem Arbeitstag wird eine Unterschreitung sofort geplant (vor einem
+      // freien Folgetag nur bis zur einstellbaren Feierabend-Uhrzeit); ansonsten
+      // erst Überschuss, ab der Garantiezeit vor dem nächsten Arbeitstag erzwungen.
+      // Oberhalb des Mindest-Ladestands zählt wie bei Privat nur echter Überschuss.
+      const targetSoc = businessTargetSoc(box);
+      const mandatoryTarget = Math.min(energyToFull,
+        capacity * Math.max(0, targetSoc - soc) / 100);
+      let mandatoryLeft = mandatoryTarget;
+      if (mandatoryTarget > 0 && isBusinessDay(box, dateKeys[0])) {
+        const tomorrowIsBusiness = dateKeys.length > 1 && isBusinessDay(box, dateKeys[1]);
+        const endHour = businessEndHour(box);
+        const immediateSlots = slots.filter(
+          (slot) => slot.dayIndex === 0 && (tomorrowIsBusiness || slot.hour < endHour)
         );
-        remaining = addPlannedEnergy(box, deadlineSlots, remaining, false);
-        if (remaining > 0) addPlannedEnergy(box, eligible, remaining, false);
+        mandatoryLeft = addPlannedEnergy(box, immediateSlots, mandatoryTarget, false);
       }
+      if (mandatoryLeft > 0) {
+        const deadlineIndex = dateKeys.findIndex((key, index) => {
+          const nextKey = dateKeys[index + 1];
+          return nextKey && isBusinessDay(box, nextKey);
+        });
+        const eligible = deadlineIndex >= 0
+          ? slots.filter((slot) => slot.dayIndex <= deadlineIndex)
+          : slots;
+        let remaining = addPlannedEnergy(box, eligible, mandatoryLeft, true);
+        if (remaining > 0 && deadlineIndex >= 0) {
+          const deadlineSlots = eligible.filter(
+            (slot) => slot.dayIndex === deadlineIndex && slot.hour >= BUSINESS_FORCE_HOUR
+          );
+          remaining = addPlannedEnergy(box, deadlineSlots, remaining, false);
+          if (remaining > 0) remaining = addPlannedEnergy(box, eligible, remaining, false);
+        }
+        mandatoryLeft = remaining;
+      }
+      const mandatoryDelivered = mandatoryTarget - mandatoryLeft;
+      addPlannedEnergy(box, slots, Math.max(0, energyToFull - mandatoryDelivered), true);
     }
 
     const first = slots.find((slot) => box.plannedHourlyByDate[slot.dateKey][slot.hour] > 0.000001);

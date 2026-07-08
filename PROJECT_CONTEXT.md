@@ -515,8 +515,13 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
       Netzeinspeisung über der Einschaltschwelle) übersteuert dabei eine zu
       vorsichtige Tagesprognose — die eingetretene Realität hat Vorrang, die
       Prognose bleibt nur für den vorausschauenden Start zuständig.
-      **Beruflich** berechnet den spätesten Start aus Fahrzeug-Restenergie und
-      Ladeleistung für 06:00 Uhr an gewählten Arbeitstagen; freie Tage → Privatregel.
+      **Beruflich** stellt an gewählten Arbeitstagen bis 06:00 Uhr den
+      **Mindest-Ladestand Beruflich** bereit (spätester Start aus Restenergie und
+      Ladeleistung berechnet); oberhalb davon gilt die Privatregel (nur Überschuss).
+      Fällt der Ladestand AN einem Arbeitstag unter den Mindest-Ladestand, startet
+      die Ladung sofort. Folgt ein freier Tag, gilt ab der einstellbaren
+      Feierabend-Uhrzeit (`business_end_hour`) nur noch die Privatregel;
+      freie Tage → Privatregel.
       **Immer voll** lässt das Ladegerät aktiviert. Mit Soll-Leistungs-Topic
       Feinmodulation, sonst An/Aus an einer Schwelle.
     - Steuerschleife `wallbox/automation.js` (30-s-Tick + serielle Kette, Init aus

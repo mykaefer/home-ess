@@ -25,6 +25,13 @@
     --color-pv: #c99a2e;
     --color-pv-tint: #faf3df;
     --color-danger: #c53030;
+
+    /* Aufgehellte Varianten der Leistungsfarben für dunkle Flächen (blauer
+       Header): gleiche Farbtöne, aber auf dem Header-Blau lesbar. */
+    --color-battery-bright: #9ec9ff;
+    --color-grid-bright: #f2938e;
+    --color-self-bright: #cfa9e8;
+    --color-pv-bright: #f2c94c;
 }
 
 * { box-sizing: border-box; }
@@ -1996,6 +2003,17 @@ h2 .cmd-confirm { font-size: 13px; vertical-align: middle; }
     font-size: 1.2em;
 }
 
+/* Das Titellogo steckt in einem Button: am Smartphone öffnet es das Menü-Sheet,
+   am Desktop ist es funktionslos (Skript prüft den Breakpoint). */
+.header-logo-button {
+    display: block;
+    padding: 0;
+    margin: 0;
+    border: 0;
+    background: none;
+    cursor: default;
+}
+
 .header-logo {
     height: 34px;
     width: auto;
@@ -2036,6 +2054,38 @@ h2 .cmd-confirm { font-size: 13px; vertical-align: middle; }
 .header-status-pill span:last-child {
     font-weight: 700;
 }
+
+/* Gemeinsame Momentanleistungs-Pill (PV/Netz/Verbrauch/Akku): nur in der
+   PC-Ansicht (Mobile-Layer blendet sie über .only-desktop aus). Piktogramm je
+   Leistungsart; transparenter Grund mit Umrandung, die Werte in den
+   aufgehellten Header-Varianten der Leistungsfarben. */
+.header-status-pill--power {
+    background: transparent;
+    backdrop-filter: none;
+    border-color: rgba(255, 255, 255, 0.45);
+    gap: 12px;
+}
+
+.header-power-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.header-power-icon {
+    font-size: 13px;
+    line-height: 1;
+}
+
+.header-power-value {
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+.header-power-value--pv { color: var(--color-pv-bright); }
+.header-power-value--grid { color: var(--color-grid-bright); }
+.header-power-value--self { color: var(--color-self-bright); }
+.header-power-value--battery { color: var(--color-battery-bright); }
 
 .header-battery {
     display: none;
@@ -3289,6 +3339,12 @@ body,
     .app-body { min-height: 0; }
     .header-logo { height: 24px; }
 
+    /* Titellogo als Menüschaltfläche (ersetzt den Menü-Tab in der Tab-Bar). */
+    .header-logo-button {
+        cursor: pointer;
+        -webkit-tap-highlight-color: transparent;
+    }
+
     .header-statusbar {
         max-width: none;
         margin-left: auto;
@@ -3303,9 +3359,26 @@ body,
 
     .header-status-pill--temperature strong { display: none; }
 
-    /* Batterie-Icon reicht — die Prozentzahl steckt im Füllstand (und im
-       Tooltip), so bleibt der Header einzeilig neben dem Logo. */
-    .header-battery .bat-pct { display: none; }
+    /* SoC-Prozentzahl klein, weiß und mittig IM Akkusymbol — statt daneben
+       wie in der breiten PC-Ansicht. So bleibt der Header kompakt. */
+    .header-battery { position: relative; }
+
+    .header-battery .bat-pct {
+        position: absolute;
+        left: 3px;               /* Innenabstand von .header-battery */
+        top: 0;
+        bottom: 0;
+        width: 44px;             /* Akku-Körper (40px) inkl. 2px Rahmen */
+        margin: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 9px;
+        font-weight: 700;
+        color: #fff;
+        text-shadow: 0 0 2px rgba(0, 0, 0, 0.55);
+        pointer-events: none;
+    }
 
     .header-status-pill {
         min-height: 28px;
@@ -3322,7 +3395,8 @@ body,
         padding: 14px 12px calc(74px + env(safe-area-inset-bottom));
     }
 
-    /* Untere Tab-Bar: vier Kernseiten + Menü, Touch-Ziele ≥ 44px. */
+    /* Untere Tab-Bar: fünf Kernseiten, Touch-Ziele ≥ 44px. Das Menü öffnet
+       das Titellogo im Header. */
     .mobile-tabbar {
         display: flex;
         position: fixed;
@@ -3382,7 +3456,8 @@ body,
         margin-bottom: 8px;
     }
 
-    .mobile-nav-logo { height: 26px; width: auto; }
+    /* Gleiche Logogröße wie im Titel (mobiler Header). */
+    .mobile-nav-logo { height: 24px; width: auto; }
 
     .mobile-nav-close {
         width: 44px;

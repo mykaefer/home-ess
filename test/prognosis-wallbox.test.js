@@ -20,7 +20,9 @@ test('Wallbox-Prognose lernt Verbrauch und Ladezeit je Box und Wochentag getrenn
     counter_topic TEXT, counter_unit TEXT, setpoint_topic TEXT, plugged_topic TEXT,
     soc_topic TEXT, mode_sync_topic TEXT, mode INTEGER, priority_private INTEGER,
     priority_business INTEGER, priority_full INTEGER, min_charge_percent INTEGER,
-    business_days TEXT, stall_timeout_seconds INTEGER, stall_power_w REAL,
+    min_charge_business_percent INTEGER NOT NULL DEFAULT 100,
+    business_days TEXT, business_end_hour INTEGER NOT NULL DEFAULT 18,
+    stall_timeout_seconds INTEGER, stall_power_w REAL,
     load_shed_phase TEXT NOT NULL DEFAULT 'three_phase')`);
   await run(db, `CREATE TABLE wallbox_daily_consumption (
     wallbox_id INTEGER, day_key TEXT, consumption_kwh REAL, completed INTEGER, updated_at INTEGER,
@@ -32,7 +34,7 @@ test('Wallbox-Prognose lernt Verbrauch und Ladezeit je Box und Wochentag getrenn
     wallbox_id INTEGER PRIMARY KEY, year_offset REAL, previous_year_total REAL)`);
   await run(db, `CREATE TABLE wallbox_counter_state (
     wallbox_id INTEGER PRIMARY KEY, day_total REAL)`);
-  const values = `(?, ?, 11000, 50, '', '', '', 'W', '', 'kWh', '', '', '', '', 1, 5, 3, 4, 30, '', 120, 200, 'three_phase')`;
+  const values = `(?, ?, 11000, 50, '', '', '', 'W', '', 'kWh', '', '', '', '', 1, 5, 3, 4, 30, 100, '', 18, 120, 200, 'three_phase')`;
   await run(db, `INSERT INTO wallboxes VALUES ${values}`, [1, 'Auto A']);
   await run(db, `INSERT INTO wallboxes VALUES ${values}`, [2, 'Auto B']);
   await run(db, `INSERT INTO wallbox_summary_state VALUES (1, 20, 0), (2, 8, 0)`);
@@ -109,6 +111,48 @@ test('Privat-Ladeplan nutzt nur Überschuss, der nicht mehr in den Hausakku pass
     capacityKwh: 10, minSoc: 20, soc: 100, chargeEfficiency: 1, dischargeEfficiency: 1,
   });
   assert.equal(fullBatteryModel.boxes[0].plannedFlexibleEnergyByDate['2026-06-30'], 6);
+});
+
+test('Beruflich-Ladeplan: Pflicht nur bis Mindest-Ladestand beruflich, am Arbeitstag sofort', () => {
+  const common = {
+    id: 1, name: 'Pendler', mode: 2, priority: 3, maxPowerW: 10000,
+    batteryCapacityKwh: 50, minChargePercent: 30, minChargeBusinessPercent: 60,
+    businessDays: [3], businessEndHour: 18, // 2026-07-02 ist ein Donnerstag (Index 3)
+    dailyByWeekday: Array(7).fill(0),
+    profilesByWeekday: Array.from({ length: 7 }, () => Array(24).fill(1 / 24)),
+    samplesByWeekday: Array(7).fill(0), todayRemainingKwh: 0,
+  };
+  // Arbeitstag, SoC 40 < 60: 10 kWh Pflicht sofort ab der ersten Stunde,
+  // der Rest bis Voll bleibt reine Überschussladung (hier: kein Überschuss).
+  const noSurplusSlots = [10, 11].map((hour) => ({
+    dateKey: '2026-07-02', dayIndex: 0, hour, durationHours: 1,
+    startMs: Date.UTC(2026, 6, 2, hour), pvKwh: 1, houseKwh: 1,
+  }));
+  const model = { boxes: [{ ...common, soc: 40 }] };
+  planWallboxSchedule(model, noSurplusSlots);
+  assert.equal(model.boxes[0].plannedEnergyByDate['2026-07-02'], 10);
+  assert.equal(model.boxes[0].plannedFlexibleEnergyByDate['2026-07-02'], 0);
+  assert.equal(model.boxes[0].nextCharge.hour, 10);
+
+  // Oberhalb des Mindest-Ladestands beruflich zählt nur echter Überschuss.
+  const surplusSlots = [10, 11].map((hour) => ({
+    dateKey: '2026-07-02', dayIndex: 0, hour, durationHours: 1,
+    startMs: Date.UTC(2026, 6, 2, hour), pvKwh: 8, houseKwh: 1,
+  }));
+  const aboveMin = { boxes: [{ ...common, soc: 70 }] };
+  planWallboxSchedule(aboveMin, surplusSlots);
+  assert.equal(aboveMin.boxes[0].plannedEnergyByDate['2026-07-02'], 14);
+  assert.equal(aboveMin.boxes[0].plannedFlexibleEnergyByDate['2026-07-02'], 14);
+
+  // Vor einem freien Folgetag endet die Sofortladung an der Feierabend-Uhrzeit:
+  // ab 18 Uhr wird nichts mehr erzwungen (kein Überschuss → kein Plan heute).
+  const eveningSlots = [19, 20].map((hour) => ({
+    dateKey: '2026-07-02', dayIndex: 0, hour, durationHours: 1,
+    startMs: Date.UTC(2026, 6, 2, hour), pvKwh: 0, houseKwh: 1,
+  }));
+  const evening = { boxes: [{ ...common, soc: 40 }] };
+  planWallboxSchedule(evening, eveningSlots);
+  assert.equal(evening.boxes[0].plannedEnergyByDate['2026-07-02'], 0);
 });
 
 test('historischer Wallbox-Verbrauch erzeugt ohne tatsächlichen Fahrzeugbedarf keine Prognoselast', () => {

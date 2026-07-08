@@ -43,7 +43,9 @@ async function freshDb() {
     priority_full INTEGER NOT NULL DEFAULT 4,
     load_shed_phase TEXT NOT NULL DEFAULT 'three_phase',
     min_charge_percent INTEGER NOT NULL DEFAULT 30,
+    min_charge_business_percent INTEGER NOT NULL DEFAULT 100,
     business_days TEXT NOT NULL DEFAULT '',
+    business_end_hour INTEGER NOT NULL DEFAULT 18,
     stall_timeout_seconds INTEGER NOT NULL DEFAULT 120,
     stall_power_w REAL NOT NULL DEFAULT 200
   )`);
@@ -241,6 +243,86 @@ test('Beruflich wartet vor dem spätesten notwendigen Ladebeginn', () => {
     weekday: 6, tomorrowWeekday: 0, prognosisOverflowKwh: 0,
   });
   assert.equal(p.desiredOn, false);
+});
+
+test('Beruflich: Garantieladung zielt auf den Mindest-Ladestand beruflich', () => {
+  const box = {
+    mode: 2, maxPowerW: 11000, batteryCapacityKwh: 50, minChargePercent: 30,
+    minChargeBusinessPercent: 60, priorityBusiness: 3, priorityPrivate: 5,
+    businessDays: [0], setpointTopic: 'x',
+  };
+  // Sonntag 20:00: bis 60 % fehlen nur 10 kWh (~1 h) → noch lange kein Ladebeginn.
+  let p = planCharge(box, {
+    plugged: true, soc: 40, surplusW: 0, hour: 20, minute: 0,
+    weekday: 6, tomorrowWeekday: 0, prognosisOverflowKwh: 0,
+  });
+  assert.equal(p.desiredOn, false);
+  // Montag 04:30: 1,5 h bis 06:00 ≈ Restladezeit + Puffer → Garantieladung startet.
+  p = planCharge(box, {
+    plugged: true, soc: 40, surplusW: 0, hour: 4, minute: 30,
+    weekday: 0, tomorrowWeekday: 1, prognosisOverflowKwh: 0,
+  });
+  assert.equal(p.desiredOn, true);
+  assert.equal(p.setpointW, 11000);
+  // Oberhalb des Mindest-Ladestands beruflich gilt die Überschussregel wie Privat.
+  p = planCharge(box, {
+    plugged: true, soc: 70, surplusW: 0, hour: 20, minute: 0,
+    weekday: 6, tomorrowWeekday: 0, prognosisOverflowKwh: 0,
+  });
+  assert.equal(p.desiredOn, false);
+  assert.match(p.reason, /über Mindest-Ladestand/);
+  p = planCharge(box, {
+    plugged: true, soc: 70, surplusW: 4000, hour: 12, minute: 0,
+    weekday: 6, tomorrowWeekday: 0, prognosisOverflowKwh: 3,
+  });
+  assert.equal(p.desiredOn, true);
+  assert.equal(p.setpointW, 4000);
+});
+
+test('Beruflich: unter Mindest-Ladestand AN einem Arbeitstag startet sofort', () => {
+  const box = {
+    mode: 2, maxPowerW: 11000, batteryCapacityKwh: 50, minChargePercent: 30,
+    minChargeBusinessPercent: 60, businessEndHour: 18, priorityBusiness: 3,
+    priorityPrivate: 5, businessDays: [0, 1], setpointTopic: 'x',
+  };
+  // Montag 14:00, SoC 45 < 60 → Sofortladung mit voller Leistung, nicht erst
+  // zum vorbereitenden Garantiestart am Abend.
+  const p = planCharge(box, {
+    plugged: true, soc: 45, surplusW: 0, hour: 14, minute: 0,
+    weekday: 0, tomorrowWeekday: 1, prognosisOverflowKwh: 0,
+  });
+  assert.equal(p.desiredOn, true);
+  assert.equal(p.setpointW, 11000);
+  assert.match(p.reason, /Sofortladung/);
+});
+
+test('Beruflich: ab der Feierabend-Uhrzeit vor einem freien Tag gilt die Privatregel', () => {
+  const box = {
+    mode: 2, maxPowerW: 11000, batteryCapacityKwh: 50, minChargePercent: 30,
+    minChargeBusinessPercent: 60, businessEndHour: 17, priorityBusiness: 3,
+    priorityPrivate: 5, businessDays: [4], setpointTopic: 'x',
+  };
+  // Freitag 16:00 (morgen frei), SoC 45 < 60 → noch Sofortladung.
+  let p = planCharge(box, {
+    plugged: true, soc: 45, surplusW: 0, hour: 16, minute: 0,
+    weekday: 4, tomorrowWeekday: 5, prognosisOverflowKwh: 0,
+  });
+  assert.equal(p.desiredOn, true);
+  // Freitag 17:30 → nur noch Privatregel (über privatem Mindeststand, kein Überschuss → aus).
+  p = planCharge(box, {
+    plugged: true, soc: 45, surplusW: 0, hour: 17, minute: 30,
+    weekday: 4, tomorrowWeekday: 5, prognosisOverflowKwh: 0,
+  });
+  assert.equal(p.desiredOn, false);
+  assert.match(p.reason, /Feierabend vor freiem Tag/);
+  // Ist der Folgetag ebenfalls Arbeitstag, endet die Beruflich-Regel abends nicht.
+  const boxTwoDays = { ...box, businessDays: [4, 5] };
+  p = planCharge(boxTwoDays, {
+    plugged: true, soc: 45, surplusW: 0, hour: 17, minute: 30,
+    weekday: 4, tomorrowWeekday: 5, prognosisOverflowKwh: 0,
+  });
+  assert.equal(p.desiredOn, true);
+  assert.match(p.reason, /Sofortladung/);
 });
 
 test('Beruflich: freier Tag fällt auf die Privatregel zurück', () => {

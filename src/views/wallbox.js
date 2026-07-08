@@ -97,7 +97,8 @@ function renderBoxDialog({ dialogError, dialogValues, dialogMode, editingBoxId, 
     name: '', maxPowerW: 11000, batteryCapacityKwh: 50, commandTopic: '', statusTopic: '',
     powerTopic: '', powerUnit: 'W', counterTopic: '', counterUnit: 'kWh', setpointTopic: '',
     pluggedTopic: '', socTopic: '', modeSyncTopic: '', priorityPrivate: 5, priorityBusiness: 3,
-    priorityFull: 4, loadShedPhase: 'three_phase', minChargePercent: 30, businessDays: [], stallTimeoutSeconds: 120, stallPowerW: 200,
+    priorityFull: 4, loadShedPhase: 'three_phase', minChargePercent: 30, minChargeBusinessPercent: 100,
+    businessDays: [], businessEndHour: 18, stallTimeoutSeconds: 120, stallPowerW: 200,
   };
   const action = dialogMode === 'edit' && editingBoxId != null
     ? `/wallbox/boxes/${editingBoxId}` : '/wallbox/boxes';
@@ -163,13 +164,20 @@ function renderBoxDialog({ dialogError, dialogValues, dialogMode, editingBoxId, 
                   ${gridControlEnabled ? '' : `<input type="hidden" name="loadShedPhase" value="${escapeHtml(v.loadShedPhase || 'three_phase')}">`}</label>
                 <label class="field-block" for="wbMinCharge"><span>Mindest-Ladestand Privat (%)</span>
                   <input type="number" min="0" max="100" step="1" id="wbMinCharge" name="minChargePercent" value="${escapeHtml(v.minChargePercent)}"></label>
+                <label class="field-block" for="wbMinChargeBusiness"><span>Mindest-Ladestand Beruflich (%)</span>
+                  <input type="number" min="0" max="100" step="1" id="wbMinChargeBusiness" name="minChargeBusinessPercent" value="${escapeHtml(v.minChargeBusinessPercent)}"></label>
               </div>
               ${gridControlEnabled ? '' : '<p class="muted">Grid-Control ist deaktiviert. Die Lastabwurf-Phase wird erst bei aktivem Modul verwendet.</p>'}
-              <div class="dialog-section-head" style="margin-top:14px;"><h4 style="font-size:14px;">Beruflich: Arbeitstage (Auto muss voll bereitstehen)</h4></div>
+              <div class="dialog-section-head" style="margin-top:14px;"><h4 style="font-size:14px;">Beruflich: Arbeitstage (Auto steht mit Mindest-Ladestand Beruflich bereit)</h4>
+                <p class="muted">Zum Arbeitstag wird rechtzeitig bis zum Mindest-Ladestand Beruflich geladen; darüber nur PV-Überschuss wie Privat. Fällt der Ladestand an einem Arbeitstag darunter, wird sofort nachgeladen.</p></div>
               <div class="pump-mode-btns" style="flex-wrap:wrap;">
                 ${WEEKDAYS.map((d) => `<label class="remember-row remember-row--boxed" style="margin:2px;" for="wbDay${d.index}">
                   <input type="checkbox" id="wbDay${d.index}" name="businessDays" value="${d.index}"${businessDays.includes(d.index) ? ' checked' : ''}>
                   <span>${d.label}</span></label>`).join('')}
+              </div>
+              <div class="dialog-grid dialog-grid--two" style="margin-top:10px;">
+                <label class="field-block" for="wbBusinessEnd"><span>Privatregel ab (Uhr) vor freiem Folgetag</span>
+                  <input type="number" min="0" max="23" step="1" id="wbBusinessEnd" name="businessEndHour" value="${escapeHtml(v.businessEndHour)}"></label>
               </div>
             </div>
 
@@ -293,6 +301,8 @@ function renderWallbox({
       document.getElementById('wbPrioFull').value = v.priorityFull == null ? 4 : v.priorityFull;
       document.getElementById('wbLoadShedPhase').value = v.loadShedPhase || 'three_phase';
       document.getElementById('wbMinCharge').value = v.minChargePercent == null ? 30 : v.minChargePercent;
+      document.getElementById('wbMinChargeBusiness').value = v.minChargeBusinessPercent == null ? 100 : v.minChargeBusinessPercent;
+      document.getElementById('wbBusinessEnd').value = v.businessEndHour == null ? 18 : v.businessEndHour;
       document.getElementById('wbStallTimeout').value = v.stallTimeoutSeconds == null ? 120 : v.stallTimeoutSeconds;
       document.getElementById('wbStallPower').value = v.stallPowerW == null ? 200 : v.stallPowerW;
       var days = Array.isArray(v.businessDays) ? v.businessDays : [];
@@ -316,8 +326,9 @@ function renderWallbox({
         form.action = '/wallbox/boxes';
         title.textContent = 'Wallbox hinzufügen';
         setBoxFormValues({ powerUnit: 'W', counterUnit: 'kWh', priorityPrivate: 5,
-          priorityBusiness: 3, priorityFull: 4, minChargePercent: 30, maxPowerW: 11000,
-          batteryCapacityKwh: 50, businessDays: [], stallTimeoutSeconds: 120, stallPowerW: 200 });
+          priorityBusiness: 3, priorityFull: 4, minChargePercent: 30, minChargeBusinessPercent: 100,
+          maxPowerW: 11000, batteryCapacityKwh: 50, businessDays: [], businessEndHour: 18,
+          stallTimeoutSeconds: 120, stallPowerW: 200 });
       }
       if (typeof dialog.showModal === 'function') dialog.showModal();
     }

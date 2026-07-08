@@ -42,11 +42,13 @@ const NAV_CORE = [
 // die Kern-Liste unter dem alten Namen.
 const NAV = NAV_CORE;
 
-// Mobile Tab-Bar (≤ 768px): die vier wichtigsten Seiten als Direktzugriff,
-// alles Weitere über den Menü-Tab (vollflächiges Navigations-Sheet).
+// Mobile Tab-Bar (≤ 768px): die fünf wichtigsten Seiten als Direktzugriff.
+// Alles Weitere über das Titellogo im Header (öffnet das vollflächige
+// Navigations-Sheet) — ein eigener Menü-Tab entfällt.
 const MOBILE_TABS = [
   { path: '/dashboard', label: 'Dashboard', icon: '🏠' },
   { path: '/stromverbrauch', label: 'Strom', icon: '⚡' },
+  { path: '/photovoltaik', label: 'PV', icon: '☀️' },
   { path: '/batterie', label: 'Batterie', icon: '🔋' },
   { path: '/prognose', label: 'Prognose', icon: '📈' },
 ];
@@ -128,7 +130,6 @@ function renderMobileNav(activePath) {
     </div>
     <nav class="mobile-tabbar" aria-label="Hauptnavigation">
       ${tabs}
-      <button type="button" class="mobile-tab" id="mobile-menu-button" aria-controls="mobile-nav-sheet"><span class="mobile-tab-icon" aria-hidden="true">☰</span><span class="mobile-tab-label">Menü</span></button>
     </nav>`;
 }
 
@@ -139,10 +140,11 @@ function mobileNavScript() {
       if (!button || !sheet) return;
       function setOpen(open) {
         sheet.classList.toggle('is-open', open);
-        button.classList.toggle('active', open);
         document.body.classList.toggle('mobile-nav-open', open);
       }
       button.addEventListener('click', function () {
+        // Das Titellogo ist nur in der Smartphone-Ansicht eine Menüschaltfläche.
+        if (!window.matchMedia('(max-width: 768px)').matches) return;
         setOpen(!sheet.classList.contains('is-open'));
       });
       var closeButton = document.getElementById('mobile-nav-close');
@@ -164,6 +166,14 @@ function renderLiveScript() {
         if (temperatureNode && data.temperature) temperatureNode.textContent = data.temperature.display;
         if (timeNode && data.time) timeNode.textContent = data.time.display;
         if (dateNode && data.date) dateNode.textContent = data.date.display;
+        if (data.power) {
+          [['header-power-pv', data.power.pv], ['header-power-grid', data.power.grid],
+           ['header-power-self', data.power.self], ['header-power-battery', data.power.battery]
+          ].forEach(function (pair) {
+            var node = document.getElementById(pair[0]);
+            if (node && pair[1] != null) node.textContent = pair[1];
+          });
+        }
         var batNode  = document.getElementById('header-battery');
         var batFill  = document.getElementById('bat-fill');
         var batPct   = document.getElementById('bat-pct');
@@ -254,8 +264,16 @@ function renderLayout({ title, activePath = '', body = '', script = '' } = {}) {
 <body class="page-dashboard">
   <div class="app-shell">
     <header class="dashboard-header">
-      <img src="/homeESS.png" alt="homeESS" class="header-logo">
+      <button type="button" class="header-logo-button" id="mobile-menu-button" aria-controls="mobile-nav-sheet" aria-label="Menü öffnen">
+        <img src="/homeESS.png" alt="homeESS" class="header-logo">
+      </button>
       <div class="header-statusbar" aria-label="Umgebungswerte">
+        <span class="header-status-pill header-status-pill--power only-desktop" aria-label="Aktuelle Leistungswerte">
+          <span class="header-power-item" title="Aktuelle PV-Leistung"><span class="header-power-icon" aria-hidden="true">☀️</span><span id="header-power-pv" class="header-power-value header-power-value--pv">— W</span></span>
+          <span class="header-power-item" title="Aktueller Netzbezug (negativ = Einspeisung)"><span class="header-power-icon" aria-hidden="true">⚡</span><span id="header-power-grid" class="header-power-value header-power-value--grid">— W</span></span>
+          <span class="header-power-item" title="Aktueller Eigenverbrauch"><span class="header-power-icon" aria-hidden="true">🏠</span><span id="header-power-self" class="header-power-value header-power-value--self">— W</span></span>
+          <span class="header-power-item" title="Aktuelle Akkuladung (negativ = Entladung)"><span class="header-power-icon" aria-hidden="true">🔋</span><span id="header-power-battery" class="header-power-value header-power-value--battery">— W</span></span>
+        </span>
         <span class="header-status-pill header-status-pill--temperature">
           <strong>Aussen</strong>
           <span id="header-temperature">-- °C</span>

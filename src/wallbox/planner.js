@@ -104,23 +104,62 @@ function privatePlan(box, ctx) {
     reason: liveOverflow ? 'Privat: Hausakku voll, Netzeinspeisung aktiv' : 'Privat: nur Überschuss' };
 }
 
-// Beruflichregel: an Arbeitstagen (bzw. am Vorabend) voll bereitstellen. Tagsüber
-// bevorzugt Überschuss, abends Garantieladung, sonst Rückfall auf Privat.
+// Mindest-Ladestand beruflich (Ziel der Garantieladung). Default 100 = das Auto
+// wird für Arbeitstage voll bereitgestellt; der wirksame Zielwert ist auf
+// FULL_SOC gedeckelt, damit „100" und „voll" identisch bleiben.
+function businessTargetSoc(box) {
+  const percent = Number(box.minChargeBusinessPercent);
+  const min = Number.isFinite(percent) ? clamp(percent, 0, 100) : 100;
+  return Math.min(min, FULL_SOC);
+}
+
+function businessEndHour(box) {
+  const hour = Number(box.businessEndHour);
+  return Number.isFinite(hour) ? clamp(hour, 0, 23) : 18;
+}
+
+// Beruflichregel: bis zum Mindest-Ladestand beruflich garantiert bereitstellen —
+// vorbereitend (Vorabend/Nacht) rechtzeitig vor 06:00, AN einem Arbeitstag bei
+// Unterschreitung sofort. Oberhalb des Mindest-Ladestands gilt die Privatregel
+// (nur Überschuss). Folgt auf einen Arbeitstag ein freier Tag, gilt ab der
+// einstellbaren Uhrzeit nur noch die Privatregel.
 function businessPlan(box, ctx) {
   const hour = Number(ctx.hour) + (Number(ctx.minute) || 0) / 60;
-  const todayDeadline = isBusinessDay(box, ctx.weekday) && hour < BUSINESS_READY_HOUR;
-  const tomorrowDeadline = isBusinessDay(box, ctx.tomorrowWeekday);
-  if (!todayDeadline && !tomorrowDeadline) {
+  const workToday = isBusinessDay(box, ctx.weekday);
+  const workTomorrow = isBusinessDay(box, ctx.tomorrowWeekday);
+  const targetSoc = businessTargetSoc(box);
+
+  // Arbeitstag vor einem freien Tag: ab der einstellbaren Uhrzeit nur noch Privat.
+  if (workToday && !workTomorrow && hour >= businessEndHour(box)) {
+    return { ...privatePlan(box, ctx), reason: 'Beruflich: Feierabend vor freiem Tag → Privatregel' };
+  }
+
+  // AN einem Arbeitstag unter dem Mindest-Ladestand: sofort nachladen, nicht auf
+  // die vorbereitende Planung für den nächsten Tag warten.
+  if (workToday && hour >= BUSINESS_READY_HOUR && ctx.soc != null && ctx.soc < targetSoc) {
+    return { ...fullPowerPlan(box),
+      reason: `Beruflich: unter Mindest-Ladestand (${targetSoc} %) → Sofortladung` };
+  }
+
+  const todayDeadline = workToday && hour < BUSINESS_READY_HOUR;
+  if (!todayDeadline && !workTomorrow) {
     return { ...privatePlan(box, ctx), reason: 'Beruflich: freier Tag → Privatregel' };
   }
   if (isFull(ctx.soc)) return { desiredOn: false, setpointW: null, reason: 'Beruflich: Fahrzeug voll' };
+
+  // Mindest-Ladestand erreicht: darüber wie Privat nur Überschuss verwenden.
+  if (ctx.soc != null && ctx.soc >= targetSoc) {
+    const flexible = privatePlan(box, ctx);
+    return { ...flexible, reason: `Beruflich: über Mindest-Ladestand → ${flexible.reason}` };
+  }
+
   const hoursUntilReady = todayDeadline
     ? BUSINESS_READY_HOUR - hour
     : 24 - hour + BUSINESS_READY_HOUR;
   const capacity = Math.max(0, Number(box.batteryCapacityKwh) || 0);
   const powerKw = Math.max(0, Number(box.maxPowerW) || 0) / 1000;
   const soc = ctx.soc == null ? 0 : clamp(Number(ctx.soc) || 0, 0, FULL_SOC);
-  const remainingKwh = capacity * Math.max(0, FULL_SOC - soc) / 100;
+  const remainingKwh = capacity * Math.max(0, targetSoc - soc) / 100;
   const requiredHours = powerKw > 0
     ? remainingKwh / (powerKw * CHARGE_EFFICIENCY)
     : Math.max(0, hoursUntilReady - BUSINESS_FORCE_HOUR);
@@ -359,6 +398,7 @@ function predictNextChargeStart(box, state, opts = {}) {
 
 module.exports = {
   planCharge, decideWallboxAction, predictNextChargeStart, priorityForMode, isBusinessDay,
+  businessTargetSoc, businessEndHour,
   FULL_SOC, SURPLUS_ON_W, MIN_CHARGE_W, BUSINESS_FORCE_HOUR,
   BUSINESS_READY_HOUR, BUSINESS_START_BUFFER_HOURS, CHARGE_EFFICIENCY,
   HOUSE_BATTERY_RESERVE_MARGIN_PERCENT, FORECAST_ENERGY_EPSILON_KWH,

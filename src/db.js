@@ -391,7 +391,9 @@ function openDatabase() {
         priority_full INTEGER NOT NULL DEFAULT 4,
         load_shed_phase TEXT NOT NULL DEFAULT 'three_phase',
         min_charge_percent INTEGER NOT NULL DEFAULT 30,
+        min_charge_business_percent INTEGER NOT NULL DEFAULT 100,
         business_days TEXT NOT NULL DEFAULT '',
+        business_end_hour INTEGER NOT NULL DEFAULT 18,
         stall_timeout_seconds INTEGER NOT NULL DEFAULT 120,
         stall_power_w REAL NOT NULL DEFAULT 200
       )`
@@ -1042,6 +1044,15 @@ function migrateWallboxes(db) {
     }
     if (!existing.has('load_shed_phase')) {
       db.run("ALTER TABLE wallboxes ADD COLUMN load_shed_phase TEXT NOT NULL DEFAULT 'three_phase'");
+    }
+    // Beruflich-Modus: eigener Mindest-Ladestand (Default 100 = bisheriges
+    // Voll-Bereitstellen) und Uhrzeit, ab der vor einem freien Folgetag nur noch
+    // die Privatregel gilt.
+    if (!existing.has('min_charge_business_percent')) {
+      db.run('ALTER TABLE wallboxes ADD COLUMN min_charge_business_percent INTEGER NOT NULL DEFAULT 100');
+    }
+    if (!existing.has('business_end_hour')) {
+      db.run('ALTER TABLE wallboxes ADD COLUMN business_end_hour INTEGER NOT NULL DEFAULT 18');
     }
   });
 }

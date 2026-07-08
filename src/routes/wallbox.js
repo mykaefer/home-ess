@@ -65,7 +65,9 @@ function boxToFormValues(box) {
     priorityFull: box.priorityFull ?? 4,
     loadShedPhase: box.loadShedPhase || 'three_phase',
     minChargePercent: box.minChargePercent ?? 30,
+    minChargeBusinessPercent: box.minChargeBusinessPercent ?? 100,
     businessDays: box.businessDays || [],
+    businessEndHour: box.businessEndHour ?? 18,
     stallTimeoutSeconds: box.stallTimeoutSeconds ?? 120,
     stallPowerW: box.stallPowerW ?? 200,
   };

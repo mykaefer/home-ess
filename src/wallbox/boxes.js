@@ -48,6 +48,12 @@ function clampPercent(value, fallback) {
   return Math.min(100, Math.max(0, Math.round(parsed)));
 }
 
+function clampHour(value, fallback) {
+  const parsed = parseNumber(value);
+  if (parsed == null) return fallback;
+  return Math.min(23, Math.max(0, Math.round(parsed)));
+}
+
 function normalizeUnit(value, allowed, fallback) {
   const text = String(value || '').trim();
   return allowed.includes(text) ? text : fallback;
@@ -114,7 +120,9 @@ function normalizeRow(row = {}) {
     priorityFull: clampPriority(row.priority_full, 4),
     loadShedPhase: normalizePhase(row.load_shed_phase, 'three_phase'),
     minChargePercent: clampPercent(row.min_charge_percent, 30),
+    minChargeBusinessPercent: clampPercent(row.min_charge_business_percent, 100),
     businessDays: businessDaysToArray(row.business_days),
+    businessEndHour: clampHour(row.business_end_hour, 18),
     stallTimeoutSeconds: row.stall_timeout_seconds != null ? Math.max(0, Math.round(row.stall_timeout_seconds)) : 120,
     stallPowerW: parseNumber(row.stall_power_w) != null ? parseNumber(row.stall_power_w) : 200,
   };
@@ -123,7 +131,8 @@ function normalizeRow(row = {}) {
 const COLUMNS = `id, name, max_power_w, battery_capacity_kwh, command_topic, status_topic,
   power_topic, power_unit, counter_topic, counter_unit, setpoint_topic, plugged_topic,
   soc_topic, mode_sync_topic, mode, priority_private, priority_business, priority_full,
-  load_shed_phase, min_charge_percent, business_days, stall_timeout_seconds, stall_power_w`;
+  load_shed_phase, min_charge_percent, min_charge_business_percent, business_days,
+  business_end_hour, stall_timeout_seconds, stall_power_w`;
 
 const wallboxListCache = new WeakMap();
 function invalidateWallboxes(db) { if (db) wallboxListCache.delete(db); }
@@ -162,7 +171,9 @@ function normalizeInput(input = {}) {
     priorityFull: clampPriority(input.priorityFull, 4),
     loadShedPhase: normalizePhase(input.loadShedPhase, 'three_phase'),
     minChargePercent: clampPercent(input.minChargePercent, 30),
+    minChargeBusinessPercent: clampPercent(input.minChargeBusinessPercent, 100),
     businessDays: normalizeBusinessDays(input.businessDays),
+    businessEndHour: clampHour(input.businessEndHour, 18),
     stallTimeoutSeconds: (() => {
       const n = parseNumber(input.stallTimeoutSeconds);
       return n != null && n >= 0 ? Math.round(n) : 120;
@@ -192,7 +203,8 @@ const INSERT_PARAMS = (input, mode) => [
   input.statusTopic, input.powerTopic, input.powerUnit, input.counterTopic,
   input.counterUnit, input.setpointTopic, input.pluggedTopic, input.socTopic,
   input.modeSyncTopic, mode, input.priorityPrivate, input.priorityBusiness,
-  input.priorityFull, input.loadShedPhase, input.minChargePercent, input.businessDays,
+  input.priorityFull, input.loadShedPhase, input.minChargePercent,
+  input.minChargeBusinessPercent, input.businessDays, input.businessEndHour,
   input.stallTimeoutSeconds, input.stallPowerW,
 ];
 
@@ -210,8 +222,9 @@ async function createWallbox(db, rawInput) {
      (name, max_power_w, battery_capacity_kwh, command_topic, status_topic, power_topic,
       power_unit, counter_topic, counter_unit, setpoint_topic, plugged_topic, soc_topic,
       mode_sync_topic, mode, priority_private, priority_business, priority_full, load_shed_phase,
-      min_charge_percent, business_days, stall_timeout_seconds, stall_power_w)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      min_charge_percent, min_charge_business_percent, business_days, business_end_hour,
+      stall_timeout_seconds, stall_power_w)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     INSERT_PARAMS(input, 1)
   );
   await dbRun(
@@ -243,7 +256,8 @@ async function updateWallbox(db, id, rawInput) {
        name = ?, max_power_w = ?, battery_capacity_kwh = ?, command_topic = ?, status_topic = ?,
        power_topic = ?, power_unit = ?, counter_topic = ?, counter_unit = ?, setpoint_topic = ?,
        plugged_topic = ?, soc_topic = ?, mode_sync_topic = ?, priority_private = ?,
-       priority_business = ?, priority_full = ?, load_shed_phase = ?, min_charge_percent = ?, business_days = ?,
+       priority_business = ?, priority_full = ?, load_shed_phase = ?, min_charge_percent = ?,
+       min_charge_business_percent = ?, business_days = ?, business_end_hour = ?,
        stall_timeout_seconds = ?, stall_power_w = ?
      WHERE id = ?`,
     [
@@ -252,7 +266,8 @@ async function updateWallbox(db, id, rawInput) {
       input.counterUnit, input.setpointTopic, input.pluggedTopic, input.socTopic,
       input.modeSyncTopic, input.priorityPrivate, input.priorityBusiness,
       input.priorityFull, input.loadShedPhase,
-      input.minChargePercent, input.businessDays,
+      input.minChargePercent, input.minChargeBusinessPercent,
+      input.businessDays, input.businessEndHour,
       input.stallTimeoutSeconds, input.stallPowerW, id,
     ]
   );

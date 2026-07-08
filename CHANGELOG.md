@@ -3,6 +3,47 @@
 Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [1.1.2] — 2026-07-08
+
+### Neu
+
+- **Wallbox: Mindest-Ladestand Beruflich.** Der Beruflich-Modus stellt das
+  Fahrzeug für Arbeitstage nicht mehr zwingend voll (100 %) bereit, sondern bis
+  zu einem je Box einstellbaren **Mindest-Ladestand Beruflich** (Default 100 %
+  = bisheriges Verhalten). Oberhalb dieses Ladestands wird das Fahrzeug — wie
+  im Privat-Modus — nur noch mit nicht speicherbarem PV-Überschuss geladen.
+
+### Geändert
+
+- **Wallbox: Lade-Timing im Beruflich-Modus.** Die vorbereitende Garantieladung
+  für einen Arbeitstag startet unverändert rechtzeitig (nicht sofort) vor
+  06:00 Uhr. Neu: Fällt der Ladestand **an** einem Arbeitstag unter den
+  Mindest-Ladestand Beruflich, wird die Ladung **sofort** aktiviert statt erst
+  mit dem vorbereitenden Plan für den Folgetag am Abend. Folgt auf einen
+  Arbeitstag ein freier Tag, gilt ab einer ebenfalls einstellbaren Uhrzeit
+  (**„Privatregel ab (Uhr) vor freiem Folgetag"**, Default 18 Uhr) nur noch die
+  Privatregel — wie an Nicht-Arbeitstagen. Der gemeinsame Vorausplan
+  (`planWallboxSchedule`) plant entsprechend: Pflicht ist nur die Energie bis
+  zum Mindest-Ladestand Beruflich (am Arbeitstag sofort, sonst ab der
+  Garantiezeit des Vorabends), der Rest bis Voll ausschließlich aus Überschuss.
+- **Mobile Ansicht: Menü über das Titellogo, Photovoltaik in der Tab-Bar.**
+  Der Menü-Tab in der unteren Leiste entfällt; das homeESS-Titellogo im Header
+  übernimmt die Funktion der Menüschaltfläche (nur am Smartphone, am Desktop
+  bleibt es funktionslos). Das Logo im Menü-Sheet hat jetzt dieselbe Größe wie
+  im Titel. Die untere Tab-Bar zeigt fünf Direktzugriffe: Dashboard, Strom,
+  **PV (Photovoltaik, neu auf Position 3)**, Batterie und Prognose.
+- **Titelzeile (PC-Ansicht): aktuelle Leistungswerte.** Eine gemeinsame Pill
+  zeigt die Momentanleistung für **PV ☀️**, **Netzbezug ⚡** (negativ =
+  Einspeisung), **Eigenverbrauch 🏠** (inkl. verbraucherseitiger PV) und
+  **Akkuladung 🔋** (negativ = Entladung) — Piktogramme statt Beschriftung,
+  transparente Pill mit Umrandung, die Werte in aufgehellten Header-Varianten
+  der hinterlegten Leistungsfarben (`--color-*-bright`).
+  Aktualisierung wie die übrigen Kopfzeilenwerte über `/live/header`
+  (10-s-Poll + MQTT-Push). In der mobilen Ansicht bleibt die Pill ausgeblendet.
+- **Mobile Ansicht: SoC-Zahl im Akkusymbol.** Der prozentuale Ladezustand
+  steht jetzt klein, weiß und mittig im Batteriesymbol des Headers statt
+  daneben wie in der breiten PC-Ansicht.
+
 ## [1.1.1] — 2026-07-08
 
 ### Behoben

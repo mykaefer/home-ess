@@ -24,12 +24,17 @@
 - **Header:** kompakt, `position: sticky` statt `fixed` — er darf dadurch
   bei Platzmangel gefahrlos in eine zweite Zeile umbrechen (**kein
   horizontales Scrollen**). Zeit-/Datum-Pills sind ausgeblendet (zeigt das
-  Smartphone selbst), das „Aussen"-Label entfällt (der °C-Wert spricht für
-  sich), die Batterie zeigt nur das Icon mit Füllstand (ohne Prozentzahl);
+  Smartphone selbst), die gemeinsame Leistungs-Pill (☀️⚡🏠🔋) ist
+  Desktop-only (`.only-desktop`), das „Aussen"-Label entfällt (der °C-Wert
+  spricht für sich), die Batterie zeigt das Icon mit Füllstand und der
+  SoC-Prozentzahl klein/weiß mittig im Symbol (statt daneben wie am PC);
   Temperatur, Batterie, Betriebslevel und Himmelssymbol bleiben sichtbar.
 - **Sidebar aus**, stattdessen:
   - **Tab-Bar unten** (fixiert, `MOBILE_TABS` in `layout.js`): Dashboard,
-    Strom, Batterie, Prognose + **Menü**.
+    Strom, PV (Photovoltaik), Batterie, Prognose — ohne eigenen Menü-Tab.
+  - **Titellogo = Menüschaltfläche:** das homeESS-Logo im Header öffnet das
+    Menü-Sheet (nur ≤ 768px; am Desktop ist der Logo-Button funktionslos).
+    Das Logo im Menü-Sheet hat dieselbe Größe wie im Titel (24px).
   - **Menü-Sheet** (vollflächig, `renderMobileNav`): alle Hauptseiten inkl.
     aktivierter Module und Unterseiten, Footer-Seiten (Module,
     Einstellungen), Abmelden, Copyright/Version.
@@ -75,7 +80,7 @@
 
 | Seite | Status | Anmerkungen |
 | --- | --- | --- |
-| Shell (Header, Navigation, Menü) | ✅ umgesetzt | Sticky-Header (darf zweizeilig umbrechen, kein horizontales Scrollen), Tab-Bar + Menü-Sheet |
+| Shell (Header, Navigation, Menü) | ✅ umgesetzt | Sticky-Header (darf zweizeilig umbrechen, kein horizontales Scrollen), Tab-Bar (5 Seiten) + Menü-Sheet über das Titellogo |
 | Prognose | ✅ umgesetzt | Referenz-Umsetzung |
 | Dashboard | ✅ umgesetzt | 2er-Widget-Raster, Info-Widgets volle Breite, Aktionen immer sichtbar; **DnD-Ersatz offen** |
 | Stromverbrauch | ✅ umgesetzt | Energie-Tabelle als Karten mit ::before-Labels (Heute/Woche/Jahr/Vorjahr) |
