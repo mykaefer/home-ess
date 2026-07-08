@@ -3,6 +3,27 @@
 Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [1.1.3] — 2026-07-08
+
+### Behoben
+
+- **HM-RPC: Adapter erholt sich jetzt von selbst von einem CCU-Neustart.** Nach
+  einem Neustart der Zentrale verliert die CCU die Event-Registrierung des
+  Adapters. Der bisherige Verbindungswächter prüfte aber nur die RPC-
+  Erreichbarkeit (`system.listMethods`) — die gelingt an einer frisch
+  gestarteten CCU sofort wieder, sodass der Adapter dauerhaft „verbunden"
+  anzeigte, ohne je wieder ein Event zu erhalten; in Messen & Schalten
+  veralteten alle Werte (⚠). Der Wächter erkennt jetzt Callback-Stille: Kommt
+  innerhalb eines Reconnect-Intervalls kein einziger CCU-Callback an, erneuert
+  er die Registrierung per idempotentem `init` — die listDevices-Antwort der
+  CCU bestätigt die Event-Strecke dabei Ende-zu-Ende. Zusätzlich werden
+  Transportfehler der Hintergrund-/Frische-Reads (`getParamset`) nicht mehr
+  unbegrenzt still geschluckt: Ab drei Fehlschlägen in Folge meldet der Adapter
+  die Verbindung als getrennt, sodass der normale Reconnect-Pfad greift.
+  CCU-Faults einzelner Kanäle (Gerät offline o. Ä.) bleiben wie bisher still.
+  Das Reconnect-Intervall ist nicht mehr auf minimal 10 s begrenzt (Default
+  bleibt 30 s). (hm-rpc 1.1.4)
+
 ## [1.1.2] — 2026-07-08
 
 ### Neu

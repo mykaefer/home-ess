@@ -431,6 +431,141 @@ test('HM-RPC beobachtet nach einem Steuerbefehl das Gerät aktiv, damit der Stat
   assert.ok(watched.some((c) => c.channel === 'ABC:1'), 'auch der Schaltkanal wird aufgefrischt');
 });
 
+test('HM-RPC registriert sich neu, wenn trotz erreichbarer CCU keine Callbacks mehr ankommen', async (t) => {
+  // Reproduziert den CCU-Neustart: Die CCU verliert die Event-Registrierung,
+  // beantwortet RPC-Aufrufe aber weiterhin. Ein reiner Erreichbarkeits-Ping
+  // bliebe ewig „verbunden" ohne je wieder ein Event zu sehen – der Adapter
+  // muss die Registrierung deshalb bei Callback-Stille per init erneuern.
+  const inits = [];
+  const ccu = http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => {
+      const request = xmlrpc.parseCall(Buffer.concat(chunks).toString('utf8'));
+      let result = '';
+      if (request.method === 'listDevices') result = [
+        { ADDRESS: 'ABC', TYPE: 'SWITCH', NAME: 'Lampe' },
+        { ADDRESS: 'ABC:1', TYPE: 'SWITCH_TRANSMITTER', PARENT: 'ABC', NAME: 'Kanal 1', PARAMSETS: ['VALUES'] },
+      ];
+      if (request.method === 'getParamsetDescription') result = { STATE: { TYPE: 'BOOL', OPERATIONS: 7 } };
+      if (request.method === 'getParamset') result = { STATE: false };
+      if (request.method === 'init' && request.params[1]) inits.push(request.params);
+      res.writeHead(200, { 'Content-Type': 'text/xml' });
+      res.end(xmlrpc.methodResponse(result));
+    });
+  });
+  const port = await listen(ccu);
+  t.after(() => new Promise((resolve) => ccu.close(resolve)));
+
+  const statuses = [];
+  const adapter = createAdapter({
+    name: 'test',
+    setStates() {}, setStorage() {}, publishState() {}, publishStates() {},
+    setConnected(connected) { statuses.push(connected); }, log() {}, error() {},
+  });
+  // Die Test-CCU schickt nie Callbacks – aus Adaptersicht herrscht Event-Stille.
+  await adapter.start({ host: '127.0.0.1', port, callbackHost: '127.0.0.1', reconnectInterval: 1 });
+  t.after(() => adapter.stop());
+
+  assert.equal(inits.length, 1, 'genau eine Registrierung beim Start');
+  await new Promise((resolve) => setTimeout(resolve, 2600));
+  assert.ok(inits.length >= 2, `Callback-Stille erneuert die Registrierung (inits: ${inits.length})`);
+  assert.ok(inits.every((params) => params[1] === 'homeESS-test'), 'Re-Init nutzt die Interface-ID, keine Abmeldung');
+  assert.ok(!statuses.includes(false), 'Adapter bleibt dabei durchgehend verbunden');
+});
+
+test('HM-RPC meldet die Verbindung als getrennt, wenn Hintergrund-Reads mehrfach scheitern', async (t) => {
+  const ccu = http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => {
+      const request = xmlrpc.parseCall(Buffer.concat(chunks).toString('utf8'));
+      let result = '';
+      if (request.method === 'listDevices') result = [
+        { ADDRESS: 'ABC', TYPE: 'METER', NAME: 'Zähler' },
+        { ADDRESS: 'ABC:1', TYPE: 'ENERGY', PARENT: 'ABC', NAME: 'Kanal 1', PARAMSETS: ['VALUES'] },
+        { ADDRESS: 'ABC:2', TYPE: 'ENERGY', PARENT: 'ABC', NAME: 'Kanal 2', PARAMSETS: ['VALUES'] },
+        { ADDRESS: 'ABC:3', TYPE: 'ENERGY', PARENT: 'ABC', NAME: 'Kanal 3', PARAMSETS: ['VALUES'] },
+      ];
+      if (request.method === 'getParamsetDescription') result = { STATE: { TYPE: 'BOOL', OPERATIONS: 5 } };
+      if (request.method === 'getParamset') result = { STATE: false };
+      res.writeHead(200, { 'Content-Type': 'text/xml' });
+      res.end(xmlrpc.methodResponse(result));
+    });
+  });
+  const port = await listen(ccu);
+
+  const statuses = []; // { connected, detail }
+  const adapter = createAdapter({
+    name: 'test',
+    setStates() {}, setStorage() {}, publishState() {}, publishStates() {},
+    setConnected(connected, detail) { statuses.push({ connected, detail }); }, log() {}, error() {},
+  });
+  // Langes Reconnect-Intervall: Die Erkennung muss aus den Reads selbst kommen.
+  await adapter.start({ host: '127.0.0.1', port, callbackHost: '127.0.0.1', reconnectInterval: 3600 });
+  t.after(() => adapter.stop());
+
+  // CCU „fällt aus" (Port zu) – die Frische-Reads der Oberfläche scheitern nun.
+  await new Promise((resolve) => ccu.close(resolve));
+  await adapter.read('ABC%3A1/STATE');
+  await adapter.read('ABC%3A2/STATE');
+  assert.equal(statuses.at(-1).connected, true, 'einzelne Fehlschläge trennen noch nicht');
+  await adapter.read('ABC%3A3/STATE');
+  assert.equal(statuses.at(-1).connected, false, 'wiederholte Transportfehler melden die Trennung');
+  assert.match(statuses.at(-1).detail, /CCU-RPC/);
+});
+
+test('HM-RPC verbindet sich nach einem CCU-Neustart von selbst neu', async (t) => {
+  const makeCcu = (inits) => http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => {
+      const request = xmlrpc.parseCall(Buffer.concat(chunks).toString('utf8'));
+      let result = '';
+      if (request.method === 'listDevices') result = [
+        { ADDRESS: 'ABC', TYPE: 'SWITCH', NAME: 'Lampe' },
+        { ADDRESS: 'ABC:1', TYPE: 'SWITCH_TRANSMITTER', PARENT: 'ABC', NAME: 'Kanal 1', PARAMSETS: ['VALUES'] },
+      ];
+      if (request.method === 'getParamsetDescription') result = { STATE: { TYPE: 'BOOL', OPERATIONS: 7 } };
+      if (request.method === 'getParamset') result = { STATE: false };
+      if (request.method === 'init' && request.params[1]) inits.push(request.params);
+      res.writeHead(200, { 'Content-Type': 'text/xml' });
+      res.end(xmlrpc.methodResponse(result));
+    });
+  });
+
+  const initsBefore = [];
+  const ccu1 = makeCcu(initsBefore);
+  const port = await listen(ccu1);
+
+  const statuses = [];
+  const adapter = createAdapter({
+    name: 'test',
+    setStates() {}, setStorage() {}, publishState() {}, publishStates() {},
+    setConnected(connected) { statuses.push(connected); }, log() {}, error() {},
+  });
+  await adapter.start({ host: '127.0.0.1', port, callbackHost: '127.0.0.1', reconnectInterval: 1 });
+  t.after(() => adapter.stop());
+  assert.equal(initsBefore.length, 1);
+
+  // CCU-Neustart: alte Instanz weg, kurze Ausfallzeit, neue Instanz auf demselben
+  // Port – ohne Kenntnis der früheren Registrierung.
+  await new Promise((resolve) => ccu1.close(resolve));
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+  const initsAfter = [];
+  const ccu2 = makeCcu(initsAfter);
+  await new Promise((resolve, reject) => {
+    ccu2.once('error', reject);
+    ccu2.listen(port, '127.0.0.1', resolve);
+  });
+  t.after(() => new Promise((resolve) => ccu2.close(resolve)));
+
+  await new Promise((resolve) => setTimeout(resolve, 2600));
+  assert.ok(initsAfter.some((params) => params[1] === 'homeESS-test'),
+    'der Adapter registriert sich an der neu gestarteten CCU von selbst neu');
+  assert.equal(statuses.at(-1), true, 'der Verbindungsstatus ist wieder „verbunden"');
+});
+
 test('HM-RPC frischt Kanäle im Hintergrund nacheinander auf – kein Burst, kein Funk', async (t) => {
   const getParamsetCalls = []; // { channel, t }
   const ccu = http.createServer((req, res) => {

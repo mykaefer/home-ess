@@ -18,6 +18,10 @@ const ACTIVE_WATCH_INTERVAL_MS = 1000;
 // vollständigen Re-Sync auslösen, nicht pro Ereignis einen. Das Fenster fasst
 // die Bursts zusammen; ein Single-Flight-Schutz verhindert Überlappungen.
 const RESYNC_DEBOUNCE_MS = 2000;
+// So viele transportbedingte getParamset-Fehlschläge in Folge gelten als tote
+// CCU-Verbindung. Einzelne Fehlschläge (Gerät offline, kurzer Netzwerkschluckauf)
+// bleiben wie bisher still.
+const REFRESH_FAILURE_LIMIT = 3;
 
 function segment(value) {
   return encodeURIComponent(String(value));
@@ -66,6 +70,12 @@ module.exports = function createHmRpcAdapter(host) {
   let callbackUrl = '';
   let latestDutyCycle = null;
   let callbackCount = 0;
+  // Zeitpunkt des letzten von der CCU empfangenen Callbacks (Event, listDevices, …).
+  // Bleibt er ein volles Prüfintervall lang stehen, ist die Event-Registrierung
+  // auf der CCU möglicherweise verloren (z. B. nach CCU-Neustart) → Re-Init.
+  let lastCallbackAt = 0;
+  // Transportbedingte getParamset-Fehlschläge in Folge (siehe refreshChannel).
+  let refreshFailures = 0;
   const descriptions = new Map();
   const channels = new Map();
   const states = new Map();
@@ -82,6 +92,10 @@ module.exports = function createHmRpcAdapter(host) {
 
   function interfaceId() {
     return `homeESS-${host.name}`;
+  }
+
+  function reconnectMs() {
+    return Math.max(1, Number(cfg.reconnectInterval) || 30) * 1000;
   }
 
   function dutyLimit() {
@@ -352,13 +366,26 @@ module.exports = function createHmRpcAdapter(host) {
     readThrottle.set(channelAddress, now);
     try {
       const values = await rpc('getParamset', [channelAddress, 'VALUES']);
+      refreshFailures = 0;
       const burst = [];
       for (const [parameter, value] of Object.entries(values || {})) {
         burst.push([channelAddress, parameter, value]);
       }
       if (burst.length) publishEventBurst(burst);
     } catch (err) {
-      // Wert momentan nicht lesbar (Gerät offline o. Ä.) – still übergehen.
+      // CCU-Fault (numerischer XML-RPC-Fehlercode): die CCU hat geantwortet, nur
+      // dieser Kanal ist momentan nicht lesbar (Gerät offline o. Ä.) – wie bisher
+      // still übergehen; die Verbindung selbst ist nachweislich in Ordnung.
+      if (typeof err.code === 'number') { refreshFailures = 0; return; }
+      // Transportfehler (Timeout, Verbindungsabbruch, HTTP-Fehler): mehrere in
+      // Folge bedeuten eine tote CCU-Verbindung. Als getrennt melden, damit der
+      // Reconnect-Pfad greift, statt Fehler unbegrenzt still zu schlucken und
+      // dabei „verbunden" anzuzeigen, während alle Werte veralten.
+      refreshFailures += 1;
+      if (refreshFailures >= REFRESH_FAILURE_LIMIT && registered) {
+        registered = false;
+        host.setConnected(false, `CCU-RPC: ${err.message}`);
+      }
     }
   }
 
@@ -447,6 +474,8 @@ module.exports = function createHmRpcAdapter(host) {
       callbackUrl = `http://${callbackHost}:${server.address().port}`;
       await rpc('init', [callbackUrl, interfaceId()]);
       registered = true;
+      refreshFailures = 0;
+      lastCallbackAt = Date.now();
       await synchronize();
       host.setConnected(true, `CCU-RPC verbunden (${channels.size} Geräte/Kanäle), Callback ${callbackUrl}`);
     } catch (err) {
@@ -462,8 +491,21 @@ module.exports = function createHmRpcAdapter(host) {
     if (!registered) { await register(); return; }
     connectionCheckRunning = true;
     try {
-      // Rein lokaler Schnittstellen-Ping der CCU, niemals ein Geräte-/Funk-Read.
-      await rpc('system.listMethods', []);
+      if (Date.now() - lastCallbackAt >= reconnectMs()) {
+        // Kein einziger Callback seit dem letzten Prüfintervall. Nach einem
+        // CCU-Neustart ist die Event-Registrierung dort verloren, während
+        // RPC-Aufrufe (und damit ein reiner Erreichbarkeits-Ping) weiter
+        // gelingen – der Adapter stünde dauerhaft auf „verbunden", ohne je
+        // wieder ein Event zu erhalten. Ein erneutes init ist idempotent und
+        // stellt die Registrierung sicher wieder her; die CCU antwortet mit
+        // listDevices-Callbacks, die die Event-Strecke Ende-zu-Ende bestätigen
+        // (und lastCallbackAt fortschreiben). In ereignislosen Phasen läuft so
+        // schlimmstenfalls je Intervall ein leichter init-Abgleich – kein Funk.
+        await rpc('init', [callbackUrl, interfaceId()]);
+      } else {
+        // Rein lokaler Schnittstellen-Ping der CCU, niemals ein Geräte-/Funk-Read.
+        await rpc('system.listMethods', []);
+      }
     } catch (err) {
       registered = false;
       host.setConnected(false, `CCU-RPC: ${err.message}`);
@@ -473,6 +515,7 @@ module.exports = function createHmRpcAdapter(host) {
   }
 
   function handleCallback(method, params) {
+    lastCallbackAt = Date.now();
     callbackCount += 1;
     // Die ersten Calls nach jeder Registrierung sichtbar machen. So lässt sich
     // unterscheiden, ob die CCU den Callback gar nicht erreicht oder Events erst
@@ -556,7 +599,7 @@ module.exports = function createHmRpcAdapter(host) {
         server.listen(Number(cfg.callbackPort) || 0, '0.0.0.0', resolve);
       });
       await register();
-      reconnectTimer = setInterval(maintainConnection, Math.max(10, Number(cfg.reconnectInterval) || 30) * 1000);
+      reconnectTimer = setInterval(maintainConnection, reconnectMs());
       scheduleDrip(); // optionaler, gleichmäßig verteilter Hintergrund-Refresh (refreshInterval > 0)
     },
 
