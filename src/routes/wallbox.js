@@ -185,7 +185,7 @@ function wallboxRoutes(db) {
         return res.status(400).json({ error: 'Ungültige Wallbox-Steuerung.' });
       }
       if (!await getWallbox(db, id)) return res.status(404).json({ error: 'Wallbox nicht gefunden.' });
-      const controlMode = wallboxAutomation.setControlMode(id, control);
+      const controlMode = wallboxAutomation.setControlMode(db, id, control);
       await wallboxAutomation.runNow(db);
       res.json({ ok: true, controlMode });
     } catch (err) { next(err); }

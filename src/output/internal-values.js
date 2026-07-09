@@ -26,7 +26,7 @@ const { readWallboxValues, readAggregateDailyHistory } = require('../wallbox/agg
 const wallboxAutomation = require('../wallbox/automation');
 const { listActors } = require('../messen-schalten/actors');
 const { listGroups: listMessSchaltGroups } = require('../messen-schalten/groups');
-const { readActorValues, readGroupSums } = require('../messen-schalten/aggregation');
+const { readActorValues, readGroupPowerTree, readGroupEnergyTree } = require('../messen-schalten/aggregation');
 const { readFunctionValues } = require('../messen-schalten/functions');
 const { isEnabled } = require('../modules');
 const { getState: getGridControlState } = require('../grid-control/automation');
@@ -630,15 +630,39 @@ async function buildInternalValues(db, cache) {
         entries.push(energyEntry(`geraet.${actor.id}.zaehler`, `${actor.name} – Zähler`, v.counterKwh));
       }
     }
-    const groupSums = readGroupSums(messSchaltGroups, actorValues);
+    const groupTree = readGroupPowerTree(messSchaltGroups, actorValues);
+    const groupEnergy = await readGroupEnergyTree(db, messSchaltGroups);
     for (const group of messSchaltGroups) {
-      const sum = groupSums.get(group.id);
-      const powerW = sum ? sum.powerW : null;
-      if (powerW != null && group.offsetTotalConsumption) verbrauchssummeGroupTotal += powerW;
+      const t = groupTree.get(group.id) || {};
+      const e = groupEnergy.get(group.id) || {};
+      // Exportierter Gruppenverbrauch = Gesamtleistung (inkl. Untergruppen bzw.
+      // bei Zählergruppen die fixe Zählerleistung).
+      const powerW = t.gesamtW == null ? null : t.gesamtW;
+      // Globaler Restposten: der Beitrag rechnet Haken UND Sperrschicht bereits
+      // ein (verrechnete Zählergruppe = voller Zweig, Nachfahren gesperrt).
+      if (t.contributionW != null) {
+        verbrauchssummeGroupTotal += t.contributionW;
+      }
       entries.push(powerEntry(
         `verbrauchssumme.${group.id}.leistung`,
         `${group.title} – Verbrauch (Leistung)`,
         powerW
+      ));
+      // Zähler-basierte Verbrauchssummen je Gruppe (Tag / Jahr / Vorjahr).
+      entries.push(energyEntry(
+        `verbrauchssumme.${group.id}.verbrauchHeute`,
+        `${group.title} – Verbrauch heute`,
+        e.todayKwh == null ? null : e.todayKwh
+      ));
+      entries.push(energyEntry(
+        `verbrauchssumme.${group.id}.verbrauchJahr`,
+        `${group.title} – Verbrauch dieses Jahr`,
+        e.yearKwh == null ? null : e.yearKwh
+      ));
+      entries.push(energyEntry(
+        `verbrauchssumme.${group.id}.verbrauchVorjahr`,
+        `${group.title} – Verbrauch Vorjahr`,
+        e.prevYearKwh == null ? null : e.prevYearKwh
       ));
     }
 

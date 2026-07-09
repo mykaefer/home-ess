@@ -2852,6 +2852,153 @@ h2 .cmd-confirm { font-size: 13px; vertical-align: middle; }
     white-space: nowrap;
 }
 
+/* Gruppen mit Untergruppen zeigen „Ebene/Gesamt W" – etwas hervorgehoben. */
+.ms-group-sum--nested {
+    color: #155e75;
+    background: #cffafe;
+}
+
+/* Zählergruppe: Badge im Kopf. */
+.ms-group-meter-badge {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
+    color: #155e75;
+    background: #cffafe;
+    border-radius: 999px;
+    padding: 1px 7px;
+}
+
+/* Fiktives Fuß-Gerät „Sonstige Verbraucher dieser Gruppe" (rechnerisch aus
+   Zählerleistung minus Untergruppen). Folgt dem Geräte-Zeilenraster. */
+.ms-sonstige {
+    display: grid;
+    grid-template-columns: 24px 12px minmax(140px, 1.4fr) minmax(0, 1fr) 90px 110px 48px 60px;
+    align-items: center;
+    gap: 10px;
+    padding: 2px 12px 2px 6px;
+    min-height: 34px;
+    border-top: 1px dashed #d5dbe1;
+    font-size: 13px;
+    font-style: italic;
+    color: #64748b;
+}
+.ms-sonstige .ms-row-name { font-weight: 600; color: #475569; font-style: italic; }
+.ms-sonstige .ms-row-power { grid-column: 5 / 6; }
+
+/* Mehrschichtige Verbrauchsgruppen: Untergruppen stehen eingerückt im Body. */
+.ms-subgroups {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 8px 0 4px 18px;
+    border-left: 2px solid #e2e6ea;
+    margin: 4px 0 4px 10px;
+}
+
+/* Gruppen-Drag (Verschachtelung): Griff am Kopf, Zieh- und Drop-Zustände. */
+.ms-group-drag {
+    cursor: grab;
+}
+.ms-group.group-dragging {
+    opacity: 0.5;
+}
+.ms-group-head.group-drop-target {
+    outline: 2px solid #0891b2;
+    outline-offset: -3px;
+    background: #cffafe;
+}
+#groupsContainer.group-drop-root {
+    outline: 2px dashed #94a3b8;
+    outline-offset: 4px;
+    border-radius: 8px;
+}
+
+/* ── Energiefluss-Diagramm ─────────────────────────────────────────────── */
+.ef-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 18px;
+    margin: 4px 0 12px;
+    font-size: 12px;
+    color: #475569;
+}
+.ef-legend-item { display: inline-flex; align-items: center; gap: 6px; }
+.ef-swatch { width: 16px; height: 8px; border-radius: 2px; display: inline-block; }
+
+.ef-wrap {
+    overflow-x: auto;
+    background: #fff;
+    border: 1px solid #e2e6ea;
+    border-radius: 10px;
+    padding: 8px;
+}
+.ef-svg { display: block; }
+.ef-empty { padding: 24px 12px; }
+
+/* Kanten: dünne Basislinie + animierter, gestrichelter Fluss darüber. Die
+   Fluss-Farbe wird je Kante inline gesetzt (Quell- bzw. Gruppenfarbe). */
+.ef-base { fill: none; stroke: #e2e8f0; stroke-width: 1.5; }
+.ef-flow {
+    fill: none;
+    stroke-linecap: round;
+    stroke-dasharray: 10 12;
+    animation-name: ef-dash;
+    animation-timing-function: linear;
+    animation-iteration-count: infinite;
+}
+.ef-flow.ef-idle { animation: none; opacity: 0.3; stroke-dasharray: none; }
+@keyframes ef-dash { to { stroke-dashoffset: -22; } }
+
+/* Knoten. Die Akzentfarbe (Rand) wird inline gesetzt. */
+.ef-box { fill: #f8fafc; stroke: #cbd5e1; stroke-width: 2; }
+.ef-title { font-size: 12px; font-weight: 700; fill: #0f172a; }
+.ef-power { font-size: 12px; font-weight: 600; fill: #334155; }
+.ef-sub { font-size: 12px; fill: #64748b; }
+.ef-energy { font-size: 12px; font-weight: 600; fill: #64748b; }
+.ef-node-central .ef-box { fill: #f6f1fb; stroke-width: 2.5; }
+.ef-node-sonstige .ef-box { fill: #f1f5f9; stroke-dasharray: 4 4; }
+.ef-node-sonstige .ef-title { fill: #64748b; font-style: italic; }
+
+/* Ausgegraute (durch Priorität/Lastabwurf abgeschaltete) Gruppen. */
+.ef-node.ef-deactivated { opacity: 0.5; }
+.ef-node.ef-deactivated .ef-box { fill: #f1f5f9; stroke-dasharray: 5 4; }
+.ef-node.ef-deactivated .ef-title,
+.ef-node.ef-deactivated .ef-power { fill: #94a3b8; }
+
+/* Stift-Button je Gruppe zum Öffnen des Farbwählers. */
+.ef-edit { cursor: pointer; opacity: 0; transition: opacity 0.12s ease; }
+.ef-node-group:hover .ef-edit { opacity: 1; }
+.ef-edit circle { fill: #fff; stroke: #cbd5e1; stroke-width: 1; }
+.ef-edit:hover circle { stroke: #64748b; }
+.ef-edit-icon { font-size: 11px; fill: #475569; }
+@media (prefers-reduced-motion: reduce) { .ef-flow { animation: none; } }
+
+/* Colorpicker-Dialog. */
+.ef-color-dialog .ef-swatch-grid {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 8px;
+    margin: 8px 0 12px;
+}
+.ef-swatch-btn {
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    min-height: 28px;
+    border: 2px solid rgba(0, 0, 0, 0.08);
+    border-radius: 6px;
+    cursor: pointer;
+    padding: 0;
+}
+.ef-swatch-btn:hover { border-color: #0f172a; }
+.ef-color-dialog input[type="color"] {
+    width: 100%;
+    height: 38px;
+    padding: 2px;
+    cursor: pointer;
+}
+
 /* An/Aus-Toggle (Wunschzustand; wird über das Betriebslevel freigegeben). */
 .ms-toggle {
     display: inline-flex;
@@ -3297,6 +3444,14 @@ body,
 .ms-caret { color: #c8d3cf; }
 .ms-row-name,
 .ms-row-power { color: var(--color-text); }
+.ms-subgroups { border-left-color: var(--color-border); }
+.ms-group-sum--nested,
+.ms-group-meter-badge {
+    color: #a5f3fc;
+    background: rgba(8, 145, 178, 0.22);
+}
+.ms-group-head.group-drop-target { background: rgba(8, 145, 178, 0.3); }
+.ms-sonstige { border-top-color: var(--color-border); }
 
 /* ═══════════════════════════════════════════════════════════════════════
    MOBILE-LAYER (≤ 768px) — Grundkonstrukt für die Smartphone-Ansicht.

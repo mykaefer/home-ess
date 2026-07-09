@@ -13,17 +13,24 @@ const {
   reorderActors, normalizeInput, effectivePriority,
 } = require('../messen-schalten/actors');
 const {
-  listGroups, createGroup, updateGroup, deleteGroup,
+  listGroups, createGroup, updateGroup, deleteGroup, setGroupParent, setGroupColor,
 } = require('../messen-schalten/groups');
+const levelHandler = require('../operating-level/handler');
 const {
   listSwitchGroups, createSwitchGroup, updateSwitchGroup, deleteSwitchGroup,
   assignActorToSwitchGroup,
 } = require('../messen-schalten/schaltgruppen');
-const { readActorValues, readGroupSums } = require('../messen-schalten/aggregation');
+const { readActorValues, readGroupPowerTree, readGroupEnergyTree } = require('../messen-schalten/aggregation');
+const { assembleEnergiefluss } = require('../messen-schalten/energiefluss');
 const automation = require('../messen-schalten/automation');
 const schaltgruppenAutomation = require('../messen-schalten/schaltgruppen-automation');
 const renderMessenSchalten = require('../views/messen-schalten');
 const renderSchaltgruppen = require('../views/schaltgruppen');
+const renderEnergiefluss = require('../views/energiefluss');
+const { listPvPlants } = require('../photovoltaik/plants');
+const { readPhotovoltaikValues } = require('../photovoltaik/aggregation');
+const { readStromverbrauchValues } = require('../stromverbrauch/aggregation');
+const { readBatterieData, loadBatterieConfig } = require('../batterie/config');
 const { isEnabled } = require('../modules');
 
 async function refreshMqttDefinitions(db) {
@@ -36,6 +43,21 @@ const numberFmt2 = new Intl.NumberFormat('de-DE', { minimumFractionDigits: 2, ma
 
 function powerDisplay(watt) {
   return watt == null ? '— W' : `${numberFmt0.format(Math.round(watt))} W`;
+}
+// Reine Zahl ohne Einheit für die verkürzte „Ebene/Gesamt W"-Darstellung.
+function powerNumber(watt) {
+  return watt == null ? '—' : numberFmt0.format(Math.round(watt));
+}
+// Titelanzeige der Verbrauchssumme:
+//  • Zählergruppe: nur die fixe Gesamtleistung (keine Ebene).
+//  • Gruppe mit Untergruppen: verkürzt „Ebene/Gesamt W".
+//  • sonst: die eine Zahl (Ebene = Gesamt, da keine Untergruppen).
+function groupSumDisplay(tree) {
+  if (!tree) return powerDisplay(null);
+  if (tree.meterGroup) return powerDisplay(tree.gesamtW);
+  return tree.hasChildren
+    ? `${powerNumber(tree.ebeneW)}/${powerNumber(tree.gesamtW)} W`
+    : powerDisplay(tree.gesamtW);
 }
 function counterDisplay(kwh) {
   return kwh == null ? '— kWh' : `${numberFmt2.format(kwh)} kWh`;
@@ -90,22 +112,71 @@ async function buildLiveData(db) {
   const groups = await listGroups(db);
   const values = await readActorValues(db, cache, actors);
   const valueById = new Map(values.map((v) => [v.id, v]));
-  const sums = readGroupSums(groups, values);
+  const tree = readGroupPowerTree(groups, values);
   const groupsById = new Map(groups.map((g) => [g.id, g]));
   const viewActors = actors.map((actor) => toViewActor(actor, valueById.get(actor.id), groupsById));
-  const viewGroups = groups.map((group) => ({
-    id: group.id,
-    title: group.title,
-    priority: group.priority,
-    functionKey: group.functionKey,
-    offsetTotalConsumption: group.offsetTotalConsumption,
-    sumDisplay: powerDisplay(sums.get(group.id) ? sums.get(group.id).powerW : null),
-  }));
+  const viewGroups = groups.map((group) => {
+    const t = tree.get(group.id) || {};
+    return {
+      id: group.id,
+      title: group.title,
+      priority: group.priority,
+      functionKey: group.functionKey,
+      offsetTotalConsumption: group.offsetTotalConsumption,
+      parentId: group.parentId,
+      meterGroup: group.meterGroup === true,
+      hasChildren: t.hasChildren === true,
+      // „Sonstige Verbraucher"-Fußzeile nur bei Zählergruppen mit Untergruppen.
+      showSonstige: t.meterGroup === true && t.hasChildren === true,
+      // Verkürzte Titelanzeige plus die Einzelwerte für Live-Updates.
+      sumDisplay: groupSumDisplay(t),
+      ebeneDisplay: powerDisplay(t.ebeneW == null ? null : t.ebeneW),
+      gesamtDisplay: powerDisplay(t.gesamtW == null ? null : t.gesamtW),
+      sonstigeDisplay: powerDisplay(t.sonstigeW == null ? null : t.sonstigeW),
+    };
+  });
   return { actors, groups, viewActors, viewGroups };
 }
 
+// Flache, alphanumerisch sortierte Gruppenliste in Baum-Reihenfolge mit
+// Tiefenangabe (für das eingerückte Auswahlfeld im Geräte-Dialog).
+function flattenGroupsForSelect(viewGroups) {
+  const childrenByParent = new Map();
+  for (const g of viewGroups) {
+    const parent = g.parentId == null ? null : g.parentId;
+    if (!childrenByParent.has(parent)) childrenByParent.set(parent, []);
+    childrenByParent.get(parent).push(g);
+  }
+  const out = [];
+  const walk = (parentKey, depth, guard) => {
+    for (const g of childrenByParent.get(parentKey) || []) {
+      if (guard.has(g.id)) continue;
+      guard.add(g.id);
+      out.push({ id: g.id, title: g.title, depth });
+      walk(g.id, depth + 1, guard);
+    }
+  };
+  walk(null, 0, new Set());
+  return out;
+}
+
+// Verschachtelte Gruppen zu einem Baum verknüpfen (parentId -> children).
+// Reihenfolge bleibt die alphanumerische Sortierung aus listGroups.
+function buildGroupTree(groups) {
+  const nodeById = new Map(groups.map((g) => [g.id, { ...g, children: [] }]));
+  const roots = [];
+  for (const node of nodeById.values()) {
+    if (node.parentId != null && nodeById.has(node.parentId) && node.parentId !== node.id) {
+      nodeById.get(node.parentId).children.push(node);
+    } else {
+      roots.push(node);
+    }
+  }
+  return roots;
+}
+
 async function renderPage(db, res, options = {}) {
-  const { actors, groups, viewActors, viewGroups } = await buildLiveData(db);
+  const { actors, viewActors, viewGroups } = await buildLiveData(db);
   const actorsByGroup = new Map();
   const ungrouped = [];
   const groupById = new Map(viewGroups.map((g) => [g.id, g]));
@@ -117,10 +188,11 @@ async function renderPage(db, res, options = {}) {
       ungrouped.push(actor);
     }
   }
+  const withActors = viewGroups.map((g) => ({ ...g, actors: actorsByGroup.get(g.id) || [] }));
   res.send(renderMessenSchalten({
     ungrouped,
-    groups: viewGroups.map((g) => ({ ...g, actors: actorsByGroup.get(g.id) || [] })),
-    groupsForSelect: groups,
+    groups: buildGroupTree(withActors),
+    groupsForSelect: flattenGroupsForSelect(viewGroups),
     actorConfigs: actors.map((a) => ({
       id: a.id, name: a.name, groupId: a.groupId,
       switchTopic: a.switchTopic, remoteTopic: a.remoteTopic, statusTopic: a.statusTopic,
@@ -179,6 +251,49 @@ async function buildSchaltgruppenData(db) {
   });
   const unassigned = viewActors.filter((a) => a.switchGroupId == null || !groupIds.has(a.switchGroupId));
   return { groups: viewGroups, unassigned, groupConfigs: groups };
+}
+
+// Momentaufnahme für das Energiefluss-Diagramm: PV (gebündelt), Netz, Batterie,
+// zentraler Eigenverbrauch und die verschachtelten Gruppen als Ausgangszweige.
+async function buildEnergieflussData(db) {
+  const cache = mqttClient.getCache();
+  const plants = await listPvPlants(db);
+  const [pvValues, stromValues, batteryConfig] = await Promise.all([
+    readPhotovoltaikValues(db, cache, plants),
+    readStromverbrauchValues(db, cache),
+    new Promise((resolve) => loadBatterieConfig(db, resolve)),
+  ]);
+  const batteryData = readBatterieData(cache);
+  const actors = await listActors(db);
+  const groups = await listGroups(db);
+  const values = await readActorValues(db, cache, actors);
+  const groupTree = readGroupPowerTree(groups, values);
+  const groupStatus = computeGroupStatus(actors, groups);
+  const groupEnergy = await readGroupEnergyTree(db, groups);
+  return assembleEnergiefluss({ pvValues, stromValues, batteryData, batteryConfig, groups, groupTree, groupStatus, groupEnergy });
+}
+
+// Je Gruppe ermitteln, ob ihre schaltbaren Geräte gerade durch das Betriebslevel
+// (Priorität) oder den Lastabwurf abgeschaltet sind. Eine Gruppe gilt als
+// „deaktiviert", wenn sie schaltbare Geräte hat und diese ALLE gerade gesperrt
+// sind – solche Gruppen werden im Diagramm ausgegraut.
+function computeGroupStatus(actors, groups) {
+  const groupsById = new Map(groups.map((g) => [g.id, g]));
+  const acc = new Map(); // groupId -> { hasSwitch, allGated }
+  for (const actor of actors) {
+    if (actor.groupId == null || !actor.switchTopic) continue;
+    const priority = effectivePriority(actor, groupsById);
+    const allowed = levelHandler.isAllowed(priority);
+    const shed = automation.getActorAutomationState(actor.id).loadShedOff === true;
+    const gated = !allowed || shed;
+    const cur = acc.get(actor.groupId) || { hasSwitch: false, allGated: true };
+    cur.hasSwitch = true;
+    if (!gated) cur.allGated = false;
+    acc.set(actor.groupId, cur);
+  }
+  const status = new Map();
+  for (const [gid, s] of acc) status.set(gid, { deactivated: s.hasSwitch && s.allGated });
+  return status;
 }
 
 async function renderSchaltgruppenPage(db, res, options = {}) {
@@ -310,6 +425,40 @@ function messenSchaltenRoutes(db) {
       await deleteGroup(db, Number(req.params.id));
       await automation.runNow(db).catch(() => {});
       await renderPage(db, res, { formMessage: 'Gruppe gelöscht.' });
+    } catch (err) { next(err); }
+  });
+
+  // Verschachtelung per Drag & Drop: Gruppe unter eine andere hängen (parentId)
+  // bzw. mit parentId=null auf die oberste Ebene lösen. Zyklen werden abgewiesen.
+  router.post('/messen-schalten/groups/:id/parent', requireAuth, async (req, res, next) => {
+    try {
+      await setGroupParent(db, Number(req.params.id), (req.body || {}).parentId);
+      await automation.runNow(db).catch(() => {});
+      res.json({ ok: true });
+    } catch (err) {
+      if (err.validation) return res.status(400).json({ error: err.message });
+      next(err);
+    }
+  });
+
+  // Freie Gruppenfarbe fürs Energiefluss-Diagramm setzen (leer = Standard).
+  router.post('/messen-schalten/groups/:id/color', requireAuth, async (req, res, next) => {
+    try {
+      await setGroupColor(db, Number(req.params.id), (req.body || {}).color);
+      res.json({ ok: true });
+    } catch (err) { next(err); }
+  });
+
+  // --- Energiefluss (Unterseite) -------------------------------------------
+  router.get('/messen-schalten/energiefluss', requireAuth, async (req, res, next) => {
+    try {
+      res.send(renderEnergiefluss({ data: await buildEnergieflussData(db) }));
+    } catch (err) { next(err); }
+  });
+
+  router.get('/messen-schalten/energiefluss/data', requireAuth, async (req, res, next) => {
+    try {
+      res.json(await buildEnergieflussData(db));
     } catch (err) { next(err); }
   });
 

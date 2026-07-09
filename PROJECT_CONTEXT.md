@@ -155,8 +155,20 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
 - **Messen + Schalten** (`/messen-schalten`, Kernseite, Menü unter Batterie):
   Gruppen als **einklappbare Abschnitte über die volle Seitenbreite** (Vorbild
   Output-Kategorien: Standard zugeklappt, Auf/Zu-Zustand je Gruppe in
-  localStorage `homeess.ms.openGroups`), fest **alphanumerisch nach Titel
-  sortiert** (keine Drag-Fläche mehr, `listGroups` sortiert). **Geräte** (Aktoren)
+  localStorage `homeess.ms.openGroups`), unter Geschwistern **alphanumerisch
+  nach Titel sortiert** (`listGroups`). Gruppen sind jetzt **mehrschichtig
+  verschachtelbar**: Der Gruppenkopf hat eine Drag-Fläche, mit der eine Gruppe
+  wie ein Verzeichnis in eine andere geschoben wird (`mess_schalt_groups.parent_id`;
+  Zyklen/Selbst-Verschachtelung werden in `messen-schalten/groups.js`
+  abgewiesen, Route `POST /messen-schalten/groups/:id/parent`). Untergruppen
+  stehen eingerückt im Body und klappen mit der Elterngruppe zu. Prioritäten
+  werden **nicht** vererbt. Der Titel einer Gruppe mit Untergruppen zeigt
+  verkürzt **„Ebene/Gesamt W"** (eigene Ebene / Gesamtleistung inkl.
+  Untergruppen; `readGroupPowerTree`). Die Gruppenoption **Zählergruppe**
+  (`meter_group`) fixiert den Zweig-Gesamtverbrauch aus den eigenen Zählern und
+  weist als Fußzeile die **„Sonstige Verbraucher dieser Gruppe"** aus; mit
+  gesetztem `offset_total_consumption` wirkt sie als **Sperrschicht** (voller
+  Zweig-Beitrag, Untergruppen global nicht mehr zusätzlich verrechnet). **Geräte** (Aktoren)
   sind einzeilige Zeilen über die volle Breite, per Drag & Drop frei anordbar und
   zwischen Gruppen verschiebbar; Drop auf den Kopf einer zugeklappten Gruppe
   ordnet ans Gruppenende zu. Gruppenlose Geräte stehen im festen Abschnitt
@@ -245,8 +257,14 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   Titelzeile. Die Gruppen-Checkbox **„Verbrauchssumme mit Gesamtverbrauch
   verrechnen“** (`offset_total_consumption`, Default `1`) steuert, ob die jeweilige
   Gruppensumme in `output/internal-values.js` vom Eigenverbrauch abgezogen wird,
-  um **„Sonstige Verbraucher“** zu bilden. Der Gruppenwert selbst bleibt unabhängig
-  davon im Wertekatalog sichtbar. Live-Refresh über
+  um **„Sonstige Verbraucher“** zu bilden (der Beitrag rechnet Sperrschicht und
+  Untergruppen bereits ein, `readGroupPowerTree.contributionW`). Der Gruppenwert
+  selbst bleibt unabhängig davon im Wertekatalog sichtbar. Zusätzlich stehen je
+  Gruppe die **Verbrauchssummen aus dem internen Gerätezähler** bereit:
+  `verbrauchssumme.<id>.verbrauchHeute`, `.verbrauchJahr`, `.verbrauchVorjahr`
+  (baum-konsistent, `readGroupEnergyTree`; Tages-/Jahres-Baselines je Gerät in
+  `mess_schalt_actor_state`, im 60-s-Snapshot fortgeschrieben, Vorjahr beim
+  Jahreswechsel abgeschlossen). Live-Refresh über
   `GET /messen-schalten/data`. Gruppen **und** Geräte
   besitzen zusätzlich ein Dropdown **Funktion** (Licht, Waschen, Warmwasser,
   Heizung / Klima, Kochen; Geräte ohne eigene Funktion erben die der Gruppe,
@@ -255,6 +273,24 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   `funktion.<key>.verbrauchHeute`); die minütlich integrierten Stundenenergien
   (`mess_schalt_function_hourly`) liefern der Prognose Stundenprofile je Funktion
   und werden aus dem gelernten Haus-Grundverbrauch herausgerechnet.
+  **Unterseite „Energiefluss"** (`/messen-schalten/energiefluss`, klappt im Menü
+  unter Messen + Schalten aus): ein clientseitig gezeichnetes, vollständig
+  **animiertes SVG-Flussdiagramm** (`views/energiefluss.js`; reine Aufbereitung
+  in `messen-schalten/energiefluss.js`, `assembleEnergiefluss`). Eingang: PV
+  gebündelt (Anlagen → PV gesamt), Netzbezug (bei Einspeisung negativ), Batterie
+  als neutrale Stabstelle; zentraler Knoten Eigenverbrauch; Ausgang: die
+  verschachtelten Gruppen plus ein **„Sonstige Verbraucher"-Ast** (global sowie
+  hinter jeder Zählergruppe), sodass an jedem Knoten `Gesamt = Σ(gezeichnete
+  Kinder) + Sonstige` gilt (nur angehakte Untergruppen werden als eigener Ast
+  gezeichnet). Strichbreite/Fließtempo folgen der Leistung, die Richtung dem
+  Vorzeichen; Live-Update per `GET /messen-schalten/energiefluss/data` ohne
+  Neustart der Animation. Systemfarben für PV/Netz/Batterie/Eigenverbrauch, je
+  Gruppe eine frei wählbare Farbe (`mess_schalt_groups.color`, Stift-Button →
+  Mini-Colorpicker, Route `POST /messen-schalten/groups/:id/color`); Pfade zu
+  Gruppen in Gruppenfarbe. Durch Priorität/Lastabwurf abgeschaltete Gruppen
+  werden ausgegraut (`levelHandler.isAllowed` + `loadShedOff`). Gruppen sowie
+  PV/Netz/Eigenverbrauch weisen Verbrauch heute und dieses Jahr aus. Einzelne
+  Geräte werden bewusst nicht gezeigt.
   **Unterseite „Schaltgruppen"** (`/messen-schalten/schaltgruppen`, klappt im
   Menü unter Messen + Schalten aus): zwei unabhängig scrollbare Spalten — links
   die Schaltgruppen (Name, optionales **Remote-Topic**, Checkbox **„Gruppe
@@ -687,11 +723,16 @@ src/
     automation.js         Steuerschleife: Tick, Level-Handler-Registrierung, Modus-Sync,
                           Überschussberechnung, Schalten via mqttClient.publish
   messen-schalten/
-    groups.js             Gruppen-CRUD (Titel/Priorität/Funktion/Verrechnung)
+    groups.js             Gruppen-CRUD (Titel/Priorität/Funktion/Verrechnung/
+                          Verschachtelung/Zählergruppe/Farbe): setGroupParent,
+                          setGroupColor
     actors.js             Geräte-CRUD + Validierung (min. 1 Topic), effectivePriority,
                           buildMessSchaltStateDefinitions, cacheKey, setDesiredOn
     aggregation.js        Live-Werte je Gerät, Leistung aus Zählerfortschritt
                           (buildActorSnapshot, 60-s-Job), Gruppen-Verbrauchssummen
+                          (readGroupPowerTree, readGroupEnergyTree Tag/Jahr/Vorjahr)
+    energiefluss.js       Reine Aufbereitung des Energiefluss-Diagramms
+                          (assembleEnergiefluss: Quellen, Gruppenbaum, Sonstige)
     automation.js         Steuerschleife: Level-Handler-Gate je Gerät mit Schalt-Topic
     schaltgruppen.js      Schaltgruppen-CRUD (Name/Remote-Topic/„als Einheit"),
                           optionaler AUS-Timer, Geräte-Zuordnung (switch_group_id),
@@ -725,6 +766,8 @@ src/
                           + GET /wallbox/data
     messen-schalten.js    GET /messen-schalten + Gruppen-/Geräte-CRUD + /layout
                           + POST /messen-schalten/actor/:id/switch/:state + /data
+                          + Gruppen /:id/parent (Verschachtelung) + /:id/color
+                          + Unterseite /messen-schalten/energiefluss (+ /data)
                           + Unterseite /messen-schalten/schaltgruppen (CRUD,
                           /assign, /:id/switch/:state, /data)
   views/
@@ -743,7 +786,10 @@ src/
     grid-control.js       Grid-Control — Zustände, Config, Bestätigungs-Badges,
                           Protokoll-Panel (live Seite 1, paginiert)
     wallbox.js            Wallbox — Boxenliste (KPI je Box), Modus-Buttons, Config-Dialog
-    messen-schalten.js    Messen + Schalten — Gruppen/Geräte-Kacheln, Drag&Drop, Dialoge
+    messen-schalten.js    Messen + Schalten — verschachtelbare Gruppen/Geräte-
+                          Kacheln, Drag&Drop, Dialoge (inkl. Zählergruppe)
+    energiefluss.js       Energiefluss — animiertes SVG-Flussdiagramm, Gruppen-
+                          Colorpicker (clientseitig gezeichnet, Live-Update)
     schaltgruppen.js      Schaltgruppen — zwei unabhängig scrollbare Spalten
                           (Gruppen | nicht zugeordnete Geräte), Drag&Drop-Zuordnung
 public/styles.css         Einziges statisches Asset
@@ -809,8 +855,10 @@ MQTT.md                   Referenz: ioBroker-MQTT-Regeln
   status_topic, power_topic, power_unit 'W'|'kW', counter_topic, counter_unit 'Wh'|'kWh',
   setpoint_topic, plugged_topic, soc_topic, mode_sync_topic, mode 1|2|3,
   priority_private/business/full 1–5, min_charge_percent, business_days CSV Mo..So,
-  stall_timeout_seconds, stall_power_w)` — je Wallbox eine Zeile (optionales Modul);
-  die beiden Stall-Spalten steuern den Ladestart-Neustart.
+  stall_timeout_seconds, stall_power_w, control_mode 'auto'|'off'|'full')` — je
+  Wallbox eine Zeile (optionales Modul); die beiden Stall-Spalten steuern den
+  Ladestart-Neustart, `control_mode` hält die manuelle Übersteuerung
+  neustart-resistent.
 - `wallbox_counter_state(wallbox_id, last_raw_value, day_total, last_day_key,
   plugged_energy_start, last_power_ts)` — Zähler-/Power-Integrationsstand + SoC-Schätzbasis.
 - `wallbox_summary_state(wallbox_id, week/month/year_offset, previous_year_total,
@@ -819,11 +867,15 @@ MQTT.md                   Referenz: ioBroker-MQTT-Regeln
 - `wallbox_hourly_consumption(wallbox_id, day_key, hour, consumption_kwh)` —
   getrennte Lernhistorie für Wochentagsbedarf und Ladezeit je Box.
 - `mess_schalt_groups(id, title, priority 1–5, position, function_key,
-  offset_total_consumption)` —
+  offset_total_consumption, parent_id, meter_group, color)` —
   Messen-+-Schalten-Gruppen; Priorität wird von Geräten mit `use_group_priority`
-  übernommen, `function_key` von Geräten ohne eigene Funktion geerbt;
-  `offset_total_consumption` ist standardmäßig `1` und bestimmt, ob die
-  Gruppensumme von „Sonstige Verbraucher“ abgezogen wird.
+  übernommen (nicht an Untergruppen vererbt), `function_key` von Geräten ohne
+  eigene Funktion geerbt; `offset_total_consumption` ist standardmäßig `1` und
+  bestimmt, ob die Gruppensumme von „Sonstige Verbraucher“ abgezogen wird.
+  `parent_id` = übergeordnete Gruppe (NULL = oberste Ebene, mehrschichtige
+  Verschachtelung); `meter_group` = Zählergruppe (eigene Geräte messen den ganzen
+  Zweig, wirkt mit gesetztem Offset als Sperrschicht); `color` = frei wählbare
+  Diagrammfarbe (Hex, leer = Standard).
 - `mess_schalt_actors(id, name, group_id, position, switch_topic, status_topic,
   power_topic, power_unit 'W'|'kW', counter_topic, counter_unit 'Wh'|'kWh',
   priority 1–5, use_group_priority, always_on, desired_on, function_key,
@@ -839,8 +891,11 @@ MQTT.md                   Referenz: ioBroker-MQTT-Regeln
   `timer_minutes > 0` startet beim Wechsel auf AN einen Laufzeittimer, der alle
   Mitglieder anschließend ausschaltet.
 - `mess_schalt_actor_state(actor_id, last_counter_raw, last_progress_ts,
-  derived_power_w)` — Ableitungszustand für „Leistung aus Zählerfortschritt"
-  (0 W nach über 10 min ohne Fortschritt).
+  derived_power_w, counter_total_kwh, day_key, day_start_kwh, year_key,
+  year_start_kwh, prev_year_kwh)` — Ableitungszustand für „Leistung aus
+  Zählerfortschritt" (0 W nach über 10 min ohne Fortschritt), interner Zähler
+  sowie Tages-/Jahres-Baselines für die Gruppen-Verbrauchssummen
+  (heute/Jahr/Vorjahr).
 - `mess_schalt_function_hourly(function_key, day_key, hour, consumption_kwh,
   temperature)` + `mess_schalt_function_state(id=1, last_sample_ts)` — je Funktion
   und Stunde integrierte Energie samt maximaler Außentemperatur der Stunde;

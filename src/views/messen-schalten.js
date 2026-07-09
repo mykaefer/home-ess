@@ -105,24 +105,53 @@ function renderActorList(actors, groupId) {
   return `<div class="widget-dropzone ms-list" data-group="${groupId == null ? '' : groupId}">${rows}</div>`;
 }
 
-// Einklappbarer Gruppen-Abschnitt über die volle Seitenbreite (Vorbild:
+// Einklappbarer, beliebig tief verschachtelbarer Gruppen-Abschnitt (Vorbild:
 // Output-Kategorien). Standard zugeklappt; msApplyOpenState() stellt den in
-// localStorage gemerkten Zustand wieder her. Der Kopf ist zugleich Drop-Ziel,
-// damit Geräte auch in zugeklappte Gruppen gezogen werden können.
+// localStorage gemerkten Zustand wieder her. Der Kopf ist zugleich Drop-Ziel:
+// Geräte lassen sich so auch in zugeklappte Gruppen ziehen, und eine per
+// Gruppen-Drag gezogene Gruppe wird durch Ablegen auf dem Kopf zur Untergruppe.
+// Untergruppen stehen eingerückt im Body (klappen also mit der Elterngruppe zu).
 function renderGroup(group) {
-  return `          <div class="ms-group" data-group-id="${group.id}">
+  const hasChildren = Array.isArray(group.children) && group.children.length > 0;
+  // Bei Untergruppen zeigt der Titel „Ebene/Gesamt W" (group.sumDisplay ist
+  // dann bereits verkürzt), sonst die eine Verbrauchssumme.
+  const sumTitle = group.meterGroup
+    ? 'Gesamtverbrauch der Zählergruppe (fix, aus den Zählern)'
+    : hasChildren
+      ? 'Leistung dieser Ebene (eigene Geräte) / Gesamtleistung inkl. Untergruppen'
+      : 'Verbrauchssumme (Leistung)';
+  const subgroups = hasChildren
+    ? `\n            <div class="ms-subgroups">\n${group.children.map(renderGroup).join('\n')}\n            </div>`
+    : '';
+  // Fiktives Fuß-Gerät einer Zählergruppe: die am Zähler gemessene Gesamtleistung
+  // abzüglich der Untergruppen ergibt die „Sonstigen Verbraucher dieser Gruppe".
+  const sonstigeFooter = group.showSonstige
+    ? `\n            <div class="ms-sonstige" title="Gesamtleistung der Zählergruppe minus Gesamtleistung der Untergruppen">
+              <span class="widget-drag" aria-hidden="true" style="visibility:hidden">⠿</span>
+              <span class="ms-status-dot is-unknown" aria-hidden="true"></span>
+              <span class="ms-row-name">Sonstige Verbraucher</span>
+              <span class="ms-prio ms-prio--muted">rechnerisch</span>
+              <span class="ms-row-power" id="ms-group-sonstige-${group.id}">${escapeHtml(group.sonstigeDisplay)}</span>
+            </div>`
+    : '';
+  const meterBadge = group.meterGroup
+    ? '<span class="ms-group-meter-badge" title="Zählergruppe: eigene Geräte sind Zähler; der Gesamtverbrauch ist fix.">Zähler</span>'
+    : '';
+  return `          <div class="ms-group${group.meterGroup ? ' ms-group--meter' : ''}" data-group-id="${group.id}" data-parent-id="${group.parentId == null ? '' : group.parentId}">
             <div class="ms-group-head" role="button" tabindex="0" aria-expanded="false">
               <span class="ms-caret" aria-hidden="true">▸</span>
+              <span class="widget-drag ms-group-drag" title="Gruppe verschieben: auf eine andere Gruppe ziehen (Untergruppe) oder auf freie Fläche (oberste Ebene)" aria-hidden="true">⠿</span>
               <span class="ms-group-title">${escapeHtml(group.title)}</span>
+              ${meterBadge}
               <span class="ms-group-count" id="ms-group-count-${group.id}">${group.actors.length}</span>
-              <span class="ms-group-prio" title="Priorität der Gruppe (Geräte mit „Priorität der Gruppe verwenden" erben sie)">Priorität ${Number(group.priority)}</span>
-              <span class="ms-group-sum" id="ms-group-sum-${group.id}" title="Verbrauchssumme (Leistung)">${escapeHtml(group.sumDisplay)}</span>
+              <span class="ms-group-prio" title="Priorität der Gruppe (Geräte mit „Priorität der Gruppe verwenden" erben sie; Untergruppen erben sie NICHT)">Priorität ${Number(group.priority)}</span>
+              <span class="ms-group-sum${hasChildren && !group.meterGroup ? ' ms-group-sum--nested' : ''}" id="ms-group-sum-${group.id}" title="${sumTitle}">${escapeHtml(group.sumDisplay)}</span>
               <div class="widget-group-actions">
-                <button type="button" class="widget-icon-btn" title="Gruppe bearbeiten" onclick="event.stopPropagation(); openGroupDialog('edit', ${group.id}, ${toJsStringLiteral(group.title)}, ${Number(group.priority)}, ${toJsStringLiteral(group.functionKey || '')}, ${group.offsetTotalConsumption !== false ? 'true' : 'false'})">✎</button>
+                <button type="button" class="widget-icon-btn" title="Gruppe bearbeiten" onclick="event.stopPropagation(); openGroupDialog('edit', ${group.id}, ${toJsStringLiteral(group.title)}, ${Number(group.priority)}, ${toJsStringLiteral(group.functionKey || '')}, ${group.offsetTotalConsumption !== false ? 'true' : 'false'}, ${group.meterGroup ? 'true' : 'false'})">✎</button>
                 <button type="button" class="widget-icon-btn" title="Gruppe entfernen" onclick="event.stopPropagation(); openDeleteGroupDialog(${group.id}, ${toJsStringLiteral(group.title)})">🗑</button>
               </div>
             </div>
-            <div class="ms-group-body">${renderActorList(group.actors, group.id)}</div>
+            <div class="ms-group-body">${renderActorList(group.actors, group.id)}${subgroups}${sonstigeFooter}</div>
           </div>`;
 }
 
@@ -160,7 +189,7 @@ function renderActorDialog({ groupsForSelect, gridControlEnabled }) {
                 <label class="field-block" for="msGroup"><span>Gruppe</span>
                   <select id="msGroup" name="groupId">
                     <option value="">Keine Gruppe</option>
-                    ${groupsForSelect.map((g) => `<option value="${g.id}">${escapeHtml(g.title)}</option>`).join('')}
+                    ${groupsForSelect.map((g) => `<option value="${g.id}">${g.depth ? '  '.repeat(g.depth) + '↳ ' : ''}${escapeHtml(g.title)}</option>`).join('')}
                   </select></label>
                 <label class="field-block" for="msFunction"><span>Funktion <span class="pool-optional">(für die Prognose-Statistik)</span></span>
                   <select id="msFunction" name="functionKey">${functionOptions('', 'Wie Gruppe (bzw. keine)')}</select></label>
@@ -245,6 +274,10 @@ function renderGroupDialog() {
               <label class="remember-row remember-row--boxed" for="groupOffsetTotalConsumption" style="align-self:end;">
                 <input type="checkbox" id="groupOffsetTotalConsumption" name="offsetTotalConsumption" value="on" checked>
                 <span>Verbrauchssumme mit Gesamtverbrauch verrechnen</span></label>
+              <label class="remember-row remember-row--boxed" for="groupMeterGroup" style="align-self:end;">
+                <input type="checkbox" id="groupMeterGroup" name="meterGroup" value="on">
+                <span>Zählergruppe (eigene Geräte sind Zähler; Gesamtverbrauch ist fix, Untergruppen werden als „Sonstige Verbraucher" abgezogen)</span></label>
+              <p class="muted" style="grid-column:1/-1;">Eine verrechnete Zählergruppe ist eine <strong>Sperrschicht</strong>: Ist ihr Haken „mit Gesamtverbrauch verrechnen" gesetzt, trägt sie den vollen Zweigwert zum Hausverbrauch bei; die Untergruppen werden dann nicht mehr zusätzlich global verrechnet. Der Haken einer Untergruppe steuert stattdessen, ob ihr Verbrauch gegen die nächsthöhere Zählergruppe verrechnet – also aus deren „Sonstige Verbraucher" herausgerechnet – wird oder darin enthalten bleibt.</p>
             </div>
             <div class="button-row">
               <button type="submit">Speichern</button>
@@ -326,6 +359,9 @@ ${renderUngrouped(ungrouped)}
     var initialGroupDialogOpen = ${groupDialogOpen ? 'true' : 'false'};
     var initialDialogError = ${JSON.stringify(dialogError || '')};
     var draggedCard = null, dropZone = null, dropRef = null;
+    // Gruppen-Drag (Verschachtelung). groupDropParent: undefined = kein Ziel,
+    // null = oberste Ebene, Zahl = ID der neuen Elterngruppe.
+    var draggedGroup = null, groupDropParent, groupMoving = false;
 
     // --- Dialoge ------------------------------------------------------------
     function setActorFormValues(v) {
@@ -374,7 +410,7 @@ ${renderUngrouped(ungrouped)}
     }
     function closeActorDialog() { var d = document.getElementById('actorDialog'); if (d) d.close(); }
 
-    function openGroupDialog(mode, groupId, groupTitle, groupPriority, groupFunction, groupOffsetTotalConsumption) {
+    function openGroupDialog(mode, groupId, groupTitle, groupPriority, groupFunction, groupOffsetTotalConsumption, groupMeterGroup) {
       var dialog = document.getElementById('groupDialog');
       if (!dialog) return;
       var form = document.getElementById('groupForm');
@@ -386,6 +422,7 @@ ${renderUngrouped(ungrouped)}
         document.getElementById('groupPriority').value = groupPriority || 4;
         document.getElementById('groupFunction').value = groupFunction || '';
         document.getElementById('groupOffsetTotalConsumption').checked = groupOffsetTotalConsumption !== false;
+        document.getElementById('groupMeterGroup').checked = groupMeterGroup === true;
       } else {
         form.action = '/messen-schalten/groups';
         title.textContent = 'Gruppe hinzufügen';
@@ -393,6 +430,7 @@ ${renderUngrouped(ungrouped)}
         document.getElementById('groupPriority').value = 4;
         document.getElementById('groupFunction').value = '';
         document.getElementById('groupOffsetTotalConsumption').checked = true;
+        document.getElementById('groupMeterGroup').checked = false;
       }
       if (typeof dialog.showModal === 'function') dialog.showModal();
     }
@@ -472,18 +510,79 @@ ${renderUngrouped(ungrouped)}
       head.addEventListener('keydown', function (event) {
         if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); msToggleGroup(head); }
       });
-      // Der Kopf ist Drop-Ziel: Geräte lassen sich so auch in zugeklappte
-      // Gruppen ziehen (sie landen dann am Ende der Gruppe).
+      // Der Kopf ist Drop-Ziel für zweierlei:
+      //  • Geräte-Drag: das Gerät landet in dieser (auch zugeklappten) Gruppe.
+      //  • Gruppen-Drag: die gezogene Gruppe wird zur Untergruppe DIESER Gruppe.
       head.addEventListener('dragover', function (event) {
+        var group = head.parentNode;
+        if (draggedGroup) {
+          // Nicht auf sich selbst oder eine eigene Untergruppe ablegen.
+          if (group === draggedGroup || draggedGroup.contains(group)) return;
+          event.preventDefault();
+          event.stopPropagation();
+          event.dataTransfer.dropEffect = 'move';
+          groupDropParent = Number(group.dataset.groupId);
+          clearGroupDropIndicators();
+          head.classList.add('group-drop-target');
+          return;
+        }
         if (!draggedCard) return;
         event.preventDefault();
         event.dataTransfer.dropEffect = 'move';
-        dropZone = head.parentNode.querySelector('.widget-dropzone');
+        dropZone = group.querySelector('.widget-dropzone');
         dropRef = null;
         clearDropIndicators();
         head.classList.add('drag-over');
       });
       head.addEventListener('drop', function (event) { event.preventDefault(); });
+    }
+
+    // --- Drag & Drop (Gruppen verschachteln) --------------------------------
+    function setupGroupDrag(group) {
+      var head = group.querySelector('.ms-group-head');
+      var handle = head ? head.querySelector('.ms-group-drag') : null;
+      if (!handle) return;
+      // Am Griff ziehen macht die GESAMTE Gruppe ziehbar; ein Klick auf den Griff
+      // darf die Gruppe nicht auf-/zuklappen.
+      handle.addEventListener('mousedown', function () { group.setAttribute('draggable', 'true'); });
+      handle.addEventListener('mouseup', function () { group.removeAttribute('draggable'); });
+      handle.addEventListener('click', function (event) { event.stopPropagation(); });
+      group.addEventListener('dragstart', function (event) {
+        event.stopPropagation();
+        draggedGroup = group; groupDropParent = undefined;
+        group.classList.add('group-dragging');
+        event.dataTransfer.effectAllowed = 'move';
+        if (event.dataTransfer.setData) event.dataTransfer.setData('text/plain', 'group:' + group.dataset.groupId);
+      });
+      group.addEventListener('dragend', function (event) {
+        event.stopPropagation();
+        group.classList.remove('group-dragging'); group.removeAttribute('draggable');
+        clearGroupDropIndicators();
+        applyGroupDrop();
+        draggedGroup = null; groupDropParent = undefined;
+      });
+    }
+
+    function clearGroupDropIndicators() {
+      var marked = document.querySelectorAll('.ms-group-head.group-drop-target, #groupsContainer.group-drop-root');
+      for (var i = 0; i < marked.length; i++) marked[i].classList.remove('group-drop-target', 'group-drop-root');
+    }
+
+    function applyGroupDrop() {
+      if (!draggedGroup || groupMoving || groupDropParent === undefined) return;
+      var groupId = Number(draggedGroup.dataset.groupId);
+      var currentParent = draggedGroup.dataset.parentId === '' ? null : Number(draggedGroup.dataset.parentId);
+      if (groupDropParent === currentParent) return; // keine Änderung
+      groupMoving = true;
+      fetch('/messen-schalten/groups/' + groupId + '/parent', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ parentId: groupDropParent })
+      }).then(function (r) {
+        // Die Baumstruktur ändert sich – am einfachsten und zuverlässigsten neu laden.
+        if (r.ok) { window.location.reload(); return; }
+        groupMoving = false;
+        return r.json().then(function (d) { if (d && d.error) alert(d.error); }).catch(function () {});
+      }).catch(function () { groupMoving = false; });
     }
 
     // --- Drag & Drop (Geräte) ----------------------------------------------
@@ -588,6 +687,22 @@ ${renderUngrouped(ungrouped)}
       for (var j = 0; j < zones.length; j++) setupZone(zones[j]);
       var heads = document.querySelectorAll('.ms-group[data-group-id] > .ms-group-head');
       for (var k = 0; k < heads.length; k++) setupGroupHead(heads[k]);
+      var groups = document.querySelectorAll('.ms-group[data-group-id]');
+      for (var g = 0; g < groups.length; g++) setupGroupDrag(groups[g]);
+      // Freie Fläche des Containers = Ablegen auf oberster Ebene (parent = null).
+      // Gruppenköpfe stoppen die Weitergabe, damit sie hier nicht überschrieben werden.
+      var container = document.getElementById('groupsContainer');
+      if (container) {
+        container.addEventListener('dragover', function (event) {
+          if (!draggedGroup) return;
+          event.preventDefault();
+          event.dataTransfer.dropEffect = 'move';
+          groupDropParent = null;
+          clearGroupDropIndicators();
+          container.classList.add('group-drop-root');
+        });
+        container.addEventListener('drop', function (event) { if (draggedGroup) event.preventDefault(); });
+      }
     }
 
     // --- Live-Aktualisierung ------------------------------------------------
@@ -632,6 +747,8 @@ ${renderUngrouped(ungrouped)}
         (data.groups || []).forEach(function (g) {
           var sum = document.getElementById('ms-group-sum-' + g.id);
           if (sum) sum.textContent = g.sumDisplay;
+          var sonstige = document.getElementById('ms-group-sonstige-' + g.id);
+          if (sonstige && g.sonstigeDisplay != null) sonstige.textContent = g.sonstigeDisplay;
         });
       } catch (_) {}
     }

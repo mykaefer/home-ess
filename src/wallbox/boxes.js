@@ -125,6 +125,9 @@ function normalizeRow(row = {}) {
     businessEndHour: clampHour(row.business_end_hour, 18),
     stallTimeoutSeconds: row.stall_timeout_seconds != null ? Math.max(0, Math.round(row.stall_timeout_seconds)) : 120,
     stallPowerW: parseNumber(row.stall_power_w) != null ? parseNumber(row.stall_power_w) : 200,
+    // Persistierte manuelle Übersteuerung (auto/off/full), damit sie einen
+    // Neustart übersteht. automation.js stellt daraus den Laufzeitzustand her.
+    controlMode: ['auto', 'off', 'full'].includes(row.control_mode) ? row.control_mode : 'auto',
   };
 }
 
@@ -132,7 +135,7 @@ const COLUMNS = `id, name, max_power_w, battery_capacity_kwh, command_topic, sta
   power_topic, power_unit, counter_topic, counter_unit, setpoint_topic, plugged_topic,
   soc_topic, mode_sync_topic, mode, priority_private, priority_business, priority_full,
   load_shed_phase, min_charge_percent, min_charge_business_percent, business_days,
-  business_end_hour, stall_timeout_seconds, stall_power_w`;
+  business_end_hour, stall_timeout_seconds, stall_power_w, control_mode`;
 
 const wallboxListCache = new WeakMap();
 function invalidateWallboxes(db) { if (db) wallboxListCache.delete(db); }
@@ -291,6 +294,14 @@ async function setWallboxMode(db, id, mode) {
   return value;
 }
 
+// Manuelle Übersteuerung persistieren (neustart-resistent).
+async function setWallboxControlMode(db, id, mode) {
+  const value = ['auto', 'off', 'full'].includes(mode) ? mode : 'auto';
+  await dbRun(db, 'UPDATE wallboxes SET control_mode = ? WHERE id = ?', [value, id]);
+  invalidateWallboxes(db);
+  return value;
+}
+
 // Cache-Key-Schema für die abonnierten Read-Topics einer Wallbox.
 function cacheKey(id, suffix) {
   return `wallbox:${id}:${suffix}`;
@@ -320,7 +331,7 @@ function buildWallboxStateDefinitions(boxes) {
 
 module.exports = {
   CHARGE_MODES, POWER_UNITS, COUNTER_UNITS, WEEKDAYS,
-  listWallboxes, invalidateWallboxes, getWallbox, createWallbox, updateWallbox, deleteWallbox, setWallboxMode,
+  listWallboxes, invalidateWallboxes, getWallbox, createWallbox, updateWallbox, deleteWallbox, setWallboxMode, setWallboxControlMode,
   normalizeInput, buildWallboxStateDefinitions, cacheKey,
   parseNumber, businessDaysToArray,
 };

@@ -395,7 +395,8 @@ function openDatabase() {
         business_days TEXT NOT NULL DEFAULT '',
         business_end_hour INTEGER NOT NULL DEFAULT 18,
         stall_timeout_seconds INTEGER NOT NULL DEFAULT 120,
-        stall_power_w REAL NOT NULL DEFAULT 200
+        stall_power_w REAL NOT NULL DEFAULT 200,
+        control_mode TEXT NOT NULL DEFAULT 'auto'
       )`
     );
     // Zähler-Roh-/Tageswert je Box (analog stromverbrauch_counter_state). Fehlt das
@@ -457,7 +458,10 @@ function openDatabase() {
         priority INTEGER NOT NULL DEFAULT 4,
         position INTEGER NOT NULL DEFAULT 0,
         function_key TEXT NOT NULL DEFAULT '',
-        offset_total_consumption INTEGER NOT NULL DEFAULT 1
+        offset_total_consumption INTEGER NOT NULL DEFAULT 1,
+        parent_id INTEGER,
+        meter_group INTEGER NOT NULL DEFAULT 0,
+        color TEXT NOT NULL DEFAULT ''
       )`
     );
     // Messen + Schalten: je Gerät (Aktor) bis zu vier MQTT-Topics (schalten/status/
@@ -497,6 +501,11 @@ function openDatabase() {
         last_progress_ts INTEGER,
         derived_power_w REAL,
         counter_total_kwh REAL,
+        day_key TEXT,
+        day_start_kwh REAL,
+        year_key TEXT,
+        year_start_kwh REAL,
+        prev_year_kwh REAL,
         FOREIGN KEY (actor_id) REFERENCES mess_schalt_actors(id) ON DELETE CASCADE
       )`
     );
@@ -1054,6 +1063,10 @@ function migrateWallboxes(db) {
     if (!existing.has('business_end_hour')) {
       db.run('ALTER TABLE wallboxes ADD COLUMN business_end_hour INTEGER NOT NULL DEFAULT 18');
     }
+    // Manuelle Übersteuerung (auto/off/full) neustart-resistent persistieren.
+    if (!existing.has('control_mode')) {
+      db.run("ALTER TABLE wallboxes ADD COLUMN control_mode TEXT NOT NULL DEFAULT 'auto'");
+    }
   });
 }
 
@@ -1095,6 +1108,21 @@ function migrateMessSchaltActors(db) {
     if (!existing.has('offset_total_consumption')) {
       db.run('ALTER TABLE mess_schalt_groups ADD COLUMN offset_total_consumption INTEGER NOT NULL DEFAULT 1');
     }
+    // Mehrschichtige Verbrauchsgruppen: parent_id verweist auf die übergeordnete
+    // Gruppe (NULL = oberste Ebene). Verschachtelung wird per Drag & Drop gepflegt.
+    if (!existing.has('parent_id')) {
+      db.run('ALTER TABLE mess_schalt_groups ADD COLUMN parent_id INTEGER');
+    }
+    // Zählergruppe: eigene Geräte gelten als Zähler; der Gesamtverbrauch der
+    // Gruppe ist damit fix und die Untergruppen werden davon abgezogen
+    // („Sonstige Verbraucher dieser Gruppe").
+    if (!existing.has('meter_group')) {
+      db.run('ALTER TABLE mess_schalt_groups ADD COLUMN meter_group INTEGER NOT NULL DEFAULT 0');
+    }
+    // Freie Gruppenfarbe (Hex) für das Energiefluss-Diagramm; leer = Standard.
+    if (!existing.has('color')) {
+      db.run("ALTER TABLE mess_schalt_groups ADD COLUMN color TEXT NOT NULL DEFAULT ''");
+    }
   });
   db.all('PRAGMA table_info(mess_schalt_switch_groups)', (err, rows) => {
     if (err || !Array.isArray(rows) || rows.length === 0) return;
@@ -1111,6 +1139,14 @@ function migrateMessSchaltActors(db) {
     const existing = new Set(rows.map((r) => r.name));
     if (!existing.has('counter_total_kwh')) {
       db.run('ALTER TABLE mess_schalt_actor_state ADD COLUMN counter_total_kwh REAL');
+    }
+    // Tages-/Jahres-Baseline auf dem internen Zähler, plus abgeschlossener
+    // Vorjahresverbrauch – für saubere Gruppen-Verbrauchssummen (Tag/Jahr/Vorjahr).
+    for (const [col, decl] of [
+      ['day_key', 'TEXT'], ['day_start_kwh', 'REAL'],
+      ['year_key', 'TEXT'], ['year_start_kwh', 'REAL'], ['prev_year_kwh', 'REAL'],
+    ]) {
+      if (!existing.has(col)) db.run(`ALTER TABLE mess_schalt_actor_state ADD COLUMN ${col} ${decl}`);
     }
   });
 }

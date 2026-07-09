@@ -13,7 +13,7 @@ const { loadGridControlConfig } = require('../grid-control/config');
 const gridControlAutomation = require('../grid-control/automation');
 const loadShed = require('../grid-control/load-shed');
 const { localCalendar } = require('../local-time');
-const { listWallboxes, setWallboxMode, cacheKey } = require('./boxes');
+const { listWallboxes, setWallboxMode, setWallboxControlMode, cacheKey } = require('./boxes');
 const { readWallboxValues, parseNumber, parseBool } = require('./aggregation');
 const { readStromverbrauchValues } = require('../stromverbrauch/aggregation');
 const {
@@ -50,6 +50,8 @@ function boxState(id) {
       chargeStartedAt: null, restartUntil: 0, restartAttempts: 0,
       nextChargeAt: null, nextChargeHour: null,
       loadShedOff: false,
+      // Persistierte Übersteuerung wird beim ersten Tick einmalig übernommen.
+      restoredControl: false,
     };
     state.set(id, s);
   }
@@ -239,6 +241,14 @@ async function tick(db) {
   for (const box of boxes) {
     const s = boxState(box.id);
     s.lastTodayKey = calendar.dateKey;
+    // Nach einem Neustart die persistierte manuelle Übersteuerung einmalig in den
+    // Laufzeitzustand übernehmen (danach ist der Laufzeitzustand maßgeblich).
+    if (!s.restoredControl) {
+      s.restoredControl = true;
+      if (box.controlMode === 'off' || box.controlMode === 'full') {
+        applyControlMode(s, box.controlMode);
+      }
+    }
     const live = valueById.get(box.id) || {};
     const id = consumerId(box);
     seen.add(id);
@@ -374,9 +384,9 @@ function getControlMode(boxId) {
   return 'auto';
 }
 
-function setControlMode(boxId, mode) {
+// Übersteuerung in den Laufzeitzustand schreiben (ohne DB).
+function applyControlMode(s, mode) {
   const normalized = ['auto', 'off', 'full'].includes(mode) ? mode : 'auto';
-  const s = boxState(Number(boxId));
   s.manualFull = normalized === 'full';
   s.manualFullSawCharging = false;
   s.manualOff = normalized === 'off';
@@ -384,6 +394,16 @@ function setControlMode(boxId, mode) {
   s.restartUntil = 0;
   s.restartAttempts = 0;
   if (normalized !== 'full') s.chargeStartedAt = null;
+  return normalized;
+}
+
+// Übersteuerung setzen: Laufzeitzustand sofort ändern UND neustart-resistent
+// persistieren. `db` ist optional (Tests/Altaufrufe ohne Persistenz).
+function setControlMode(db, boxId, mode) {
+  const s = boxState(Number(boxId));
+  s.restoredControl = true; // aktive Bedienung überschreibt späteres Wiederherstellen
+  const normalized = applyControlMode(s, mode);
+  if (db) setWallboxControlMode(db, Number(boxId), normalized).catch(() => {});
   return getControlMode(boxId);
 }
 

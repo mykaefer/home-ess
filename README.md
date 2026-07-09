@@ -83,6 +83,18 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
     fest alphanumerisch sortiert. **Geräte** sind einzeilige Zeilen über die
     volle Breite, per Drag & Drop frei anordbar und zwischen Gruppen
     verschiebbar; gruppenlose Geräte stehen am Ende unter den Gruppen.
+  - **Mehrschichtige Gruppen:** Über die Drag-Fläche am Gruppenkopf lassen sich
+    Gruppen – wie Verzeichnisse – beliebig tief ineinander schieben
+    (Untergruppen stehen eingerückt und klappen mit der Elterngruppe zu; Zyklen
+    werden abgewiesen). Prioritäten werden **nicht** vererbt. Der Titel einer
+    Gruppe mit Untergruppen zeigt verkürzt **„Ebene/Gesamt W"** (eigene Ebene /
+    Gesamtleistung inkl. Untergruppen).
+  - Die Gruppenoption **„Zählergruppe"** macht die eigenen Geräte zu Zählern des
+    ganzen Zweigs: Der Gesamtverbrauch ist dann **fix** aus diesen Zählern und
+    eine Fußzeile weist die **„Sonstige Verbraucher dieser Gruppe"** aus
+    (Zählerleistung − verrechnete Untergruppen). Mit gesetztem Verrechnungs-Haken
+    wirkt die Zählergruppe als **Sperrschicht** (trägt den vollen Zweig bei,
+    Untergruppen nicht mehr zusätzlich).
   - Je Gerät bis zu fünf MQTT-Topics: **Schalten, Remote, Status, Leistung, Zähler**
     (mindestens Schalten, Leistung oder Zähler). Ohne Status-Topic gilt das
     Schalt-Topic (sonst die Leistung) als Ist-Stand. Ist nur ein Zähler gesetzt,
@@ -117,6 +129,24 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
     Pro Gruppe legt die standardmäßig aktivierte Option **„Verbrauchssumme mit
     Gesamtverbrauch verrechnen“** fest, ob ihre Leistung bei der Berechnung von
     **„Sonstige Verbraucher“** vom Eigenverbrauch abgezogen wird.
+  - Aus dem internen Gerätezähler wird pro Gruppe zusätzlich der **Verbrauch
+    heute, dieses Jahr und im Vorjahr** gebildet und im Wertekatalog bereit-
+    gestellt (`verbrauchssumme.<id>.verbrauchHeute` / `.verbrauchJahr` /
+    `.verbrauchVorjahr`) – baum-konsistent wie die Leistung (Zählergruppe = eigene
+    Zähler, sonst additiv eigene Geräte + Untergruppen).
+  - Unterseite **Energiefluss** (klappt im Menü unter Messen + Schalten aus):
+    ein vollständig **animiertes SVG-Flussdiagramm**. Eingangsseitig bündeln sich
+    die PV-Anlagen zu einem Gesamtzweig, dazu **Netzbezug** (bei Einspeisung
+    negativ) und die **Batterie** als neutrale Stabstelle; zentraler Knoten ist
+    der **Eigenverbrauch**; ausgangsseitig verzweigt der Fluss auf die
+    (verschachtelten) Gruppen und den **„Sonstige Verbraucher"-Rest** (global und
+    hinter jeder Zählergruppe), sodass das Bild in sich geschlossen ist.
+    Strichbreite und Fließgeschwindigkeit folgen der Leistung, die Richtung dem
+    Vorzeichen. Farben aus den Systemfarben; je Gruppe eine **frei wählbare
+    Farbe** (Stift-Button → Colorpicker), Pfade zu den Gruppen in Gruppenfarbe.
+    Durch Priorität oder Lastabwurf abgeschaltete Gruppen werden ausgegraut;
+    Gruppen sowie PV/Netz/Eigenverbrauch weisen **Verbrauch heute und dieses
+    Jahr** aus.
   - Unterseite **Schaltgruppen** (klappt im Menü unter Messen + Schalten aus):
     zwei unabhängig scrollbare Spalten — links die Schaltgruppen (Name,
     optionales **Remote-Topic**, Häkchen **„Gruppe schaltet als Einheit"**),

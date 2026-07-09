@@ -3,6 +3,69 @@
 Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [1.2.0] — 2026-07-09
+
+### Neu
+
+- **Messen + Schalten: mehrschichtige Verbrauchsgruppen.** Gruppen haben jetzt
+  eine Drag-Fläche am Kopf und lassen sich – wie Verzeichnisse – beliebig tief
+  ineinander schieben (`mess_schalt_groups.parent_id`, Zyklen werden
+  abgewiesen). Untergruppen stehen eingerückt im Body und klappen mit der
+  Elterngruppe zu. Prioritäten werden **nicht** vererbt; Geräte mit „Priorität
+  der Gruppe verwenden" beziehen sie weiter von ihrer direkten Gruppe. Der Titel
+  einer Gruppe mit Untergruppen zeigt verkürzt **„Ebene/Gesamt W"** (eigene
+  Ebene / Gesamtleistung inkl. Untergruppen); der globale „Sonstige
+  Verbraucher"-Offset zählt Untergruppen nicht doppelt.
+- **Zählergruppe (Sperrschicht).** Neue Gruppenoption: Sind die eigenen Geräte
+  einer Gruppe Zähler des ganzen Zweigs (`meter_group`), ist der
+  Gesamtverbrauch **fix** aus diesen Zählern; die Ebene entfällt und stattdessen
+  weist eine Fußzeile die **„Sonstige Verbraucher dieser Gruppe"**
+  (Zählerleistung − verrechnete Untergruppen) aus. Ist der Haken „mit
+  Gesamtverbrauch verrechnen" gesetzt, wirkt die Zählergruppe als
+  **Sperrschicht**: Sie trägt den vollen Zweigwert zum Hausverbrauch bei, die
+  Untergruppen nicht mehr zusätzlich. Der Haken einer Untergruppe steuert dann,
+  ob ihr Verbrauch aus der „Sonstige"-Summe der Zählergruppe herausgerechnet
+  wird.
+- **Unterseite „Energiefluss"** (`/messen-schalten/energiefluss`): ein
+  vollständig animiertes SVG-Flussdiagramm. Eingangsseitig bündeln sich die
+  PV-Anlagen zu einem Gesamtzweig, dazu Netzbezug (bei Einspeisung negativ) und
+  die Batterie als neutrale Stabstelle; zentraler Knoten ist der Eigenverbrauch;
+  ausgangsseitig verzweigt der Fluss auf die (verschachtelten) Gruppen und den
+  „Sonstige Verbraucher"-Rest (global sowie hinter jeder Zählergruppe), sodass
+  das Bild in sich geschlossen ist. Strichbreite und Fließgeschwindigkeit folgen
+  der Leistung, die Richtung dem Vorzeichen (Bezug/Einspeisung, Laden/Entladen).
+  Farben aus den Systemfarben (PV, Netz, Batterie, Eigenverbrauch), je Gruppe
+  eine **frei wählbare Farbe** (Stift-Button → Mini-Colorpicker,
+  `mess_schalt_groups.color`); Pfade zu den Gruppen in Gruppenfarbe. Durch
+  Priorität oder Lastabwurf gerade abgeschaltete Gruppen werden ausgegraut. Jeder
+  Gruppen-Knoten sowie PV/Netz/Eigenverbrauch weisen **Verbrauch heute und
+  dieses Jahr** aus.
+- **Verbrauchssummen je Gruppe: Tag/Jahr/Vorjahr im Wertekatalog.** Aus dem
+  internen Gerätezähler wird pro Gruppe sauber der Verbrauch des laufenden Tages
+  und Jahres sowie der abgeschlossene Vorjahresverbrauch gebildet
+  (`verbrauchssumme.<id>.verbrauchHeute` / `.verbrauchJahr` / `.verbrauchVorjahr`;
+  neue Baseline-Spalten in `mess_schalt_actor_state`). Die Aggregation ist
+  baum-konsistent: eine Zählergruppe zählt nur ihre eigenen Zähler, sonst
+  additiv eigene Geräte + Untergruppen.
+
+### Behoben
+
+- **Wallbox: der Steuerungs-Schalter ist jetzt neustart-resistent.** Die
+  manuelle Übersteuerung (Automatik / dauerhaft Aus / einmalig Vollladen) lag
+  bisher nur im Arbeitsspeicher und stand nach einem Neustart wieder auf
+  „Automatik". Sie wird jetzt persistiert (`wallboxes.control_mode`) und beim
+  ersten Tick nach dem Start in den Laufzeitzustand übernommen.
+
+### Migration
+
+- Bestehende Datenbanken erhalten die neuen Spalten automatisch:
+  `mess_schalt_groups.parent_id` (NULL = oberste Ebene), `.meter_group`
+  (Default 0), `.color` (leer = Standardfarbe); `wallboxes.control_mode`
+  (Default `auto`); Tages-/Jahres-Baselines in `mess_schalt_actor_state`. Ohne
+  Anpassung bleibt das Verhalten wie in v1.1.3 (flache Gruppen, keine
+  Zählergruppen). Der Vorjahres-Gruppenverbrauch entsteht erst mit dem ersten
+  Jahreswechsel nach dem Update.
+
 ## [1.1.3] — 2026-07-08
 
 ### Behoben

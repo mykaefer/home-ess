@@ -24,7 +24,10 @@ const NAV_CORE = [
     path: '/messen-schalten',
     label: 'Messen + Schalten',
     section: 'main',
-    children: [{ path: '/messen-schalten/schaltgruppen', label: 'Schaltgruppen' }],
+    children: [
+      { path: '/messen-schalten/energiefluss', label: 'Energiefluss' },
+      { path: '/messen-schalten/schaltgruppen', label: 'Schaltgruppen' },
+    ],
   },
   { path: '/prognose', label: 'Prognose', section: 'main' },
   {

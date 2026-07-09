@@ -9,7 +9,7 @@ const {
   RESTART_OFF_MS, SURPLUS_ON_W,
 } = require('../src/wallbox/planner');
 const { houseSurplusWatt } = require('../src/wallbox/automation');
-const { createWallbox, updateWallbox, getWallbox } = require('../src/wallbox/boxes');
+const { createWallbox, updateWallbox, getWallbox, setWallboxControlMode } = require('../src/wallbox/boxes');
 const {
   updateWallboxCounter, updateWallboxSummary, loadSummaryState, loadCounterState,
   estimateSoc, recordWallboxHistory,
@@ -47,7 +47,8 @@ async function freshDb() {
     business_days TEXT NOT NULL DEFAULT '',
     business_end_hour INTEGER NOT NULL DEFAULT 18,
     stall_timeout_seconds INTEGER NOT NULL DEFAULT 120,
-    stall_power_w REAL NOT NULL DEFAULT 200
+    stall_power_w REAL NOT NULL DEFAULT 200,
+    control_mode TEXT NOT NULL DEFAULT 'auto'
   )`);
   await dbRun(db, `CREATE TABLE wallbox_counter_state (
     wallbox_id INTEGER PRIMARY KEY, last_raw_value REAL, day_total REAL NOT NULL DEFAULT 0,
@@ -85,6 +86,25 @@ test('Wallbox speichert Lastabwurf-Phase und normalisiert ungueltige Werte', asy
   });
   const updated = await getWallbox(db, box.id);
   assert.equal(updated.loadShedPhase, 'three_phase');
+  await new Promise((resolve) => db.close(resolve));
+});
+
+test('Steuerungs-Übersteuerung wird persistiert (neustart-resistent)', async () => {
+  const db = await freshDb();
+  const box = await createWallbox(db, {
+    name: 'WB', maxPowerW: 11000, batteryCapacityKwh: 50, commandTopic: 'wb.0.command',
+  });
+  assert.equal(box.controlMode, 'auto'); // Default
+
+  await setWallboxControlMode(db, box.id, 'off');
+  assert.equal((await getWallbox(db, box.id)).controlMode, 'off');
+
+  await setWallboxControlMode(db, box.id, 'full');
+  assert.equal((await getWallbox(db, box.id)).controlMode, 'full');
+
+  // Ungültige Werte fallen auf 'auto' zurück.
+  await setWallboxControlMode(db, box.id, 'unsinn');
+  assert.equal((await getWallbox(db, box.id)).controlMode, 'auto');
   await new Promise((resolve) => db.close(resolve));
 });
 

@@ -13,6 +13,8 @@
 // basieren ebenfalls nur neu.
 
 const { listActors, cacheKey } = require('./actors');
+const { loadMqttConfig } = require('../mqtt/config');
+const { localCalendar } = require('../local-time');
 
 const STALL_MS = 10 * 60 * 1000;   // > 10 min ohne Zählerfortschritt ⇒ 0 W
 const POWER_ON_THRESHOLD_W = 1;    // ab dieser Leistung gilt ein Gerät als „an"
@@ -66,7 +68,9 @@ function counterToKwh(value, unit) {
 async function loadStates(db) {
   const rows = await dbAll(
     db,
-    'SELECT actor_id, last_counter_raw, last_progress_ts, derived_power_w, counter_total_kwh FROM mess_schalt_actor_state'
+    `SELECT actor_id, last_counter_raw, last_progress_ts, derived_power_w, counter_total_kwh,
+            day_key, day_start_kwh, year_key, year_start_kwh, prev_year_kwh
+     FROM mess_schalt_actor_state`
   );
   const map = new Map();
   for (const row of rows) {
@@ -75,6 +79,11 @@ async function loadStates(db) {
       lastProgressTs: row.last_progress_ts == null ? null : Number(row.last_progress_ts),
       derivedPowerW: parseNumber(row.derived_power_w),
       counterTotalKwh: parseNumber(row.counter_total_kwh),
+      dayKey: row.day_key || null,
+      dayStartKwh: parseNumber(row.day_start_kwh),
+      yearKey: row.year_key || null,
+      yearStartKwh: parseNumber(row.year_start_kwh),
+      prevYearKwh: parseNumber(row.prev_year_kwh),
     });
   }
   return map;
@@ -83,14 +92,24 @@ async function loadStates(db) {
 async function saveState(db, actorId, state) {
   await dbRun(
     db,
-    `INSERT INTO mess_schalt_actor_state (actor_id, last_counter_raw, last_progress_ts, derived_power_w, counter_total_kwh)
-     VALUES (?, ?, ?, ?, ?)
+    `INSERT INTO mess_schalt_actor_state
+       (actor_id, last_counter_raw, last_progress_ts, derived_power_w, counter_total_kwh,
+        day_key, day_start_kwh, year_key, year_start_kwh, prev_year_kwh)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(actor_id) DO UPDATE SET
        last_counter_raw = excluded.last_counter_raw,
        last_progress_ts = excluded.last_progress_ts,
        derived_power_w = excluded.derived_power_w,
-       counter_total_kwh = excluded.counter_total_kwh`,
-    [actorId, state.lastCounterRaw, state.lastProgressTs, state.derivedPowerW, state.counterTotalKwh]
+       counter_total_kwh = excluded.counter_total_kwh,
+       day_key = excluded.day_key,
+       day_start_kwh = excluded.day_start_kwh,
+       year_key = excluded.year_key,
+       year_start_kwh = excluded.year_start_kwh,
+       prev_year_kwh = excluded.prev_year_kwh`,
+    [actorId, state.lastCounterRaw, state.lastProgressTs, state.derivedPowerW, state.counterTotalKwh,
+      state.dayKey == null ? null : state.dayKey, state.dayStartKwh == null ? null : state.dayStartKwh,
+      state.yearKey == null ? null : state.yearKey, state.yearStartKwh == null ? null : state.yearStartKwh,
+      state.prevYearKwh == null ? null : state.prevYearKwh]
   );
 }
 
@@ -105,9 +124,30 @@ function derivedPowerFromState(state, now) {
 // Schreibende Fortschreibung (60-s-Job) für alle Geräte mit Zähler-Topic:
 // interner Zählerstand (Delta-Fortschreibung) und – nur ohne eigenes
 // Leistungs-Topic – die Ableitung der Leistung aus dem Zählerfortschritt.
+// Tages-/Jahres-Baseline auf dem internen Zähler fortschreiben. „Heute" bzw.
+// „dieses Jahr" ergeben sich beim Lesen als (Zählerstand − Baseline). Beim
+// Jahreswechsel wird der abgeschlossene Jahresverbrauch als Vorjahr festgehalten.
+function applyPeriodRollover(state, calendar) {
+  const total = state.counterTotalKwh;
+  if (total == null || !calendar) return;
+  if (state.dayKey !== calendar.dateKey || state.dayStartKwh == null) {
+    state.dayKey = calendar.dateKey;
+    state.dayStartKwh = total;
+  }
+  if (state.yearKey !== calendar.yearKey || state.yearStartKwh == null) {
+    if (state.yearKey != null && state.yearStartKwh != null) {
+      state.prevYearKwh = Math.max(0, total - state.yearStartKwh);
+    }
+    state.yearKey = calendar.yearKey;
+    state.yearStartKwh = total;
+  }
+}
+
 async function buildActorSnapshot(db, cache, now = Date.now()) {
   const actors = await listActors(db);
   const states = await loadStates(db);
+  const mqttConfig = await new Promise((resolve) => loadMqttConfig(db, resolve));
+  const calendar = localCalendar(cache, mqttConfig.timezone, new Date(now));
   for (const actor of actors) {
     if (!actor.counterTopic) continue;
     const raw = counterToKwh(getCacheNumber(cache, cacheKey(actor.id, 'counter')), actor.counterUnit);
@@ -144,8 +184,25 @@ async function buildActorSnapshot(db, cache, now = Date.now()) {
       next.lastCounterRaw = raw;
       next.lastProgressTs = now;
     }
+    applyPeriodRollover(next, calendar);
     await saveState(db, actor.id, next);
   }
+}
+
+// Verbrauch (kWh) eines Geräts je Zeitraum aus dem persistierten Zustand:
+//   heute   = interner Zähler − Tages-Baseline
+//   jahr    = interner Zähler − Jahres-Baseline
+//   vorjahr = abgeschlossener Vorjahresverbrauch
+function computeActorEnergy(state) {
+  if (!state || state.counterTotalKwh == null) {
+    return { todayKwh: null, yearKwh: null, prevYearKwh: state ? state.prevYearKwh ?? null : null };
+  }
+  const total = state.counterTotalKwh;
+  return {
+    todayKwh: state.dayStartKwh == null ? 0 : Math.max(0, total - state.dayStartKwh),
+    yearKwh: state.yearStartKwh == null ? 0 : Math.max(0, total - state.yearStartKwh),
+    prevYearKwh: state.prevYearKwh == null ? null : state.prevYearKwh,
+  };
 }
 
 // Leistung (W) eines Geräts: Leistungs-Topic bevorzugt, sonst aus dem
@@ -238,9 +295,208 @@ function readGroupSums(groups, values) {
   return result;
 }
 
+// Ebene/Gesamt je Gruppe für die mehrschichtige Darstellung. Zwei Modelle:
+//
+//   Normale Gruppe (additiv):
+//     ebeneW  = Leistung der EIGENEN Geräte (wie readGroupSums)
+//     gesamtW = ebeneW + Σ(gesamtW der direkten Untergruppen), rekursiv
+//
+//   Zählergruppe (meterGroup): die eigenen Geräte sind Zähler und messen den
+//   ganzen Zweig inklusive Untergruppen. Der Gesamtverbrauch ist damit fix:
+//     gesamtW   = ebeneW (die Zähler)
+//     sonstigeW = ebeneW − Σ(gesamtW der Untergruppen)  (bei 0 gekappt)
+//   „Ebene" wird bei Zählergruppen nicht angezeigt; stattdessen erscheint
+//   sonstigeW als Fußzeile („Sonstige Verbraucher dieser Gruppe").
+//
+// contributionW ist der Beitrag der Gruppe zum globalen „Sonstige Verbraucher"-
+// Restposten. Er berücksichtigt bereits den eigenen Haken (offsetTotalConsumption)
+// UND die Sperrschicht-Regel und wird darum in einem Top-down-Lauf gebildet:
+//   • Eine VERRECHNETE Zählergruppe (meterGroup + Haken) trägt ihren vollen
+//     Zweig-Gesamtwert (gesamtW) bei und wird zur Sperrschicht: alle Nachfahren
+//     tragen 0 bei, egal was dort angehakt ist – der Zweig ist über den Zähler
+//     bereits vollständig erfasst.
+//   • Sonst trägt eine Gruppe mit gesetztem Haken ihre eigenen Geräte (ebeneW)
+//     bei; ohne Haken 0.
+//
+// Ein Wert ist null, wenn kein passender Leistungswert vorliegt; sonst zählen
+// fehlende Teilwerte als 0.
+function readGroupPowerTree(groups, values) {
+  const own = readGroupSums(groups, values); // id -> { powerW }
+  const groupById = new Map((groups || []).map((g) => [g.id, g]));
+  const childrenByParent = new Map();
+  for (const group of groups || []) {
+    const parent = group.parentId == null ? null : group.parentId;
+    if (parent == null) continue;
+    if (!childrenByParent.has(parent)) childrenByParent.set(parent, []);
+    childrenByParent.get(parent).push(group.id);
+  }
+
+  // Summe der Gesamtleistungen der direkten Untergruppen (null wenn keine liefert).
+  const childrenTotalMemo = new Map();
+  function childrenTotal(id, guard) {
+    if (childrenTotalMemo.has(id)) return childrenTotalMemo.get(id);
+    let acc = 0;
+    let hasValue = false;
+    for (const childId of childrenByParent.get(id) || []) {
+      const childTotal = computeTotal(childId, guard);
+      if (childTotal != null) { acc += childTotal; hasValue = true; }
+    }
+    const total = hasValue ? acc : null;
+    childrenTotalMemo.set(id, total);
+    return total;
+  }
+
+  const totalMemo = new Map();
+  function computeTotal(id, guard) {
+    if (totalMemo.has(id)) return totalMemo.get(id);
+    if (guard.has(id)) return null; // defensiv gegen Datenzyklen
+    guard.add(id);
+    const ebene = own.get(id) ? own.get(id).powerW : null;
+    const kids = childrenTotal(id, guard);
+    guard.delete(id);
+    let total;
+    if (groupById.get(id) && groupById.get(id).meterGroup) {
+      // Zählergruppe: der Gesamtverbrauch ist durch die eigenen Zähler fixiert.
+      total = ebene;
+    } else if (ebene == null && kids == null) {
+      total = null;
+    } else {
+      total = (ebene || 0) + (kids || 0);
+    }
+    totalMemo.set(id, total);
+    return total;
+  }
+
+  const result = new Map();
+  for (const group of groups || []) {
+    const children = childrenByParent.get(group.id) || [];
+    const ebeneW = own.get(group.id) ? own.get(group.id).powerW : null;
+    const gesamtW = computeTotal(group.id, new Set());
+    const isMeter = group.meterGroup === true;
+    // „Sonstige Verbraucher dieser Gruppe" nur bei Zählergruppen mit Untergruppen.
+    // Abgezogen werden nur die Untergruppen, deren Haken „mit Gesamtverbrauch
+    // verrechnen" gesetzt ist – sie werden aus der Sonstige-Summe herausgerechnet.
+    // Untergruppen ohne Haken bleiben in „Sonstige" enthalten.
+    let countedKidsW = 0;
+    for (const childId of children) {
+      const child = groupById.get(childId);
+      if (!child || child.offsetTotalConsumption === false) continue;
+      const ct = computeTotal(childId, new Set());
+      if (ct != null) countedKidsW += ct;
+    }
+    const sonstigeW = isMeter && children.length > 0 && ebeneW != null
+      ? Math.max(0, ebeneW - countedKidsW)
+      : null;
+    result.set(group.id, {
+      ebeneW,
+      gesamtW,
+      sonstigeW,
+      // Beitrag zum globalen Restposten – im Top-down-Lauf unten gesetzt.
+      contributionW: 0,
+      meterGroup: isMeter,
+      hasChildren: children.length > 0,
+      childCount: children.length,
+    });
+  }
+
+  // Globalen Beitrag je Gruppe im Top-down-Lauf bilden (Sperrschicht beachten).
+  function walkGlobal(id, blocked, guard) {
+    if (guard.has(id)) return; // defensiv gegen Datenzyklen
+    guard.add(id);
+    const group = groupById.get(id);
+    const res = result.get(id);
+    const offset = group.offsetTotalConsumption !== false; // Default: verrechnen
+    let childBlocked;
+    if (blocked) {
+      res.contributionW = 0;
+      childBlocked = true;
+    } else if (res.meterGroup && offset) {
+      // Verrechnete Zählergruppe: voller Zweigwert, danach Sperrschicht.
+      res.contributionW = res.gesamtW == null ? 0 : res.gesamtW;
+      childBlocked = true;
+    } else {
+      res.contributionW = offset && res.ebeneW != null ? res.ebeneW : 0;
+      childBlocked = false;
+    }
+    for (const childId of childrenByParent.get(id) || []) walkGlobal(childId, childBlocked, guard);
+  }
+  const globalGuard = new Set();
+  for (const group of groups || []) {
+    const parent = group.parentId;
+    const isRoot = parent == null || !groupById.has(parent) || parent === group.id;
+    if (isRoot) walkGlobal(group.id, false, globalGuard);
+  }
+
+  return result;
+}
+
+// Verbrauch (kWh) je Gruppe und Zeitraum (heute/Jahr/Vorjahr), baum-konsistent
+// mit dem Leistungsmodell: eine Zählergruppe zählt nur ihre eigenen Zähler
+// (die den ganzen Zweig messen), sonst additiv eigene Geräte + Untergruppen.
+function buildGroupEnergyTree(groups, actorEnergies) {
+  const fields = ['todayKwh', 'yearKwh', 'prevYearKwh'];
+  const own = new Map();
+  for (const g of groups || []) own.set(g.id, { todayKwh: null, yearKwh: null, prevYearKwh: null });
+  for (const e of actorEnergies || []) {
+    if (e.groupId == null || !own.has(e.groupId)) continue;
+    const acc = own.get(e.groupId);
+    for (const f of fields) if (e[f] != null) acc[f] = (acc[f] || 0) + e[f];
+  }
+  const groupById = new Map((groups || []).map((g) => [g.id, g]));
+  const childrenByParent = new Map();
+  for (const g of groups || []) {
+    const parent = g.parentId == null ? null : g.parentId;
+    if (parent == null) continue;
+    if (!childrenByParent.has(parent)) childrenByParent.set(parent, []);
+    childrenByParent.get(parent).push(g.id);
+  }
+  const memo = new Map();
+  function total(id, field, guard) {
+    const key = id + '|' + field;
+    if (memo.has(key)) return memo.get(key);
+    if (guard.has(id)) return null; // defensiv gegen Datenzyklen
+    guard.add(id);
+    const g = groupById.get(id);
+    const ownV = own.get(id) ? own.get(id)[field] : null;
+    let val;
+    if (g && g.meterGroup) {
+      val = ownV; // Zählergruppe: fix aus den eigenen Zählern
+    } else {
+      let acc = 0; let has = false;
+      if (ownV != null) { acc += ownV; has = true; }
+      for (const childId of childrenByParent.get(id) || []) {
+        const cv = total(childId, field, guard);
+        if (cv != null) { acc += cv; has = true; }
+      }
+      val = has ? acc : null;
+    }
+    guard.delete(id);
+    memo.set(key, val);
+    return val;
+  }
+  const result = new Map();
+  for (const g of groups || []) {
+    result.set(g.id, {
+      todayKwh: total(g.id, 'todayKwh', new Set()),
+      yearKwh: total(g.id, 'yearKwh', new Set()),
+      prevYearKwh: total(g.id, 'prevYearKwh', new Set()),
+    });
+  }
+  return result;
+}
+
+// Wie buildGroupEnergyTree, aber lädt Geräte + persistierten Zustand aus der DB.
+async function readGroupEnergyTree(db, groups) {
+  const actors = await listActors(db);
+  const states = await loadStates(db);
+  const actorEnergies = actors.map((a) => ({ groupId: a.groupId, ...computeActorEnergy(states.get(a.id)) }));
+  return buildGroupEnergyTree(groups, actorEnergies);
+}
+
 module.exports = {
   STALL_MS, VALUE_STALE_MS, POWER_ON_THRESHOLD_W,
-  buildActorSnapshot, readActorValues, readGroupSums,
+  buildActorSnapshot, readActorValues, readGroupSums, readGroupPowerTree,
+  applyPeriodRollover, computeActorEnergy, buildGroupEnergyTree, readGroupEnergyTree,
   derivedPowerFromState, resolvePowerW, resolveStatus,
   powerToWatt, counterToKwh, parseNumber, parseBool,
 };
