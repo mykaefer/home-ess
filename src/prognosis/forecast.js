@@ -13,7 +13,7 @@ const { solarGeometryAt } = require('../photovoltaik/aggregation');
 const { buildWallboxModel, planWallboxSchedule, wallboxForecastForDay } = require('./wallbox-model');
 const { isEnabled } = require('../modules');
 const { loadPoolEnergyModel, poolLoadForHour } = require('../pool/energy-model');
-const { loadFunctionModels, functionsLoadForHour } = require('../messen-schalten/functions');
+const { loadFunctionModels, functionsLoadForHour, summarizeTemperatureDemand } = require('../messen-schalten/functions');
 
 // BDEW-nahe, geglättete Haushaltsform als reiner Kaltstart (noch kein einziger
 // abgeschlossener Lerntag). Sobald ein Tag vollständig vorliegt, dient dessen
@@ -507,6 +507,10 @@ async function buildConsumptionModelUncached(db, strom, config, cache, forecast 
     currentWeekday, previousDayKey, previousDayKwh,
     wallboxModel, poolModel, functionModels, todayByHour,
     todayPrimaryByHour, todaySelfByHour,
+    // Verbrauchskurve Heizung / Klima über die Temperaturfenster (für das
+    // Balkendiagramm der Prognose-Datenbasis); dieselben Fenster werden oben in
+    // functionsLoadForHour je Prognosestunde nach Außentemperatur eingeplant.
+    heatingDemand: summarizeTemperatureDemand(functionModels && functionModels.heizung_klima),
     remainingByHour, recentHourKwh, hoursToSunrise, consumptionToSunrise: null,
     _wallboxPlanningSlots: wallboxPlanningSlots,
     historyDays: dailyRows.length,

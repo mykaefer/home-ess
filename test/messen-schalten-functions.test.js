@@ -9,7 +9,8 @@ const { createGroup } = require('../src/messen-schalten/groups');
 const {
   FUNCTIONS, effectiveFunction, functionPowerSums, currentFunctionPowerW,
   recordFunctionSamples, readFunctionValues, loadFunctionModels,
-  functionsLoadForHour, temperatureBucket,
+  functionsLoadForHour, temperatureBucket, summarizeTemperatureDemand,
+  temperatureBucketList, TEMPERATURE_BUCKET_BELOW, TEMPERATURE_BUCKET_MAX,
 } = require('../src/messen-schalten/functions');
 const { ENVIRONMENT_STATE_IDS } = require('../src/mqtt/config');
 
@@ -28,7 +29,7 @@ async function freshDb() {
     remote_topic TEXT NOT NULL DEFAULT '',
     status_topic TEXT NOT NULL DEFAULT '', power_topic TEXT NOT NULL DEFAULT '',
     power_unit TEXT NOT NULL DEFAULT 'W', counter_topic TEXT NOT NULL DEFAULT '',
-    counter_unit TEXT NOT NULL DEFAULT 'kWh', priority INTEGER NOT NULL DEFAULT 4,
+    counter_unit TEXT NOT NULL DEFAULT 'kWh', rated_power REAL, rated_power_unit TEXT NOT NULL DEFAULT 'W', priority INTEGER NOT NULL DEFAULT 4,
     use_group_priority INTEGER NOT NULL DEFAULT 0, desired_on INTEGER NOT NULL DEFAULT 0,
     always_on INTEGER NOT NULL DEFAULT 0,
     function_key TEXT NOT NULL DEFAULT '',
@@ -171,6 +172,66 @@ test('loadFunctionModels: Wochentagsprofil und Temperatur-Buckets in 5-Grad-Schr
   assert.equal(functionsLoadForHour(models, forecast, '2026-07-07', 12, 1), 1.5);
   // Fehlende Temperaturprognose: Mittel über die gelernten Buckets.
   assert.equal(functionsLoadForHour(models, null, '2026-07-07', 14, 1), 1.25);
+  await new Promise((resolve) => db.close(resolve));
+});
+
+test('temperatureBucket klemmt auf den unteren (< -20) und oberen (> 50) Sammelbereich', () => {
+  assert.equal(temperatureBucket(-100), TEMPERATURE_BUCKET_BELOW);
+  assert.equal(temperatureBucket(-21), TEMPERATURE_BUCKET_BELOW);
+  assert.equal(temperatureBucket(-20), -20); // Untergrenze bleibt eigener 5-°C-Bereich
+  assert.equal(temperatureBucket(-16), -20);
+  assert.equal(temperatureBucket(0), 0);
+  assert.equal(temperatureBucket(49.9), 45);
+  assert.equal(temperatureBucket(50), TEMPERATURE_BUCKET_MAX); // ab 50 °C Sammelbereich
+  assert.equal(temperatureBucket(80), TEMPERATURE_BUCKET_MAX);
+  // Fensterliste: <-20, 14 × 5-°C-Bereiche, >50 = 16 Fenster.
+  const windows = temperatureBucketList();
+  assert.equal(windows.length, 16);
+  assert.equal(windows[0].below, true);
+  assert.equal(windows[windows.length - 1].above, true);
+});
+
+test('summarizeTemperatureDemand liefert alle Fenster mit Tagesenergie und Messstunden', async () => {
+  const db = await freshDb();
+  // Zwei Messstunden im Sammelbereich < -20 °C (−30/−28 °C) und eine bei > 50 °C.
+  await dbRun(db, "INSERT INTO mess_schalt_function_hourly VALUES ('heizung_klima', '2026-01-01', 6, 3.0, -30)");
+  await dbRun(db, "INSERT INTO mess_schalt_function_hourly VALUES ('heizung_klima', '2026-01-02', 6, 1.0, -28)");
+  await dbRun(db, "INSERT INTO mess_schalt_function_hourly VALUES ('heizung_klima', '2026-07-01', 14, 0.5, 60)");
+  const models = await loadFunctionModels(db);
+  const summary = summarizeTemperatureDemand(models.heizung_klima);
+  assert.equal(summary.length, 16);
+
+  const below = summary[0];
+  assert.equal(below.below, true);
+  assert.equal(below.samples, 2); // beide Stunden im <-20-Fenster
+  assert.ok(Math.abs(below.dailyKwh - 2) < 1e-9); // Stundenmittel (3+1)/2 = 2
+
+  const above = summary[summary.length - 1];
+  assert.equal(above.above, true);
+  assert.equal(above.samples, 1);
+  assert.ok(Math.abs(above.dailyKwh - 0.5) < 1e-9);
+
+  const mildEmpty = summary.find((w) => w.min === 0);
+  assert.equal(mildEmpty.samples, 0);
+  assert.equal(mildEmpty.dailyKwh, 0);
+  await new Promise((resolve) => db.close(resolve));
+});
+
+test('functionsLoadForHour plant Heizung/Klima je Stunde nach der Stundentemperatur', async () => {
+  const db = await freshDb();
+  // Kalt (0 °C) hoher Bedarf, mild (15 °C) geringer – jeweils in Stunde 8 und 9.
+  await dbRun(db, "INSERT INTO mess_schalt_function_hourly VALUES ('heizung_klima', '2026-01-01', 8, 2.0, 0)");
+  await dbRun(db, "INSERT INTO mess_schalt_function_hourly VALUES ('heizung_klima', '2026-01-01', 9, 2.0, 0)");
+  await dbRun(db, "INSERT INTO mess_schalt_function_hourly VALUES ('heizung_klima', '2026-01-02', 8, 0.4, 15)");
+  await dbRun(db, "INSERT INTO mess_schalt_function_hourly VALUES ('heizung_klima', '2026-01-02', 9, 0.4, 15)");
+  const models = await loadFunctionModels(db);
+  // Selber Tag, aber Stunde 8 kalt (0 °C) und Stunde 9 mild (15 °C) prognostiziert.
+  const forecast = { hours: [
+    { dateKey: '2026-07-07', hour: 8, kwh: 0, temperature: 0 },
+    { dateKey: '2026-07-07', hour: 9, kwh: 0, temperature: 15 },
+  ] };
+  assert.equal(functionsLoadForHour(models, forecast, '2026-07-07', 8, 1), 2.0);
+  assert.equal(functionsLoadForHour(models, forecast, '2026-07-07', 9, 1), 0.4);
   await new Promise((resolve) => db.close(resolve));
 });
 

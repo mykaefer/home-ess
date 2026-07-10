@@ -196,7 +196,10 @@ function createApp() {
   let actorAggregationTimer = null;
   mqttClient.onValuesChanged((event) => {
     const keys = event && Array.isArray(event.changedKeys) ? event.changedKeys : [];
-    if (!keys.some((key) => /^messschalt:\d+:counter$/.test(String(key)))) return;
+    // Zähler-Fortschritt sowie Schalt-/Status-Flanken (Letztere für die virtuelle
+    // Zählung aus Nennleistung × Schaltzustand) sofort statt erst im Minutentakt
+    // verarbeiten.
+    if (!keys.some((key) => /^messschalt:\d+:(counter|switch|status)$/.test(String(key)))) return;
     if (actorAggregationTimer) return;
     actorAggregationTimer = setTimeout(() => {
       actorAggregationTimer = null;

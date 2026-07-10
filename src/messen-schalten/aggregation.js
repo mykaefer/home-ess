@@ -60,6 +60,13 @@ function powerToWatt(value, unit) {
   if (value == null) return null;
   return unit === 'kW' ? value * 1000 : value;
 }
+// Nennleistung eines Geräts in Watt (positiv) oder null. Basis der virtuellen
+// Zählung, wenn kein Leistungs- und kein Zähler-Topic gesetzt ist.
+function ratedPowerWatt(actor) {
+  if (!actor || actor.ratedPower == null) return null;
+  const w = powerToWatt(actor.ratedPower, actor.ratedPowerUnit);
+  return w != null && w > 0 ? w : null;
+}
 function counterToKwh(value, unit) {
   if (value == null) return null;
   return unit === 'Wh' ? value / 1000 : value;
@@ -143,13 +150,45 @@ function applyPeriodRollover(state, calendar) {
   }
 }
 
+// Virtuelle Zählung für ein Gerät ohne Leistungs- und Zähler-Topic, aber mit
+// Nennleistung: Energie des vergangenen Intervalls mit der DAMALS gültigen
+// Leistung integrieren (interner Zähler wie bei echten Zählern, inkl. Tages-/
+// Jahres-Baseline), danach die aktuelle Leistung aus dem Schaltzustand ableiten
+// (Nennleistung wenn an, sonst 0). Ist der Schaltzustand unbekannt, wird nichts
+// fortgeschrieben. Kein Effekt, wenn ein Leistungs-Topic vorhanden ist.
+async function updateVirtualState(db, cache, actor, prevState, calendar, now) {
+  if (actor.powerTopic) return;
+  const rated = ratedPowerWatt(actor);
+  if (rated == null) return;
+  const switchRaw = actor.switchTopic ? getCacheRaw(cache, cacheKey(actor.id, 'switch')) : undefined;
+  const switchOn = switchRaw === undefined || switchRaw == null || switchRaw === ''
+    ? null : parseBool(switchRaw);
+  const on = resolveTopicStatus(cache, actor, switchOn);
+  if (on == null) return; // kein Schaltzustand bekannt ⇒ nicht zählen
+  const prev = prevState
+    || { lastCounterRaw: null, lastProgressTs: null, derivedPowerW: null, counterTotalKwh: 0 };
+  const next = { ...prev };
+  if (next.counterTotalKwh == null) next.counterTotalKwh = 0;
+  if (prev.lastProgressTs != null && prev.derivedPowerW != null && prev.derivedPowerW > 0) {
+    const dtH = (now - prev.lastProgressTs) / 3600000;
+    if (dtH > 0) next.counterTotalKwh += prev.derivedPowerW * dtH / 1000;
+  }
+  next.derivedPowerW = on ? rated : 0;
+  next.lastProgressTs = now;
+  applyPeriodRollover(next, calendar);
+  await saveState(db, actor.id, next);
+}
+
 async function buildActorSnapshot(db, cache, now = Date.now()) {
   const actors = await listActors(db);
   const states = await loadStates(db);
   const mqttConfig = await new Promise((resolve) => loadMqttConfig(db, resolve));
   const calendar = localCalendar(cache, mqttConfig.timezone, new Date(now));
   for (const actor of actors) {
-    if (!actor.counterTopic) continue;
+    if (!actor.counterTopic) {
+      await updateVirtualState(db, cache, actor, states.get(actor.id), calendar, now);
+      continue;
+    }
     const raw = counterToKwh(getCacheNumber(cache, cacheKey(actor.id, 'counter')), actor.counterUnit);
     if (raw == null) continue;
     const prev = states.get(actor.id)
@@ -205,23 +244,34 @@ function computeActorEnergy(state) {
   };
 }
 
-// Leistung (W) eines Geräts: Leistungs-Topic bevorzugt, sonst aus dem
-// Zählerfortschritt (mit Live-Cutoff), sonst null.
-function resolvePowerW(cache, actor, state, now) {
-  if (actor.powerTopic) {
-    return powerToWatt(getCacheNumber(cache, cacheKey(actor.id, 'power')), actor.powerUnit);
-  }
-  if (actor.counterTopic) return derivedPowerFromState(state, now);
-  return null;
-}
-
-// Status (an/aus): Status-Topic → sonst Schalt-Topic → sonst aus der Leistung.
-function resolveStatus(cache, actor, switchOn, powerW) {
+// Ist-Zustand allein aus Status-/Schalt-Topic (ohne Leistungs-Rückschluss). Für
+// die virtuelle Zählung, deren Leistung erst aus diesem Zustand entsteht.
+function resolveTopicStatus(cache, actor, switchOn) {
   if (actor.statusTopic) {
     const raw = getCacheRaw(cache, cacheKey(actor.id, 'status'));
     return raw === undefined || raw == null || raw === '' ? null : parseBool(raw);
   }
   if (actor.switchTopic) return switchOn;
+  return null;
+}
+
+// Leistung (W) eines Geräts: Leistungs-Topic bevorzugt, sonst aus dem
+// Zählerfortschritt (mit Live-Cutoff), sonst virtuell aus Nennleistung ×
+// Schaltzustand, sonst null. topicStatus ist der aus Status-/Schalt-Topic
+// bekannte Ist-Zustand (nur für die virtuelle Zählung nötig).
+function resolvePowerW(cache, actor, state, now, topicStatus = null) {
+  if (actor.powerTopic) {
+    return powerToWatt(getCacheNumber(cache, cacheKey(actor.id, 'power')), actor.powerUnit);
+  }
+  if (actor.counterTopic) return derivedPowerFromState(state, now);
+  const rated = ratedPowerWatt(actor);
+  if (rated != null && topicStatus != null) return topicStatus ? rated : 0;
+  return null;
+}
+
+// Status (an/aus): Status-Topic → sonst Schalt-Topic → sonst aus der Leistung.
+function resolveStatus(cache, actor, switchOn, powerW) {
+  if (actor.statusTopic || actor.switchTopic) return resolveTopicStatus(cache, actor, switchOn);
   if (powerW != null) return powerW > POWER_ON_THRESHOLD_W;
   return null;
 }
@@ -238,7 +288,12 @@ async function readActorValues(db, cache, actors, now = Date.now()) {
     const counterEntry = actor.counterTopic ? getCacheEntry(cache, cacheKey(actor.id, 'counter')) : null;
     const switchOn = switchEntry && switchEntry.value != null && switchEntry.value !== ''
       ? parseBool(switchEntry.value) : null;
-    let powerW = resolvePowerW(cache, actor, state, now);
+    // Virtuelle Zählung: kein Leistungs-/Zähler-Topic, aber eine Nennleistung. Der
+    // Schaltzustand kommt dann aus Status-/Schalt-Topic; Leistung/Energie werden
+    // daraus abgeleitet, der Frische-Bezug ist das Status-/Schalt-Topic.
+    const isVirtualRated = !actor.powerTopic && !actor.counterTopic && ratedPowerWatt(actor) != null;
+    const topicStatus = resolveTopicStatus(cache, actor, switchOn);
+    let powerW = resolvePowerW(cache, actor, state, now, topicStatus);
     const statusOn = resolveStatus(cache, actor, switchOn, powerW);
     let powerInferredOff = false;
     // Homematic meldet beim Ausschalten gelegentlich keinen neuen POWER-Wert.
@@ -248,13 +303,16 @@ async function readActorValues(db, cache, actors, now = Date.now()) {
       powerW = 0;
       powerInferredOff = true;
     }
-    // Interner Zählerstand statt Roh-Topic-Wert. Altbestände ohne fortgeschriebenen
-    // internen Zähler zeigen bis zum ersten Snapshot den Rohwert (wie bisher).
+    // Interner Zählerstand statt Roh-Topic-Wert – für Zähler-Topics wie für die
+    // virtuelle Zählung (beide schreiben counter_total_kwh im Snapshot-Job fort).
+    // Altbestände ohne fortgeschriebenen Zähler zeigen bis zum ersten Snapshot den
+    // Rohwert (wie bisher).
     const counterKwh = actor.counterTopic
       ? (state && state.counterTotalKwh != null
         ? state.counterTotalKwh
         : counterToKwh(getCacheNumber(cache, cacheKey(actor.id, 'counter')), actor.counterUnit))
-      : null;
+      : (isVirtualRated && state && state.counterTotalKwh != null ? state.counterTotalKwh : null);
+    const virtualEntry = isVirtualRated ? statusEntry : null;
     return {
       id: actor.id,
       name: actor.name,
@@ -264,13 +322,16 @@ async function readActorValues(db, cache, actors, now = Date.now()) {
       powerW,
       counterKwh,
       statusReceivedAt: statusEntry ? statusEntry.receivedAt : null,
-      powerReceivedAt: powerEntry ? powerEntry.receivedAt : (counterEntry ? counterEntry.receivedAt : null),
-      counterReceivedAt: counterEntry ? counterEntry.receivedAt : null,
+      powerReceivedAt: powerEntry ? powerEntry.receivedAt
+        : counterEntry ? counterEntry.receivedAt
+          : (virtualEntry ? virtualEntry.receivedAt : null),
+      counterReceivedAt: counterEntry ? counterEntry.receivedAt : (virtualEntry ? virtualEntry.receivedAt : null),
       statusStale: isStale(statusEntry, now),
-      powerStale: !powerInferredOff && isStale(powerEntry || counterEntry, now),
-      counterStale: isStale(counterEntry, now),
+      powerStale: !powerInferredOff && isStale(powerEntry || counterEntry || virtualEntry, now),
+      counterStale: isStale(counterEntry || virtualEntry, now),
       powerInferredOff,
       powerFromCounter: !actor.powerTopic && !!actor.counterTopic,
+      powerFromRated: isVirtualRated,
       hasSwitch: !!actor.switchTopic,
       alwaysOn: actor.alwaysOn,
     };
@@ -497,6 +558,7 @@ module.exports = {
   STALL_MS, VALUE_STALE_MS, POWER_ON_THRESHOLD_W,
   buildActorSnapshot, readActorValues, readGroupSums, readGroupPowerTree,
   applyPeriodRollover, computeActorEnergy, buildGroupEnergyTree, readGroupEnergyTree,
-  derivedPowerFromState, resolvePowerW, resolveStatus,
+  derivedPowerFromState, resolvePowerW, resolveStatus, resolveTopicStatus,
+  ratedPowerWatt, updateVirtualState,
   powerToWatt, counterToKwh, parseNumber, parseBool,
 };

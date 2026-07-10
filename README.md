@@ -103,6 +103,12 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
     **interner Zähler**, der nur die Deltas des Zähler-Topics fortschreibt —
     Geräte-Neuanlage oder ein Topic-Wechsel lassen ihn nicht auf den Rohwert
     des Topics springen.
+  - Geräte **ohne Leistungs- und Zähler-Topic** können eine **Nennleistung**
+    (Feld nahe den Zähler-Topics, W/kW) bekommen: Dann werden Leistung und
+    Energie **virtuell** aus Nennleistung × Schaltzustand berechnet (an =
+    Nennleistung, aus = 0) und wie bei echten Zählern zu Tag/Jahr integriert.
+    Ein Leistungs- oder Zähler-Topic hat Vorrang; ohne Nennleistung gibt es keine
+    Messung. Beim Umstellen bleibt der bisherige interne Zählerstand erhalten.
   - Das optionale **Remote-Topic** wird bidirektional mit dem Schaltzustand
     synchronisiert: Eine Remote-Änderung schaltet das Gerät, eine Schaltung des
     Geräts aktualisiert das Remote-Topic. Wird ein Einschaltwunsch durch
@@ -145,8 +151,14 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
     Vorzeichen. Farben aus den Systemfarben; je Gruppe eine **frei wählbare
     Farbe** (Stift-Button → Colorpicker), Pfade zu den Gruppen in Gruppenfarbe.
     Durch Priorität oder Lastabwurf abgeschaltete Gruppen werden ausgegraut;
-    Gruppen sowie PV/Netz/Eigenverbrauch weisen **Verbrauch heute und dieses
-    Jahr** aus.
+    Gruppen, der **„Sonstige"-Rest** sowie PV/Netz/Eigenverbrauch weisen
+    **Verbrauch heute und dieses Jahr** aus. Unter dem Diagramm lassen sich
+    benannte **Exporte** anlegen: öffentlich abrufbare Live-Ansichten mit Theme
+    **hell** oder **dunkel** unter einer aus dem Namen gebildeten URL
+    (`/energiefluss/export/<slug>`). Die Export-Ansicht zeigt nur das Diagramm,
+    skaliert den ganzen Baum auf die Viewport-Größe (bei Platzmangel fallen
+    zuerst die Zählersummen weg) und trägt Legende und Wasserzeichen an den
+    Viewport-Rändern.
   - Unterseite **Schaltgruppen** (klappt im Menü unter Messen + Schalten aus):
     zwei unabhängig scrollbare Spalten — links die Schaltgruppen (Name,
     optionales **Remote-Topic**, Häkchen **„Gruppe schaltet als Einheit"**),
@@ -181,8 +193,12 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
   und funktionszugeordnete Messen-+-Schalten-Geräte (Licht, Waschen, Warmwasser,
   Heizung / Klima, Kochen) werden ebenfalls aus dem reinen Hausbedarf entfernt und
   anschließend separat eingeplant — Heizung / Klima über Stundenprofile je
-  energiegewichteter Stundentemperatur in 5-°C-Schritten, die übrigen Funktionen
-  je Wochentag. E-Auto-Ladung wird ausschließlich aus dem aktuellen Fahrzeugbedarf
+  energiegewichteter Stundentemperatur in festen 5-°C-Fenstern (unterer
+  Sammelbereich **< -20 °C**, oberer **> 50 °C**), die übrigen Funktionen je
+  Wochentag. Der Heizungs-/Klimabedarf wird **je Prognosestunde** nach der
+  prognostizierten Außentemperatur eingeplant (nicht im Tagesdurchschnitt) und
+  auf der Prognoseseite unter der Datenbasis als **Balkendiagramm über die
+  Temperaturfenster** dargestellt. E-Auto-Ladung wird ausschließlich aus dem aktuellen Fahrzeugbedarf
   (Fahrzeug-SoC) und der gewählten Ladestrategie geplant; historische
   Ladezeiten erzeugen keine Lastprognose.
   Ungelernte Wochentage übernehmen ausschließlich die Lernkurve des jüngsten

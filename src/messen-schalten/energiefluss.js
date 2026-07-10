@@ -52,15 +52,28 @@ function buildGroupNodes(groups, groupTree, groupStatus, groupEnergy) {
     const t = tree.get(group.id) || {};
     const drawn = drawnChildren(group.id);
     const children = drawn.map((c) => build(c, guard)).filter(Boolean);
-    // „Sonstige Verbraucher dieser Gruppe" = Gesamt − Σ(gezeichnete Kinder).
+    const st = status.get(group.id) || {};
+    const en = energy.get(group.id) || {};
+    // „Sonstige Verbraucher dieser Gruppe" = Gesamt − Σ(gezeichnete Kinder), für
+    // Leistung wie Energie (heute/Jahr) baum-konsistent nach demselben Prinzip.
     let sonstigeW = null;
+    let sonstigeTodayKwh = null;
+    let sonstigeYearKwh = null;
     if (children.length && t.gesamtW != null) {
       let sub = 0;
       for (const c of drawn) { const cg = gesamt(c.id); if (cg != null) sub += cg; }
       sonstigeW = Math.max(0, t.gesamtW - sub);
     }
-    const st = status.get(group.id) || {};
-    const en = energy.get(group.id) || {};
+    if (children.length && en.todayKwh != null) {
+      let subT = 0;
+      for (const c of drawn) { const ce = energy.get(c.id); if (ce && ce.todayKwh != null) subT += ce.todayKwh; }
+      sonstigeTodayKwh = Math.max(0, en.todayKwh - subT);
+    }
+    if (children.length && en.yearKwh != null) {
+      let subY = 0;
+      for (const c of drawn) { const ce = energy.get(c.id); if (ce && ce.yearKwh != null) subY += ce.yearKwh; }
+      sonstigeYearKwh = Math.max(0, en.yearKwh - subY);
+    }
     return {
       id: group.id,
       title: group.title,
@@ -69,6 +82,8 @@ function buildGroupNodes(groups, groupTree, groupStatus, groupEnergy) {
       color: group.color || '',
       deactivated: st.deactivated === true,
       sonstigeW,
+      sonstigeTodayKwh,
+      sonstigeYearKwh,
       // Verbrauch heute / dieses Jahr (baum-konsistent zur Leistung).
       todayKwh: en.todayKwh == null ? null : en.todayKwh,
       yearKwh: en.yearKwh == null ? null : en.yearKwh,
@@ -112,9 +127,19 @@ function assembleEnergiefluss({
   // gezeichneten (verrechneten) obersten Gruppen. So bleibt der zentrale Knoten
   // ebenfalls in sich geschlossen.
   const eigen = parseNum(stromValues.eigenverbrauchPower);
+  const eigenToday = parseNum(bdToday.eigenverbrauch);
+  const eigenYear = parseNum(bdYear.eigenverbrauch);
   let drawnSum = 0;
-  for (const n of groupNodes) if (n.powerW != null) drawnSum += n.powerW;
+  let drawnToday = 0;
+  let drawnYear = 0;
+  for (const n of groupNodes) {
+    if (n.powerW != null) drawnSum += n.powerW;
+    if (n.todayKwh != null) drawnToday += n.todayKwh;
+    if (n.yearKwh != null) drawnYear += n.yearKwh;
+  }
   const globalSonstigeW = eigen == null ? null : Math.max(0, eigen - drawnSum);
+  const globalSonstigeToday = eigenToday == null ? null : Math.max(0, eigenToday - drawnToday);
+  const globalSonstigeYear = eigenYear == null ? null : Math.max(0, eigenYear - drawnYear);
 
   return {
     // Eingang: PV (gebündelt) …
@@ -128,11 +153,11 @@ function assembleEnergiefluss({
       soc: parseNum(batteryData.soc),
     },
     // Zentraler Knoten.
-    eigenverbrauch: { powerW: eigen, todayKwh: parseNum(bdToday.eigenverbrauch), yearKwh: parseNum(bdYear.eigenverbrauch) },
+    eigenverbrauch: { powerW: eigen, todayKwh: eigenToday, yearKwh: eigenYear },
     // Ausgang: verschachtelte Gruppen …
     groups: groupNodes,
-    // … plus der globale Restposten als eigener Ast.
-    sonstige: { powerW: globalSonstigeW },
+    // … plus der globale Restposten als eigener Ast (Leistung + Energie).
+    sonstige: { powerW: globalSonstigeW, todayKwh: globalSonstigeToday, yearKwh: globalSonstigeYear },
   };
 }
 

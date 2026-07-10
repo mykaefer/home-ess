@@ -8,7 +8,7 @@ const {
   planCharge, priorityForMode, decideWallboxAction, predictNextChargeStart,
   RESTART_OFF_MS, SURPLUS_ON_W,
 } = require('../src/wallbox/planner');
-const { houseSurplusWatt } = require('../src/wallbox/automation');
+const { houseSurplusWatt, syncControlModePersistence } = require('../src/wallbox/automation');
 const { createWallbox, updateWallbox, getWallbox, setWallboxControlMode } = require('../src/wallbox/boxes');
 const {
   updateWallboxCounter, updateWallboxSummary, loadSummaryState, loadCounterState,
@@ -518,6 +518,66 @@ test('Umschalter AUS kehrt erst bei PV-Deckung und Hausakku-Reserve am Folgetag 
   }));
   assert.equal(s.manualOff, false);
   assert.equal(d.on, true);
+});
+
+test('Autonome Freigabe der Aus-Übersteuerung wird nach Automatik persistiert', async () => {
+  const db = await freshDb();
+  const created = await createWallbox(db, {
+    name: 'WB', maxPowerW: 11000, batteryCapacityKwh: 50, commandTopic: 'wb.cmd',
+  });
+  await setWallboxControlMode(db, created.id, 'off');
+  const box = await getWallbox(db, created.id);
+  assert.equal(box.controlMode, 'off');
+
+  // Laufzeitzustand: manuell aus seit Vortag.
+  const s = freshState();
+  s.manualOff = true;
+  s.manualOffDay = '2026-06-30';
+
+  // Noch keine PV-Deckung ⇒ keine Freigabe: bleibt 'off', DB unverändert.
+  decideWallboxAction(box, s, baseDecideCtx({
+    plan: { desiredOn: true, setpointW: null, priority: 3 },
+    todayKey: '2026-07-01', pvPowerW: 5000, selfConsumptionW: 3000,
+    houseBatterySoc: 30, houseBatteryMinSoc: 20,
+  }));
+  await syncControlModePersistence(db, box, s);
+  assert.equal(s.manualOff, true);
+  assert.equal((await getWallbox(db, created.id)).controlMode, 'off');
+
+  // Folgetag, PV-Deckung, Hausakku-Reserve ⇒ Freigabe: 'auto' wird persistiert,
+  // sodass ein Neustart nicht wieder 'off' herstellt.
+  decideWallboxAction(box, s, baseDecideCtx({
+    plan: { desiredOn: true, setpointW: null, priority: 3 },
+    todayKey: '2026-07-01', pvPowerW: 15000, selfConsumptionW: 3000,
+    houseBatterySoc: 30, houseBatteryMinSoc: 20,
+  }));
+  await syncControlModePersistence(db, box, s);
+  assert.equal(s.manualOff, false);
+  assert.equal((await getWallbox(db, created.id)).controlMode, 'auto');
+  await new Promise((resolve) => db.close(resolve));
+});
+
+test('Abgeschlossene Volladung stellt die Steuerung persistent auf Automatik', async () => {
+  const db = await freshDb();
+  const created = await createWallbox(db, {
+    name: 'WB', maxPowerW: 3000, batteryCapacityKwh: 50, commandTopic: 'wb.cmd',
+    powerTopic: 'wb.pwr', stallPowerW: 20,
+  });
+  await setWallboxControlMode(db, created.id, 'full');
+  const box = await getWallbox(db, created.id);
+
+  const s = freshState();
+  s.manualFull = true;
+  // Erst echte Ladeleistung sehen, dann Abfall unter Leerlaufschwelle ⇒ fertig.
+  decideWallboxAction(box, s, baseDecideCtx({ powerW: 2300 }));
+  await syncControlModePersistence(db, box, s);
+  assert.equal((await getWallbox(db, created.id)).controlMode, 'full');
+
+  decideWallboxAction(box, s, baseDecideCtx({ powerW: 5 }));
+  await syncControlModePersistence(db, box, s);
+  assert.equal(s.manualFull, false);
+  assert.equal((await getWallbox(db, created.id)).controlMode, 'auto');
+  await new Promise((resolve) => db.close(resolve));
 });
 
 test('Manuelles Vollladen endet nach echter Ladeleistung beim Abfall unter Leerlaufschwelle', () => {

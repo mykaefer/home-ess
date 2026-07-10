@@ -141,6 +141,45 @@ function renderDataBasisChart(model = {}) {
         </section>`;
 }
 
+// Bedarf der Funktionsgruppe Heizung / Klima über die Außentemperatur-Fenster
+// (5-°C-Bereiche, unten „< -20 °C", oben „> 50 °C"). Balkenhöhe = erwartete
+// Tagesenergie (Summe der gelernten Stundenmittel des Fensters). Die Prognose
+// plant genau diese Fenster je Stunde nach der prognostizierten Außentemperatur.
+function renderHeatingDemandChart(model = {}) {
+  const windows = Array.isArray(model.heatingDemand) ? model.heatingDemand : [];
+  const totalSamples = windows.reduce((sum, w) => sum + (Number(w.samples) || 0), 0);
+  const head = `<div class="panel-head"><div><h2>Heizung / Klima nach Außentemperatur</h2><p class="muted">Gemessener Energiebedarf der Funktionsgruppe Heizung / Klima je 5-°C-Fenster der Außentemperatur (erwartete Tagesenergie als gleitender Mittelwert). Die Prognose plant diesen Bedarf je Stunde nach der prognostizierten Außentemperatur ein.</p></div></div>`;
+  if (!windows.length || totalSamples <= 0) {
+    return `<section class="panel-card">
+          ${head}
+          <p class="muted">Sobald die Funktionsgruppe Heizung / Klima Verbrauch bei verschiedenen Außentemperaturen gemessen hat, erscheint hier die Bedarfskurve über die Temperaturfenster.</p>
+        </section>`;
+  }
+  const max = Math.max(0.001, ...windows.map((w) => Number(w.dailyKwh) || 0));
+  const lastIndex = Math.max(1, windows.length - 1);
+  const fmt = (value) => `${(Number(value) || 0).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} kWh`;
+  const cells = windows.map((w, index) => {
+    const value = Math.max(0, Number(w.dailyKwh) || 0);
+    const pct = Math.min(100, value / max * 100);
+    const empty = (Number(w.samples) || 0) <= 0;
+    // Kalt (blau) → warm (rot) über die Fenster, damit die Temperaturachse sofort lesbar ist.
+    const hue = Math.round(210 - (index / lastIndex) * 210);
+    const tick = w.below ? `&lt;${w.max}` : w.above ? `&gt;${w.min}` : String(w.min);
+    const title = `${w.label} · Ø ${fmt(value)}/Tag · ${empty ? 'keine Messwerte' : `${w.samples} Messstunden`}`;
+    return `<div class="tb-cell${empty ? ' tb-cell--empty' : ''}" title="${escapeHtml(title)}">
+          <span class="tb-bar" style="height:${pct.toFixed(1)}%;background:hsl(${hue} 68% 50%)"></span>
+          <span class="tb-tick">${tick}</span>
+        </div>`;
+  }).join('');
+  return `<section class="panel-card">
+          ${head}
+          <div class="tb-chart">
+            <div class="tb-chart-bars">${cells}</div>
+            <div class="tb-axis muted">Außentemperatur (°C) · Balkenhöhe = erwartete Tagesenergie Heizung / Klima</div>
+          </div>
+        </section>`;
+}
+
 function renderDays(days = [], model = {}) {
   if (!days.length) return '<p class="muted">Noch keine PV-Wetterprognose verfügbar. Bitte Standort und PV-Anlagen prüfen.</p>';
   const max = Math.max(1, ...days.flatMap((day) => [day.pvKwh || 0, day.loadKwh || 0]));
@@ -249,6 +288,8 @@ function renderPrognosis({ prognosis, message = '', error = '' } = {}) {
         </section>
 
         ${renderDataBasisChart(model)}
+
+        ${renderHeatingDemandChart(model)}
 
         <div class="content-grid content-grid--split forecast-details">
           <section class="info-card">

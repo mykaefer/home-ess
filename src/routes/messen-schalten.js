@@ -22,11 +22,15 @@ const {
 } = require('../messen-schalten/schaltgruppen');
 const { readActorValues, readGroupPowerTree, readGroupEnergyTree } = require('../messen-schalten/aggregation');
 const { assembleEnergiefluss } = require('../messen-schalten/energiefluss');
+const {
+  listExports, getExportBySlug, createExport, updateExport, deleteExport,
+} = require('../messen-schalten/energiefluss-exports');
 const automation = require('../messen-schalten/automation');
 const schaltgruppenAutomation = require('../messen-schalten/schaltgruppen-automation');
 const renderMessenSchalten = require('../views/messen-schalten');
 const renderSchaltgruppen = require('../views/schaltgruppen');
 const renderEnergiefluss = require('../views/energiefluss');
+const renderEnergieflussExport = require('../views/energiefluss-export');
 const { listPvPlants } = require('../photovoltaik/plants');
 const { readPhotovoltaikValues } = require('../photovoltaik/aggregation');
 const { readStromverbrauchValues } = require('../stromverbrauch/aggregation');
@@ -81,7 +85,9 @@ function toViewActor(actor, value, groupsById) {
     name: actor.name,
     groupId: actor.groupId,
     hasSwitch: !!actor.switchTopic,
-    hasCounter: !!actor.counterTopic,
+    // Zähler-Zelle auch für die virtuelle Zählung zeigen: sie führt einen internen
+    // Zähler (fortlaufend, auch 0) ohne eigenes Zähler-Topic.
+    hasCounter: !!actor.counterTopic || v.powerFromRated === true,
     alwaysOn: actor.alwaysOn === true,
     statusOn: v.statusOn == null ? null : !!v.statusOn,
     powerDisplay: powerDisplay(v.powerW),
@@ -198,6 +204,7 @@ async function renderPage(db, res, options = {}) {
       switchTopic: a.switchTopic, remoteTopic: a.remoteTopic, statusTopic: a.statusTopic,
       powerTopic: a.powerTopic, powerUnit: a.powerUnit,
       counterTopic: a.counterTopic, counterUnit: a.counterUnit,
+      ratedPower: a.ratedPower, ratedPowerUnit: a.ratedPowerUnit,
       priority: a.priority, useGroupPriority: a.useGroupPriority, alwaysOn: a.alwaysOn,
       functionKey: a.functionKey,
       loadShedEnabled: a.loadShedEnabled, loadShedPhase: a.loadShedPhase,
@@ -450,14 +457,72 @@ function messenSchaltenRoutes(db) {
   });
 
   // --- Energiefluss (Unterseite) -------------------------------------------
+  async function renderEnergieflussPage(res, options = {}) {
+    const [data, exports] = await Promise.all([buildEnergieflussData(db), listExports(db)]);
+    res.send(renderEnergiefluss({
+      data, exports,
+      formMessage: options.formMessage || '',
+      formError: options.formError || '',
+    }));
+  }
+
   router.get('/messen-schalten/energiefluss', requireAuth, async (req, res, next) => {
     try {
-      res.send(renderEnergiefluss({ data: await buildEnergieflussData(db) }));
+      await renderEnergieflussPage(res, {});
     } catch (err) { next(err); }
   });
 
   router.get('/messen-schalten/energiefluss/data', requireAuth, async (req, res, next) => {
     try {
+      res.json(await buildEnergieflussData(db));
+    } catch (err) { next(err); }
+  });
+
+  // Export-Verwaltung: benannte, öffentlich abrufbare Live-Ansichten anlegen,
+  // bearbeiten und löschen (bekanntes Formular-Schema, Neurendern der Seite).
+  router.post('/messen-schalten/energiefluss/exports', requireAuth, async (req, res, next) => {
+    try {
+      await createExport(db, req.body);
+      await renderEnergieflussPage(res, { formMessage: 'Export hinzugefügt.' });
+    } catch (err) {
+      if (err.validation) return renderEnergieflussPage(res, { formError: err.message });
+      next(err);
+    }
+  });
+
+  router.post('/messen-schalten/energiefluss/exports/:id', requireAuth, async (req, res, next) => {
+    try {
+      await updateExport(db, Number(req.params.id), req.body);
+      await renderEnergieflussPage(res, { formMessage: 'Export gespeichert.' });
+    } catch (err) {
+      if (err.validation) return renderEnergieflussPage(res, { formError: err.message });
+      next(err);
+    }
+  });
+
+  router.post('/messen-schalten/energiefluss/exports/:id/delete', requireAuth, async (req, res, next) => {
+    try {
+      await deleteExport(db, Number(req.params.id));
+      await renderEnergieflussPage(res, { formMessage: 'Export gelöscht.' });
+    } catch (err) { next(err); }
+  });
+
+  // Öffentliche Export-Ansicht (ohne Auth): reines Diagramm, live abrufbar. Der
+  // Slug identifiziert den Export; unbekannt ⇒ 404.
+  router.get('/energiefluss/export/:slug', async (req, res, next) => {
+    try {
+      const entry = await getExportBySlug(db, req.params.slug);
+      if (!entry) return res.status(404).send('Export nicht gefunden.');
+      res.send(renderEnergieflussExport({
+        data: await buildEnergieflussData(db), theme: entry.theme, slug: entry.slug,
+      }));
+    } catch (err) { next(err); }
+  });
+
+  router.get('/energiefluss/export/:slug/data', async (req, res, next) => {
+    try {
+      const entry = await getExportBySlug(db, req.params.slug);
+      if (!entry) return res.status(404).json({ error: 'Export nicht gefunden.' });
       res.json(await buildEnergieflussData(db));
     } catch (err) { next(err); }
   });

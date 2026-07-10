@@ -295,6 +295,9 @@ async function tick(db) {
       levelAllows: levelHandler.isAllowed(plan.priority),
       now,
     });
+    // Von der Automatik selbst geänderte Übersteuerung (Freigabe/Volladung/Broker)
+    // sofort persistieren, damit sie einen Neustart konsistent übersteht.
+    await syncControlModePersistence(db, box, s);
     const wantsOn = decision.on === true;
     if (loadShedActive && wantsOn && loadShed.shouldShed(box.loadShedPhase, plan.priority)) {
       decision.on = false;
@@ -374,14 +377,33 @@ function forceOff(box) {
   s.loadShedOff = false;
 }
 
-// Sichtbare manuelle Übersteuerung je Wallbox. MQTT-Schaltänderungen im laufenden
-// Betrieb nutzen dieselben Zustände; der erste Readback nach einem Neustart nicht.
-function getControlMode(boxId) {
-  const s = state.get(Number(boxId));
+// Effektiver Steuermodus aus dem Laufzeitzustand (auto/off/full).
+function controlModeFromState(s) {
   if (!s) return 'auto';
   if (s.manualOff) return 'off';
   if (s.manualFull) return 'full';
   return 'auto';
+}
+
+// Sichtbare manuelle Übersteuerung je Wallbox. MQTT-Schaltänderungen im laufenden
+// Betrieb nutzen dieselben Zustände; der erste Readback nach einem Neustart nicht.
+function getControlMode(boxId) {
+  return controlModeFromState(state.get(Number(boxId)));
+}
+
+// Autonome Übersteuerungs-Wechsel neustart-resistent nachziehen: Gibt die Automatik
+// ein manuelles „Aus" wieder frei (zurück auf Automatik), beendet eine Volladung
+// oder erkennt am Broker eine manuelle Schaltung, weicht der Laufzeitzustand vom
+// persistierten control_mode ab. Ohne dieses Nachziehen würde ein Prozess-Neustart
+// die längst verworfene Übersteuerung aus der DB wiederherstellen (restoredControl)
+// – die Steuerung bliebe z. B. auf „Aus" hängen, obwohl bereits wieder geladen wird.
+async function syncControlModePersistence(db, box, s) {
+  const effective = controlModeFromState(s);
+  if (effective !== box.controlMode) {
+    box.controlMode = effective;
+    if (db) await setWallboxControlMode(db, box.id, effective).catch(() => {});
+  }
+  return effective;
 }
 
 // Übersteuerung in den Laufzeitzustand schreiben (ohne DB).
@@ -448,5 +470,5 @@ function init(db) {
 
 module.exports = {
   init, runNow, tick, applyModeChange, getNextCharge, houseSurplusWatt,
-  getControlMode, setControlMode,
+  getControlMode, setControlMode, controlModeFromState, syncControlModePersistence,
 };

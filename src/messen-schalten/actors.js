@@ -52,6 +52,13 @@ function parseNumber(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+// Nennleistung: nur ein positiver Wert aktiviert die virtuelle Zählung; alles
+// andere (leer, 0, negativ, keine Zahl) gilt als „nicht gesetzt".
+function parseRatedPower(value) {
+  const parsed = parseNumber(value);
+  return parsed != null && parsed > 0 ? parsed : null;
+}
+
 function clampPriority(value, fallback) {
   const parsed = parseNumber(value);
   if (parsed == null) return fallback;
@@ -82,6 +89,9 @@ function normalizeRow(row = {}) {
     powerUnit: normalizeUnit(row.power_unit, POWER_UNITS, 'W'),
     counterTopic: row.counter_topic || '',
     counterUnit: normalizeUnit(row.counter_unit, COUNTER_UNITS, 'kWh'),
+    // Nennleistung + Einheit für die virtuelle Zählung (siehe aggregation.js).
+    ratedPower: parseRatedPower(row.rated_power),
+    ratedPowerUnit: normalizeUnit(row.rated_power_unit, POWER_UNITS, 'W'),
     priority: clampPriority(row.priority, 4),
     useGroupPriority: Number(row.use_group_priority) === 1,
     // Jedes schaltbare Gerät hat Zwangs-Aus unterhalb seiner Priorität. „Immer an"
@@ -98,8 +108,8 @@ function normalizeRow(row = {}) {
 }
 
 const COLUMNS = `id, name, group_id, position, switch_topic, remote_topic, status_topic, power_topic,
-  power_unit, counter_topic, counter_unit, priority, use_group_priority, always_on,
-  function_key, load_shed_enabled, load_shed_phase, switch_group_id`;
+  power_unit, counter_topic, counter_unit, rated_power, rated_power_unit, priority, use_group_priority,
+  always_on, function_key, load_shed_enabled, load_shed_phase, switch_group_id`;
 
 async function listActors(db) {
   const rows = await dbAll(
@@ -125,6 +135,8 @@ function normalizeInput(input = {}) {
     powerUnit: normalizeUnit(input.powerUnit, POWER_UNITS, 'W'),
     counterTopic: normalizeMqttTopic(input.counterTopic || ''),
     counterUnit: normalizeUnit(input.counterUnit, COUNTER_UNITS, 'kWh'),
+    ratedPower: parseRatedPower(input.ratedPower),
+    ratedPowerUnit: normalizeUnit(input.ratedPowerUnit, POWER_UNITS, 'W'),
     priority: clampPriority(input.priority, 4),
     // Checkboxen: kommen als 'on'/'1'/'true' oder fehlen ganz.
     useGroupPriority: parseCheckbox(input.useGroupPriority),
@@ -179,12 +191,13 @@ async function createActor(db, rawInput) {
     db,
     `INSERT INTO mess_schalt_actors
       (name, group_id, position, switch_topic, remote_topic, status_topic, power_topic, power_unit,
-       counter_topic, counter_unit, priority, use_group_priority, always_on, function_key,
-       load_shed_enabled, load_shed_phase, desired_on)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+       counter_topic, counter_unit, rated_power, rated_power_unit, priority, use_group_priority,
+       always_on, function_key, load_shed_enabled, load_shed_phase, desired_on)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
     [
       input.name, input.groupId, position, input.switchTopic, input.remoteTopic, input.statusTopic,
       input.powerTopic, input.powerUnit, input.counterTopic, input.counterUnit,
+      input.ratedPower, input.ratedPowerUnit,
       input.priority, input.useGroupPriority ? 1 : 0, input.alwaysOn ? 1 : 0,
       input.functionKey, input.loadShedEnabled ? 1 : 0, input.loadShedPhase,
     ]
@@ -208,13 +221,14 @@ async function updateActor(db, id, rawInput) {
     db,
     `UPDATE mess_schalt_actors SET
        name = ?, group_id = ?, switch_topic = ?, remote_topic = ?, status_topic = ?, power_topic = ?,
-       power_unit = ?, counter_topic = ?, counter_unit = ?, priority = ?, use_group_priority = ?,
-       always_on = ?, function_key = ?, load_shed_enabled = ?, load_shed_phase = ?
+       power_unit = ?, counter_topic = ?, counter_unit = ?, rated_power = ?, rated_power_unit = ?,
+       priority = ?, use_group_priority = ?, always_on = ?, function_key = ?, load_shed_enabled = ?,
+       load_shed_phase = ?
      WHERE id = ?`,
     [
       input.name, input.groupId, input.switchTopic, input.remoteTopic, input.statusTopic, input.powerTopic,
-      input.powerUnit, input.counterTopic, input.counterUnit, input.priority,
-      input.useGroupPriority ? 1 : 0, input.alwaysOn ? 1 : 0, input.functionKey,
+      input.powerUnit, input.counterTopic, input.counterUnit, input.ratedPower, input.ratedPowerUnit,
+      input.priority, input.useGroupPriority ? 1 : 0, input.alwaysOn ? 1 : 0, input.functionKey,
       input.loadShedEnabled ? 1 : 0, input.loadShedPhase, id,
     ]
   );

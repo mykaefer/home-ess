@@ -26,6 +26,13 @@ const FUNCTION_LABELS = {
 };
 const FUNCTIONS = FUNCTION_KEYS.map((key) => ({ key, label: FUNCTION_LABELS[key] || key }));
 const TEMPERATURE_BUCKET_SIZE = 5;
+// Feste Temperaturfenster für Heizung / Klima: unterer Sammelbereich „< -20 °C",
+// oberer Sammelbereich „> 50 °C", dazwischen 5-°C-Bereiche. Diese Grenzen gelten
+// sowohl beim Erfassen (loadFunctionModels) als auch beim Prognostizieren
+// (nearestBucketHourly) und im Balkendiagramm der Prognose-Datenbasis.
+const TEMPERATURE_BUCKET_MIN = -20; // untere Kante des ersten 5-°C-Bereichs
+const TEMPERATURE_BUCKET_MAX = 50;  // untere Kante des Sammelbereichs „> 50 °C"
+const TEMPERATURE_BUCKET_BELOW = TEMPERATURE_BUCKET_MIN - TEMPERATURE_BUCKET_SIZE; // Schlüssel „< -20 °C"
 // Wochentagsprofile aus demselben Fenster wie die Haus-Stundenprofile;
 // Temperatur-Buckets brauchen ganze Saisons, um Sommer und Winter zu sehen.
 const WEEKDAY_WINDOW_DAYS = 42;
@@ -72,8 +79,45 @@ function weekdayForDateKey(key) {
   return new Date(Date.UTC(year, month - 1, day)).getUTCDay();
 }
 
+// Temperatur → Fenster-Schlüssel. Werte unter -20 °C fallen in den unteren
+// Sammelbereich, ab 50 °C in den oberen; dazwischen exakte 5-°C-Bereiche.
 function temperatureBucket(temperature) {
-  return Math.floor(temperature / TEMPERATURE_BUCKET_SIZE) * TEMPERATURE_BUCKET_SIZE;
+  const raw = Math.floor(temperature / TEMPERATURE_BUCKET_SIZE) * TEMPERATURE_BUCKET_SIZE;
+  if (raw < TEMPERATURE_BUCKET_MIN) return TEMPERATURE_BUCKET_BELOW;
+  if (raw >= TEMPERATURE_BUCKET_MAX) return TEMPERATURE_BUCKET_MAX;
+  return raw;
+}
+
+// Geordnete Liste aller Temperaturfenster (unten „< -20 °C", 5-°C-Bereiche, oben
+// „> 50 °C") für das Balkendiagramm und die Modellzusammenfassung.
+function temperatureBucketList() {
+  const list = [{
+    key: TEMPERATURE_BUCKET_BELOW, below: true, min: null, max: TEMPERATURE_BUCKET_MIN,
+    label: `< ${TEMPERATURE_BUCKET_MIN} °C`,
+  }];
+  for (let k = TEMPERATURE_BUCKET_MIN; k < TEMPERATURE_BUCKET_MAX; k += TEMPERATURE_BUCKET_SIZE) {
+    list.push({ key: k, below: false, above: false, min: k, max: k + TEMPERATURE_BUCKET_SIZE,
+      label: `${k} bis ${k + TEMPERATURE_BUCKET_SIZE} °C` });
+  }
+  list.push({
+    key: TEMPERATURE_BUCKET_MAX, above: true, min: TEMPERATURE_BUCKET_MAX, max: null,
+    label: `> ${TEMPERATURE_BUCKET_MAX} °C`,
+  });
+  return list;
+}
+
+// Verbrauchskurve Heizung / Klima über die Temperaturfenster: je Fenster die
+// erwartete Tagesenergie (Summe der gelernten Stundenmittel) und die Zahl der
+// eingeflossenen Messstunden. `model` ist ein Temperatur-Funktionsmodell aus
+// loadFunctionModels; fehlt es, sind alle Fenster leer (0).
+function summarizeTemperatureDemand(model) {
+  const buckets = model && model.buckets instanceof Map ? model.buckets : new Map();
+  const samples = model && model.bucketSamples instanceof Map ? model.bucketSamples : new Map();
+  return temperatureBucketList().map((window) => {
+    const hourly = buckets.get(window.key) || null;
+    const dailyKwh = hourly ? hourly.reduce((sum, value) => sum + (value || 0), 0) : 0;
+    return { ...window, dailyKwh, samples: samples.get(window.key) || 0 };
+  });
 }
 
 // Aktuelle Leistungssumme (W) je Funktion aus den Live-Werten der Geräte.
@@ -241,10 +285,12 @@ async function loadFunctionModels(db, referenceDayKey = null) {
     const model = models[fn];
     if (model.type === 'temperature') {
       const buckets = new Map();
+      const bucketSamples = new Map();
       for (const [bucket, entry] of model.buckets.entries()) {
         buckets.set(bucket, entry.sums.map((sum, hour) => (entry.counts[hour] > 0 ? sum / entry.counts[hour] : 0)));
+        bucketSamples.set(bucket, entry.counts.reduce((sum, count) => sum + count, 0));
       }
-      result[fn] = { type: 'temperature', buckets, sampleDays: model.sampleDays.size };
+      result[fn] = { type: 'temperature', buckets, bucketSamples, sampleDays: model.sampleDays.size };
     } else {
       result[fn] = {
         type: 'weekday',
@@ -310,7 +356,9 @@ function dayKeyDiff(a, b) {
 
 module.exports = {
   FUNCTIONS, FUNCTION_KEYS, TEMPERATURE_BUCKET_SIZE,
+  TEMPERATURE_BUCKET_MIN, TEMPERATURE_BUCKET_MAX, TEMPERATURE_BUCKET_BELOW,
   isFunctionKey, functionLabel, effectiveFunction, functionPowerSums,
   currentFunctionPowerW, recordFunctionSamples, readFunctionValues,
   loadFunctionModels, functionsLoadForHour, temperatureBucket,
+  temperatureBucketList, summarizeTemperatureDemand,
 };

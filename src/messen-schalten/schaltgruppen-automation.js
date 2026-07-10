@@ -28,6 +28,15 @@ const state = new Map();
 // kurzes Fenster, um einen Burst gemeinsam auszuwerten, ohne sichtbare
 // Verzögerung bei direkt am Gerät ausgelösten Zustandsänderungen.
 const EVENT_DEBOUNCE_MS = 50;
+// Nach jeder Gruppenschaltung (Modus „als Einheit") ignoriert die Automation für
+// dieses Fenster die Ist-Flanken, die die Geräte SELBST melden. Das unterbindet
+// die Rückkopplung mancher Zigbee-Aktoren, deren Status nach dem Einschalten kurz
+// auf AUS und wieder auf AN springt und so ein endloses Nachschalten der ganzen
+// Gruppe auslöste. Erst am Fensterende wird abgeglichen: Weicht ein Gerät dann
+// noch vom gewünschten Gruppenzustand ab, gilt dieser ABWEICHENDE Zustand als
+// neuer Soll-Zustand (der zuletzt betätigte Schalter gewinnt, unabhängig von der
+// Mehrheit). Als let, damit Tests das Fenster verkürzen/abschalten können.
+let switchCooldownMs = 15000;
 // Kanonische Adapter-Topics der aktuell zugeordneten Gruppenmitglieder. Manche
 // Adapter-Batches melden neben dem konfigurierten Cache-Key nur diesen Schlüssel;
 // auch dann muss die Gruppenautomation sofort laufen.
@@ -44,6 +53,11 @@ function groupState(id) {
       timerDueAt: null,
       timerHandle: null,
       memberSeenOn: new Map(), // actorId -> zuletzt gesehener Ist-Zustand
+      // Cooldown nach einer Gruppenschaltung: bis dahin werden selbst gemeldete
+      // Flanken nicht weitergereicht; committedOn ist der gewünschte Zustand.
+      cooldownUntil: 0,
+      committedOn: null,
+      cooldownHandle: null,
     };
     state.set(id, s);
   }
@@ -69,6 +83,37 @@ function armGroupTimer(db, group, s) {
     runNow(db).catch(() => {});
   }, delay);
   if (typeof s.timerHandle.unref === 'function') s.timerHandle.unref();
+}
+
+function clearCooldown(s) {
+  if (s.cooldownHandle) clearTimeout(s.cooldownHandle);
+  s.cooldownHandle = null;
+}
+
+// Re-Tick am Fensterende einplanen, damit der Abgleich (Reconcile) auch dann
+// stattfindet, wenn bis dahin kein weiteres Geräte-Event eintrifft.
+function scheduleCooldownRecheck(db, s) {
+  const delay = s.cooldownUntil - Date.now();
+  if (!(delay > 0)) return;
+  clearCooldown(s);
+  s.cooldownHandle = setTimeout(() => {
+    s.cooldownHandle = null;
+    runNow(db).catch(() => {});
+  }, delay);
+  if (typeof s.cooldownHandle.unref === 'function') s.cooldownHandle.unref();
+}
+
+// Cooldown nach einer Gruppenschaltung scharf machen: den gewünschten Zustand als
+// Vergleichsbasis (Baseline) aller steuerbaren Mitglieder festhalten, damit ein
+// kurzer Blip am Fensterende keine Abweichung ist, eine echte Betätigung dagegen
+// schon. „Immer an"-Geräte und Geräte ohne Schalt-Topic werden nicht mitgeführt.
+function armCooldown(db, s, members, on) {
+  s.committedOn = on === true;
+  s.cooldownUntil = Date.now() + switchCooldownMs;
+  for (const m of members) {
+    if (m.switchTopic && !m.alwaysOn) s.memberSeenOn.set(m.id, on === true);
+  }
+  scheduleCooldownRecheck(db, s);
 }
 
 function readCachedBool(cache, key) {
@@ -134,6 +179,7 @@ async function tick(db) {
       const on = pendingCommands.get(group.id);
       pendingCommands.delete(group.id);
       await switchMembers(db, members, on);
+      if (group.switchAsUnit) armCooldown(db, s, members, on);
     }
 
     // 2) Remote-Topic geändert: genau wie beim Remote-Topic eines Geräts die
@@ -156,6 +202,7 @@ async function tick(db) {
       } else {
         s.pendingRemote = null;
         await switchMembers(db, members, remote.on);
+        if (group.switchAsUnit) armCooldown(db, s, members, remote.on);
       }
     }
 
@@ -163,29 +210,45 @@ async function tick(db) {
     // Schaltflanke eines Geräts die übrigen in denselben Zustand mit.
     let anyOn = false;
     const memberOnById = new Map();
-    const changedMembers = [];
     for (const member of members) {
       const actual = readMemberActual(cache, member);
       const on = actual ? actual.on : null;
       memberOnById.set(member.id, on);
       if (on === true) anyOn = true;
-      if (on != null) {
-        const prev = s.memberSeenOn.get(member.id);
-        if (prev !== undefined && prev !== on) changedMembers.push({ member, on });
-        s.memberSeenOn.set(member.id, on);
-      }
     }
     for (const id of [...s.memberSeenOn.keys()]) {
       if (!memberOnById.has(id)) s.memberSeenOn.delete(id);
     }
-    if (group.switchAsUnit && changedMembers.length) {
-      const change = changedMembers[changedMembers.length - 1];
-      await switchMembers(db, members.filter((m) => m.id !== change.member.id), change.on);
+    // Im Cooldown-Fenster nach einer Gruppenschaltung werden selbst gemeldete
+    // Flanken weder weitergereicht noch in die Baseline übernommen – der Abgleich
+    // erfolgt erst am Fensterende (Re-Tick). Ausdrückliche Befehle (Schritt 1/2)
+    // bleiben davon unberührt und haben den Cooldown ggf. bereits neu gesetzt.
+    const inCooldown = group.switchAsUnit && Date.now() < s.cooldownUntil;
+    if (inCooldown) {
+      if (!s.cooldownHandle) scheduleCooldownRecheck(db, s);
+    } else {
+      const changedMembers = [];
+      for (const member of members) {
+        const on = memberOnById.get(member.id);
+        if (on == null) continue;
+        const prev = s.memberSeenOn.get(member.id);
+        if (prev !== undefined && prev !== on) changedMembers.push({ member, on });
+        s.memberSeenOn.set(member.id, on);
+      }
+      // Beim Reconcile am Fensterende ist die Baseline der gewünschte Zustand; ein
+      // davon abweichendes Gerät ist damit die „geänderte" Flanke und zieht die
+      // übrigen mit – der zuletzt betätigte Schalter gewinnt gegen die Mehrheit.
+      if (group.switchAsUnit && changedMembers.length) {
+        const change = changedMembers[changedMembers.length - 1];
+        await switchMembers(db, members.filter((m) => m.id !== change.member.id), change.on);
+        armCooldown(db, s, members, change.on);
+      }
     }
 
     // 4) Gruppenzustand veröffentlichen: in den State-Bus (kanonisches Topic samt
-    // registrierter Abonnenten) …
-    const groupOn = anyOn;
+    // registrierter Abonnenten) … Im Cooldown wird der gewünschte Zustand gehalten,
+    // damit ein Blip nicht über Remote/UI sichtbar wird.
+    const groupOn = inCooldown ? s.committedOn === true : anyOn;
     const turnedOn = groupOn && s.groupSeenOn !== true;
     const timerChanged = s.timerMinutes !== group.timerMinutes;
     if (!groupOn) {
@@ -213,6 +276,7 @@ async function tick(db) {
   for (const id of [...state.keys()]) {
     if (!seen.has(id)) {
       clearGroupTimer(state.get(id));
+      clearCooldown(state.get(id));
       state.delete(id);
     }
   }
@@ -224,7 +288,9 @@ async function commandGroup(db, groupId, on) {
   const group = groups.find((g) => g.id === Number(groupId));
   if (!group) return false;
   const actors = await listActors(db);
-  await switchMembers(db, actors.filter((a) => a.switchGroupId === group.id), !!on);
+  const members = actors.filter((a) => a.switchGroupId === group.id);
+  await switchMembers(db, members, !!on);
+  if (group.switchAsUnit) armCooldown(db, groupState(group.id), members, !!on);
   return true;
 }
 
@@ -286,10 +352,16 @@ function init(db) {
 }
 
 function resetForTests() {
-  for (const s of state.values()) clearGroupTimer(s);
+  for (const s of state.values()) { clearGroupTimer(s); clearCooldown(s); }
   state.clear();
   relevantMemberTopics.clear();
   pendingCommands.clear();
 }
 
-module.exports = { init, runNow, tick, commandGroup, isRelevantEvent, resetForTests };
+// Cooldown-Fenster für Tests verkürzen/abschalten (0 = aus). Ohne Argument gilt
+// wieder der Betriebswert.
+function setSwitchCooldownMsForTests(ms) {
+  switchCooldownMs = Number.isFinite(ms) && ms >= 0 ? ms : 15000;
+}
+
+module.exports = { init, runNow, tick, commandGroup, isRelevantEvent, resetForTests, setSwitchCooldownMsForTests };

@@ -24,6 +24,9 @@ adapterRouter.registerVirtualInstance(INSTANCE, SCHEME, {});
 test.beforeEach(() => {
   automation.resetForTests();
   sgAutomation.resetForTests();
+  // Cooldown aus, damit die Propagations-/Remote-Tests rasche Wechsel prüfen
+  // können; die Cooldown-Tests setzen das Fenster jeweils selbst.
+  sgAutomation.setSwitchCooldownMsForTests(0);
   mqttClient.getCache().clear();
   levelHandler.applyLevel(5);
 });
@@ -43,7 +46,7 @@ async function freshDb() {
     remote_topic TEXT NOT NULL DEFAULT '',
     status_topic TEXT NOT NULL DEFAULT '', power_topic TEXT NOT NULL DEFAULT '',
     power_unit TEXT NOT NULL DEFAULT 'W', counter_topic TEXT NOT NULL DEFAULT '',
-    counter_unit TEXT NOT NULL DEFAULT 'kWh', priority INTEGER NOT NULL DEFAULT 4,
+    counter_unit TEXT NOT NULL DEFAULT 'kWh', rated_power REAL, rated_power_unit TEXT NOT NULL DEFAULT 'W', priority INTEGER NOT NULL DEFAULT 4,
     use_group_priority INTEGER NOT NULL DEFAULT 0, desired_on INTEGER NOT NULL DEFAULT 0,
     always_on INTEGER NOT NULL DEFAULT 0,
     function_key TEXT NOT NULL DEFAULT '',
@@ -280,6 +283,102 @@ test('Einschalten über die Gruppe bleibt je Gerät durch die Priorität gegatet
     assert.ok(published.some((p) => p[0] === 'ga.state' && p[1] === '1'));
     // Priorität 5 ist bei Level 3 nicht freigegeben ⇒ Einschalten abgewiesen.
     assert.ok(!published.some((p) => p[0] === 'gb.state' && p[1] === '1'));
+  });
+  await closeDb(db);
+});
+
+// --- Cooldown gegen Blip-Rückkopplung -----------------------------------------
+
+test('Cooldown: ein Blip nach dem Einschalten löst kein erneutes Schalten aus', async () => {
+  const db = await freshDb();
+  sgAutomation.setSwitchCooldownMsForTests(10000); // langes Fenster für den Test
+  const group = await createSwitchGroup(db, { name: 'Blip', switchAsUnit: 'on' });
+  await dbRun(db, "INSERT INTO mess_schalt_actors (id, name, switch_topic, switch_group_id) VALUES (80, 'A', 'blip-a.state', ?)", [group.id]);
+  await dbRun(db, "INSERT INTO mess_schalt_actors (id, name, switch_topic, switch_group_id) VALUES (81, 'B', 'blip-b.state', ?)", [group.id]);
+
+  await withPublishCapture(async (published) => {
+    setActual(80, false);
+    setActual(81, false);
+    await sgAutomation.tick(db);
+
+    // A ein ⇒ B wird mitgezogen, Cooldown scharf.
+    setActual(80, true);
+    await sgAutomation.tick(db);
+    setActual(81, true);
+    await sgAutomation.tick(db);
+    published.length = 0;
+
+    // Blip: A springt kurz auf AUS und sofort wieder auf AN. Im Cooldown darf das
+    // die übrigen Geräte nicht ausschalten – sonst startet die Endlosschleife.
+    setActual(80, false);
+    await sgAutomation.tick(db);
+    setActual(80, true);
+    await sgAutomation.tick(db);
+    assert.equal(published.length, 0);
+    // Der veröffentlichte Gruppenzustand bleibt trotz Blip AN.
+    assert.equal(mqttClient.getCache().get(stateTopic(group.id)).value, 1);
+  });
+  await closeDb(db);
+});
+
+test('Cooldown: nach Ablauf gewinnt der abweichende Schaltzustand (Flur-Beispiel)', async () => {
+  const db = await freshDb();
+  sgAutomation.setSwitchCooldownMsForTests(40); // kurzes Fenster, real ablaufen lassen
+  const group = await createSwitchGroup(db, { name: 'Flur', switchAsUnit: 'on' });
+  await dbRun(db, "INSERT INTO mess_schalt_actors (id, name, switch_topic, switch_group_id) VALUES (82, 'A', 'flur-a.state', ?)", [group.id]);
+  await dbRun(db, "INSERT INTO mess_schalt_actors (id, name, switch_topic, switch_group_id) VALUES (83, 'B', 'flur-b.state', ?)", [group.id]);
+
+  await withPublishCapture(async (published) => {
+    setActual(82, false);
+    setActual(83, false);
+    await sgAutomation.tick(db);
+
+    // Einschalten an der einen Seite ⇒ ganze Gruppe an, Cooldown scharf.
+    setActual(82, true);
+    await sgAutomation.tick(db);
+    setActual(83, true);
+    await sgAutomation.tick(db);
+
+    // Innerhalb des Fensters an der anderen Seite ausschalten. Wird zunächst
+    // unterdrückt (kein sofortiges Nachziehen).
+    published.length = 0;
+    setActual(83, false);
+    await sgAutomation.tick(db);
+    assert.equal(published.length, 0);
+
+    // Nach Ablauf: B weicht ab ⇒ AUS gewinnt, A wird nachgezogen.
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    await sgAutomation.tick(db);
+    assert.ok(published.some((p) => p[0] === 'flur-a.state' && p[1] === '0'));
+  });
+  await closeDb(db);
+});
+
+test('Cooldown: die Mehrheit zählt nicht – ein einzelnes abweichendes Gerät gewinnt', async () => {
+  const db = await freshDb();
+  sgAutomation.setSwitchCooldownMsForTests(40);
+  const group = await createSwitchGroup(db, { name: 'Drei', switchAsUnit: 'on' });
+  await dbRun(db, "INSERT INTO mess_schalt_actors (id, name, switch_topic, switch_group_id) VALUES (84, 'A', 'drei-a.state', ?)", [group.id]);
+  await dbRun(db, "INSERT INTO mess_schalt_actors (id, name, switch_topic, switch_group_id) VALUES (85, 'B', 'drei-b.state', ?)", [group.id]);
+  await dbRun(db, "INSERT INTO mess_schalt_actors (id, name, switch_topic, switch_group_id) VALUES (86, 'C', 'drei-c.state', ?)", [group.id]);
+
+  await withPublishCapture(async (published) => {
+    setActual(84, false); setActual(85, false); setActual(86, false);
+    await sgAutomation.tick(db);
+    setActual(84, true);
+    await sgAutomation.tick(db);
+    setActual(85, true); setActual(86, true);
+    await sgAutomation.tick(db);
+
+    // Nur eines von drei Geräten geht wieder aus. Trotz 2:1-Mehrheit für AN muss
+    // der abweichende AUS-Zustand gewinnen.
+    published.length = 0;
+    setActual(86, false);
+    await sgAutomation.tick(db);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    await sgAutomation.tick(db);
+    assert.ok(published.some((p) => p[0] === 'drei-a.state' && p[1] === '0'));
+    assert.ok(published.some((p) => p[0] === 'drei-b.state' && p[1] === '0'));
   });
   await closeDb(db);
 });

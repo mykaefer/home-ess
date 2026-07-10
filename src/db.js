@@ -481,6 +481,8 @@ function openDatabase() {
         power_unit TEXT NOT NULL DEFAULT 'W',
         counter_topic TEXT NOT NULL DEFAULT '',
         counter_unit TEXT NOT NULL DEFAULT 'kWh',
+        rated_power REAL,
+        rated_power_unit TEXT NOT NULL DEFAULT 'W',
         priority INTEGER NOT NULL DEFAULT 4,
         use_group_priority INTEGER NOT NULL DEFAULT 0,
         desired_on INTEGER NOT NULL DEFAULT 0,
@@ -542,6 +544,17 @@ function openDatabase() {
       `CREATE TABLE IF NOT EXISTS mess_schalt_function_state (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         last_sample_ts INTEGER
+      )`
+    );
+    // Energiefluss-Exporte: benannte, öffentlich abrufbare Live-Ansichten des
+    // Energiefluss-Diagramms (Theme hell/dunkel). Der aus dem Namen abgeleitete
+    // Slug bildet die Export-URL (/energiefluss/export/<slug>).
+    db.run(
+      `CREATE TABLE IF NOT EXISTS energiefluss_exports (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL DEFAULT '',
+        slug TEXT NOT NULL DEFAULT '',
+        theme TEXT NOT NULL DEFAULT 'light'
       )`
     );
     // Adapter-Instanzen: je Zeile eine benannte Instanz eines Adapters (aus
@@ -1097,6 +1110,14 @@ function migrateMessSchaltActors(db) {
     // Zuordnung zu einer Schaltgruppe (Unterseite Schaltgruppen, per Drag & Drop).
     if (!existing.has('switch_group_id')) {
       db.run('ALTER TABLE mess_schalt_actors ADD COLUMN switch_group_id INTEGER');
+    }
+    // Nennleistung für die virtuelle Zählung (Leistung/Energie aus Nennwert ×
+    // Schaltzustand, nur wenn kein Leistungs- und kein Zähler-Topic gesetzt ist).
+    if (!existing.has('rated_power')) {
+      db.run('ALTER TABLE mess_schalt_actors ADD COLUMN rated_power REAL');
+    }
+    if (!existing.has('rated_power_unit')) {
+      db.run("ALTER TABLE mess_schalt_actors ADD COLUMN rated_power_unit TEXT NOT NULL DEFAULT 'W'");
     }
   });
   db.all('PRAGMA table_info(mess_schalt_groups)', (err, rows) => {

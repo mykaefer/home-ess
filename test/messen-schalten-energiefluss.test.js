@@ -104,6 +104,36 @@ test('assembleEnergiefluss: Verbrauch heute/Jahr landet an den Gruppen-Nodes', (
   assert.equal(snap.groups[0].yearKwh, 812);
 });
 
+test('assembleEnergiefluss: Sonstige bekommt Tages-/Jahresenergie (pro Gruppe und global)', () => {
+  const snap = assembleEnergiefluss({
+    stromValues: {
+      eigenverbrauchPower: 2500,
+      breakdown: { today: { eigenverbrauch: 12 }, year: { eigenverbrauch: 4000 } },
+    },
+    groups: [
+      { id: 10, title: 'Haus', parentId: null, meterGroup: false, offsetTotalConsumption: true },
+      { id: 11, title: 'A', parentId: 10, meterGroup: false, offsetTotalConsumption: true },
+      { id: 12, title: 'B', parentId: 10, meterGroup: false, offsetTotalConsumption: false },
+    ],
+    groupTree: tree([
+      [10, { gesamtW: 1800, meterGroup: false }],
+      [11, { gesamtW: 400, meterGroup: false }],
+      [12, { gesamtW: 250, meterGroup: false }],
+    ]),
+    groupEnergy: new Map([
+      [10, { todayKwh: 10, yearKwh: 3000 }],
+      [11, { todayKwh: 3, yearKwh: 800 }],
+    ]),
+  });
+  const haus = snap.groups[0];
+  // „Sonstige" des Hauses = Gruppe − Σ(gezeichnete Kinder), analog zur Leistung.
+  assert.equal(haus.sonstigeTodayKwh, 7); // 10 − 3 (A)
+  assert.equal(haus.sonstigeYearKwh, 2200); // 3000 − 800 (A)
+  // Global: Eigenverbrauch − gezeichnete oberste Gruppen.
+  assert.equal(snap.sonstige.todayKwh, 2); // 12 − 10 (Haus)
+  assert.equal(snap.sonstige.yearKwh, 1000); // 4000 − 3000 (Haus)
+});
+
 test('assembleEnergiefluss: Zählergruppe zeigt Sonstige-Rest; groupStatus grayt aus', () => {
   const snap = assembleEnergiefluss({
     stromValues: { eigenverbrauchPower: 1000 },

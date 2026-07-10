@@ -25,7 +25,7 @@ async function freshDb() {
     remote_topic TEXT NOT NULL DEFAULT '',
     status_topic TEXT NOT NULL DEFAULT '', power_topic TEXT NOT NULL DEFAULT '',
     power_unit TEXT NOT NULL DEFAULT 'W', counter_topic TEXT NOT NULL DEFAULT '',
-    counter_unit TEXT NOT NULL DEFAULT 'kWh', priority INTEGER NOT NULL DEFAULT 4,
+    counter_unit TEXT NOT NULL DEFAULT 'kWh', rated_power REAL, rated_power_unit TEXT NOT NULL DEFAULT 'W', priority INTEGER NOT NULL DEFAULT 4,
     use_group_priority INTEGER NOT NULL DEFAULT 0, desired_on INTEGER NOT NULL DEFAULT 0,
     always_on INTEGER NOT NULL DEFAULT 0,
     function_key TEXT NOT NULL DEFAULT '',
@@ -110,6 +110,106 @@ test('Neueres AUS setzt alten Leistungswert passiv auf 0 und markiert alte Werte
   assert.equal(stale.powerW, 68);
   assert.equal(stale.powerStale, true);
   assert.equal(stale.statusStale, true);
+  await new Promise((resolve) => db.close(resolve));
+});
+
+// --- Virtuelle Zählung aus Nennleistung × Schaltzustand ----------------------
+
+test('readActorValues: virtuelle Leistung aus Nennleistung × Schaltzustand', async () => {
+  const db = await freshDb();
+  // Kein Leistungs-/Zähler-Topic, aber Nennleistung 2 kW.
+  await createActor(db, { name: 'Heizung', switchTopic: 's.1', ratedPower: '2', ratedPowerUnit: 'kW' });
+  const [on] = await readActorValues(db, cacheFrom([[cacheKey(1, 'switch'), '1']]), null);
+  assert.equal(on.powerW, 2000);
+  assert.equal(on.statusOn, true);
+  assert.equal(on.powerFromRated, true);
+
+  const [off] = await readActorValues(db, cacheFrom([[cacheKey(1, 'switch'), '0']]), null);
+  assert.equal(off.powerW, 0);
+  assert.equal(off.statusOn, false);
+  await new Promise((resolve) => db.close(resolve));
+});
+
+test('readActorValues: Leistungs-Topic hat Vorrang vor der Nennleistung', async () => {
+  const db = await freshDb();
+  await createActor(db, { name: 'Steckdose', switchTopic: 's.1', powerTopic: 'p.1', ratedPower: '2000' });
+  const [v] = await readActorValues(db, cacheFrom([[cacheKey(1, 'switch'), '1'], [cacheKey(1, 'power'), 55]]), null);
+  assert.equal(v.powerW, 55);
+  assert.equal(v.powerFromRated, false);
+  await new Promise((resolve) => db.close(resolve));
+});
+
+test('Virtuelle Zählung integriert Energie aus Nennleistung × Einschaltdauer', async () => {
+  const db = await freshDb();
+  await createActor(db, { name: 'Heizung', switchTopic: 's.1', ratedPower: '2000' }); // 2000 W
+  const t0 = 1_000_000_000_000;
+  const on = () => cacheFrom([[cacheKey(1, 'switch'), '1']]);
+  const off = () => cacheFrom([[cacheKey(1, 'switch'), '0']]);
+
+  // Erster Snapshot: Basis setzen (an), noch keine Energie.
+  await buildActorSnapshot(db, on(), t0);
+  let row = await dbGet(db, 'SELECT counter_total_kwh, derived_power_w FROM mess_schalt_actor_state WHERE actor_id = 1');
+  assert.equal(row.counter_total_kwh, 0);
+  assert.equal(row.derived_power_w, 2000);
+
+  // 30 min an ⇒ 2000 W × 0,5 h = 1 kWh.
+  await buildActorSnapshot(db, on(), t0 + 30 * 60 * 1000);
+  row = await dbGet(db, 'SELECT counter_total_kwh FROM mess_schalt_actor_state WHERE actor_id = 1');
+  assert.ok(Math.abs(row.counter_total_kwh - 1) < 1e-9);
+
+  // Weitere 30 min (Intervall lief noch mit alter Leistung an) ⇒ 2 kWh, dann aus.
+  await buildActorSnapshot(db, off(), t0 + 60 * 60 * 1000);
+  row = await dbGet(db, 'SELECT counter_total_kwh, derived_power_w FROM mess_schalt_actor_state WHERE actor_id = 1');
+  assert.ok(Math.abs(row.counter_total_kwh - 2) < 1e-9);
+  assert.equal(row.derived_power_w, 0);
+
+  // Aus bleibt aus ⇒ keine weitere Energie; der interne Zähler erscheint im Read.
+  await buildActorSnapshot(db, off(), t0 + 90 * 60 * 1000);
+  const [val] = await readActorValues(db, off(), null, t0 + 90 * 60 * 1000);
+  assert.ok(Math.abs(val.counterKwh - 2) < 1e-9);
+  assert.equal(val.powerW, 0);
+  await new Promise((resolve) => db.close(resolve));
+});
+
+test('Wechsel von Zähler- auf Nennleistungs-Zählung führt den internen Zähler fort', async () => {
+  const db = await freshDb();
+  const a = await createActor(db, { name: 'Ofen', counterTopic: 'c.0', counterUnit: 'kWh' });
+  const t0 = 1_000_000_000_000;
+  await buildActorSnapshot(db, cacheFrom([[cacheKey(a.id, 'counter'), 100]]), t0); // Basis
+  await buildActorSnapshot(db, cacheFrom([[cacheKey(a.id, 'counter'), 105]]), t0 + 60_000); // +5 kWh
+  let row = await dbGet(db, 'SELECT counter_total_kwh FROM mess_schalt_actor_state WHERE actor_id = ?', [a.id]);
+  assert.ok(Math.abs(row.counter_total_kwh - 5) < 1e-9);
+
+  // Umstellen auf Nennleistung: Zähler-Topic entfernt, Nennwert gesetzt.
+  await updateActor(db, a.id, { name: 'Ofen', switchTopic: 's.0', ratedPower: '2000' });
+  row = await dbGet(db, 'SELECT counter_total_kwh, last_progress_ts FROM mess_schalt_actor_state WHERE actor_id = ?', [a.id]);
+  assert.ok(Math.abs(row.counter_total_kwh - 5) < 1e-9); // fortlaufender Zähler bleibt erhalten
+  assert.equal(row.last_progress_ts, null); // Integrations-Timing neu basiert
+
+  // Der Read zeigt den erhaltenen Stand auch ohne Zähler-Topic (nicht ausgeblendet).
+  const [v] = await readActorValues(db, cacheFrom([[cacheKey(a.id, 'switch'), '1']]), null);
+  assert.ok(Math.abs(v.counterKwh - 5) < 1e-9);
+  assert.equal(v.powerFromRated, true);
+
+  // Weiter zählen: 30 min an ⇒ +1 kWh ⇒ 6 kWh.
+  await buildActorSnapshot(db, cacheFrom([[cacheKey(a.id, 'switch'), '1']]), t0 + 120_000);
+  await buildActorSnapshot(db, cacheFrom([[cacheKey(a.id, 'switch'), '1']]), t0 + 120_000 + 30 * 60 * 1000);
+  row = await dbGet(db, 'SELECT counter_total_kwh FROM mess_schalt_actor_state WHERE actor_id = ?', [a.id]);
+  assert.ok(Math.abs(row.counter_total_kwh - 6) < 1e-9);
+  await new Promise((resolve) => db.close(resolve));
+});
+
+test('Ohne Nennleistung und ohne Mess-Topic bleibt Leistung/Energie leer', async () => {
+  const db = await freshDb();
+  await createActor(db, { name: 'Nur Schalten', switchTopic: 's.1' });
+  await buildActorSnapshot(db, cacheFrom([[cacheKey(1, 'switch'), '1']]), 1_000_000_000_000);
+  const row = await dbGet(db, 'SELECT derived_power_w, last_progress_ts FROM mess_schalt_actor_state WHERE actor_id = 1');
+  assert.equal(row.derived_power_w, null); // virtuelle Zählung nicht aktiv
+  assert.equal(row.last_progress_ts, null);
+  const [v] = await readActorValues(db, cacheFrom([[cacheKey(1, 'switch'), '1']]), null);
+  assert.equal(v.powerW, null);
+  assert.equal(v.counterKwh, null);
+  assert.equal(v.powerFromRated, false);
   await new Promise((resolve) => db.close(resolve));
 });
 

@@ -198,7 +198,7 @@ function renderActorDialog({ groupsForSelect, gridControlEnabled }) {
 
             <div class="dialog-section">
               <div class="dialog-section-head"><h4>MQTT-Topics</h4>
-                <p class="muted">Ohne Status-Topic gilt das Schalt-Topic als Ist-Stand. Ist nur ein Zähler gesetzt, wird die Leistung aus dem Zählerfortschritt abgeleitet (0 W nach über 10 min ohne Fortschritt).</p></div>
+                <p class="muted">Ohne Status-Topic gilt das Schalt-Topic als Ist-Stand. Ist nur ein Zähler gesetzt, wird die Leistung aus dem Zählerfortschritt abgeleitet (0 W nach über 10 min ohne Fortschritt). Ohne Leistungs- und Zähler-Topic werden Leistung und Energie stattdessen virtuell aus <strong>Nennleistung × Schaltzustand</strong> berechnet – ohne Nennleistung gibt es keine Messung.</p></div>
               <div class="dialog-grid dialog-grid--two">
                 <label class="field-block" for="msSwitch"><span>Schalten-Topic <span class="pool-optional">(an/aus)</span></span>
                   <input type="text" id="msSwitch" name="switchTopic" placeholder="z.B. steckdose.0.state"></label>
@@ -216,6 +216,11 @@ function renderActorDialog({ groupsForSelect, gridControlEnabled }) {
                   <div class="topic-input-row">
                     <input type="text" id="msCounter" name="counterTopic" placeholder="z.B. steckdose.0.energy">
                     <select name="counterUnit" aria-label="Zählereinheit">${unitOptions(['Wh', 'kWh'], 'kWh')}</select>
+                  </div></label>
+                <label class="field-block" for="msRated"><span>Nennleistung <span class="pool-optional">(optional, virtuelle Zählung)</span></span>
+                  <div class="topic-input-row">
+                    <input type="number" id="msRated" name="ratedPower" min="0" step="any" placeholder="z.B. 2000">
+                    <select name="ratedPowerUnit" aria-label="Nennleistungseinheit">${unitOptions(['W', 'kW'], 'W')}</select>
                   </div></label>
               </div>
             </div>
@@ -375,6 +380,8 @@ ${renderUngrouped(ungrouped)}
       document.getElementById('msCounter').value = v.counterTopic || '';
       document.querySelector('#actorDialog [name=powerUnit]').value = v.powerUnit || 'W';
       document.querySelector('#actorDialog [name=counterUnit]').value = v.counterUnit || 'kWh';
+      document.getElementById('msRated').value = v.ratedPower == null ? '' : v.ratedPower;
+      document.querySelector('#actorDialog [name=ratedPowerUnit]').value = v.ratedPowerUnit || 'W';
       document.getElementById('msPriority').value = v.priority == null ? 4 : v.priority;
       document.getElementById('msUseGroupPriority').checked = v.useGroupPriority === true;
       document.getElementById('msAlwaysOn').checked = v.alwaysOn === true;
@@ -404,7 +411,7 @@ ${renderUngrouped(ungrouped)}
       } else {
         form.action = '/messen-schalten/actors';
         title.textContent = 'Gerät hinzufügen';
-        setActorFormValues({ priority: 4, powerUnit: 'W', counterUnit: 'kWh' });
+        setActorFormValues({ priority: 4, powerUnit: 'W', counterUnit: 'kWh', ratedPowerUnit: 'W' });
       }
       if (typeof dialog.showModal === 'function') dialog.showModal();
     }

@@ -21,7 +21,7 @@ async function freshDb() {
     remote_topic TEXT NOT NULL DEFAULT '',
     status_topic TEXT NOT NULL DEFAULT '', power_topic TEXT NOT NULL DEFAULT '',
     power_unit TEXT NOT NULL DEFAULT 'W', counter_topic TEXT NOT NULL DEFAULT '',
-    counter_unit TEXT NOT NULL DEFAULT 'kWh', priority INTEGER NOT NULL DEFAULT 4,
+    counter_unit TEXT NOT NULL DEFAULT 'kWh', rated_power REAL, rated_power_unit TEXT NOT NULL DEFAULT 'W', priority INTEGER NOT NULL DEFAULT 4,
     use_group_priority INTEGER NOT NULL DEFAULT 0, desired_on INTEGER NOT NULL DEFAULT 0,
     always_on INTEGER NOT NULL DEFAULT 0,
     function_key TEXT NOT NULL DEFAULT '',
@@ -58,6 +58,21 @@ test('createActor speichert und listActors liefert normalisierte Werte', async (
   assert.equal(created.alwaysOn, false);
   const list = await listActors(db);
   assert.equal(list.length, 1);
+  await new Promise((resolve) => db.close(resolve));
+});
+
+test('Nennleistung wird gespeichert; nur positive Werte aktivieren die virtuelle Zählung', async () => {
+  const db = await freshDb();
+  const a = await createActor(db, { name: 'Heizung', switchTopic: 's.0', ratedPower: '2,5', ratedPowerUnit: 'kW' });
+  const loaded = await getActor(db, a.id);
+  assert.equal(loaded.ratedPower, 2.5); // Komma-Dezimal normalisiert
+  assert.equal(loaded.ratedPowerUnit, 'kW');
+
+  // 0 bzw. negativ ⇒ nicht gesetzt (null), Einheit fällt auf W zurück.
+  await updateActor(db, a.id, { name: 'Heizung', switchTopic: 's.0', ratedPower: '0', ratedPowerUnit: 'x' });
+  const cleared = await getActor(db, a.id);
+  assert.equal(cleared.ratedPower, null);
+  assert.equal(cleared.ratedPowerUnit, 'W');
   await new Promise((resolve) => db.close(resolve));
 });
 

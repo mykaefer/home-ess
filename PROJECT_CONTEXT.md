@@ -288,9 +288,18 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   Gruppe eine frei wählbare Farbe (`mess_schalt_groups.color`, Stift-Button →
   Mini-Colorpicker, Route `POST /messen-schalten/groups/:id/color`); Pfade zu
   Gruppen in Gruppenfarbe. Durch Priorität/Lastabwurf abgeschaltete Gruppen
-  werden ausgegraut (`levelHandler.isAllowed` + `loadShedOff`). Gruppen sowie
-  PV/Netz/Eigenverbrauch weisen Verbrauch heute und dieses Jahr aus. Einzelne
-  Geräte werden bewusst nicht gezeigt.
+  werden ausgegraut (`levelHandler.isAllowed` + `loadShedOff`). Gruppen, der
+  **„Sonstige"-Ast** sowie PV/Netz/Eigenverbrauch weisen Verbrauch heute und
+  dieses Jahr aus. Einzelne Geräte werden bewusst nicht gezeigt. Die Zeichen-Logik
+  (Layout + Rendering) liegt gemeinsam in `public/energiefluss-diagram.js`
+  (`window.EFDiagram`), genutzt von der Seite (interaktiv, mit Farb-Stift) und den
+  Exporten (viewport-füllend). **Exporte** (Tabelle `energiefluss_exports`,
+  `energiefluss-exports.js`, `views/energiefluss-export.js`): unter dem Diagramm
+  benannte, öffentlich abrufbare Live-Ansichten (Theme hell/dunkel) unter
+  `/energiefluss/export/<slug>` (+ `/data`, beide ohne Auth). Die Export-Ansicht
+  zeigt nur das Diagramm, skaliert den Baum via `viewBox` auf den Viewport und
+  blendet bei Platzmangel zuerst die Zählersummen aus (kompakte Knoten), bevor die
+  Schrift schrumpft; Legende unten links, Wasserzeichen unten rechts.
   **Unterseite „Schaltgruppen"** (`/messen-schalten/schaltgruppen`, klappt im
   Menü unter Messen + Schalten aus): zwei unabhängig scrollbare Spalten — links
   die Schaltgruppen (Name, optionales **Remote-Topic**, Checkbox **„Gruppe
@@ -733,6 +742,7 @@ src/
                           (readGroupPowerTree, readGroupEnergyTree Tag/Jahr/Vorjahr)
     energiefluss.js       Reine Aufbereitung des Energiefluss-Diagramms
                           (assembleEnergiefluss: Quellen, Gruppenbaum, Sonstige)
+    energiefluss-exports.js  CRUD der Energiefluss-Exporte (Name→Slug, Theme)
     automation.js         Steuerschleife: Level-Handler-Gate je Gerät mit Schalt-Topic
     schaltgruppen.js      Schaltgruppen-CRUD (Name/Remote-Topic/„als Einheit"),
                           optionaler AUS-Timer, Geräte-Zuordnung (switch_group_id),
@@ -788,11 +798,15 @@ src/
     wallbox.js            Wallbox — Boxenliste (KPI je Box), Modus-Buttons, Config-Dialog
     messen-schalten.js    Messen + Schalten — verschachtelbare Gruppen/Geräte-
                           Kacheln, Drag&Drop, Dialoge (inkl. Zählergruppe)
-    energiefluss.js       Energiefluss — animiertes SVG-Flussdiagramm, Gruppen-
-                          Colorpicker (clientseitig gezeichnet, Live-Update)
+    energiefluss.js       Energiefluss — Seite mit Diagramm (gemeinsames
+                          EFDiagram), Gruppen-Colorpicker und Export-Verwaltung
+    energiefluss-export.js  Eigenständige öffentliche Export-Ansicht (viewport-
+                          füllend, Theme hell/dunkel, Legende + Wasserzeichen)
     schaltgruppen.js      Schaltgruppen — zwei unabhängig scrollbare Spalten
                           (Gruppen | nicht zugeordnete Geräte), Drag&Drop-Zuordnung
-public/styles.css         Einziges statisches Asset
+public/styles.css         Statische Assets (CSS)
+public/energiefluss-diagram.js  Gemeinsame Zeichen-Logik des Energiefluss-
+                          Diagramms (window.EFDiagram; Seite + Export)
 data/app.db               SQLite (gitignored)
 MQTT.md                   Referenz: ioBroker-MQTT-Regeln
 ```
@@ -878,12 +892,20 @@ MQTT.md                   Referenz: ioBroker-MQTT-Regeln
   Diagrammfarbe (Hex, leer = Standard).
 - `mess_schalt_actors(id, name, group_id, position, switch_topic, status_topic,
   power_topic, power_unit 'W'|'kW', counter_topic, counter_unit 'Wh'|'kWh',
-  priority 1–5, use_group_priority, always_on, desired_on, function_key,
-  switch_group_id)` — je
+  rated_power, rated_power_unit 'W'|'kW', priority 1–5, use_group_priority,
+  always_on, desired_on, function_key, switch_group_id)` — je
   Gerät eine Zeile; `always_on` = automatisch übers Betriebslevel (sonst manueller
   Toggle, direkt am Schalt-Topic). `desired_on` ist ungenutzter Altbestand.
   `switch_group_id` = Zuordnung zu einer Schaltgruppe (nur über die
-  Schaltgruppen-Unterseite gepflegt).
+  Schaltgruppen-Unterseite gepflegt). `rated_power`/`rated_power_unit` =
+  Nennleistung für die virtuelle Zählung: ohne Leistungs- **und** Zähler-Topic
+  werden Leistung/Energie daraus aus dem Schaltzustand abgeleitet
+  (`aggregation.updateVirtualState`, in denselben internen Zähler integriert).
+- `energiefluss_exports(id, name, slug, theme 'light'|'dark')` — benannte,
+  öffentlich abrufbare Live-Ansichten des Energiefluss-Diagramms. Der aus dem
+  Namen abgeleitete, eindeutige `slug` bildet die Export-URL
+  `/energiefluss/export/<slug>` (ohne Auth; CRUD über
+  `messen-schalten/energiefluss-exports.js`).
 - `mess_schalt_switch_groups(id, name, remote_topic, switch_as_unit, timer_minutes)` —
   Schaltgruppen der Unterseite `/messen-schalten/schaltgruppen`; Zustand wird
   nicht persistiert, sondern je Tick aus den Geräten abgeleitet und als

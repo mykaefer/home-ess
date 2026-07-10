@@ -3,6 +3,62 @@
 Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [1.2.1] — 2026-07-10
+
+### Neu
+
+- **Virtuelle Zählung aus Nennleistung (Messen + Schalten).** Geräte ohne
+  eigenes Leistungs- oder Zähler-Topic erhalten optional eine **Nennleistung**
+  (Feld nahe den Zähler-Topics, W/kW). Fehlt ein Leistungs- und ein Zähler-Topic,
+  werden Leistung und Energie daraus virtuell berechnet: Leistung = Nennleistung
+  bei „an", sonst 0; die Energie wird über die Einschaltdauer in denselben
+  internen Zähler (mit Tages-/Jahres-Baseline) integriert wie echte Zähler. Ohne
+  Nennleistung gibt es weiterhin keine Messung. Neue Spalten
+  `mess_schalt_actors.rated_power` / `rated_power_unit`.
+- **Energiefluss: „Sonstige" mit Tages-/Jahreszähler.** Der „Sonstige
+  Verbraucher"-Ast (global wie hinter jeder Zählergruppe) weist jetzt ebenfalls
+  **Verbrauch heute und dieses Jahr** aus (baum-konsistent zur Leistung). Der
+  Knotentitel ist auf **„Sonstige"** gekürzt.
+- **Energiefluss-Exporte.** Unter dem Diagramm lassen sich benannte,
+  **öffentlich abrufbare Live-Ansichten** anlegen, bearbeiten und löschen
+  (Tabelle `energiefluss_exports`). Jeder Export hat einen Namen, ein **Theme**
+  (hell wie auf der Seite oder dunkel mit schwarzem Hintergrund) und eine aus dem
+  Namen abgeleitete **Export-URL** (`/energiefluss/export/<slug>`). Diese Ansicht
+  zeigt nur das Diagramm ohne Titel/Erklärungen und **skaliert den kompletten
+  Baum auf die Viewport-Größe**; wird es zu klein, fallen zuerst die Zählersummen
+  weg, bevor die Schrift weiter schrumpft. Legende unten links, Wasserzeichen
+  unten rechts. Die Zeichen-Logik liegt gemeinsam in
+  `public/energiefluss-diagram.js` (Seite und Export nutzen sie).
+- **Prognose: Balkendiagramm „Heizung / Klima nach Außentemperatur".** Unter der
+  Datenbasis stellt ein Diagramm den gemessenen Energiebedarf der Funktionsgruppe
+  Heizung / Klima über feste **5-°C-Temperaturfenster** dar (unterer Sammelbereich
+  **< -20 °C**, oberer **> 50 °C**, dazwischen 5-°C-Bereiche). Genau diese Fenster
+  werden in der Prognose ermittelt und **je Stunde** nach der prognostizierten
+  Außentemperatur eingeplant (nicht im Tagesdurchschnitt).
+
+### Geändert
+
+- **Schaltgruppen „als Einheit": Cooldown gegen Blip-Rückkopplung.** Manche
+  Zigbee-Aktoren melden nach dem Einschalten kurz „aus" und wieder „an". Bislang
+  wertete die Gruppe das als Schaltflanke und schaltete endlos hin und her. Nach
+  jeder Gruppenschaltung gilt nun ein **15-Sekunden-Fenster**, in dem selbst
+  gemeldete Flanken nicht weitergereicht werden; am Fensterende wird abgeglichen,
+  wobei ein **abweichender Schaltzustand** (der zuletzt betätigte Schalter) gegen
+  die Mehrheit gewinnt.
+
+### Behoben
+
+- **Wallbox: Steuerung springt nach autonomer Freigabe wieder auf Automatik.**
+  Gab die Automatik ein manuelles „Aus" selbst frei (oder schloss eine Volladung
+  ab), wurde das nur im Speicher vermerkt, nicht persistiert – ein Neustart holte
+  die veraltete Übersteuerung aus der DB zurück, sodass die Steuerung auf „Aus"
+  hängen blieb, obwohl bereits geladen wurde. Autonome Steuerungs-Wechsel werden
+  jetzt sofort persistiert.
+- **Messen + Schalten: virtueller Zähler wurde ausgeblendet.** Beim Umstellen
+  eines Geräts auf die Nennleistungs-Zählung verschwand der Energiezähler ganz
+  (nicht einmal „0 kWh"). Der fortlaufende interne Zählerstand bleibt beim
+  Umstellen erhalten und wird nun auch ohne Zähler-Topic angezeigt.
+
 ## [1.2.0] — 2026-07-09
 
 ### Neu
