@@ -420,6 +420,12 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   und in der Simulation je Stunde aufgeschlagen — Heizung / Klima nach
   Außentemperatur-Buckets in 5-°C-Schritten (nächstgelegener gelernter Bucket,
   Prognosetemperatur aus Open-Meteo), die übrigen Funktionen nach Wochentag.
+  Die Temperatur-Buckets werden je Fenster/Stunde als **gleitender Mittelwert
+  (EWMA)** über die Messreihe nachgezogen statt hart überschrieben (kleines
+  Alpha = träge; über die Messreihe, nicht den Kalender, damit ein nur im Winter
+  belegtes Fenster über den Sommer nicht „vergisst"). Eine gemessene **0,0 kWh**
+  ist dabei eine gültige Beobachtung des Fensters; das Bedarfsdiagramm erscheint,
+  sobald Messwerte in ein Fenster einfließen oder eine Außentemperatur vorliegt.
   Persistente Verhaltensmodelle (`prognosis_config.behavior_model/_active`):
   `grid_parallel` bewertet ausschließlich Reserve und Netzbedarf bis zum nächsten
   Ladebeginn; spätere Tage sind wegen des verfügbaren Netzes irrelevant und
@@ -530,7 +536,16 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
       angemeldet (`grid-control/load-shed.js`): je Phase wird zuerst die
       niedrigste Priorität abgeworfen, nach **10 s** ggf. weiter eskaliert und
       erst unter **50 %** der je Phase konfigurierten Lastabwurf-Maximallast mit
-      **60 s** Abstand je Freigabestufe wieder freigegeben.
+      **60 s** Abstand je Freigabestufe wieder freigegeben. Der Lastabwurf wirkt
+      auf die Schaltentscheidung **nur, solange er aktiv ist** (`loadShedActive`),
+      damit ein alter Cutoff nach beendetem Grid-Control-Betrieb die Pumpe nicht
+      aussperrt — konsistent zu Messen+Schalten und Wallbox.
+    - **Ist-Zustands-Abgleich:** Beide Pumpen richten ihre Schaltentscheidung am
+      tatsächlichen **Status-Topic** aus, nicht nur am internen Soll-Glauben.
+      Weicht das Gerät vom Zielzustand ab (verlorener Befehl, extern/an der CCU
+      geschaltet, Neustart), wird der Befehl **nachgesendet** — gedrosselt über die
+      2-Min-Haltesperre; ein Moduswechsel (An/Aus) hebt die Drossel für sofortiges
+      Schalten auf. Ohne Status-Topic gilt weiterhin der interne Soll-Zustand.
   - **Wallbox** (`/wallbox`): verwaltet mehrere PKW-Wallboxen, einzeln anlegbar wie die
     PV-Anlagen (`wallbox/boxes.js`, Tabellen `wallboxes`/`wallbox_counter_state`/
     `wallbox_summary_state`). Je Box ein Pflicht-**Steuer-Topic** sowie optional Status

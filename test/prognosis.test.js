@@ -461,3 +461,38 @@ test('ungelernte Wochentage erhalten Kurve und Ziel des jüngsten Lerntags', asy
   assert.equal(model.todayByHour.filter((value) => value != null).length, 0);
   await new Promise((resolve) => db.close(resolve));
 });
+
+const { renderHeatingDemandChart } = require('../src/views/prognosis');
+
+function heatingWindows({ samples = 0, dailyKwh = 0 } = {}) {
+  // Nur das erste Fenster mit Werten belegen; der Rest bleibt leer.
+  return [{ key: -25, below: true, min: null, max: -20, label: '< -20 °C', samples, dailyKwh }]
+    .concat(Array.from({ length: 15 }, (_, i) => ({ key: i * 5, min: i * 5, max: i * 5 + 5, label: '', samples: 0, dailyKwh: 0 })));
+}
+
+test('renderHeatingDemandChart zeigt das Diagramm bei vorhandener Messung (auch 0 kWh)', () => {
+  const html = renderHeatingDemandChart({
+    heatingDemand: heatingWindows({ samples: 3, dailyKwh: 0 }),
+    heatingTemperatureAvailable: true,
+  });
+  assert.ok(html.includes('tb-chart'));       // Diagramm gerendert …
+  assert.ok(!html.includes('Noch keine Bedarfskurve')); // … kein Platzhalter.
+});
+
+test('renderHeatingDemandChart zeigt das Diagramm bei vorhandener Temperatur ohne Messdaten', () => {
+  const html = renderHeatingDemandChart({
+    heatingDemand: heatingWindows({ samples: 0, dailyKwh: 0 }),
+    heatingTemperatureAvailable: true,
+  });
+  assert.ok(html.includes('tb-chart'));
+  assert.ok(!html.includes('Noch keine Bedarfskurve'));
+});
+
+test('renderHeatingDemandChart zeigt den Platzhalter nur ohne Temperatur UND ohne Messdaten', () => {
+  const html = renderHeatingDemandChart({
+    heatingDemand: heatingWindows({ samples: 0, dailyKwh: 0 }),
+    heatingTemperatureAvailable: false,
+  });
+  assert.ok(html.includes('Noch keine Bedarfskurve'));
+  assert.ok(!html.includes('tb-chart'));
+});

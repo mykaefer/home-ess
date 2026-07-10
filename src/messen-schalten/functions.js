@@ -37,6 +37,12 @@ const TEMPERATURE_BUCKET_BELOW = TEMPERATURE_BUCKET_MIN - TEMPERATURE_BUCKET_SIZ
 // Temperatur-Buckets brauchen ganze Saisons, um Sommer und Winter zu sehen.
 const WEEKDAY_WINDOW_DAYS = 42;
 const RETENTION_DAYS = 400;
+// Temperaturfenster ziehen langsam mit statt hart zu überschreiben: jede neue
+// Messstunde eines Fensters nudged den gelernten Stundenwert per EWMA (analog
+// zum recency-gewichteten Wochentags-Grundverbrauch). Bewusst über die
+// Messreihe des Fensters (nicht über den Kalender), damit ein nur im Winter
+// belegtes Fenster über den Sommer nicht „vergisst". Kleines Alpha = träge.
+const TEMPERATURE_BUCKET_ALPHA = 0.2;
 const MAX_SAMPLE_AGE_MS = 5 * 60 * 1000;
 
 function dbAll(db, sql, params = []) {
@@ -253,7 +259,12 @@ async function loadFunctionModels(db, referenceDayKey = null) {
     const newest = newestByFunction.get(row.function_key);
     if (!newest || row.day_key > newest) newestByFunction.set(row.function_key, row.day_key);
   }
-  for (const row of rows) {
+  // Temperatur-EWMA verlangt chronologische Reihenfolge (alt → neu), damit die
+  // jüngste Messstunde eines Fensters den Wert zuletzt mitzieht. Für die
+  // Wochentagsprofile ist die Reihenfolge unerheblich (reine Summen).
+  const orderedRows = rows.slice().sort((a, b) =>
+    (a.day_key < b.day_key ? -1 : a.day_key > b.day_key ? 1 : (Number(a.hour) || 0) - (Number(b.hour) || 0)));
+  for (const row of orderedRows) {
     const model = models[row.function_key];
     if (!model) continue;
     const hour = Math.min(23, Math.max(0, Number(row.hour) || 0));
@@ -265,10 +276,14 @@ async function loadFunctionModels(db, referenceDayKey = null) {
       const bucket = temperatureBucket(temperature);
       let entry = model.buckets.get(bucket);
       if (!entry) {
-        entry = { sums: Array(24).fill(0), counts: Array(24).fill(0) };
+        entry = { ewma: Array(24).fill(null), counts: Array(24).fill(0) };
         model.buckets.set(bucket, entry);
       }
-      entry.sums[hour] += kwh;
+      // Erste Messstunde des Fensters setzt den Wert, jede weitere zieht ihn
+      // träge mit – eine 0-kWh-Messung ist dabei eine gültige Beobachtung.
+      entry.ewma[hour] = entry.ewma[hour] == null
+        ? kwh
+        : entry.ewma[hour] * (1 - TEMPERATURE_BUCKET_ALPHA) + kwh * TEMPERATURE_BUCKET_ALPHA;
       entry.counts[hour] += 1;
     } else {
       // Wochentagsprofile bewusst auf das jüngere Fenster begrenzen; ältere
@@ -287,7 +302,7 @@ async function loadFunctionModels(db, referenceDayKey = null) {
       const buckets = new Map();
       const bucketSamples = new Map();
       for (const [bucket, entry] of model.buckets.entries()) {
-        buckets.set(bucket, entry.sums.map((sum, hour) => (entry.counts[hour] > 0 ? sum / entry.counts[hour] : 0)));
+        buckets.set(bucket, entry.ewma.map((value) => value == null ? 0 : value));
         bucketSamples.set(bucket, entry.counts.reduce((sum, count) => sum + count, 0));
       }
       result[fn] = { type: 'temperature', buckets, bucketSamples, sampleDays: model.sampleDays.size };
@@ -357,6 +372,7 @@ function dayKeyDiff(a, b) {
 module.exports = {
   FUNCTIONS, FUNCTION_KEYS, TEMPERATURE_BUCKET_SIZE,
   TEMPERATURE_BUCKET_MIN, TEMPERATURE_BUCKET_MAX, TEMPERATURE_BUCKET_BELOW,
+  TEMPERATURE_BUCKET_ALPHA,
   isFunctionKey, functionLabel, effectiveFunction, functionPowerSums,
   currentFunctionPowerW, recordFunctionSamples, readFunctionValues,
   loadFunctionModels, functionsLoadForHour, temperatureBucket,

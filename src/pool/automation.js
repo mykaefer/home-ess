@@ -34,6 +34,7 @@ const solar = {
 
 const filter = {
   output: null,
+  changedAt: 0,
   loadShedOff: false,
 };
 
@@ -49,6 +50,20 @@ function parseNum(v) {
 
 function parseOn(v) {
   return v === true || v === 'true' || v === 1 || v === '1';
+}
+
+// Tatsächlicher Ist-Zustand einer Pumpe aus ihrem Status-Topic: true/false, oder
+// null, wenn kein Status vorliegt. Grundlage für den Abgleich „Ziel vs. Realität",
+// damit eine verlorene/übersehene Schaltung nachgesendet wird (analog M+S).
+function actualPumpOn(cache, statusTopic) {
+  if (!statusTopic) return null;
+  const raw = readPoolValue(cache, statusTopic);
+  if (raw == null || raw === '') return null;
+  return parseOn(raw);
+}
+// Gerät bereits im Zielzustand? Bevorzugt der echte Status; ohne Status der interne Glaube.
+function pumpInTarget(actual, believedOutput, target) {
+  return actual != null ? (actual === (target === 'on')) : (believedOutput === target);
 }
 
 function timeToMinutes(t) {
@@ -147,6 +162,11 @@ async function tick(db) {
     solar.loadShedOff = false;
     filter.loadShedOff = false;
   }
+  // Lastabwurf zählt für Steuerentscheidungen nur, SOLANGE er aktiv ist. Sonst
+  // würde ein veralteter Cutoff aus einer früheren Grid-Control-Phase die Pumpe
+  // dauerhaft aussperren (loadShed.stages werden bei Inaktivität nicht geleert).
+  // Konsistent zu messen-schalten/automation.js (dort: loadShedActive ? … : false).
+  const shedNow = (which, priority) => loadShedActive && isShed(which, priority, cfg);
 
   loadShed.registerProvider('pool', [
     cfg.solarPumpCommandTopic && (solar.output === 'on' || solar.loadShedOff)
@@ -158,18 +178,24 @@ async function tick(db) {
 
   // ── Solarpumpe ──────────────────────────────────────────────────────────────
   if (cfg.solarPumpCommandTopic && pumpModes.solar !== 'auto') {
+    // Hand-Modus übersteuert das Betriebslevel bewusst (LEVEL_HANDLING.md Punkt 3):
+    // „an"/„aus" schalten unabhängig vom Level – das Gate wird ignoriert (die Pumpe
+    // ist im Hand-Modus ohnehin nicht beim Level-Handler registriert). Der Lastabwurf
+    // (Netzschutz) bleibt als eigenständiger Schutz erhalten.
     const desired = pumpModes.solar;
-    const shouldOn = desired === 'on'
-      && levelHandler.isAllowed(cfg.solarPumpPriority)
-      && !isShed('solar', cfg.solarPumpPriority, cfg);
+    const shed = shedNow('solar', cfg.solarPumpPriority);
+    const shouldOn = desired === 'on' && !shed;
     const target = shouldOn ? 'on' : 'off';
-    if (solar.output !== target) {
-      if (desired === 'on' && isShed('solar', cfg.solarPumpPriority, cfg)) solar.loadShedOff = true;
-      else if (desired === 'on') solar.loadShedOff = false;
-      if (desired !== 'on') solar.loadShedOff = false;
+    const actual = actualPumpOn(cache, cfg.solarPumpStatusTopic);
+    const inTarget = pumpInTarget(actual, solar.output, target);
+    const holdOk = solar.changedAt === 0 || now - solar.changedAt >= HOLD_MS;
+    if (!inTarget && holdOk) {
+      solar.loadShedOff = desired === 'on' && shed;
       send(cfg.solarPumpCommandTopic, shouldOn);
       solar.output = target;
       solar.changedAt = now;
+    } else if (inTarget) {
+      solar.output = target; // internen Glauben mit der Realität synchronisieren
     }
   } else if (cfg.solarPumpCommandTopic) {
     const waterTemp = parseNum(readPoolValue(cache, cfg.temperatureTopic));
@@ -253,23 +279,22 @@ async function tick(db) {
       // Sonnenbasierte Steuerung
       const desired = hasSun ? 'on' : 'off';
       let requestOn = desired === 'on';
-      if (requestOn && (isShed('solar', cfg.solarPumpPriority, cfg)
+      if (requestOn && (shedNow('solar', cfg.solarPumpPriority)
         || !levelHandler.isAllowed(cfg.solarPumpPriority))) requestOn = false;
       const target = requestOn ? 'on' : 'off';
-      if (solar.output !== target) {
-        const holdOk = solar.changedAt === 0 || now - solar.changedAt >= HOLD_MS;
-        if (holdOk) {
-          if (desired === 'on' && isShed('solar', cfg.solarPumpPriority, cfg)) {
-            solar.loadShedOff = true;
-          } else if (requestOn) {
-            solar.loadShedOff = false;
-          } else {
-            solar.loadShedOff = false;
-          }
-          const on = gatedSend(cfg.solarPumpCommandTopic, requestOn, cfg.solarPumpPriority);
-          solar.output = on ? 'on' : 'off';
-          solar.changedAt = now;
-        }
+      // Am echten Status ausrichten: nachsenden, wenn das Gerät nicht im Ziel ist
+      // (nicht nur bei abweichendem internen Glauben) – so wird eine verlorene
+      // Schaltung korrigiert, gedrosselt über HOLD_MS.
+      const actual = actualPumpOn(cache, cfg.solarPumpStatusTopic);
+      const inTarget = pumpInTarget(actual, solar.output, target);
+      const holdOk = solar.changedAt === 0 || now - solar.changedAt >= HOLD_MS;
+      if (!inTarget && holdOk) {
+        solar.loadShedOff = desired === 'on' && shedNow('solar', cfg.solarPumpPriority);
+        const on = gatedSend(cfg.solarPumpCommandTopic, requestOn, cfg.solarPumpPriority);
+        solar.output = on ? 'on' : 'off';
+        solar.changedAt = now;
+      } else if (inTarget) {
+        solar.output = target; // internen Glauben mit der Realität synchronisieren
       }
     }
   }
@@ -283,18 +308,23 @@ async function tick(db) {
 
   // ── Filterpumpe ─────────────────────────────────────────────────────────────
   if (cfg.filterPumpCommandTopic && pumpModes.filter !== 'auto') {
+    // Hand-Modus übersteuert das Betriebslevel bewusst (wie bei der Solarpumpe oben);
+    // nur der Lastabwurf (Netzschutz) bleibt wirksam.
     const desired = pumpModes.filter;
     const effectivePriority = getEffectivePriority('filter', cfg);
-    const shouldOn = desired === 'on'
-      && levelHandler.isAllowed(effectivePriority)
-      && !isShed('filter', effectivePriority, cfg);
+    const shed = shedNow('filter', effectivePriority);
+    const shouldOn = desired === 'on' && !shed;
     const target = shouldOn ? 'on' : 'off';
-    if (filter.output !== target) {
-      if (desired === 'on' && isShed('filter', effectivePriority, cfg)) filter.loadShedOff = true;
-      else if (desired === 'on') filter.loadShedOff = false;
-      if (desired !== 'on') filter.loadShedOff = false;
+    const actual = actualPumpOn(cache, cfg.filterPumpStatusTopic);
+    const inTarget = pumpInTarget(actual, filter.output, target);
+    const holdOk = filter.changedAt === 0 || now - filter.changedAt >= HOLD_MS;
+    if (!inTarget && holdOk) {
+      filter.loadShedOff = desired === 'on' && shed;
       send(cfg.filterPumpCommandTopic, shouldOn);
       filter.output = target;
+      filter.changedAt = now;
+    } else if (inTarget) {
+      filter.output = target; // internen Glauben mit der Realität synchronisieren
     }
   } else if (cfg.filterPumpCommandTopic && !_filterActsAsSolar) {
     let desired = 'off';
@@ -321,19 +351,19 @@ async function tick(db) {
 
     const effectivePriority = getEffectivePriority('filter', cfg);
     let requestOn = desired === 'on';
-    if (requestOn && (isShed('filter', effectivePriority, cfg)
+    if (requestOn && (shedNow('filter', effectivePriority)
       || !levelHandler.isAllowed(effectivePriority))) requestOn = false;
     const target = requestOn ? 'on' : 'off';
-    if (filter.output !== target) {
-      if (desired === 'on' && isShed('filter', effectivePriority, cfg)) {
-        filter.loadShedOff = true;
-      } else if (requestOn) {
-        filter.loadShedOff = false;
-      } else {
-        filter.loadShedOff = false;
-      }
+    const actual = actualPumpOn(cache, cfg.filterPumpStatusTopic);
+    const inTarget = pumpInTarget(actual, filter.output, target);
+    const holdOk = filter.changedAt === 0 || now - filter.changedAt >= HOLD_MS;
+    if (!inTarget && holdOk) {
+      filter.loadShedOff = desired === 'on' && shedNow('filter', effectivePriority);
       const on = gatedSend(cfg.filterPumpCommandTopic, requestOn, effectivePriority);
       filter.output = on ? 'on' : 'off';
+      filter.changedAt = now;
+    } else if (inTarget) {
+      filter.output = target; // internen Glauben mit der Realität synchronisieren
     }
   }
 
@@ -379,6 +409,12 @@ function setPumpMode(which, mode) {
     solar.tempSamplingStart = 0;
     solar.tempCycleStart = 0;
     _filterActsAsSolar = false;
+    // Moduswechsel = ausdrückliche Bedienhandlung → Haltesperre aufheben, damit
+    // der neue Zielzustand sofort (nicht erst nach HOLD_MS) gesendet wird.
+    solar.changedAt = 0;
+  }
+  if (which === 'filter' && previous !== mode) {
+    filter.changedAt = 0;
   }
 }
 
@@ -420,4 +456,25 @@ function init(db) {
   runNow(db).catch(() => {});
 }
 
-module.exports = { init, runNow, getSolarOutput, getFilterOutput, getPumpMode, setPumpMode, getEffectivePriority };
+// Setzt den In-Memory-Zustand (Modus + Ist-Glaube) zurück – nur für Tests, damit
+// sich Zustände nicht über mehrere Testfälle im selben Prozess vererben.
+function resetForTests() {
+  solar.output = null;
+  solar.changedAt = 0;
+  solar.loadShedOff = false;
+  solar.tempMode = false;
+  solar.tempSampling = false;
+  solar.tempSamplingStart = 0;
+  solar.tempCycleStart = 0;
+  filter.output = null;
+  filter.changedAt = 0;
+  filter.loadShedOff = false;
+  pumpModes.solar = 'auto';
+  pumpModes.filter = 'auto';
+  _filterActsAsSolar = false;
+}
+
+module.exports = {
+  init, runNow, getSolarOutput, getFilterOutput, getPumpMode, setPumpMode,
+  getEffectivePriority, resetForTests,
+};

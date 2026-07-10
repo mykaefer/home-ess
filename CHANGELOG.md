@@ -3,6 +3,38 @@
 Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [1.2.2] — 2026-07-10
+
+### Behoben
+
+- **Poolsteuerung: Solar-/Filterpumpe schaltet zuverlässig.** Die Automatik
+  vertraute bisher nur ihrem internen Soll-Glauben (`solar.output`/`filter.output`)
+  und unterdrückte per `if (output !== target)` jeden erneuten Befehl. Wich der
+  echte Pumpenzustand davon ab (verlorener Schaltbefehl, extern/an der CCU
+  geschaltet, CCU-Neustart), blieb die Pumpe dauerhaft im falschen Zustand.
+  Beide Pumpen gleichen ihre Entscheidung jetzt gegen das tatsächliche
+  **Status-Topic** ab und senden bei Abweichung nach (gedrosselt über die
+  2-Min-Haltesperre; ein Moduswechsel An/Aus hebt die Drossel sofort auf).
+- **Poolsteuerung: veralteter Lastabwurf sperrt die Pumpe nicht mehr aus.** Der
+  Grid-Control-Lastabwurf wird für die Schaltentscheidung nur noch berücksichtigt,
+  solange er wirklich aktiv ist (`loadShedActive`). Ein alter Cutoff aus einer
+  beendeten Grid-Control-Phase kann die Pumpe nicht länger blockieren —
+  konsistent zu Messen+Schalten und Wallbox. Hand-„An"/„Aus" übersteuert das
+  Betriebslevel wie vorgesehen.
+- **Prognose: Bedarfsdiagramm Heizung/Klima erscheint korrekt.** Der Platzhalter
+  behauptete fälschlich, es brauche gemessenen *Verbrauch*. Eine gemessene
+  **0,0 kWh** ist eine gültige Beobachtung eines Temperaturfensters; das Diagramm
+  erscheint jetzt, sobald Messwerte einfließen oder eine Außentemperatur vorliegt.
+
+### Geändert
+
+- **Prognose: Temperaturfenster ziehen träge nach.** Die gelernten
+  Außentemperatur-Buckets für Heizung/Klima werden je Fenster/Stunde als
+  **gleitender Mittelwert (EWMA)** über die Messreihe nachgezogen statt bei jeder
+  Messung hart überschrieben (analog dem recency-gewichteten Wochentag-Grundverbrauch;
+  bewusst über die Messreihe statt den Kalender, damit ein nur im Winter belegtes
+  Fenster über den Sommer nicht „vergisst").
+
 ## [1.2.1] — 2026-07-10
 
 ### Neu

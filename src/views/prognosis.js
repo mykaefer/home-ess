@@ -149,10 +149,15 @@ function renderHeatingDemandChart(model = {}) {
   const windows = Array.isArray(model.heatingDemand) ? model.heatingDemand : [];
   const totalSamples = windows.reduce((sum, w) => sum + (Number(w.samples) || 0), 0);
   const head = `<div class="panel-head"><div><h2>Heizung / Klima nach Außentemperatur</h2><p class="muted">Gemessener Energiebedarf der Funktionsgruppe Heizung / Klima je 5-°C-Fenster der Außentemperatur (erwartete Tagesenergie als gleitender Mittelwert). Die Prognose plant diesen Bedarf je Stunde nach der prognostizierten Außentemperatur ein.</p></div></div>`;
-  if (!windows.length || totalSamples <= 0) {
+  // Diagramm zeigen, sobald überhaupt eine Messung in ein Temperaturfenster
+  // eingeflossen ist (auch 0,0 kWh ist eine gültige Messung) – oder solange eine
+  // Außentemperatur hereinkommt, damit sich die (noch leeren) Fenster füllen
+  // können. Der Platzhalter erscheint nur, wenn beides fehlt: keine Temperatur
+  // (Topic unbelegt oder Sensor/Server liefert nicht) UND noch keine Messdaten.
+  if (!windows.length || (totalSamples <= 0 && !model.heatingTemperatureAvailable)) {
     return `<section class="panel-card">
           ${head}
-          <p class="muted">Sobald die Funktionsgruppe Heizung / Klima Verbrauch bei verschiedenen Außentemperaturen gemessen hat, erscheint hier die Bedarfskurve über die Temperaturfenster.</p>
+          <p class="muted">Noch keine Bedarfskurve: Es kommt aktuell keine Außentemperatur herein (Topic in den Einstellungen prüfen bzw. Sensor/Server) und es liegen noch keine Messdaten vor. Sobald Messwerte in die Temperaturfenster einfließen – ein Bedarf von 0,0 kWh ist dabei eine gültige Messung – erscheint hier die Kurve.</p>
         </section>`;
   }
   const max = Math.max(0.001, ...windows.map((w) => Number(w.dailyKwh) || 0));
@@ -364,3 +369,5 @@ function renderPrognosis({ prognosis, message = '', error = '' } = {}) {
 }
 
 module.exports = renderPrognosis;
+// Für gezielte Tests der Diagramm-Sichtbarkeit (Default-Export bleibt die View).
+module.exports.renderHeatingDemandChart = renderHeatingDemandChart;

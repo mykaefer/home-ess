@@ -11,6 +11,7 @@ const {
   recordFunctionSamples, readFunctionValues, loadFunctionModels,
   functionsLoadForHour, temperatureBucket, summarizeTemperatureDemand,
   temperatureBucketList, TEMPERATURE_BUCKET_BELOW, TEMPERATURE_BUCKET_MAX,
+  TEMPERATURE_BUCKET_ALPHA,
 } = require('../src/messen-schalten/functions');
 const { ENVIRONMENT_STATE_IDS } = require('../src/mqtt/config');
 
@@ -204,7 +205,8 @@ test('summarizeTemperatureDemand liefert alle Fenster mit Tagesenergie und Messs
   const below = summary[0];
   assert.equal(below.below, true);
   assert.equal(below.samples, 2); // beide Stunden im <-20-Fenster
-  assert.ok(Math.abs(below.dailyKwh - 2) < 1e-9); // Stundenmittel (3+1)/2 = 2
+  // Fenster ziehen träge mit (EWMA, alt → neu): 3,0 → dann 3,0·0,8 + 1,0·0,2 = 2,6.
+  assert.ok(Math.abs(below.dailyKwh - 2.6) < 1e-9);
 
   const above = summary[summary.length - 1];
   assert.equal(above.above, true);
@@ -214,6 +216,36 @@ test('summarizeTemperatureDemand liefert alle Fenster mit Tagesenergie und Messs
   const mildEmpty = summary.find((w) => w.min === 0);
   assert.equal(mildEmpty.samples, 0);
   assert.equal(mildEmpty.dailyKwh, 0);
+  await new Promise((resolve) => db.close(resolve));
+});
+
+test('loadFunctionModels: Temperaturfenster ziehen langsam mit statt hart zu überschreiben', async () => {
+  const db = await freshDb();
+  const a = TEMPERATURE_BUCKET_ALPHA;
+  // Vier Tage im selben Fenster (0 °C) / derselben Stunde: ein Sprung nach oben
+  // darf den gelernten Wert nur schrittweise mitziehen, nicht ersetzen.
+  await dbRun(db, "INSERT INTO mess_schalt_function_hourly VALUES ('heizung_klima', '2026-01-01', 7, 1.0, 0)");
+  await dbRun(db, "INSERT INTO mess_schalt_function_hourly VALUES ('heizung_klima', '2026-01-02', 7, 1.0, 1)");
+  await dbRun(db, "INSERT INTO mess_schalt_function_hourly VALUES ('heizung_klima', '2026-01-03', 7, 1.0, 2)");
+  await dbRun(db, "INSERT INTO mess_schalt_function_hourly VALUES ('heizung_klima', '2026-01-04', 7, 5.0, 3)");
+  const models = await loadFunctionModels(db);
+  // EWMA (alt → neu): 1 → 1 → 1 → 1·(1−a) + 5·a. Mit a=0,2 ergibt das 1,8 – die
+  // letzte Messung hat den Wert mitgezogen, aber nicht auf 5 überschrieben.
+  const expected = 1 * (1 - a) + 5 * a;
+  assert.ok(Math.abs(models.heizung_klima.buckets.get(0)[7] - expected) < 1e-9);
+  assert.ok(models.heizung_klima.buckets.get(0)[7] < 5);
+  await new Promise((resolve) => db.close(resolve));
+});
+
+test('loadFunctionModels: 0-kWh-Messung ist eine gültige Beobachtung des Fensters', async () => {
+  const db = await freshDb();
+  // Gemessener Bedarf 0,0 kWh bei 18 °C – gültige Messung, das Fenster ist belegt.
+  await dbRun(db, "INSERT INTO mess_schalt_function_hourly VALUES ('heizung_klima', '2026-05-01', 13, 0.0, 18)");
+  const models = await loadFunctionModels(db);
+  const summary = summarizeTemperatureDemand(models.heizung_klima);
+  const window15 = summary.find((w) => w.min === 15);
+  assert.equal(window15.samples, 1);      // Messstunde vorhanden …
+  assert.equal(window15.dailyKwh, 0);      // … mit erwartetem Bedarf 0,0 kWh.
   await new Promise((resolve) => db.close(resolve));
 });
 

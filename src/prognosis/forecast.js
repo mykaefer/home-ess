@@ -7,7 +7,7 @@ const { loadBatterieConfig, readBatterieData, batteryCapacityKwh } = require('..
 const { loadPrognosisConfig } = require('./config');
 const operatingState = require('../operating-state');
 const metrics = require('../runtime-metrics');
-const { loadMqttConfig } = require('../mqtt/config');
+const { loadMqttConfig, buildEnvironmentSnapshot } = require('../mqtt/config');
 const { localCalendar } = require('../local-time');
 const { solarGeometryAt } = require('../photovoltaik/aggregation');
 const { buildWallboxModel, planWallboxSchedule, wallboxForecastForDay } = require('./wallbox-model');
@@ -511,6 +511,10 @@ async function buildConsumptionModelUncached(db, strom, config, cache, forecast 
     // Balkendiagramm der Prognose-Datenbasis); dieselben Fenster werden oben in
     // functionsLoadForHour je Prognosestunde nach Außentemperatur eingeplant.
     heatingDemand: summarizeTemperatureDemand(functionModels && functionModels.heizung_klima),
+    // Ob aktuell eine Außentemperatur hereinkommt (Topic belegt + Sensor/Server
+    // liefert). Nur wenn zusätzlich noch keine Messdaten vorliegen, zeigt das
+    // Balkendiagramm einen Platzhalter statt der (ggf. noch leeren) Fenster.
+    heatingTemperatureAvailable: num(buildEnvironmentSnapshot(cache).temperature.value) != null,
     remainingByHour, recentHourKwh, hoursToSunrise, consumptionToSunrise: null,
     _wallboxPlanningSlots: wallboxPlanningSlots,
     historyDays: dailyRows.length,
