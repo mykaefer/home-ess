@@ -27,6 +27,11 @@ let client = null;
 let clientGeneration = 0;
 let connected = false;
 let lastError = null;
+// Zählt jeden erfolgreichen (Wieder-)Verbindungsaufbau. Konsumenten, die auf das
+// erneute Einspielen aller retained-Werte reagieren müssen (z. B. die Wallbox-
+// Bedienerkennung, die einen Reconnect NICHT als Nutzerschaltung werten darf),
+// erkennen über diesen Zähler einen zwischenzeitlichen Reconnect.
+let connectEpoch = 0;
 
 let subscribedTopics = new Set(); // Deduplizierung der Abos
 // Zentraler Wert-Cache liegt im gemeinsamen state-bus (auch von Adaptern genutzt).
@@ -162,6 +167,7 @@ function connect(cfg) {
   currentClient.on('connect', () => {
     if (generation !== clientGeneration || client !== currentClient) return;
     connected = true;
+    connectEpoch += 1; // Reconnect-Marker: alle retained-Werte werden gleich neu eingespielt
     lastError = null;
     subscribedTopics = new Set(); // KRITISCH: bei jedem connect leeren (Auto-Reconnect)
     subscribeAllTopics();
@@ -209,6 +215,13 @@ function getStatus() {
 
 function getCache() {
   return valueCache;
+}
+
+// Fortlaufender Zähler der (Wieder-)Verbindungen. Ändert er sich zwischen zwei
+// Abfragen, lag ein Reconnect (und damit ein erneutes Einspielen aller retained-
+// Werte) dazwischen.
+function getConnectEpoch() {
+  return connectEpoch;
 }
 
 // Façade auf den gemeinsamen state-bus, damit bestehende Konsumenten (Output-
@@ -426,6 +439,7 @@ module.exports = {
   disconnect,
   getStatus,
   getCache,
+  getConnectEpoch,
   onValuesChanged,
   setStateDefinitions,
   subscribeAdHoc,

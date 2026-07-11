@@ -141,38 +141,51 @@ function renderDataBasisChart(model = {}) {
         </section>`;
 }
 
-// Bedarf der Funktionsgruppe Heizung / Klima über die Außentemperatur-Fenster
-// (5-°C-Bereiche, unten „< -20 °C", oben „> 50 °C"). Balkenhöhe = erwartete
-// Tagesenergie (Summe der gelernten Stundenmittel des Fensters). Die Prognose
-// plant genau diese Fenster je Stunde nach der prognostizierten Außentemperatur.
+// Leistungskurve der Funktionsgruppe Heizung / Klima über die Außentemperatur-
+// Fenster (1-°C-Bereiche, unten „< -20 °C", oben „> 50 °C"). Balkenhöhe =
+// mittlere Leistung (W) über die letzten (bis zu 30) Messtage des Fensters; die
+// Markierungslinie zeigt den Wert des aktuellen Tages. Die Prognose errechnet aus
+// dieser Leistung je Stunde nach der prognostizierten Außentemperatur den
+// erwarteten Verbrauch.
 function renderHeatingDemandChart(model = {}) {
   const windows = Array.isArray(model.heatingDemand) ? model.heatingDemand : [];
-  const totalSamples = windows.reduce((sum, w) => sum + (Number(w.samples) || 0), 0);
-  const head = `<div class="panel-head"><div><h2>Heizung / Klima nach Außentemperatur</h2><p class="muted">Gemessener Energiebedarf der Funktionsgruppe Heizung / Klima je 5-°C-Fenster der Außentemperatur (erwartete Tagesenergie als gleitender Mittelwert). Die Prognose plant diesen Bedarf je Stunde nach der prognostizierten Außentemperatur ein.</p></div></div>`;
-  // Diagramm zeigen, sobald überhaupt eine Messung in ein Temperaturfenster
-  // eingeflossen ist (auch 0,0 kWh ist eine gültige Messung) – oder solange eine
+  const totalDays = windows.reduce((sum, w) => sum + (Number(w.days) || 0), 0);
+  const head = `<div class="panel-head"><div><h2>Heizung / Klima nach Außentemperatur</h2><p class="muted">Gemessene mittlere Leistung der Funktionsgruppe Heizung / Klima je 1-°C-Fenster der Außentemperatur (Mittel der letzten bis zu 30 Messtage; die Markierungslinie zeigt den heutigen Wert). Die Prognose errechnet daraus je Stunde nach der prognostizierten Außentemperatur den erwarteten Verbrauch.</p></div></div>`;
+  // Diagramm zeigen, sobald überhaupt ein Messtag in ein Temperaturfenster
+  // eingeflossen ist (auch 0 W ist eine gültige Messung) – oder solange eine
   // Außentemperatur hereinkommt, damit sich die (noch leeren) Fenster füllen
   // können. Der Platzhalter erscheint nur, wenn beides fehlt: keine Temperatur
   // (Topic unbelegt oder Sensor/Server liefert nicht) UND noch keine Messdaten.
-  if (!windows.length || (totalSamples <= 0 && !model.heatingTemperatureAvailable)) {
+  if (!windows.length || (totalDays <= 0 && !model.heatingTemperatureAvailable)) {
     return `<section class="panel-card">
           ${head}
-          <p class="muted">Noch keine Bedarfskurve: Es kommt aktuell keine Außentemperatur herein (Topic in den Einstellungen prüfen bzw. Sensor/Server) und es liegen noch keine Messdaten vor. Sobald Messwerte in die Temperaturfenster einfließen – ein Bedarf von 0,0 kWh ist dabei eine gültige Messung – erscheint hier die Kurve.</p>
+          <p class="muted">Noch keine Leistungskurve: Es kommt aktuell keine Außentemperatur herein (Topic in den Einstellungen prüfen bzw. Sensor/Server) und es liegen noch keine Messdaten vor. Sobald Messtage in die Temperaturfenster einfließen – eine Leistung von 0 W ist dabei eine gültige Messung – erscheint hier die Kurve.</p>
         </section>`;
   }
-  const max = Math.max(0.001, ...windows.map((w) => Number(w.dailyKwh) || 0));
+  const max = Math.max(1, ...windows.map((w) => Math.max(Number(w.avgPowerW) || 0, Number(w.todayPowerW) || 0)));
   const lastIndex = Math.max(1, windows.length - 1);
-  const fmt = (value) => `${(Number(value) || 0).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} kWh`;
+  const fmt = (value) => `${Math.round(Number(value) || 0).toLocaleString('de-DE')} W`;
   const cells = windows.map((w, index) => {
-    const value = Math.max(0, Number(w.dailyKwh) || 0);
+    const value = Math.max(0, Number(w.avgPowerW) || 0);
     const pct = Math.min(100, value / max * 100);
-    const empty = (Number(w.samples) || 0) <= 0;
+    const empty = (Number(w.days) || 0) <= 0;
     // Kalt (blau) → warm (rot) über die Fenster, damit die Temperaturachse sofort lesbar ist.
     const hue = Math.round(210 - (index / lastIndex) * 210);
-    const tick = w.below ? `&lt;${w.max}` : w.above ? `&gt;${w.min}` : String(w.min);
-    const title = `${w.label} · Ø ${fmt(value)}/Tag · ${empty ? 'keine Messwerte' : `${w.samples} Messstunden`}`;
+    // Bei feiner 1-°C-Auflösung nur jedes 5. Fenster (Vielfache von 5 °C) sowie die
+    // Sammelbereiche beschriften, sonst überlagern sich die Ticks; die Balken selbst
+    // bleiben in voller 1-°C-Auflösung.
+    const labelled = w.below || w.above || (Number(w.min) % 5 === 0);
+    const tick = w.below ? `&lt;${w.max}` : w.above ? `&gt;${w.min}` : (labelled ? String(w.min) : '');
+    // Markierungslinie: mittlere Leistung des aktuellen Tages in diesem Fenster.
+    const hasToday = w.todayPowerW != null;
+    const todayPct = hasToday ? Math.min(100, Math.max(0, (Number(w.todayPowerW) || 0) / max * 100)) : 0;
+    const mark = hasToday
+      ? `<span class="tb-mark" style="bottom:${todayPct.toFixed(1)}%" title="${escapeHtml(`${w.label} · heute Ø ${fmt(w.todayPowerW)}`)}"></span>`
+      : '';
+    const title = `${w.label} · Ø ${fmt(value)}${hasToday ? ` · heute ${fmt(w.todayPowerW)}` : ''} · ${empty ? 'keine Messtage' : `${w.days} Messtag${w.days === 1 ? '' : 'e'}`}`;
     return `<div class="tb-cell${empty ? ' tb-cell--empty' : ''}" title="${escapeHtml(title)}">
           <span class="tb-bar" style="height:${pct.toFixed(1)}%;background:hsl(${hue} 68% 50%)"></span>
+          ${mark}
           <span class="tb-tick">${tick}</span>
         </div>`;
   }).join('');
@@ -180,7 +193,7 @@ function renderHeatingDemandChart(model = {}) {
           ${head}
           <div class="tb-chart">
             <div class="tb-chart-bars">${cells}</div>
-            <div class="tb-axis muted">Außentemperatur (°C) · Balkenhöhe = erwartete Tagesenergie Heizung / Klima</div>
+            <div class="tb-axis muted">Außentemperatur (°C) · Balkenhöhe = mittlere Leistung (W) · Markierung = heutiger Wert</div>
           </div>
         </section>`;
 }

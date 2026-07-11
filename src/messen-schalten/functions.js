@@ -4,7 +4,7 @@
 // Warmwasser, Heizung / Klima, Kochen). Je Funktion wird minütlich die Leistung
 // der zugeordneten Geräte zu Stundenenergien integriert. Daraus entstehen die
 // Stundenprofile der Prognose: nach Wochentag – für Heizung / Klima nach
-// Außentemperatur in 5-°C-Schritten, weil dort die Temperatur den Bedarf
+// Außentemperatur in 1-°C-Schritten, weil dort die Temperatur den Bedarf
 // bestimmt, nicht der Wochentag. Die gemessene Funktionsleistung wird zugleich
 // aus dem gelernten Haus-Grundverbrauch herausgerechnet (analog Wallbox/Pool),
 // damit sporadische Lasten die Grundlastkurve nicht verfälschen.
@@ -25,24 +25,24 @@ const FUNCTION_LABELS = {
   kochen: 'Kochen',
 };
 const FUNCTIONS = FUNCTION_KEYS.map((key) => ({ key, label: FUNCTION_LABELS[key] || key }));
-const TEMPERATURE_BUCKET_SIZE = 5;
+const TEMPERATURE_BUCKET_SIZE = 1;
 // Feste Temperaturfenster für Heizung / Klima: unterer Sammelbereich „< -20 °C",
-// oberer Sammelbereich „> 50 °C", dazwischen 5-°C-Bereiche. Diese Grenzen gelten
-// sowohl beim Erfassen (loadFunctionModels) als auch beim Prognostizieren
-// (nearestBucketHourly) und im Balkendiagramm der Prognose-Datenbasis.
-const TEMPERATURE_BUCKET_MIN = -20; // untere Kante des ersten 5-°C-Bereichs
+// oberer Sammelbereich „> 50 °C", dazwischen 1-°C-Bereiche. Diese Grenzen gelten
+// sowohl beim Erfassen (recordFunctionSamples) als auch beim Prognostizieren
+// (nearestWindowPower) und im Balkendiagramm der Prognose-Datenbasis.
+const TEMPERATURE_BUCKET_MIN = -20; // untere Kante des ersten 1-°C-Bereichs
 const TEMPERATURE_BUCKET_MAX = 50;  // untere Kante des Sammelbereichs „> 50 °C"
 const TEMPERATURE_BUCKET_BELOW = TEMPERATURE_BUCKET_MIN - TEMPERATURE_BUCKET_SIZE; // Schlüssel „< -20 °C"
-// Wochentagsprofile aus demselben Fenster wie die Haus-Stundenprofile;
-// Temperatur-Buckets brauchen ganze Saisons, um Sommer und Winter zu sehen.
+// Wochentagsprofile aus demselben Fenster wie die Haus-Stundenprofile.
 const WEEKDAY_WINDOW_DAYS = 42;
 const RETENTION_DAYS = 400;
-// Temperaturfenster ziehen langsam mit statt hart zu überschreiben: jede neue
-// Messstunde eines Fensters nudged den gelernten Stundenwert per EWMA (analog
-// zum recency-gewichteten Wochentags-Grundverbrauch). Bewusst über die
-// Messreihe des Fensters (nicht über den Kalender), damit ein nur im Winter
-// belegtes Fenster über den Sommer nicht „vergisst". Kleines Alpha = träge.
-const TEMPERATURE_BUCKET_ALPHA = 0.2;
+// Heizung / Klima: je 1-°C-Fenster bis zu 30 Messtage vorhalten, das Modell ist
+// deren gleitendes Mittel. Bewusst begrenzt statt eines dauerhaften Mittelwerts –
+// sonst flacht die Anpassung mit der Zeit immer weiter ab und reagiert kaum noch
+// auf Veränderungen. Ein Fenster wird nur an Tagen belegt, an denen diese
+// Außentemperatur real auftrat, daher kann der Sommer die Winterkurve nicht
+// überschreiben (und umgekehrt).
+const TEMPERATURE_POWER_DAYS = 30;
 const MAX_SAMPLE_AGE_MS = 5 * 60 * 1000;
 
 function dbAll(db, sql, params = []) {
@@ -112,17 +112,21 @@ function temperatureBucketList() {
   return list;
 }
 
-// Verbrauchskurve Heizung / Klima über die Temperaturfenster: je Fenster die
-// erwartete Tagesenergie (Summe der gelernten Stundenmittel) und die Zahl der
-// eingeflossenen Messstunden. `model` ist ein Temperatur-Funktionsmodell aus
-// loadFunctionModels; fehlt es, sind alle Fenster leer (0).
+// Leistungskurve Heizung / Klima über die Temperaturfenster: je Fenster die
+// mittlere Leistung (W) über die (bis zu 30) Messtage, der Wert des aktuellen
+// Tages (Markierungslinie) und die Zahl der Messtage. `model` ist das
+// Temperatur-Funktionsmodell aus loadFunctionModels; fehlt es, sind alle Fenster
+// leer (0).
 function summarizeTemperatureDemand(model) {
-  const buckets = model && model.buckets instanceof Map ? model.buckets : new Map();
-  const samples = model && model.bucketSamples instanceof Map ? model.bucketSamples : new Map();
+  const windows = model && model.windows instanceof Map ? model.windows : new Map();
   return temperatureBucketList().map((window) => {
-    const hourly = buckets.get(window.key) || null;
-    const dailyKwh = hourly ? hourly.reduce((sum, value) => sum + (value || 0), 0) : 0;
-    return { ...window, dailyKwh, samples: samples.get(window.key) || 0 };
+    const entry = windows.get(window.key) || null;
+    return {
+      ...window,
+      avgPowerW: entry ? entry.meanPowerW : 0,
+      todayPowerW: entry ? entry.todayPowerW : null,
+      days: entry ? entry.days : 0,
+    };
   });
 }
 
@@ -206,6 +210,36 @@ async function recordFunctionSamples(db, cache, now = Date.now()) {
     "DELETE FROM mess_schalt_function_hourly WHERE day_key < date(?, ?)",
     [calendar.dateKey, `-${RETENTION_DAYS} days`]
   );
+
+  // Heizung / Klima zusätzlich nach Außentemperatur lernen: je 1-°C-Fenster und
+  // Tag die zeitgewichtete mittlere Leistung (W). Ohne Außentemperatur lässt sich
+  // das Fenster nicht bestimmen; eine gemessene 0 W ist eine gültige Beobachtung.
+  if (sums.has('heizung_klima') && temperature != null) {
+    const bucket = temperatureBucket(temperature);
+    const seconds = age / 1000;
+    const powerW = Math.max(0, sums.get('heizung_klima'));
+    await dbRun(
+      db,
+      `INSERT INTO mess_schalt_temperature_power (bucket, day_key, avg_power_w, weight_seconds)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(bucket, day_key) DO UPDATE SET
+         avg_power_w = (mess_schalt_temperature_power.avg_power_w * mess_schalt_temperature_power.weight_seconds
+                        + excluded.avg_power_w * excluded.weight_seconds)
+                       / (mess_schalt_temperature_power.weight_seconds + excluded.weight_seconds),
+         weight_seconds = mess_schalt_temperature_power.weight_seconds + excluded.weight_seconds`,
+      [bucket, calendar.dateKey, powerW, seconds]
+    );
+    // Je Fenster nur die letzten 30 Messtage behalten (keine lange Historie).
+    await dbRun(
+      db,
+      `DELETE FROM mess_schalt_temperature_power
+        WHERE bucket = ? AND day_key NOT IN (
+          SELECT day_key FROM mess_schalt_temperature_power
+           WHERE bucket = ? ORDER BY day_key DESC LIMIT ?
+        )`,
+      [bucket, bucket, TEMPERATURE_POWER_DAYS]
+    );
+  }
 }
 
 // Live-Werte je Funktion für den Wertekatalog: aktuelle Leistung + Verbrauch heute.
@@ -236,85 +270,85 @@ async function readFunctionValues(db, cache, now = Date.now()) {
     }));
 }
 
+// Heizung / Klima: Modell aus der Temperaturfenster-Tabelle. Je 1-°C-Fenster das
+// Mittel der (bis zu 30) Messtage plus – für die Markierungslinie – der Wert des
+// aktuellen Tages. `todayKey` benennt den laufenden Tag (aus der Prognose).
+async function loadTemperaturePowerModel(db, todayKey = null) {
+  const rows = await dbAll(
+    db,
+    `SELECT bucket, day_key, avg_power_w FROM mess_schalt_temperature_power
+       ORDER BY bucket ASC, day_key DESC`
+  ).catch(() => []);
+  const byBucket = new Map(); // bucket -> { values: [neueste zuerst], today }
+  for (const row of rows) {
+    const bucket = Math.round(Number(row.bucket));
+    let entry = byBucket.get(bucket);
+    if (!entry) { entry = { values: [], today: null }; byBucket.set(bucket, entry); }
+    const powerW = Math.max(0, num(row.avg_power_w) || 0);
+    // Sicherheitsnetz, falls doch mehr als 30 Zeilen je Fenster existieren.
+    if (entry.values.length < TEMPERATURE_POWER_DAYS) entry.values.push(powerW);
+    if (todayKey != null && row.day_key === todayKey) entry.today = powerW;
+  }
+  const windows = new Map();
+  for (const [bucket, entry] of byBucket.entries()) {
+    const days = entry.values.length;
+    const meanPowerW = days ? entry.values.reduce((sum, value) => sum + value, 0) / days : 0;
+    windows.set(bucket, { meanPowerW, days, todayPowerW: entry.today });
+  }
+  return { type: 'temperature', windows };
+}
+
 // Gelerntes Prognosemodell je Funktion: Stundenmittel nach Wochentag – für
-// Heizung / Klima Stundenmittel nach Außentemperatur-Bucket (5-°C-Schritte).
+// Heizung / Klima die mittlere Leistung (W) je Außentemperatur-Fenster (1-°C).
 async function loadFunctionModels(db, referenceDayKey = null) {
   const rows = await dbAll(
     db,
     referenceDayKey
-      ? `SELECT function_key, day_key, hour, consumption_kwh, temperature
+      ? `SELECT function_key, day_key, hour, consumption_kwh
            FROM mess_schalt_function_hourly WHERE day_key < ?`
-      : `SELECT function_key, day_key, hour, consumption_kwh, temperature
+      : `SELECT function_key, day_key, hour, consumption_kwh
            FROM mess_schalt_function_hourly`,
     referenceDayKey ? [referenceDayKey] : []
   ).catch(() => []);
+  // Wochentagsmodelle für alle Funktionen außer Heizung / Klima (die kommt aus
+  // der Temperaturfenster-Tabelle, nicht aus dem Stunden-Energielog).
   const models = {};
   for (const fn of FUNCTION_KEYS) {
-    models[fn] = fn === 'heizung_klima'
-      ? { type: 'temperature', buckets: new Map(), sampleDays: new Set() }
-      : { type: 'weekday', sums: Array.from({ length: 7 }, () => Array(24).fill(0)), counts: Array.from({ length: 7 }, () => Array(24).fill(0)), sampleDays: new Set() };
+    if (fn === 'heizung_klima') continue;
+    models[fn] = { sums: Array.from({ length: 7 }, () => Array(24).fill(0)), counts: Array.from({ length: 7 }, () => Array(24).fill(0)), sampleDays: new Set() };
   }
   const newestByFunction = new Map();
   for (const row of rows) {
+    if (row.function_key === 'heizung_klima') continue;
     const newest = newestByFunction.get(row.function_key);
     if (!newest || row.day_key > newest) newestByFunction.set(row.function_key, row.day_key);
   }
-  // Temperatur-EWMA verlangt chronologische Reihenfolge (alt → neu), damit die
-  // jüngste Messstunde eines Fensters den Wert zuletzt mitzieht. Für die
-  // Wochentagsprofile ist die Reihenfolge unerheblich (reine Summen).
-  const orderedRows = rows.slice().sort((a, b) =>
-    (a.day_key < b.day_key ? -1 : a.day_key > b.day_key ? 1 : (Number(a.hour) || 0) - (Number(b.hour) || 0)));
-  for (const row of orderedRows) {
+  for (const row of rows) {
     const model = models[row.function_key];
-    if (!model) continue;
+    if (!model) continue; // heizung_klima oder unbekannt
     const hour = Math.min(23, Math.max(0, Number(row.hour) || 0));
     const kwh = Math.max(0, num(row.consumption_kwh) || 0);
+    // Wochentagsprofile bewusst auf das jüngere Fenster begrenzen; ältere
+    // Gewohnheiten sollen aktuelle Muster nicht verwässern.
+    const newest = newestByFunction.get(row.function_key);
+    if (newest && dayKeyDiff(newest, row.day_key) > WEEKDAY_WINDOW_DAYS) continue;
     model.sampleDays.add(row.day_key);
-    if (model.type === 'temperature') {
-      const temperature = num(row.temperature);
-      if (temperature == null) continue;
-      const bucket = temperatureBucket(temperature);
-      let entry = model.buckets.get(bucket);
-      if (!entry) {
-        entry = { ewma: Array(24).fill(null), counts: Array(24).fill(0) };
-        model.buckets.set(bucket, entry);
-      }
-      // Erste Messstunde des Fensters setzt den Wert, jede weitere zieht ihn
-      // träge mit – eine 0-kWh-Messung ist dabei eine gültige Beobachtung.
-      entry.ewma[hour] = entry.ewma[hour] == null
-        ? kwh
-        : entry.ewma[hour] * (1 - TEMPERATURE_BUCKET_ALPHA) + kwh * TEMPERATURE_BUCKET_ALPHA;
-      entry.counts[hour] += 1;
-    } else {
-      // Wochentagsprofile bewusst auf das jüngere Fenster begrenzen; ältere
-      // Gewohnheiten sollen aktuelle Muster nicht verwässern.
-      const newest = newestByFunction.get(row.function_key);
-      if (newest && dayKeyDiff(newest, row.day_key) > WEEKDAY_WINDOW_DAYS) continue;
-      const weekday = weekdayForDateKey(row.day_key);
-      model.sums[weekday][hour] += kwh;
-      model.counts[weekday][hour] += 1;
-    }
+    const weekday = weekdayForDateKey(row.day_key);
+    model.sums[weekday][hour] += kwh;
+    model.counts[weekday][hour] += 1;
   }
   const result = {};
   for (const fn of FUNCTION_KEYS) {
+    if (fn === 'heizung_klima') continue;
     const model = models[fn];
-    if (model.type === 'temperature') {
-      const buckets = new Map();
-      const bucketSamples = new Map();
-      for (const [bucket, entry] of model.buckets.entries()) {
-        buckets.set(bucket, entry.ewma.map((value) => value == null ? 0 : value));
-        bucketSamples.set(bucket, entry.counts.reduce((sum, count) => sum + count, 0));
-      }
-      result[fn] = { type: 'temperature', buckets, bucketSamples, sampleDays: model.sampleDays.size };
-    } else {
-      result[fn] = {
-        type: 'weekday',
-        hourlyByWeekday: model.sums.map((hours, weekday) =>
-          hours.map((sum, hour) => (model.counts[weekday][hour] > 0 ? sum / model.counts[weekday][hour] : 0))),
-        sampleDays: model.sampleDays.size,
-      };
-    }
+    result[fn] = {
+      type: 'weekday',
+      hourlyByWeekday: model.sums.map((hours, weekday) =>
+        hours.map((sum, hour) => (model.counts[weekday][hour] > 0 ? sum / model.counts[weekday][hour] : 0))),
+      sampleDays: model.sampleDays.size,
+    };
   }
+  result.heizung_klima = await loadTemperaturePowerModel(db, referenceDayKey);
   return result;
 }
 
@@ -326,26 +360,30 @@ function forecastTemperatureForHour(forecast, dateKey, hour) {
   return slot ? num(slot.temperature) : null;
 }
 
-function nearestBucketHourly(model, temperature) {
-  if (!model || !model.buckets || !model.buckets.size) return null;
+// Erwartete Heizleistung (W) für eine Außentemperatur: das nächstgelegene
+// gelernte Temperaturfenster. Ohne Temperaturprognose das Mittel über alle
+// gelernten Fenster.
+function nearestWindowPower(model, temperature) {
+  if (!model || !model.windows || !model.windows.size) return null;
   if (temperature == null) {
-    // Ohne Temperaturprognose das Mittel über alle gelernten Buckets verwenden.
-    const totals = Array(24).fill(0);
-    for (const hourly of model.buckets.values()) hourly.forEach((value, hour) => { totals[hour] += value; });
-    return totals.map((value) => value / model.buckets.size);
+    let sum = 0;
+    for (const entry of model.windows.values()) sum += entry.meanPowerW;
+    return sum / model.windows.size;
   }
   const target = temperatureBucket(temperature);
   let best = null;
   let bestDistance = Infinity;
-  for (const [bucket, hourly] of model.buckets.entries()) {
+  for (const [bucket, entry] of model.windows.entries()) {
     const distance = Math.abs(bucket - target);
-    if (distance < bestDistance) { bestDistance = distance; best = hourly; }
+    if (distance < bestDistance) { bestDistance = distance; best = entry.meanPowerW; }
   }
   return best;
 }
 
 // Erwartete Funktionslast (kWh) einer Stunde eines Prognosetages: Summe über
-// alle Funktionen – Wochentagsprofil bzw. Temperatur-Bucket bei Heizung / Klima.
+// alle Funktionen – Wochentagsprofil bzw. bei Heizung / Klima die erwartete
+// Leistung des Temperaturfensters, aus der der Verbrauch errechnet wird
+// (kWh = W / 1000 × Stunden).
 function functionsLoadForHour(models, forecast, dateKey, hour, durationHours = 1) {
   if (!models) return 0;
   const weekday = weekdayForDateKey(dateKey);
@@ -354,8 +392,8 @@ function functionsLoadForHour(models, forecast, dateKey, hour, durationHours = 1
     const model = models[fn];
     if (!model) continue;
     if (model.type === 'temperature') {
-      const hourly = nearestBucketHourly(model, forecastTemperatureForHour(forecast, dateKey, hour));
-      if (hourly) total += hourly[hour] || 0;
+      const powerW = nearestWindowPower(model, forecastTemperatureForHour(forecast, dateKey, hour));
+      if (powerW != null) total += powerW / 1000; // erwartete Leistung → kWh dieser Stunde
     } else if (model.hourlyByWeekday) {
       total += model.hourlyByWeekday[weekday][hour] || 0;
     }
@@ -372,7 +410,7 @@ function dayKeyDiff(a, b) {
 module.exports = {
   FUNCTIONS, FUNCTION_KEYS, TEMPERATURE_BUCKET_SIZE,
   TEMPERATURE_BUCKET_MIN, TEMPERATURE_BUCKET_MAX, TEMPERATURE_BUCKET_BELOW,
-  TEMPERATURE_BUCKET_ALPHA,
+  TEMPERATURE_POWER_DAYS,
   isFunctionKey, functionLabel, effectiveFunction, functionPowerSums,
   currentFunctionPowerW, recordFunctionSamples, readFunctionValues,
   loadFunctionModels, functionsLoadForHour, temperatureBucket,

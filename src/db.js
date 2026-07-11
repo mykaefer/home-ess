@@ -546,6 +546,21 @@ function openDatabase() {
         last_sample_ts INTEGER
       )`
     );
+    // Heizung / Klima nach Außentemperatur: je 1-°C-Fenster bis zu 30 Messtage,
+    // pro Tag die zeitgewichtete mittlere Leistung (W) bei dieser Temperatur.
+    // Bewusst KEINE lange Historie – ein Fenster wird nur an Tagen belegt, an denen
+    // diese Außentemperatur real auftrat (Sommer-Kühlkurve bleibt im Winter stehen).
+    // Der Balken der Prognose-Datenbasis zeigt das 30-Tage-Mittel, die
+    // Markierungslinie den Wert des aktuellen Tages.
+    db.run(
+      `CREATE TABLE IF NOT EXISTS mess_schalt_temperature_power (
+        bucket INTEGER NOT NULL,
+        day_key TEXT NOT NULL,
+        avg_power_w REAL NOT NULL DEFAULT 0,
+        weight_seconds REAL NOT NULL DEFAULT 0,
+        PRIMARY KEY (bucket, day_key)
+      )`
+    );
     // Energiefluss-Exporte: benannte, öffentlich abrufbare Live-Ansichten des
     // Energiefluss-Diagramms (Theme hell/dunkel). Der aus dem Namen abgeleitete
     // Slug bildet die Export-URL (/energiefluss/export/<slug>).

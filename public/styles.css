@@ -2319,11 +2319,19 @@ h2 .cmd-confirm { font-size: 13px; vertical-align: middle; }
 
 /* Heizung/Klima-Bedarf über die Temperaturfenster (5-°C-Bereiche). */
 .tb-chart { margin-top: 4px; }
-.tb-chart-bars { display: flex; align-items: flex-end; gap: 3px; height: 120px; border-bottom: 1px solid #e2e8f0; }
+/* Platz unter der Nulllinie für die absolut positionierten Tick-Beschriftungen,
+   damit die Zahlen nicht im Balkenfluss liegen und beschriftete Balken nicht
+   nach oben verschieben. */
+.tb-chart-bars { display: flex; align-items: flex-end; gap: 3px; height: 120px; margin-bottom: 20px; border-bottom: 1px solid #e2e8f0; }
 .tb-cell { position: relative; flex: 1 1 0; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; }
 .tb-bar { display: block; width: 70%; max-width: 20px; min-height: 1px; border-radius: 2px 2px 0 0; }
 .tb-cell--empty .tb-bar { background: repeating-linear-gradient(135deg, rgba(148,163,184,0.18) 0 3px, transparent 3px 6px) !important; }
-.tb-tick { margin-top: 4px; font-size: 10px; color: #94a3b8; white-space: nowrap; }
+/* Markierungslinie: mittlere Leistung des aktuellen Tages im Fenster (über der
+   Balkenbreite, damit sie sich klar vom 30-Tage-Balken abhebt). */
+.tb-mark { position: absolute; left: 0; right: 0; height: 0; border-top: 2px dashed #0f172a; pointer-events: none; }
+/* Tick unter der Nulllinie verankern: alle Balken teilen dieselbe Basislinie,
+   unabhängig davon, ob das Fenster beschriftet ist. */
+.tb-tick { position: absolute; bottom: -16px; left: 0; right: 0; text-align: center; font-size: 10px; color: #94a3b8; white-space: nowrap; }
 .tb-axis { margin-top: 6px; font-size: 11px; }
 
 .forecast-details { margin-top: 20px; align-items: start; }

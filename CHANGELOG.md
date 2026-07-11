@@ -3,6 +3,42 @@
 Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [1.2.3] — 2026-07-11
+
+### Behoben
+
+- **Wallbox: Neustart/Reconnect schaltet die Steuerung nicht mehr ungewollt auf
+  „Aus".** Bei jedem MQTT-(Wieder-)Verbindungsaufbau spielt der Broker alle
+  retained-Werte erneut ein — auch den des Steuer-Topics, u. U. mit dem echten
+  (abweichenden) Gerätezustand. Der bisherige Neustart-Schutz entschärfte nur den
+  allerersten Wert nach Prozessstart; ein späterer Adapter-Reconnect wurde als
+  „Nutzer hat ausgeschaltet" fehlgedeutet und (seit der Persistenz-Änderung in
+  1.2.1/1.2.2) über Neustarts hinweg festgehalten. Die Steuerschleife öffnet nach
+  jedem Reconnect (Connect-Epoch aus dem MQTT-Client) je Box ein kurzes
+  **Re-Baseline-Fenster (45 s)**: der erneut eingespielte Steuer-Topic-Wert gilt
+  nur als Ausgangszustand, nie als Nutzerschaltung. Damit bleibt der Schaltzustand
+  über Neustart, Adapter-Reconnect und Topic-Refresh unverändert (auto bleibt auto,
+  aus bleibt aus).
+- **Prognose: Balken des Heizung/Klima-Diagramms sitzen auf einer Nulllinie.** Die
+  Achsen-Beschriftungen lagen im Balkenfluss und verschoben beschriftete Balken
+  nach oben; sie sind jetzt unter der Nulllinie verankert.
+
+### Geändert
+
+- **Prognose: Heizung/Klima lernt mittlere Leistung je 1-°C-Temperaturfenster.**
+  Die Auflösung der Außentemperaturfenster wurde von **5 °C auf 1 °C** verfeinert.
+  Gelernt und geplant wird jetzt die **mittlere Leistung (W)** je Fenster statt der
+  Energie: je Fenster bis zu **30 Messtage** (pro Tag die zeitgewichtete mittlere
+  Leistung), der Modellwert ist deren **Mittel** — bewusst begrenzt statt eines
+  dauerhaften Mittelwerts, damit die Anpassung nicht mit der Zeit abflacht. Ein
+  Fenster wird nur an Tagen belegt, an denen diese Außentemperatur real auftrat, so
+  überschreibt die Sommer- die Winterkurve nicht (neue Tabelle
+  `mess_schalt_temperature_power`; ersetzt das frühere EWMA-Bucket-Lernen aus dem
+  Stunden-Energielog). Die Prognose errechnet daraus je Stunde nach der
+  prognostizierten Außentemperatur den erwarteten Verbrauch
+  (`kWh = W/1000 × Stunden`). Das Diagramm zeigt je Fenster das **30-Tage-Mittel
+  (W)** als Balken und den **heutigen Wert** als Markierungslinie.
+
 ## [1.2.2] — 2026-07-10
 
 ### Behoben

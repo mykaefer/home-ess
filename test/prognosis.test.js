@@ -270,14 +270,18 @@ test('gelernte Funktionslasten werden je Stunde separat aufgeschlagen', () => {
   const tuesday = 2; // 2026-06-30 ist ein Dienstag
   kochenByWeekday[tuesday][12] = 1.5;
   input.model.functionModels = {
-    heizung_klima: { type: 'temperature', buckets: new Map([[30, (() => { const h = Array(24).fill(0); h[14] = 2; return h; })()]]) },
+    heizung_klima: { type: 'temperature', windows: new Map([[31, { meanPowerW: 2000, days: 1, todayPowerW: null }]]) },
     kochen: { type: 'weekday', hourlyByWeekday: kochenByWeekday },
   };
   input.forecast.days.push({ dateKey: '2026-06-30', label: 'Morgen', totalKwh: 0 });
-  input.forecast.hours = [{ dateKey: '2026-06-30', hour: 14, kwh: 0, temperature: 31 }];
+  // Ganztägig 31 °C prognostiziert → Heizfenster 31 (2000 W) → 2,0 kWh je Stunde.
+  input.forecast.hours = Array.from({ length: 24 }, (_, hour) =>
+    ({ dateKey: '2026-06-30', hour, kwh: 0, temperature: 31 }));
   const result = simulateDays(input);
-  assert.equal(result.days[1].functionsKwh, 3.5);
-  assert.equal(result.days[1].loadKwh, 5.5);
+  // Heizung 24 × 2,0 kWh (temperaturabhängig, jede Stunde) + Kochen 1,5 kWh (nur 12 Uhr).
+  assert.equal(result.days[1].functionsKwh, 49.5);
+  // Haus-Grundlast (2,0 kWh um 12 Uhr) + Funktionen = 51,5 kWh.
+  assert.equal(result.days[1].loadKwh, 51.5);
 });
 
 test('Batteriesimulation respektiert Mindest-SoC', () => {
@@ -464,35 +468,43 @@ test('ungelernte Wochentage erhalten Kurve und Ziel des jüngsten Lerntags', asy
 
 const { renderHeatingDemandChart } = require('../src/views/prognosis');
 
-function heatingWindows({ samples = 0, dailyKwh = 0 } = {}) {
+function heatingWindows({ days = 0, avgPowerW = 0, todayPowerW = null } = {}) {
   // Nur das erste Fenster mit Werten belegen; der Rest bleibt leer.
-  return [{ key: -25, below: true, min: null, max: -20, label: '< -20 °C', samples, dailyKwh }]
-    .concat(Array.from({ length: 15 }, (_, i) => ({ key: i * 5, min: i * 5, max: i * 5 + 5, label: '', samples: 0, dailyKwh: 0 })));
+  return [{ key: -21, below: true, min: null, max: -20, label: '< -20 °C', days, avgPowerW, todayPowerW }]
+    .concat(Array.from({ length: 15 }, (_, i) => ({ key: i * 5, min: i * 5, max: i * 5 + 5, label: '', days: 0, avgPowerW: 0, todayPowerW: null })));
 }
 
-test('renderHeatingDemandChart zeigt das Diagramm bei vorhandener Messung (auch 0 kWh)', () => {
+test('renderHeatingDemandChart zeigt das Diagramm bei vorhandenem Messtag (auch 0 W)', () => {
   const html = renderHeatingDemandChart({
-    heatingDemand: heatingWindows({ samples: 3, dailyKwh: 0 }),
+    heatingDemand: heatingWindows({ days: 3, avgPowerW: 0 }),
     heatingTemperatureAvailable: true,
   });
   assert.ok(html.includes('tb-chart'));       // Diagramm gerendert …
-  assert.ok(!html.includes('Noch keine Bedarfskurve')); // … kein Platzhalter.
+  assert.ok(!html.includes('Noch keine Leistungskurve')); // … kein Platzhalter.
+});
+
+test('renderHeatingDemandChart zeigt die heutige Markierungslinie', () => {
+  const html = renderHeatingDemandChart({
+    heatingDemand: heatingWindows({ days: 5, avgPowerW: 1200, todayPowerW: 800 }),
+    heatingTemperatureAvailable: true,
+  });
+  assert.ok(html.includes('tb-mark'));        // Markierungslinie für den heutigen Wert.
 });
 
 test('renderHeatingDemandChart zeigt das Diagramm bei vorhandener Temperatur ohne Messdaten', () => {
   const html = renderHeatingDemandChart({
-    heatingDemand: heatingWindows({ samples: 0, dailyKwh: 0 }),
+    heatingDemand: heatingWindows({ days: 0, avgPowerW: 0 }),
     heatingTemperatureAvailable: true,
   });
   assert.ok(html.includes('tb-chart'));
-  assert.ok(!html.includes('Noch keine Bedarfskurve'));
+  assert.ok(!html.includes('Noch keine Leistungskurve'));
 });
 
 test('renderHeatingDemandChart zeigt den Platzhalter nur ohne Temperatur UND ohne Messdaten', () => {
   const html = renderHeatingDemandChart({
-    heatingDemand: heatingWindows({ samples: 0, dailyKwh: 0 }),
+    heatingDemand: heatingWindows({ days: 0, avgPowerW: 0 }),
     heatingTemperatureAvailable: false,
   });
-  assert.ok(html.includes('Noch keine Bedarfskurve'));
+  assert.ok(html.includes('Noch keine Leistungskurve'));
   assert.ok(!html.includes('tb-chart'));
 });

@@ -192,13 +192,18 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
   Wallbox, Poolpumpen
   und funktionszugeordnete Messen-+-Schalten-Geräte (Licht, Waschen, Warmwasser,
   Heizung / Klima, Kochen) werden ebenfalls aus dem reinen Hausbedarf entfernt und
-  anschließend separat eingeplant — Heizung / Klima über Stundenprofile je
-  energiegewichteter Stundentemperatur in festen 5-°C-Fenstern (unterer
-  Sammelbereich **< -20 °C**, oberer **> 50 °C**), die übrigen Funktionen je
-  Wochentag. Der Heizungs-/Klimabedarf wird **je Prognosestunde** nach der
-  prognostizierten Außentemperatur eingeplant (nicht im Tagesdurchschnitt) und
-  auf der Prognoseseite unter der Datenbasis als **Balkendiagramm über die
-  Temperaturfenster** dargestellt. E-Auto-Ladung wird ausschließlich aus dem aktuellen Fahrzeugbedarf
+  anschließend separat eingeplant — Heizung / Klima als **mittlere Leistung (W)
+  je 1-°C-Außentemperaturfenster** (unterer Sammelbereich **< -20 °C**, oberer
+  **> 50 °C**), die übrigen Funktionen je Wochentag. Je Fenster werden bis zu
+  **30 Messtage** vorgehalten (pro Tag die mittlere Leistung bei dieser
+  Temperatur); der Modellwert ist deren Mittel. Ein Fenster wird nur an Tagen
+  belegt, an denen diese Außentemperatur real auftrat, sodass die Sommer- die
+  Winterkurve nicht überschreibt. Der Heizungs-/Klimabedarf wird **je
+  Prognosestunde** aus der Fensterleistung nach der prognostizierten
+  Außentemperatur zu erwartetem Verbrauch errechnet (`kWh = W/1000 × Stunden`,
+  nicht im Tagesdurchschnitt) und auf der Prognoseseite unter der Datenbasis als
+  **Balkendiagramm über die Temperaturfenster** dargestellt (Balken =
+  30-Tage-Mittel, Markierungslinie = heutiger Wert). E-Auto-Ladung wird ausschließlich aus dem aktuellen Fahrzeugbedarf
   (Fahrzeug-SoC) und der gewählten Ladestrategie geplant; historische
   Ladezeiten erzeugen keine Lastprognose.
   Ungelernte Wochentage übernehmen ausschließlich die Lernkurve des jüngsten

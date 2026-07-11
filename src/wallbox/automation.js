@@ -45,6 +45,7 @@ function boxState(id) {
     s = {
       output: null, changedAt: 0, setpointW: null, lastModeSync: null,
       lastBrokerStatus: null, brokerStatusInitialized: false, expectedBrokerStatus: null,
+      brokerRebaselineUntil: null,
       manualFull: false, manualFullSawCharging: false,
       manualOff: false, manualOffDay: '', lastTodayKey: '',
       chargeStartedAt: null, restartUntil: 0, restartAttempts: 0,
@@ -170,6 +171,32 @@ async function adoptModeSync(db, box, cache, s) {
 }
 
 let _knownConsumers = new Set();
+// Zuletzt gesehene MQTT-Verbindungs-Epoche. Bei einem Reconnect (Epoch-Wechsel)
+// spielt der Broker alle retained-Werte erneut ein – auch den des Steuer-Topics.
+// Dieser wiederholte Wert darf NICHT als Nutzerschaltung gelten (Regel 3: ein
+// Reconnect/Refresh ändert den Schaltzustand nicht). Wir machen deshalb pro Box
+// die Baseline-Erkennung wieder scharf: der nächste Steuer-Topic-Wert wird – wie
+// nach einem Prozessstart – nur als Ausgangszustand übernommen.
+let _lastConnectEpoch = mqttClient.getConnectEpoch();
+
+// Nach einem Reconnect ein kurzes Fenster öffnen, in dem jeder Steuer-Topic-Wert
+// nur als Ausgangszustand übernommen wird (nie als Nutzerschaltung). Das Fenster
+// muss länger als ein Tick-Intervall sein, weil der neu eingespielte (evtl.
+// abweichende) Gerätewert erst einen oder zwei Ticks nach dem 'connect' eintrifft;
+// ein reines Einmal-Flag würde sonst den noch gecachten Altwert als Baseline
+// verbrauchen und wieder scharf schalten. manualOff/manualFull und der
+// Schaltausgang bleiben unverändert erhalten (Regel 3).
+const RECONNECT_REBASELINE_MS = 45 * 1000;
+function rearmBrokerBaselineOnReconnect(now) {
+  const epoch = mqttClient.getConnectEpoch();
+  if (epoch === _lastConnectEpoch) return;
+  _lastConnectEpoch = epoch;
+  for (const s of state.values()) {
+    s.brokerStatusInitialized = false;
+    s.expectedBrokerStatus = null;
+    s.brokerRebaselineUntil = now + RECONNECT_REBASELINE_MS;
+  }
+}
 
 async function tick(db) {
   if (!isEnabled('wallbox')) {
@@ -181,6 +208,10 @@ async function tick(db) {
 
   const cache = mqttClient.getCache();
   const now = Date.now();
+  // Vor jeder Auswertung prüfen, ob zwischenzeitlich ein Reconnect lag; dann ein
+  // Fenster öffnen, in dem der erneut eingespielte Steuer-Topic-Wert nur als
+  // Ausgangszustand übernommen und nicht als Nutzerschaltung gewertet wird (Regel 3).
+  rearmBrokerBaselineOnReconnect(now);
   const boxes = await listWallboxes(db);
   const mqttConfig = await new Promise((resolve) => loadMqttConfig(db, resolve));
   const calendar = localCalendar(cache, mqttConfig.timezone, new Date(now));

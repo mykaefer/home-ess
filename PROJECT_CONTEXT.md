@@ -366,8 +366,10 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   Wallbox-Zählerdelta und Haus-Sample laufen im
   selben Takt; E-Auto-Energie wird nur aus angeschlossenem Fahrzeug, Live-SoC und
   Ladestrategie geplant, nicht aus historischen Ladezeiten. Heizung / Klima wird
-  separat nach energiegewichteter Stundentemperatur in 5-°C-Fenstern gelernt und
-  anhand der prognostizierten Außentemperatur zugeschlagen. Je Prognosetag zeigt die Seite ein
+  separat als **mittlere Leistung (W) je 1-°C-Außentemperaturfenster** gelernt
+  (bis zu 30 Messtage je Fenster, Modellwert = deren Mittel) und anhand der
+  prognostizierten Außentemperatur je Stunde zu erwartetem Verbrauch
+  (`kWh = W/1000 × Stunden`) umgerechnet. Je Prognosetag zeigt die Seite ein
   24-h-Stundenprofil-Balkendiagramm (Soll = Tagesziel × Wochentagskurve); bereits
   gelernte Stunden von heute erscheinen als Ist-Balken in abweichender Farbe mit
   Soll-Marke je Stunde (`model.todayByHour`). Die Ergebnisse sind als `prognose.*` im
@@ -417,15 +419,22 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   ersetzt das frühere Klimatisierungsmodell: Geräte/Gruppen mit Funktion (Licht,
   Waschen, Warmwasser, Heizung / Klima, Kochen) werden minütlich zu
   Stundenenergien integriert (plausible Intervalle ≤ 5 min, analog Lernmodell)
-  und in der Simulation je Stunde aufgeschlagen — Heizung / Klima nach
-  Außentemperatur-Buckets in 5-°C-Schritten (nächstgelegener gelernter Bucket,
-  Prognosetemperatur aus Open-Meteo), die übrigen Funktionen nach Wochentag.
-  Die Temperatur-Buckets werden je Fenster/Stunde als **gleitender Mittelwert
-  (EWMA)** über die Messreihe nachgezogen statt hart überschrieben (kleines
-  Alpha = träge; über die Messreihe, nicht den Kalender, damit ein nur im Winter
-  belegtes Fenster über den Sommer nicht „vergisst"). Eine gemessene **0,0 kWh**
-  ist dabei eine gültige Beobachtung des Fensters; das Bedarfsdiagramm erscheint,
-  sobald Messwerte in ein Fenster einfließen oder eine Außentemperatur vorliegt.
+  und in der Simulation je Stunde aufgeschlagen — die übrigen Funktionen nach
+  Wochentag. **Heizung / Klima** wird abweichend als **mittlere Leistung (W) je
+  1-°C-Außentemperaturfenster** gelernt (`mess_schalt_temperature_power`): je
+  Fenster bis zu **30 Messtage**, pro Tag die zeitgewichtete mittlere Leistung;
+  der Modellwert ist deren **Mittel** (bewusst begrenzt statt dauerhaftem
+  Mittelwert, damit die Anpassung nicht mit der Zeit abflacht). Ein Fenster wird
+  nur an Tagen belegt, an denen diese Außentemperatur real auftrat — dadurch kann
+  der Sommer die Winterkurve (und umgekehrt) nicht überschreiben. In der Prognose
+  liefert das nächstgelegene gelernte Fenster (Prognosetemperatur aus Open-Meteo)
+  die erwartete Leistung, aus der der Stundenverbrauch errechnet wird
+  (`kWh = W/1000 × Stunden`). Eine gemessene **0 W** ist dabei eine gültige
+  Beobachtung des Fensters; das Leistungsdiagramm erscheint, sobald ein Messtag in
+  ein Fenster einfließt oder eine Außentemperatur vorliegt. Der Balken zeigt das
+  30-Tage-Mittel, eine Markierungslinie den Wert des aktuellen Tages. Das
+  Stunden-Energielog (`mess_schalt_function_hourly`) speist dieses Heizmodell
+  **nicht**; es dient nur der Jahres-Grundlastkorrektur und der Tagesanzeige.
   Persistente Verhaltensmodelle (`prognosis_config.behavior_model/_active`):
   `grid_parallel` bewertet ausschließlich Reserve und Netzbedarf bis zum nächsten
   Ladebeginn; spätere Tage sind wegen des verfügbaren Netzes irrelevant und
@@ -609,7 +618,14 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
       möglich falsch-negativ. Ist laut Plan oder Anforderung eine Ladung erforderlich, wird
       immer eingeschaltet. Manuelle Schaltungen werden ausschließlich über das Steuer-Topic
       erkannt. Erwartete Readbacks eigener Automatikbefehle werden konsumiert und nicht
-      als Nutzerwunsch gewertet; das Status-Topic ist reiner Ist-Zustand.
+      als Nutzerwunsch gewertet; das Status-Topic ist reiner Ist-Zustand. **Nach jedem
+      MQTT-(Wieder-)Verbindungsaufbau** (Connect-Epoch aus dem MQTT-Client) öffnet die
+      Steuerschleife je Box ein kurzes **Re-Baseline-Fenster** (45 s): der erneut
+      eingespielte retained-Steuer-Topic-Wert wird nur als Ausgangszustand übernommen,
+      nie als Nutzerschaltung. Damit ändert ein Neustart, Adapter-Reconnect oder
+      Topic-Refresh den Schaltzustand nicht (auto bleibt auto, aus bleibt aus) — der
+      Broker liefert beim Reconnect alle retained-Werte erneut, u. U. mit dem echten
+      Gerätezustand, was sonst als „Nutzer hat geschaltet" fehlgedeutet würde.
     - *Nächster Ladebeginn*: wird gerade nicht geladen, übernimmt die Automatik den
       Ladebeginn aus dem gemeinsamen Mehr-Wallbox-Vorausplan. `predictNextChargeStart`
       bleibt Fallback und behandelt insbesondere die manuelle Sperre. Die Steuerschleife legt
@@ -935,9 +951,15 @@ MQTT.md                   Referenz: ioBroker-MQTT-Regeln
   (heute/Jahr/Vorjahr).
 - `mess_schalt_function_hourly(function_key, day_key, hour, consumption_kwh,
   temperature)` + `mess_schalt_function_state(id=1, last_sample_ts)` — je Funktion
-  und Stunde integrierte Energie samt maximaler Außentemperatur der Stunde;
-  Grundlage der Funktions-Stundenprofile der Prognose (Heizung / Klima nach
-  5-°C-Temperatur-Buckets, übrige Funktionen nach Wochentag). 400 Tage Aufbewahrung.
+  und Stunde integrierte Energie samt energiegewichteter Außentemperatur der
+  Stunde; Grundlage der Wochentags-Stundenprofile der übrigen Funktionen (400 Tage
+  Aufbewahrung). Speist das Heizmodell **nicht** mehr — dient nur Jahres-Grundlast
+  und Tagesanzeige.
+- `mess_schalt_temperature_power(bucket, day_key, avg_power_w, weight_seconds,
+  PRIMARY KEY(bucket, day_key))` — Heizung / Klima nach Außentemperatur: je
+  1-°C-Fenster bis zu **30 Messtage**, pro Tag die zeitgewichtete mittlere Leistung
+  (W). Modellwert = Mittel der Messtage; ältere Tage je Fenster werden verworfen.
+  Ein Fenster wird nur an Tagen mit real aufgetretener Temperatur belegt.
 - `battery_energy_state(id=1, day_charge/discharge_kwh, week/month/year_charge/
   discharge_offset, previous_year_charge/discharge_total, last_power_ts,
   last_rollover_date, week/month/year_key)` — per Leistungsintegration erfasste

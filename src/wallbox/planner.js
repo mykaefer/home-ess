@@ -213,6 +213,16 @@ function decideWallboxAction(box, state, ctx) {
   const now = ctx.now;
   const settleOk = !state.changedAt || (now - state.changedAt) >= SETTLE_MS;
 
+  // Reconnect-Fenster: Nach einem MQTT-Wiederverbindungsaufbau spielt der Broker
+  // alle retained-Werte erneut ein – auch den des Steuer-Topics, u. U. mit dem
+  // echten (abweichenden) Gerätezustand. Solange das Fenster offen ist, wird jeder
+  // Steuer-Topic-Wert nur als Ausgangszustand übernommen und NIE als Nutzerschaltung
+  // gewertet (Regel 3: ein Reconnect/Refresh ändert den Schaltmodus nicht).
+  const rebaselining = state.brokerRebaselineUntil != null && now < state.brokerRebaselineUntil;
+  if (state.brokerRebaselineUntil != null && now >= state.brokerRebaselineUntil) {
+    state.brokerRebaselineUntil = null;
+  }
+
   // Den ersten Broker-Wert nach einem Prozessstart nur als Ausgangszustand
   // übernehmen. Andernfalls würde eine bereits laufende Ladung fälschlich als
   // manuelles Einschalten gelten und bis 99 % weiterladen.
@@ -224,7 +234,8 @@ function decideWallboxAction(box, state, ctx) {
     state.brokerStatusInitialized = true;
     state.lastBrokerStatus = ctx.brokerStatus;
     if (state.output == null) state.output = ctx.brokerStatus;
-  } else if (ctx.brokerStatus && !state.brokerStatusInitialized) {
+  } else if (ctx.brokerStatus && (!state.brokerStatusInitialized || rebaselining)) {
+    // Erstwert nach (Wieder-)Verbindung: nur Ausgangszustand, keine Bedienerkennung.
     state.brokerStatusInitialized = true;
     state.lastBrokerStatus = ctx.brokerStatus;
     if (state.output == null) state.output = ctx.brokerStatus;

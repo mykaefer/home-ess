@@ -497,6 +497,34 @@ test('Manuell AUS sperrt bis Folgetag mit PV über Wallbox-Leistung', () => {
   assert.equal(d.on, true);
 });
 
+test('Reconnect/Refresh des Steuer-Topics schaltet nicht auf AUS (Regel 3)', () => {
+  const box = { id: 1, maxPowerW: 11000, setpointTopic: '' };
+  // Laufender Automatikbetrieb, Fahrzeug lädt: output='on', Baseline etabliert.
+  const s = freshState();
+  s.output = 'on';
+  s.lastBrokerStatus = 'on';
+  // Ein Reconnect hat das Baseline-Fenster geöffnet; der Broker spielt jetzt den
+  // retained-Wert '0' (Gerät meldet echten Aus-Zustand) erneut ein.
+  s.brokerRebaselineUntil = 1_040_000;
+  const d = decideWallboxAction(box, s, baseDecideCtx({
+    plan: { desiredOn: true, setpointW: null, priority: 3 },
+    brokerStatus: 'off', now: 1_000_000,
+  }));
+  // Nur Ausgangszustand übernommen, KEINE manuelle Aus-Übersteuerung.
+  assert.equal(s.manualOff, false);
+  assert.equal(s.lastBrokerStatus, 'off');
+  assert.equal(d.on, true); // Automatik lädt weiter
+
+  // Nach Ablauf des Fensters wird eine echte Nutzerschaltung wieder erkannt.
+  s.output = 'on';
+  s.lastBrokerStatus = 'on';
+  decideWallboxAction(box, s, baseDecideCtx({
+    plan: { desiredOn: true, setpointW: null, priority: 3 },
+    brokerStatus: 'off', now: 1_050_000,
+  }));
+  assert.equal(s.manualOff, true);
+});
+
 test('Umschalter AUS kehrt erst bei PV-Deckung und Hausakku-Reserve am Folgetag zurück', () => {
   const box = { id: 1, maxPowerW: 11000, setpointTopic: '' };
   const s = freshState();
