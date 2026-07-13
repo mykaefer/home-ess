@@ -51,24 +51,41 @@ function renderHourProfile(day, model, isToday) {
   const plan = Array.from({ length: 24 }, (_, hour) => Math.max(0, (Number(target) || 0) * (Number(profile[hour]) || 0)));
   const actualByHour = isToday && Array.isArray(model.todayByHour) ? model.todayByHour : null;
   const currentHour = isToday && model.local && model.local.time ? Number(model.local.time.hours) || 0 : null;
-  const max = Math.max(0.1, ...plan, ...(actualByHour || []).map((value) => Number(value) || 0));
+  // Zusätzlicher Heiz-/Kühlbedarf je Stunde (kWh), gestapelt über der Grundlast.
+  const climateByHour = Array.isArray(day.climateByHour) ? day.climateByHour : [];
+  const climate = (hour) => Math.max(0, Number(climateByHour[hour]) || 0);
+  // Skalierung schließt den gestapelten Klima-Balken ein, damit die Summe (Grundlast
+  // + Klima) je geplanter Stunde in den Rahmen passt; die Grundlast selbst bleibt unberührt.
+  const max = Math.max(
+    0.1,
+    ...plan.map((value, hour) => value + climate(hour)),
+    ...(actualByHour || []).map((value) => Number(value) || 0)
+  );
   const cells = Array.from({ length: 24 }, (_, hour) => {
     const isLearned = isToday && currentHour != null && hour < currentHour;
     const actual = isLearned ? Math.max(0, Number(actualByHour && actualByHour[hour]) || 0) : null;
     const value = isLearned ? actual : plan[hour];
     const heightPct = Math.min(100, value / max * 100);
     const planPct = Math.min(100, plan[hour] / max * 100);
+    // Klima-Anteil nur auf geplanten (noch nicht gelernten) Stunden aufsetzen.
+    const climateKwh = isLearned ? 0 : climate(hour);
+    const climatePct = Math.min(100 - heightPct, climateKwh / max * 100);
+    const climateBar = climateKwh > 0.0005
+      ? `<span class="fh-bar fh-bar--climate" style="height:${climatePct.toFixed(1)}%"></span>`
+      : '';
     const deviation = isLearned && plan[hour] > 0.01
       ? ` (${actual >= plan[hour] ? '+' : ''}${Math.round((actual / plan[hour] - 1) * 100)} %)`
       : '';
+    const climateHint = climateKwh > 0.0005 ? ` · Klima +${formatShortEnergy(climateKwh)}` : '';
     const title = isLearned
       ? `${String(hour).padStart(2, '0')} Uhr · Ist ${formatShortEnergy(actual)} · Soll ${formatShortEnergy(plan[hour])}${deviation}`
-      : `${String(hour).padStart(2, '0')} Uhr · Soll ${formatShortEnergy(plan[hour])}`;
+      : `${String(hour).padStart(2, '0')} Uhr · Soll ${formatShortEnergy(plan[hour])}${climateHint}`;
     const marker = isLearned ? `<i class="fh-plan" style="bottom:${planPct.toFixed(1)}%"></i>` : '';
-    return `<div class="fh-cell" title="${escapeHtml(title)}">${marker}<span class="fh-bar fh-bar--${isLearned ? 'ist' : 'soll'}" style="height:${heightPct.toFixed(1)}%"></span></div>`;
+    return `<div class="fh-cell" title="${escapeHtml(title)}">${marker}${climateBar}<span class="fh-bar fh-bar--${isLearned ? 'ist' : 'soll'}" style="height:${heightPct.toFixed(1)}%"></span></div>`;
   }).join('');
-  const legend = isToday
-    ? `<div class="forecast-hours-legend"><span><i class="fh-key fh-key--ist"></i>Ist (gelernt)</span><span><i class="fh-key fh-key--soll"></i>Soll (Profil)</span><span><i class="fh-key fh-key--plan"></i>Soll-Marke</span></div>`
+  const hasClimate = climateByHour.some((value) => Math.max(0, Number(value) || 0) > 0.0005);
+  const legend = (isToday || hasClimate)
+    ? `<div class="forecast-hours-legend">${isToday ? '<span><i class="fh-key fh-key--ist"></i>Ist (gelernt)</span>' : ''}<span><i class="fh-key fh-key--soll"></i>Soll (Profil)</span>${hasClimate ? '<span><i class="fh-key fh-key--climate"></i>Heizung / Klima</span>' : ''}${isToday ? '<span><i class="fh-key fh-key--plan"></i>Soll-Marke</span>' : ''}</div>`
     : '';
   return `<div class="forecast-hours">
         <div class="forecast-hours-chart">${cells}</div>
@@ -90,6 +107,7 @@ function renderDataBasisChart(model = {}) {
   const selfSeries = model.todaySelfByHour || [];
   const primarySeries = model.todayPrimaryByHour || [];
   const chosenSeries = model.todayByHour || [];
+  const incompleteSeries = model.todayIncompleteByHour || [];
   const hasAny = selfSeries.some((v) => v != null) || primarySeries.some((v) => v != null);
   if (!hasAny) {
     return `<section class="panel-card">
@@ -109,6 +127,7 @@ function renderDataBasisChart(model = {}) {
     const chosenValue = toNum(chosenSeries[h]);
     const isCurrent = h === currentHour;
     const isFuture = h > currentHour;
+    const isIncomplete = incompleteSeries[h] === true;
     const selfPct = selfValue == null ? 0 : Math.min(100, selfValue / max * 100);
     const primaryPct = primaryValue == null ? 0 : Math.min(100, primaryValue / max * 100);
     const replaced = !isCurrent && !isFuture && chosenValue != null && primaryValue != null
@@ -119,8 +138,10 @@ function renderDataBasisChart(model = {}) {
     const fmt = (v) => (v == null ? '—' : `${v.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} kWh`);
     const title = isFuture
       ? `${String(h).padStart(2, '0')} Uhr · noch offen`
-      : `${String(h).padStart(2, '0')} Uhr${isCurrent ? ' (läuft)' : ''} · Selbstzählung ${fmt(selfValue)} · Bilanz/Messung ${fmt(primaryValue)}${replaced ? ` · in Prognose: ${fmt(chosenValue)} (ersetzt)` : ''}`;
-    const cls = `db-cell${isCurrent ? ' db-cell--current' : ''}${isFuture ? ' db-cell--future' : ''}${replaced ? ' db-cell--replaced' : ''}`;
+      : isIncomplete
+        ? `${String(h).padStart(2, '0')} Uhr · keine saubere Erfassung (Sampling-Lücke) · Vortageswert eingesetzt: ${fmt(chosenValue)}`
+        : `${String(h).padStart(2, '0')} Uhr${isCurrent ? ' (läuft)' : ''} · Selbstzählung ${fmt(selfValue)} · Bilanz/Messung ${fmt(primaryValue)}${replaced ? ` · in Prognose: ${fmt(chosenValue)} (ersetzt)` : ''}`;
+    const cls = `db-cell${isCurrent ? ' db-cell--current' : ''}${isFuture ? ' db-cell--future' : ''}${replaced ? ' db-cell--replaced' : ''}${isIncomplete ? ' db-cell--incomplete' : ''}`;
     cells.push(`<div class="${cls}" title="${escapeHtml(title)}">
           <span class="db-bar db-bar--self" style="height:${selfPct.toFixed(1)}%"></span>
           <span class="db-bar db-bar--primary" style="height:${primaryPct.toFixed(1)}%"></span>
@@ -136,6 +157,7 @@ function renderDataBasisChart(model = {}) {
               <span><i class="db-key db-key--self"></i>Selbstzählung</span>
               <span><i class="db-key db-key--primary"></i>Bilanz/Messung</span>
               <span><i class="db-key db-key--mark"></i>in Prognose übernommen</span>
+              <span><i class="db-key db-key--incomplete"></i>keine Erfassung (Vortageswert)</span>
             </div>
           </div>
         </section>`;
@@ -169,6 +191,8 @@ function renderHeatingDemandChart(model = {}) {
     const value = Math.max(0, Number(w.avgPowerW) || 0);
     const pct = Math.min(100, value / max * 100);
     const empty = (Number(w.days) || 0) <= 0;
+    // Fenster mit Messtagen sind anklickbar → 24-Stunden-Kurve im Dialog.
+    const clickable = !empty;
     // Kalt (blau) → warm (rot) über die Fenster, damit die Temperaturachse sofort lesbar ist.
     const hue = Math.round(210 - (index / lastIndex) * 210);
     // Bei feiner 1-°C-Auflösung nur jedes 5. Fenster (Vielfache von 5 °C) sowie die
@@ -182,19 +206,36 @@ function renderHeatingDemandChart(model = {}) {
     const mark = hasToday
       ? `<span class="tb-mark" style="bottom:${todayPct.toFixed(1)}%" title="${escapeHtml(`${w.label} · heute Ø ${fmt(w.todayPowerW)}`)}"></span>`
       : '';
-    const title = `${w.label} · Ø ${fmt(value)}${hasToday ? ` · heute ${fmt(w.todayPowerW)}` : ''} · ${empty ? 'keine Messtage' : `${w.days} Messtag${w.days === 1 ? '' : 'e'}`}`;
-    return `<div class="tb-cell${empty ? ' tb-cell--empty' : ''}" title="${escapeHtml(title)}">
+    const title = `${w.label} · Ø ${fmt(value)}${hasToday ? ` · heute ${fmt(w.todayPowerW)}` : ''} · ${empty ? 'keine Messtage' : `${w.days} Messtag${w.days === 1 ? '' : 'e'}`}${clickable ? ' · klicken für 24-Stunden-Kurve' : ''}`;
+    return `<div class="tb-cell${empty ? ' tb-cell--empty' : ''}${clickable ? ' tb-cell--clickable' : ''}"${clickable ? ` data-heat-idx="${index}"` : ''} title="${escapeHtml(title)}">
           <span class="tb-bar" style="height:${pct.toFixed(1)}%;background:hsl(${hue} 68% 50%)"></span>
           ${mark}
           <span class="tb-tick">${tick}</span>
         </div>`;
   }).join('');
+  // Datenbasis für den Klick-Dialog: je Fenster die 24-Stunden-Leistung (Mittel der
+  // Messtage) und der heutige Stundenwert als Markierung.
+  const hourlyData = windows.map((w) => ({
+    label: w.label,
+    days: Number(w.days) || 0,
+    hourlyPowerW: Array.isArray(w.hourlyPowerW) ? w.hourlyPowerW.map((v) => (v == null ? null : Number(v))) : Array(24).fill(null),
+    hourlyDays: Array.isArray(w.hourlyDays) ? w.hourlyDays.map((v) => Number(v) || 0) : Array(24).fill(0),
+    todayHourlyPowerW: Array.isArray(w.todayHourlyPowerW) ? w.todayHourlyPowerW.map((v) => (v == null ? null : Number(v))) : Array(24).fill(null),
+  }));
   return `<section class="panel-card">
           ${head}
           <div class="tb-chart">
             <div class="tb-chart-bars">${cells}</div>
-            <div class="tb-axis muted">Außentemperatur (°C) · Balkenhöhe = mittlere Leistung (W) · Markierung = heutiger Wert</div>
+            <div class="tb-axis muted">Außentemperatur (°C) · Balkenhöhe = mittlere Leistung (W) über alle 24 Stunden · Markierung = heutiger Wert · Balken anklicken für die 24-Stunden-Kurve</div>
           </div>
+          <dialog id="heatingHourDialog" class="value-dialog">
+            <div class="dialog-form">
+              <div class="dialog-hero"><h3 id="heatingHourTitle">24-Stunden-Kurve</h3><p id="heatingHourSub" class="muted"></p></div>
+              <div id="heatingHourChart"></div>
+              <div class="button-row"><button type="button" onclick="document.getElementById('heatingHourDialog').close()">Schließen</button></div>
+            </div>
+          </dialog>
+          <script type="application/json" id="heatingHourData">${JSON.stringify(hourlyData).replace(/</g, '\\u003c')}</script>
         </section>`;
 }
 
@@ -370,6 +411,55 @@ function renderPrognosis({ prognosis, message = '', error = '' } = {}) {
       }
     });
 
+    // Klick auf einen Temperatur-Balken öffnet die 24-Stunden-Kurve dieses Fensters:
+    // je Tagesstunde die mittlere gelernte Leistung, plus Markierung des heutigen Werts.
+    (function () {
+      var dataEl = document.getElementById('heatingHourData');
+      var dialog = document.getElementById('heatingHourDialog');
+      if (!dataEl || !dialog) return;
+      var windows = [];
+      try { windows = JSON.parse(dataEl.textContent || '[]'); } catch (e) { windows = []; }
+      function fmtW(value) { return Math.round(Number(value) || 0).toLocaleString('de-DE') + ' W'; }
+      function renderHourChart(win) {
+        var hourly = win.hourlyPowerW || [];
+        var today = win.todayHourlyPowerW || [];
+        var days = win.hourlyDays || [];
+        var max = 1;
+        for (var h = 0; h < 24; h += 1) {
+          if (hourly[h] != null) max = Math.max(max, hourly[h]);
+          if (today[h] != null) max = Math.max(max, today[h]);
+        }
+        var bars = '';
+        for (var i = 0; i < 24; i += 1) {
+          var value = hourly[i];
+          var empty = value == null;
+          var pct = empty ? 0 : Math.min(100, Math.max(0, value) / max * 100);
+          var hasToday = today[i] != null;
+          var todayPct = hasToday ? Math.min(100, Math.max(0, today[i]) / max * 100) : 0;
+          var hue = 200 - Math.round(i / 23 * 160); // Nacht (kühl) → Tag (warm)
+          var mark = hasToday ? '<span class="hc-mark" style="bottom:' + todayPct.toFixed(1) + '%"></span>' : '';
+          var tip = String(i).padStart(2, '0') + ' Uhr · ' + (empty ? 'keine Messdaten' : ('Ø ' + fmtW(value) + ' · ' + (days[i] || 0) + ' Messtag' + ((days[i] || 0) === 1 ? '' : 'e')));
+          if (hasToday) tip += ' · heute ' + fmtW(today[i]);
+          var tick = (i % 6 === 0) ? String(i) : '';
+          bars += '<div class="hc-cell' + (empty ? ' hc-cell--empty' : '') + '" title="' + tip.replace(/"/g, '&quot;') + '">'
+            + '<span class="hc-bar" style="height:' + pct.toFixed(1) + '%;background:hsl(' + hue + ' 68% 50%)"></span>'
+            + mark + '<span class="hc-tick">' + tick + '</span></div>';
+        }
+        return '<div class="hc-chart"><div class="hc-chart-bars">' + bars + '</div>'
+          + '<div class="hc-axis muted">Tagesstunde (0–23 Uhr) · Balkenhöhe = mittlere Leistung (W) · Markierung = heutiger Wert</div></div>';
+      }
+      document.querySelectorAll('[data-heat-idx]').forEach(function (cell) {
+        cell.addEventListener('click', function () {
+          var win = windows[Number(cell.getAttribute('data-heat-idx'))];
+          if (!win) return;
+          document.getElementById('heatingHourTitle').textContent = 'Heizung / Klima · ' + win.label;
+          document.getElementById('heatingHourSub').textContent = win.days + ' Messtag' + (win.days === 1 ? '' : 'e') + ' · mittlere Leistung je Tagesstunde';
+          document.getElementById('heatingHourChart').innerHTML = renderHourChart(win);
+          if (typeof dialog.showModal === 'function') dialog.showModal();
+        });
+      });
+    })();
+
     // Prognosewerte ändern sich langsamer als Live-Leistungen. Ein Minuten-Takt
     // hält die Seite aktuell, ohne jede MQTT-Nachricht neu durchzurechnen.
     window.setTimeout(function () {
@@ -384,3 +474,4 @@ function renderPrognosis({ prognosis, message = '', error = '' } = {}) {
 module.exports = renderPrognosis;
 // Für gezielte Tests der Diagramm-Sichtbarkeit (Default-Export bleibt die View).
 module.exports.renderHeatingDemandChart = renderHeatingDemandChart;
+module.exports.renderHourProfile = renderHourProfile;

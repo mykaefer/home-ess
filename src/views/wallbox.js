@@ -94,7 +94,7 @@ function topicField(id, name, label, value, optional, placeholder) {
 
 function renderBoxDialog({ dialogError, dialogValues, dialogMode, editingBoxId, gridControlEnabled }) {
   const v = dialogValues || {
-    name: '', maxPowerW: 11000, batteryCapacityKwh: 50, commandTopic: '', statusTopic: '',
+    name: '', maxPowerW: 11000, batteryCapacityKwh: 50, commandTopic: '', controlSyncTopic: '', statusTopic: '',
     powerTopic: '', powerUnit: 'W', counterTopic: '', counterUnit: 'kWh', setpointTopic: '',
     pluggedTopic: '', socTopic: '', modeSyncTopic: '', priorityPrivate: 5, priorityBusiness: 3,
     priorityFull: 4, loadShedPhase: 'three_phase', minChargePercent: 30, minChargeBusinessPercent: 100,
@@ -128,9 +128,10 @@ function renderBoxDialog({ dialogError, dialogValues, dialogMode, editingBoxId, 
 
             <div class="dialog-section">
               <div class="dialog-section-head"><h4>MQTT-Topics</h4>
-                <p class="muted">Nur das Steuer-Topic ist erforderlich. Ohne Status-Topic dient das Steuer-Topic als Ist-Stand. Ohne Zähler-Topic wird der Verbrauch aus der Leistung abgeleitet.</p></div>
+                <p class="muted">Nur das Steuer-Topic ist erforderlich. Das <strong>Steuer-Topic</strong> ist reiner Aktor (homeESS schaltet die Wallbox hierüber). Das optionale <strong>Steuerung-Sync-Topic</strong> spiegelt bidirektional den An/Aus-Zustand: homeESS schreibt es beim eigenen Schalten mit; eine externe Änderung (am entfernten Gerät) gilt als Bedienbefehl (EIN → Vollladen, AUS während der Ladung → aus bis Folgetag). Ohne Status-Topic dient Sync- bzw. Steuer-Topic als Ist-Stand.</p></div>
               <div class="dialog-grid dialog-grid--two">
-                ${topicField('wbCommand', 'commandTopic', 'Steuer-Topic (an/aus)', v.commandTopic, false, 'z.B. wallbox.0.enabled')}
+                ${topicField('wbCommand', 'commandTopic', 'Steuer-Topic (Aktor, an/aus)', v.commandTopic, false, 'z.B. wallbox.0.enabled')}
+                ${topicField('wbControlSync', 'controlSyncTopic', 'Steuerung-Sync-Topic (an/aus)', v.controlSyncTopic, true, 'z.B. wallbox.0.switch')}
                 ${topicField('wbStatus', 'statusTopic', 'Status-Topic', v.statusTopic, true, 'z.B. wallbox.0.charging')}
                 <label class="field-block" for="wbPower"><span>Leistungs-Topic <span class="pool-optional">(optional)</span></span>
                   <div style="display:flex;gap:8px;">
@@ -145,8 +146,9 @@ function renderBoxDialog({ dialogError, dialogValues, dialogMode, editingBoxId, 
                 ${topicField('wbSetpoint', 'setpointTopic', 'Soll-Leistungs-Topic', v.setpointTopic, true, 'z.B. wallbox.0.setpoint')}
                 ${topicField('wbPlugged', 'pluggedTopic', 'Fahrzeug-angesteckt-Topic (true/false)', v.pluggedTopic, true, 'z.B. wallbox.0.plugged')}
                 ${topicField('wbSoc', 'socTopic', 'Fahrzeug-SoC-Topic (%)', v.socTopic, true, 'z.B. wallbox.0.soc')}
-                ${topicField('wbModeSync', 'modeSyncTopic', 'Modus-Sync-Topic', v.modeSyncTopic, true, 'z.B. wallbox.0.mode')}
+                ${topicField('wbModeSync', 'modeSyncTopic', 'Modus-Sync-Topic (Ladeplan)', v.modeSyncTopic, true, 'z.B. wallbox.0.mode')}
               </div>
+              <p class="muted">Das Modus-Sync-Topic hält nur den <strong>Ladeplan</strong> bidirektional synchron: <strong>1 = Privat</strong>, <strong>2 = Beruflich</strong>, <strong>3 = Immer voll</strong>. Es schaltet die Ladung nicht ein oder aus.</p>
             </div>
 
             <div class="dialog-section">
@@ -287,6 +289,7 @@ function renderWallbox({
       document.getElementById('wbMaxPower').value = v.maxPowerW == null ? '' : v.maxPowerW;
       document.getElementById('wbCapacity').value = v.batteryCapacityKwh == null ? '' : v.batteryCapacityKwh;
       document.getElementById('wbCommand').value = v.commandTopic || '';
+      document.getElementById('wbControlSync').value = v.controlSyncTopic || '';
       document.getElementById('wbStatus').value = v.statusTopic || '';
       document.getElementById('wbPower').value = v.powerTopic || '';
       document.getElementById('wbCounter').value = v.counterTopic || '';

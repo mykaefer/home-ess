@@ -18,7 +18,7 @@ async function freshDb() {
   const db = new sqlite3.Database(':memory:');
   await dbRun(db, `CREATE TABLE prognosis_hourly_consumption (
     day_key TEXT, hour INTEGER, consumption_kwh REAL DEFAULT 0,
-    primary_kwh REAL, self_kwh REAL, reconciled INTEGER DEFAULT 0,
+    primary_kwh REAL, self_kwh REAL, reconciled INTEGER DEFAULT 0, incomplete INTEGER DEFAULT 0,
     PRIMARY KEY(day_key, hour))`);
   await dbRun(db, `CREATE TABLE prognosis_daily_consumption (
     day_key TEXT PRIMARY KEY, consumption_kwh REAL, raw_consumption_kwh REAL, completed INTEGER, updated_at INTEGER)`);

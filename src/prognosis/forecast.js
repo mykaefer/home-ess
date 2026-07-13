@@ -13,7 +13,7 @@ const { solarGeometryAt } = require('../photovoltaik/aggregation');
 const { buildWallboxModel, planWallboxSchedule, wallboxForecastForDay } = require('./wallbox-model');
 const { isEnabled } = require('../modules');
 const { loadPoolEnergyModel, poolLoadForHour } = require('../pool/energy-model');
-const { loadFunctionModels, functionsLoadForHour, summarizeTemperatureDemand } = require('../messen-schalten/functions');
+const { loadFunctionModels, functionsLoadForHour, climateLoadForHour, summarizeTemperatureDemand } = require('../messen-schalten/functions');
 
 // BDEW-nahe, geglättete Haushaltsform als reiner Kaltstart (noch kein einziger
 // abgeschlossener Lerntag). Sobald ein Tag vollständig vorliegt, dient dessen
@@ -291,7 +291,7 @@ async function buildConsumptionModelUncached(db, strom, config, cache, forecast 
   // Kalibrierung und der Ist/Soll-Darstellung auf der Prognoseseite.
   const todayHourRows = await dbAll(
     db,
-    'SELECT hour, consumption_kwh, primary_kwh, self_kwh FROM prognosis_hourly_consumption WHERE day_key = ?',
+    'SELECT hour, consumption_kwh, primary_kwh, self_kwh, incomplete FROM prognosis_hourly_consumption WHERE day_key = ?',
     [key]
   );
   const todayByHour = Array(24).fill(null);
@@ -299,6 +299,9 @@ async function buildConsumptionModelUncached(db, strom, config, cache, forecast 
   // zähler-/bilanzbasierte Quelle (primary) und die Selbstzählung (self).
   const todayPrimaryByHour = Array(24).fill(null);
   const todaySelfByHour = Array(24).fill(null);
+  // Stunden ohne saubere Erfassung (Sampling-Lücke): Wert = Vortageswert, in der
+  // Anzeige ausgegraut.
+  const todayIncompleteByHour = Array(24).fill(false);
   for (const row of todayHourRows) {
     const hourIndex = clamp(Number(row.hour) || 0, 0, 23);
     todayByHour[hourIndex] = (todayByHour[hourIndex] || 0) + (num(row.consumption_kwh) || 0);
@@ -306,6 +309,7 @@ async function buildConsumptionModelUncached(db, strom, config, cache, forecast 
     if (primaryValue != null) todayPrimaryByHour[hourIndex] = (todayPrimaryByHour[hourIndex] || 0) + primaryValue;
     const selfValue = num(row.self_kwh);
     if (selfValue != null) todaySelfByHour[hourIndex] = (todaySelfByHour[hourIndex] || 0) + selfValue;
+    if (Number(row.incomplete) === 1) todayIncompleteByHour[hourIndex] = true;
   }
   const previousHourRow = previousHour.date && dateKey(previousHour.date) === key
     ? todayHourRows.find((row) => Number(row.hour) === Number(previousHour.time.hours))
@@ -506,7 +510,7 @@ async function buildConsumptionModelUncached(db, strom, config, cache, forecast 
     weekdayProfileDays: weekdayProfileDays.map((days) => days.size), weekdayDailyCounts,
     currentWeekday, previousDayKey, previousDayKwh,
     wallboxModel, poolModel, functionModels, todayByHour,
-    todayPrimaryByHour, todaySelfByHour,
+    todayPrimaryByHour, todaySelfByHour, todayIncompleteByHour,
     // Verbrauchskurve Heizung / Klima über die Temperaturfenster (für das
     // Balkendiagramm der Prognose-Datenbasis); dieselben Fenster werden oben in
     // functionsLoadForHour je Prognosestunde nach Außentemperatur eingeplant.
@@ -676,6 +680,10 @@ function simulateDays({ forecast, model, config, batteryConfig, batteryData }) {
     // Erwartete Stundenlast des Tages (Haus + Funktionen + Wallbox + Pool) für
     // das 24-h-Balkendiagramm; bereits verstrichene Stunden von heute sind null.
     const hourlyLoadKwh = Array(24).fill(null);
+    // Nur der Heizung-/Klima-Anteil (kWh) je Stunde – als gestapelter Balken über
+    // der Grundlast im Stundenprofil. Rein additive Anzeige, die Grundlast selbst
+    // bleibt unberührt.
+    const climateByHour = Array(24).fill(null);
     const weekday = weekdayForDateKey(pvDay.dateKey);
     const dayProfile = model.profilesByWeekday && model.profilesByWeekday[weekday]
       ? model.profilesByWeekday[weekday]
@@ -701,6 +709,7 @@ function simulateDays({ forecast, model, config, batteryConfig, batteryData }) {
       const currentBatterySoc = capacity > 0 ? minSoc + stored / capacity * 100 : minSoc;
       const durationHours = dayIndex === 0 && hour === currentHour ? 1 - currentMinute / 60 : 1;
       const functionsLoad = functionsLoadForHour(model.functionModels, forecast, pvDay.dateKey, hour, durationHours);
+      climateByHour[hour] = Math.max(0, climateLoadForHour(model.functionModels, forecast, pvDay.dateKey, hour, durationHours));
       const poolLoad = poolLoadForHour(model.poolModel, forecast, pvDay.dateKey, hour, durationHours, currentBatterySoc);
       let load = houseLoad + functionsLoad + wallboxLoad + poolLoad.totalKwh;
       let pv = pvHourly[hour] * pvScale;
@@ -788,6 +797,7 @@ function simulateDays({ forecast, model, config, batteryConfig, batteryData }) {
       poolFilterKwh,
       wallboxes: wallboxForecast.perBox,
       hourlyLoadKwh,
+      climateByHour,
     };
   });
 

@@ -9,7 +9,7 @@ const { createGroup } = require('../src/messen-schalten/groups');
 const {
   FUNCTIONS, effectiveFunction, functionPowerSums, currentFunctionPowerW,
   recordFunctionSamples, readFunctionValues, loadFunctionModels,
-  functionsLoadForHour, temperatureBucket, summarizeTemperatureDemand,
+  functionsLoadForHour, climateLoadForHour, temperatureBucket, summarizeTemperatureDemand,
   temperatureBucketList, TEMPERATURE_BUCKET_BELOW, TEMPERATURE_BUCKET_MAX,
   TEMPERATURE_POWER_DAYS,
 } = require('../src/messen-schalten/functions');
@@ -38,16 +38,16 @@ async function freshDb() {
     load_shed_phase TEXT NOT NULL DEFAULT 'l1',
     switch_group_id INTEGER)`);
   await dbRun(db, "CREATE TABLE mess_schalt_groups (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, priority INTEGER NOT NULL DEFAULT 4, position INTEGER NOT NULL DEFAULT 0, function_key TEXT NOT NULL DEFAULT '', offset_total_consumption INTEGER NOT NULL DEFAULT 1, parent_id INTEGER, meter_group INTEGER NOT NULL DEFAULT 0, color TEXT NOT NULL DEFAULT '')");
-  await dbRun(db, 'CREATE TABLE mess_schalt_actor_state (actor_id INTEGER PRIMARY KEY, last_counter_raw REAL, last_progress_ts INTEGER, derived_power_w REAL, counter_total_kwh REAL, day_key TEXT, day_start_kwh REAL, year_key TEXT, year_start_kwh REAL, prev_year_kwh REAL)');
+  await dbRun(db, 'CREATE TABLE mess_schalt_actor_state (actor_id INTEGER PRIMARY KEY, last_counter_raw REAL, last_progress_ts INTEGER, derived_power_w REAL, counter_total_kwh REAL, day_key TEXT, day_start_kwh REAL, year_key TEXT, year_start_kwh REAL, prev_year_kwh REAL, power_energy_kwh REAL, power_energy_day_start_kwh REAL, last_power_ts INTEGER)');
   await dbRun(db, `CREATE TABLE mess_schalt_function_hourly (
     function_key TEXT NOT NULL, day_key TEXT NOT NULL, hour INTEGER NOT NULL,
     consumption_kwh REAL NOT NULL DEFAULT 0, temperature REAL,
     PRIMARY KEY (function_key, day_key, hour))`);
   await dbRun(db, 'CREATE TABLE mess_schalt_function_state (id INTEGER PRIMARY KEY CHECK (id = 1), last_sample_ts INTEGER)');
   await dbRun(db, `CREATE TABLE mess_schalt_temperature_power (
-    bucket INTEGER NOT NULL, day_key TEXT NOT NULL,
+    bucket INTEGER NOT NULL, day_key TEXT NOT NULL, hour INTEGER NOT NULL DEFAULT 0,
     avg_power_w REAL NOT NULL DEFAULT 0, weight_seconds REAL NOT NULL DEFAULT 0,
-    PRIMARY KEY (bucket, day_key))`);
+    PRIMARY KEY (bucket, day_key, hour))`);
   await dbRun(db, `CREATE TABLE mqtt_config (
     id INTEGER PRIMARY KEY, host TEXT, port INTEGER, username TEXT, password TEXT,
     latitude REAL, longitude REAL, timezone TEXT, dst_enabled INTEGER,
@@ -159,9 +159,10 @@ test('loadFunctionModels: Wochentagsprofil (kWh) und Heiz-Temperaturfenster (mit
   // Kochen: zwei Dienstage (30.06. und 07.07.2026? 07.07. ist Dienstag) mit 12-Uhr-Werten.
   await dbRun(db, "INSERT INTO mess_schalt_function_hourly VALUES ('kochen', '2026-06-30', 12, 1.0, NULL)");
   await dbRun(db, "INSERT INTO mess_schalt_function_hourly VALUES ('kochen', '2026-06-23', 12, 2.0, NULL)");
-  // Heizung / Klima: mittlere Leistung (W) je 1-°C-Temperaturfenster (Fenstertabelle).
-  await dbRun(db, "INSERT INTO mess_schalt_temperature_power VALUES (31, '2026-06-29', 2000, 3600)");
-  await dbRun(db, "INSERT INTO mess_schalt_temperature_power VALUES (22, '2026-06-28', 500, 3600)");
+  // Heizung / Klima: mittlere Leistung (W) je 1-°C-Temperaturfenster (Fenstertabelle),
+  // gelernt für die später abgefragte Tagesstunde (14 bzw. 12 Uhr).
+  await dbRun(db, "INSERT INTO mess_schalt_temperature_power VALUES (31, '2026-06-29', 14, 2000, 3600)");
+  await dbRun(db, "INSERT INTO mess_schalt_temperature_power VALUES (22, '2026-06-28', 12, 500, 3600)");
   const models = await loadFunctionModels(db, '2026-07-01');
   const tuesday = 2;
   assert.equal(models.kochen.type, 'weekday');
@@ -203,10 +204,11 @@ test('temperatureBucket klemmt auf den unteren (< -20) und oberen (> 50) Sammelb
 
 test('summarizeTemperatureDemand liefert alle Fenster mit mittlerer Leistung, Heutewert und Messtagen', async () => {
   const db = await freshDb();
-  // Zwei Messtage im Sammelbereich < -20 °C (Fenster -21) und einer bei > 50 °C.
-  await dbRun(db, "INSERT INTO mess_schalt_temperature_power VALUES (-21, '2026-01-01', 3000, 3600)");
-  await dbRun(db, "INSERT INTO mess_schalt_temperature_power VALUES (-21, '2026-01-02', 1000, 3600)");
-  await dbRun(db, "INSERT INTO mess_schalt_temperature_power VALUES (50, '2026-07-01', 500, 3600)");
+  // Zwei Messtage im Sammelbereich < -20 °C (Fenster -21) und einer bei > 50 °C,
+  // hier jeweils zur 8. Tagesstunde gelernt.
+  await dbRun(db, "INSERT INTO mess_schalt_temperature_power VALUES (-21, '2026-01-01', 8, 3000, 3600)");
+  await dbRun(db, "INSERT INTO mess_schalt_temperature_power VALUES (-21, '2026-01-02', 8, 1000, 3600)");
+  await dbRun(db, "INSERT INTO mess_schalt_temperature_power VALUES (50, '2026-07-01', 8, 500, 3600)");
   const models = await loadFunctionModels(db, '2026-01-02');
   const summary = summarizeTemperatureDemand(models.heizung_klima);
   assert.equal(summary.length, 72);
@@ -216,6 +218,11 @@ test('summarizeTemperatureDemand liefert alle Fenster mit mittlerer Leistung, He
   assert.equal(below.days, 2); // beide Tage im <-20-Fenster
   assert.equal(below.avgPowerW, 2000); // Mittel der Messtage: (3000 + 1000) / 2
   assert.equal(below.todayPowerW, 1000); // Markierung = heutiger Wert (02.01.)
+  // 24-Stunden-Kurve: nur die 8. Stunde belegt, dort das Tagesmittel (2000 W).
+  assert.equal(below.hourlyPowerW[8], 2000);
+  assert.equal(below.hourlyDays[8], 2);
+  assert.equal(below.hourlyPowerW[9], null); // andere Stunden ungelernt
+  assert.equal(below.todayHourlyPowerW[8], 1000); // heutiger Stundenwert (Markierung)
 
   const above = summary[summary.length - 1];
   assert.equal(above.above, true);
@@ -234,10 +241,10 @@ test('loadFunctionModels: Heizmodell ist das ungewichtete Mittel der Messtage je
   // Vier Messtage im selben 1-°C-Fenster (0 °C): der Sprung nach oben geht als
   // gleichwertiger Messtag in den Mittelwert ein (kein träges EWMA mehr, damit die
   // Anpassung nicht mit der Zeit abflacht).
-  await dbRun(db, "INSERT INTO mess_schalt_temperature_power VALUES (0, '2026-01-01', 1000, 3600)");
-  await dbRun(db, "INSERT INTO mess_schalt_temperature_power VALUES (0, '2026-01-02', 1000, 3600)");
-  await dbRun(db, "INSERT INTO mess_schalt_temperature_power VALUES (0, '2026-01-03', 1000, 3600)");
-  await dbRun(db, "INSERT INTO mess_schalt_temperature_power VALUES (0, '2026-01-04', 5000, 3600)");
+  await dbRun(db, "INSERT INTO mess_schalt_temperature_power VALUES (0, '2026-01-01', 12, 1000, 3600)");
+  await dbRun(db, "INSERT INTO mess_schalt_temperature_power VALUES (0, '2026-01-02', 12, 1000, 3600)");
+  await dbRun(db, "INSERT INTO mess_schalt_temperature_power VALUES (0, '2026-01-03', 12, 1000, 3600)");
+  await dbRun(db, "INSERT INTO mess_schalt_temperature_power VALUES (0, '2026-01-04', 12, 5000, 3600)");
   const models = await loadFunctionModels(db);
   const window0 = models.heizung_klima.windows.get(0);
   assert.equal(window0.days, 4);
@@ -248,7 +255,7 @@ test('loadFunctionModels: Heizmodell ist das ungewichtete Mittel der Messtage je
 test('loadFunctionModels: 0-W-Messtag ist eine gültige Beobachtung des Fensters', async () => {
   const db = await freshDb();
   // Gemessene mittlere Leistung 0 W bei 18 °C – gültige Messung, das Fenster ist belegt.
-  await dbRun(db, "INSERT INTO mess_schalt_temperature_power VALUES (18, '2026-05-01', 0, 3600)");
+  await dbRun(db, "INSERT INTO mess_schalt_temperature_power VALUES (18, '2026-05-01', 12, 0, 3600)");
   const models = await loadFunctionModels(db, '2026-05-01');
   const summary = summarizeTemperatureDemand(models.heizung_klima);
   const window18 = summary.find((w) => w.min === 18);
@@ -261,10 +268,11 @@ test('loadFunctionModels: 0-W-Messtag ist eine gültige Beobachtung des Fensters
 test('recordFunctionSamples lernt Heizleistung je Temperaturfenster (30-Tage-Cap, Heutewert)', async () => {
   const db = await freshDb();
   const actor = await createActor(db, { name: 'WP', powerTopic: 'wp.0.power', functionKey: 'heizung_klima' });
-  // 31 Alt-Messtage im Fenster 3 °C vorbelegen.
+  // 31 Alt-Messtage im Fenster 3 °C vorbelegen – zur selben Tagesstunde (11 Uhr
+  // lokal), zu der die folgende Messung fällt, damit das Stundenmittel greift.
   for (let d = 1; d <= 31; d += 1) {
     const day = `2026-03-${String(d).padStart(2, '0')}`;
-    await dbRun(db, 'INSERT INTO mess_schalt_temperature_power VALUES (3, ?, 1000, 3600)', [day]);
+    await dbRun(db, 'INSERT INTO mess_schalt_temperature_power VALUES (3, ?, 11, 1000, 3600)', [day]);
   }
   const cache = new Map([
     [cacheKey(actor.id, 'power'), { value: '2000' }],
@@ -291,19 +299,42 @@ test('recordFunctionSamples lernt Heizleistung je Temperaturfenster (30-Tage-Cap
 
 test('functionsLoadForHour plant Heizung/Klima je Stunde nach der Stundentemperatur', async () => {
   const db = await freshDb();
-  // Kalt (0 °C) hohe Leistung (2000 W), mild (15 °C) geringe (400 W).
-  await dbRun(db, "INSERT INTO mess_schalt_temperature_power VALUES (0, '2026-01-01', 2000, 3600)");
-  await dbRun(db, "INSERT INTO mess_schalt_temperature_power VALUES (15, '2026-01-02', 400, 3600)");
+  // Kalt (0 °C) hohe Leistung (2000 W) zur 8. Stunde, mild (15 °C) geringe (400 W)
+  // zur 9. Stunde gelernt.
+  await dbRun(db, "INSERT INTO mess_schalt_temperature_power VALUES (0, '2026-01-01', 8, 2000, 3600)");
+  await dbRun(db, "INSERT INTO mess_schalt_temperature_power VALUES (15, '2026-01-02', 9, 400, 3600)");
   const models = await loadFunctionModels(db);
   // Selber Tag, aber Stunde 8 kalt (0 °C) und Stunde 9 mild (15 °C) prognostiziert.
-  // Aus der Fensterleistung wird der Stundenverbrauch errechnet: 2000 W → 2,0 kWh,
-  // 400 W → 0,4 kWh.
+  // Aus der stundengenauen Fensterleistung wird der Stundenverbrauch errechnet:
+  // 2000 W → 2,0 kWh, 400 W → 0,4 kWh.
   const forecast = { hours: [
     { dateKey: '2026-07-07', hour: 8, kwh: 0, temperature: 0 },
     { dateKey: '2026-07-07', hour: 9, kwh: 0, temperature: 15 },
   ] };
   assert.equal(functionsLoadForHour(models, forecast, '2026-07-07', 8, 1), 2.0);
   assert.equal(functionsLoadForHour(models, forecast, '2026-07-07', 9, 1), 0.4);
+  await new Promise((resolve) => db.close(resolve));
+});
+
+test('climateLoadForHour trennt gleiche Temperatur nach Tageszeit (Kühlen v.a. abends)', async () => {
+  const db = await freshDb();
+  // Selbes Fenster (28 °C), aber morgens wenig, abends viel Kühlleistung – je Stunde
+  // getrennt gelernt (ein Messtag reicht für das Stundenmittel).
+  await dbRun(db, "INSERT INTO mess_schalt_temperature_power VALUES (28, '2026-07-01', 8, 200, 3600)");
+  await dbRun(db, "INSERT INTO mess_schalt_temperature_power VALUES (28, '2026-07-01', 20, 1800, 3600)");
+  const models = await loadFunctionModels(db);
+  const forecast = { hours: [
+    { dateKey: '2026-07-10', hour: 8, temperature: 28 },
+    { dateKey: '2026-07-10', hour: 20, temperature: 28 },
+    { dateKey: '2026-07-10', hour: 14, temperature: 28 },
+  ] };
+  // Morgens 200 W → 0,2 kWh, abends 1800 W → 1,8 kWh: gleiche Temperatur, andere Stunde.
+  assert.equal(climateLoadForHour(models, forecast, '2026-07-10', 8, 1), 0.2);
+  assert.equal(climateLoadForHour(models, forecast, '2026-07-10', 20, 1), 1.8);
+  // Noch ungelernte Stunde (14) fällt auf das Fenstermittel zurück: (200 + 1800) / 2 = 1000 W.
+  assert.equal(climateLoadForHour(models, forecast, '2026-07-10', 14, 1), 1.0);
+  // Halbe Stunde skaliert linear.
+  assert.equal(climateLoadForHour(models, forecast, '2026-07-10', 20, 0.5), 0.9);
   await new Promise((resolve) => db.close(resolve));
 });
 

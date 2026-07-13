@@ -42,6 +42,8 @@ const operatingState = require('./operating-state');
 const operatingLevelHandler = require('./operating-level/handler');
 const { recordConsumptionSample } = require('./prognosis/forecast');
 const { integrateSelfCount, reconcileCompletedHours } = require('./prognosis/self-count');
+const { checkSamplingHealth, markSampleHealthy } = require('./prognosis/sampling-health');
+const { logSamplingEvent } = require('./prognosis/sampling-log');
 const { updateBatteryEnergy } = require('./batterie/energy');
 const batterieMinSocSync = require('./batterie/min-soc-sync');
 const prognosisBehavior = require('./prognosis/behavior');
@@ -138,41 +140,57 @@ function createApp() {
       const rawCounters = snapshot.raw.rawCounters || {};
       const hasCounterReading = ['import', 'export'].some((direction) =>
         Object.values(rawCounters[direction] || {}).some((value) => value != null));
+
+      // Fehlererkennung zuerst – auch wenn unten (mangels Daten) nichts erfasst
+      // wird: vollständig verpasste Stunden werden als unvollständig markiert
+      // (Vortageswert, ausgegraut), statt eine Null zu lernen.
+      await checkSamplingHealth(db, cache).catch(() => {});
+
+      const evPowerRaw = snapshot.raw.eigenverbrauchPower;
+      // Rein verbraucherseitige Eigenverbrauch-Leistung liegt vor? (Wechselrichter-
+      // Ausgang + verbraucherseitige PV). Bewusst unabhängig von den Netzzählern.
+      const hasConsumerData = evPowerRaw != null && Number.isFinite(Number(evPowerRaw));
       // Beim Start läuft der erste Job eventuell vor den retained MQTT-Werten.
       // Eine aus lauter fehlenden Quellen berechnete Null darf den kumulierten
       // Tagesstand nicht neu basieren.
-      if (!hasCounterReading && !(Number(snapshot.raw.today.eigenverbrauch) > 0)) return;
-      const poolEnergy = await updatePoolEnergyModel(db, cache, snapshot.raw.eigenverbrauchPower);
-      // Eigenverbrauch ist hier die physikalische Hausbilanz PV + Netzsaldo.
-      // `summe` addiert die separat dargestellte Netzkomponente ein zweites Mal
-      // und ist deshalb keine geeignete kumulierte Quelle für das Lernmodell.
-      // Funktionszugeordnete Geräte (Licht, Waschen, …) werden separat
-      // statistisiert und deshalb – wie Wallbox und Pool – aus dem gelernten
-      // Haus-Grundverbrauch herausgerechnet.
+      const countersUsable = hasCounterReading || Number(snapshot.raw.today.eigenverbrauch) > 0;
+      if (!hasConsumerData && !countersUsable) return;
+
+      const poolEnergy = await updatePoolEnergyModel(db, cache, evPowerRaw);
+      // Funktionszugeordnete Geräte (Licht, Waschen, …) werden – wie Wallbox und
+      // Pool – aus dem gelernten Haus-Grundverbrauch herausgerechnet.
       const functionPower = await currentFunctionPowerW(db, cache).catch(() => 0);
       const wallboxPower = totalWallboxPowerWatt(cache, boxes);
-      // Unabhängige Selbstzählung: Eigenverbrauch-Leistung (Wechselrichter-Ausgang
-      // + verbraucherseitige PV) abzüglich Wallbox/Pool/Funktionen = Haus-Grundlast.
-      // Diese Leistung ist ≥ 0 und sägezahnfrei; sie sichert die Bilanz je Stunde ab.
-      const eigenverbrauchPower = Number(snapshot.raw.eigenverbrauchPower);
-      if (Number.isFinite(eigenverbrauchPower)) {
-        const netHousePower = eigenverbrauchPower - wallboxPower - (poolEnergy.currentPowerW || 0) - functionPower;
+
+      // Unabhängige Selbstzählung = Eigenverbrauch-Leistung − Wallbox/Pool/Funktionen
+      // (Haus-Grundlast, ≥ 0, sägezahnfrei). Läuft UNABHÄNGIG von den Netzzählern:
+      // früher stand sie hinter deren Early-Return, sodass ein fehlender Netzzähler
+      // (Verbindungsabbruch/Inselbetrieb) die grid-unabhängige Selbstzählung
+      // fälschlich mit abschaltete.
+      if (hasConsumerData) {
+        const netHousePower = Number(evPowerRaw) - wallboxPower - (poolEnergy.currentPowerW || 0) - functionPower;
         await integrateSelfCount(db, cache, netHousePower).catch(() => {});
+        await markSampleHealthy(db).catch(() => {});
       }
-      await recordConsumptionSample(db, snapshot.raw.today.eigenverbrauch, cache, {
-        // Der Stromverbrauchs-Snapshot ist bereits um Laden/Entladen des
-        // Hausakkus bereinigt; hier darf die Korrektur nicht erneut erfolgen.
-        batteryPower: 0,
-        wallboxPower,
-        wallboxEnergyDelta: wallboxSample.hourlyDeltaKwh,
-        poolPower: poolEnergy.currentPowerW,
-        functionPower,
-      });
-      // Abgeschlossene Stunden absichern: Bilanz ggf. durch die Selbstzählung
-      // ersetzen (nur ohne echten Eigenverbrauchszähler).
+
+      // Zähler-/bilanzbasierte Erfassung braucht zusätzlich einen echten Zählerwert
+      // (sonst würde eine Start-Null den kumulierten Tageszähler neu basieren).
+      if (countersUsable) {
+        await recordConsumptionSample(db, snapshot.raw.today.eigenverbrauch, cache, {
+          // Der Stromverbrauchs-Snapshot ist bereits um Laden/Entladen des
+          // Hausakkus bereinigt; hier darf die Korrektur nicht erneut erfolgen.
+          batteryPower: 0,
+          wallboxPower,
+          wallboxEnergyDelta: wallboxSample.hourlyDeltaKwh,
+          poolPower: poolEnergy.currentPowerW,
+          functionPower,
+        });
+      }
+      // Abgeschlossene Stunden absichern: Bilanz ggf. durch die Selbstzählung ersetzen.
       await reconcileCompletedHours(db, cache, { selfMeterPresent: snapshot.raw.selfMeterPresent }).catch(() => {});
-    } catch (_) {
-      // Der nächste Minutentakt versucht es erneut.
+    } catch (err) {
+      // Der nächste Minutentakt versucht es erneut; die Störung wird protokolliert.
+      logSamplingEvent('Fehler im Verbrauchs-Sampling', { error: String((err && err.message) || err) });
     }
   };
   jobs.runExclusive('consumption', updateConsumption).catch(() => {});

@@ -92,7 +92,7 @@ test('bereinigte Verbrauchssamples werden stündlich und täglich persistiert', 
     completed INTEGER, updated_at INTEGER
   )`);
   await dbRun(db, `CREATE TABLE prognosis_hourly_consumption (
-    day_key TEXT, hour INTEGER, consumption_kwh REAL, primary_kwh REAL, self_kwh REAL, reconciled INTEGER DEFAULT 0, PRIMARY KEY(day_key, hour)
+    day_key TEXT, hour INTEGER, consumption_kwh REAL, primary_kwh REAL, self_kwh REAL, reconciled INTEGER DEFAULT 0, incomplete INTEGER DEFAULT 0, PRIMARY KEY(day_key, hour)
   )`);
   const start = new Date('2026-06-29T10:00:00Z');
   await recordConsumptionSample(db, 0, new Map(), { batteryPower: 0 }, start);
@@ -117,7 +117,7 @@ test('Bilanz-Sägezahn wird gegengerechnet statt gleichgerichtet', async () => {
     completed INTEGER, updated_at INTEGER
   )`);
   await dbRun(db, `CREATE TABLE prognosis_hourly_consumption (
-    day_key TEXT, hour INTEGER, consumption_kwh REAL, primary_kwh REAL, self_kwh REAL, reconciled INTEGER DEFAULT 0, PRIMARY KEY(day_key, hour)
+    day_key TEXT, hour INTEGER, consumption_kwh REAL, primary_kwh REAL, self_kwh REAL, reconciled INTEGER DEFAULT 0, incomplete INTEGER DEFAULT 0, PRIMARY KEY(day_key, hour)
   )`);
   const start = new Date('2026-06-29T10:00:00Z');
   // Kumulierte Bilanz pendelt beim Akku-Laden: 0 → 0.05 → 0.02 → 0.07.
@@ -148,7 +148,7 @@ test('negatives Delta drückt Stunden- und Tageswert nie unter 0', async () => {
     completed INTEGER, updated_at INTEGER
   )`);
   await dbRun(db, `CREATE TABLE prognosis_hourly_consumption (
-    day_key TEXT, hour INTEGER, consumption_kwh REAL, primary_kwh REAL, self_kwh REAL, reconciled INTEGER DEFAULT 0, PRIMARY KEY(day_key, hour)
+    day_key TEXT, hour INTEGER, consumption_kwh REAL, primary_kwh REAL, self_kwh REAL, reconciled INTEGER DEFAULT 0, incomplete INTEGER DEFAULT 0, PRIMARY KEY(day_key, hour)
   )`);
   const start = new Date('2026-06-29T10:00:00Z');
   await recordConsumptionSample(db, 0.1, new Map(), { batteryPower: 0 }, start);
@@ -175,7 +175,7 @@ test('verspäteter Tageszähler-Reset übernimmt den Vortag nicht in den neuen L
     completed INTEGER, updated_at INTEGER
   )`);
   await dbRun(db, `CREATE TABLE prognosis_hourly_consumption (
-    day_key TEXT, hour INTEGER, consumption_kwh REAL, primary_kwh REAL, self_kwh REAL, reconciled INTEGER DEFAULT 0, PRIMARY KEY(day_key, hour)
+    day_key TEXT, hour INTEGER, consumption_kwh REAL, primary_kwh REAL, self_kwh REAL, reconciled INTEGER DEFAULT 0, incomplete INTEGER DEFAULT 0, PRIMARY KEY(day_key, hour)
   )`);
 
   const midnight = new Date('2026-06-29T22:00:00Z'); // 00:00 Europe/Berlin
@@ -202,7 +202,7 @@ test('ein ungültiges Intervall mit riesigem Zählersprung überschwemmt den Tag
     completed INTEGER, updated_at INTEGER
   )`);
   await dbRun(db, `CREATE TABLE prognosis_hourly_consumption (
-    day_key TEXT, hour INTEGER, consumption_kwh REAL, primary_kwh REAL, self_kwh REAL, reconciled INTEGER DEFAULT 0, PRIMARY KEY(day_key, hour)
+    day_key TEXT, hour INTEGER, consumption_kwh REAL, primary_kwh REAL, self_kwh REAL, reconciled INTEGER DEFAULT 0, incomplete INTEGER DEFAULT 0, PRIMARY KEY(day_key, hour)
   )`);
 
   const start = new Date('2026-06-29T10:00:00Z');
@@ -230,7 +230,7 @@ test('aufgeblähter Tageswert wird aus plausiblen Stundenwerten selbst geheilt',
     completed INTEGER, updated_at INTEGER
   )`);
   await dbRun(db, `CREATE TABLE prognosis_hourly_consumption (
-    day_key TEXT, hour INTEGER, consumption_kwh REAL, primary_kwh REAL, self_kwh REAL, reconciled INTEGER DEFAULT 0, PRIMARY KEY(day_key, hour)
+    day_key TEXT, hour INTEGER, consumption_kwh REAL, primary_kwh REAL, self_kwh REAL, reconciled INTEGER DEFAULT 0, incomplete INTEGER DEFAULT 0, PRIMARY KEY(day_key, hour)
   )`);
   const start = new Date('2026-06-29T10:00:00Z');
   await recordConsumptionSample(db, 0, new Map(), { batteryPower: 0 }, start);
@@ -413,7 +413,7 @@ test('ungelernte Wochentage erhalten Kurve und Ziel des jüngsten Lerntags', asy
     completed INTEGER, updated_at INTEGER
   )`);
   await dbRun(db, `CREATE TABLE prognosis_hourly_consumption (
-    day_key TEXT, hour INTEGER, consumption_kwh REAL, primary_kwh REAL, self_kwh REAL, reconciled INTEGER DEFAULT 0, PRIMARY KEY(day_key, hour)
+    day_key TEXT, hour INTEGER, consumption_kwh REAL, primary_kwh REAL, self_kwh REAL, reconciled INTEGER DEFAULT 0, incomplete INTEGER DEFAULT 0, PRIMARY KEY(day_key, hour)
   )`);
   await dbRun(db, `CREATE TABLE battery_energy_state (
     id INTEGER PRIMARY KEY CHECK (id = 1), last_power_ts INTEGER,
@@ -466,12 +466,17 @@ test('ungelernte Wochentage erhalten Kurve und Ziel des jüngsten Lerntags', asy
   await new Promise((resolve) => db.close(resolve));
 });
 
-const { renderHeatingDemandChart } = require('../src/views/prognosis');
+const { renderHeatingDemandChart, renderHourProfile } = require('../src/views/prognosis');
 
-function heatingWindows({ days = 0, avgPowerW = 0, todayPowerW = null } = {}) {
+function heatingWindows({ days = 0, avgPowerW = 0, todayPowerW = null, hourlyPowerW = null, todayHourlyPowerW = null } = {}) {
   // Nur das erste Fenster mit Werten belegen; der Rest bleibt leer.
-  return [{ key: -21, below: true, min: null, max: -20, label: '< -20 °C', days, avgPowerW, todayPowerW }]
-    .concat(Array.from({ length: 15 }, (_, i) => ({ key: i * 5, min: i * 5, max: i * 5 + 5, label: '', days: 0, avgPowerW: 0, todayPowerW: null })));
+  return [{
+    key: -21, below: true, min: null, max: -20, label: '< -20 °C', days, avgPowerW, todayPowerW,
+    hourlyPowerW: hourlyPowerW || Array(24).fill(null),
+    hourlyDays: (hourlyPowerW || Array(24).fill(null)).map((v) => (v == null ? 0 : days)),
+    todayHourlyPowerW: todayHourlyPowerW || Array(24).fill(null),
+  }]
+    .concat(Array.from({ length: 15 }, (_, i) => ({ key: i * 5, min: i * 5, max: i * 5 + 5, label: '', days: 0, avgPowerW: 0, todayPowerW: null, hourlyPowerW: Array(24).fill(null), hourlyDays: Array(24).fill(0), todayHourlyPowerW: Array(24).fill(null) })));
 }
 
 test('renderHeatingDemandChart zeigt das Diagramm bei vorhandenem Messtag (auch 0 W)', () => {
@@ -507,4 +512,39 @@ test('renderHeatingDemandChart zeigt den Platzhalter nur ohne Temperatur UND ohn
   });
   assert.ok(html.includes('Noch keine Leistungskurve'));
   assert.ok(!html.includes('tb-chart'));
+});
+
+test('renderHeatingDemandChart macht belegte Fenster klickbar und liefert die 24-Stunden-Daten', () => {
+  const hourly = Array(24).fill(null);
+  hourly[8] = 400; hourly[20] = 1600;
+  const html = renderHeatingDemandChart({
+    heatingDemand: heatingWindows({ days: 4, avgPowerW: 1000, hourlyPowerW: hourly }),
+    heatingTemperatureAvailable: true,
+  });
+  assert.ok(html.includes('data-heat-idx="0"'));      // belegtes Fenster ist anklickbar
+  assert.ok(html.includes('tb-cell--clickable'));
+  assert.ok(html.includes('id="heatingHourDialog"'));  // Dialog für die 24-Stunden-Kurve
+  assert.ok(html.includes('id="heatingHourData"'));    // Dateninsel für den Client
+  assert.ok(html.includes('1600'));                    // abendlicher Stundenwert eingebettet
+});
+
+test('renderHourProfile stapelt den Heiz-/Klima-Bedarf über die Grundlast', () => {
+  const climateByHour = Array(24).fill(0);
+  climateByHour[18] = 0.8; // abendlicher Kühlbedarf
+  const day = { weekday: 3, climateByHour };
+  const model = {
+    profile: Array(24).fill(1 / 24),
+    dailyTarget: 24, // Grundlast 1 kWh je Stunde
+  };
+  const html = renderHourProfile(day, model, false);
+  assert.ok(html.includes('fh-bar--climate'));         // gestapelter Klima-Balken
+  assert.ok(html.includes('fh-key--climate'));         // Legende weist Klima aus
+  assert.ok(html.includes('Klima +'));                 // Tooltip nennt den Zusatzbedarf
+});
+
+test('renderHourProfile ohne Klima-Bedarf zeigt keinen Klima-Balken', () => {
+  const day = { weekday: 3, climateByHour: Array(24).fill(0) };
+  const model = { profile: Array(24).fill(1 / 24), dailyTarget: 24 };
+  const html = renderHourProfile(day, model, false);
+  assert.ok(!html.includes('fh-bar--climate'));
 });

@@ -184,7 +184,18 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   startet bei 0; Topic-/Einheitenwechsel setzt nur die Baseline (`last_counter_raw`)
   zurück; Rückwärtssprünge des Rohwerts (Geräte-Reset) basieren neu, ohne den
   Stand zu ändern. Altbestände ohne internen Zähler übernehmen beim ersten
-  Snapshot einmalig den Rohwert (nahtlose Anzeige). Das optionale `remote_topic`
+  Snapshot einmalig den Rohwert (nahtlose Anzeige). Für Geräte mit Leistungs- UND
+  Zähler-Topic wird zusätzlich die aus der Live-Leistung integrierte Tagesenergie
+  geführt (`power_energy_kwh`/`power_energy_day_start_kwh`/`last_power_ts`,
+  `integratePowerEnergy`); weicht der Zähler heute stark davon ab
+  (`counterPowerMismatch`, Faktor ≥ 3 ab 0,05 kWh) — typisch bei vertauschter
+  Einheit Wh↔kWh —, warnt die Zählerzelle mit rotem ⚠. Die Zählung/Gruppensummen
+  bleiben unverändert (nur Hinweis). Der Zählerstand wird bewusst **nie als
+  „veraltet" markiert** (interner, immer bekannter Wert); eine fehlende Verbindung
+  zeigt sich stattdessen als **Gerät „offline"** (`offline`/`DEVICE_OFFLINE_MS`,
+  roter Statuspunkt-Ring + Namensbadge), sobald die **periodische Telemetrie**
+  (Leistung/Zähler) länger als 30 min schweigt – Schalt-/Status-Topics zählen dafür
+  nicht (ereignisgetrieben). Das optionale `remote_topic`
   ist ebenfalls ein abonnierter Zustand
   (`messschalt:<id>:remote`) und wird in `messen-schalten/automation.js`
   bidirektional mit dem Gerät synchronisiert. Eine Wertänderung am Remote-Topic
@@ -292,8 +303,20 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   **„Sonstige"-Ast** sowie PV/Netz/Eigenverbrauch weisen Verbrauch heute und
   dieses Jahr aus. Einzelne Geräte werden bewusst nicht gezeigt. Die Zeichen-Logik
   (Layout + Rendering) liegt gemeinsam in `public/energiefluss-diagram.js`
-  (`window.EFDiagram`), genutzt von der Seite (interaktiv, mit Farb-Stift) und den
-  Exporten (viewport-füllend). **Exporte** (Tabelle `energiefluss_exports`,
+  (`window.EFDiagram`; zusätzlich `module.exports` für DOM-freie Geometrie-Tests),
+  genutzt von der Seite (interaktiv, mit Farb-Stift) und den Exporten
+  (viewport-füllend). Zwei Layout-Modi: **horizontal** (`layoutH`, Spalten = Ebenen)
+  und **vertikal** (`layoutV`, schmaler Stamm mit eingerückten Zweigen, einheitlich
+  oben→unten: Einzel-Anlagen → PV gesamt → Netz → Batterie ÜBER dem Eigenverbrauch
+  (Batterie wie eine Quelle eingerückt angebunden), Verbraucher eingerückt darunter;
+  ein Knoten je Zeile). Jede Kante läuft in einem eigenen senkrechten Kanal im
+  Einrück-Spalt links der Knoten (orthogonal, `polyD`; nächstes Kind außen, ferne
+  innen) – so liegen die Linien nebeneinander, queren nie einen Knoten, bündeln am
+  Eigenverbrauch (dicker) und dünnen nach unten aus. Die Einrückung je Kinderreihe ist
+  dynamisch (`childIndent`: mehr Kinder → breiterer Kanal-Spalt → tiefere Einrückung;
+  über/unter getrennt, sodass die wenigen Quellen oben schmal bleiben). Die Seite wählt bei
+  ≤ 760 px vertikal (füllt die Breite, wächst in die Höhe) und zeichnet bei
+  Breitenwechsel neu; Desktop bleibt horizontal. **Exporte** (Tabelle `energiefluss_exports`,
   `energiefluss-exports.js`, `views/energiefluss-export.js`): unter dem Diagramm
   benannte, öffentlich abrufbare Live-Ansichten (Theme hell/dunkel) unter
   `/energiefluss/export/<slug>` (+ `/data`, beide ohne Auth). Die Export-Ansicht
@@ -304,7 +327,10 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   Menü unter Messen + Schalten aus): zwei unabhängig scrollbare Spalten — links
   die Schaltgruppen (Name, optionales **Remote-Topic**, Checkbox **„Gruppe
   schaltet als Einheit"**; Tabelle `mess_schalt_switch_groups`), rechts schmaler
-  alle Geräte ohne Schaltgruppe; Zuordnung per **Drag & Drop**
+  alle Geräte ohne Schaltgruppe; Zuordnung per **Drag & Drop** (Desktop) oder
+  klickbasiert über den **„+ Gerät hinzufügen"**-Dialog je Gruppe bzw. das **„×"**
+  je Zeile (Touch/Handy; am Handy ist die Pool-Spalte ausgeblendet und dient nur als
+  Quelle des Auswahldialogs) — beides schreibt `POST …/schaltgruppen/assign`
   (`mess_schalt_actors.switch_group_id`, nur über diese Seite gepflegt). Eine
   Gruppe gilt als **an, sobald ein Gerät an ist**, und erst als aus, wenn alle
   Geräte aus sind; nur „als Einheit" schaltet die Einschalt-Flanke eines Geräts
@@ -362,17 +388,33 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   Tageswert wird aus der Stundensumme neu gebildet). Die Prognose-Seite zeigt dazu
   ein **Transparenz-Diagramm** (je Stunde Selbstzählung vs. Bilanz/Messung, laufende
   aktuelle Stunde, Marke des übernommenen Werts; `todaySelfByHour`/
-  `todayPrimaryByHour`/`todayByHour`).
+  `todayPrimaryByHour`/`todayByHour`). Die Selbstzählung läuft **unabhängig von den
+  Netzzählern** (in `app.js` NICHT hinter deren Early-Return – ein fehlender Netzzähler
+  darf die grid-unabhängige Selbstzählung nicht mit abschalten). **Fehlererkennung**
+  (`prognosis/sampling-health.js`): `markSampleHealthy` merkt sich das letzte Sample MIT
+  verbraucherseitigen Daten; `checkSamplingHealth` markiert vollständig verpasste Stunden
+  als `incomplete`, setzt ihren Lernwert auf den **Vortageswert** (Rohwerte bleiben) und
+  rechnet den Tageswert neu; die Datenbasis-Ansicht graut solche Stunden aus. Störungen
+  landen in `data/prognosis-sampling.log` (`prognosis/sampling-log.js`). Zustand in
+  `prognosis_sampling_state`, Flag in `prognosis_hourly_consumption.incomplete`.
   Wallbox-Zählerdelta und Haus-Sample laufen im
   selben Takt; E-Auto-Energie wird nur aus angeschlossenem Fahrzeug, Live-SoC und
   Ladestrategie geplant, nicht aus historischen Ladezeiten. Heizung / Klima wird
-  separat als **mittlere Leistung (W) je 1-°C-Außentemperaturfenster** gelernt
-  (bis zu 30 Messtage je Fenster, Modellwert = deren Mittel) und anhand der
-  prognostizierten Außentemperatur je Stunde zu erwartetem Verbrauch
-  (`kWh = W/1000 × Stunden`) umgerechnet. Je Prognosetag zeigt die Seite ein
+  separat als **mittlere Leistung (W) je 1-°C-Außentemperaturfenster und
+  Tagesstunde** gelernt (Tabelle `mess_schalt_temperature_power` mit PK
+  `bucket, day_key, hour`; je Fenster für jede der 24 Stunden bis zu 30 Messtage,
+  Modellwert = deren Mittel) und anhand der prognostizierten Außentemperatur je
+  Stunde zu erwartetem Verbrauch (`kWh = W/1000 × Stunden`) umgerechnet — dabei
+  greift der Stundenwert des Fensters, noch ungelernte Stunden fallen auf das
+  Fenstermittel zurück (`hourWindowPower`/`nearestWindowPower`). Das
+  Temperatur-Balkendiagramm zeigt je Fenster das Mittel über alle 24 Stunden; ein
+  Klick öffnet die 24-Stunden-Kurve (`summarizeTemperatureDemand` liefert dazu
+  `hourlyPowerW`/`hourlyDays`/`todayHourlyPowerW`). Je Prognosetag zeigt die Seite ein
   24-h-Stundenprofil-Balkendiagramm (Soll = Tagesziel × Wochentagskurve); bereits
   gelernte Stunden von heute erscheinen als Ist-Balken in abweichender Farbe mit
-  Soll-Marke je Stunde (`model.todayByHour`). Die Ergebnisse sind als `prognose.*` im
+  Soll-Marke je Stunde (`model.todayByHour`). Der erwartete Heiz-/Kühlbedarf sitzt
+  je Stunde als gestapelter Balken über der Grundlast (`day.climateByHour` aus
+  `climateLoadForHour`; reine Anzeige, die Grundlast-/Lastsumme bleibt unberührt). Die Ergebnisse sind als `prognose.*` im
   Wertekatalog verfügbar. Zusätzlich zeigt die Seite den persistenten
   `operating.autark`-Tagesstatus. Beim lokalen Tageswechsel wird ein
   Jahreszähler nur dann erhöht, wenn der Tag weiterhin autark endete; ein
@@ -421,20 +463,28 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   Stundenenergien integriert (plausible Intervalle ≤ 5 min, analog Lernmodell)
   und in der Simulation je Stunde aufgeschlagen — die übrigen Funktionen nach
   Wochentag. **Heizung / Klima** wird abweichend als **mittlere Leistung (W) je
-  1-°C-Außentemperaturfenster** gelernt (`mess_schalt_temperature_power`): je
-  Fenster bis zu **30 Messtage**, pro Tag die zeitgewichtete mittlere Leistung;
-  der Modellwert ist deren **Mittel** (bewusst begrenzt statt dauerhaftem
-  Mittelwert, damit die Anpassung nicht mit der Zeit abflacht). Ein Fenster wird
-  nur an Tagen belegt, an denen diese Außentemperatur real auftrat — dadurch kann
-  der Sommer die Winterkurve (und umgekehrt) nicht überschreiben. In der Prognose
-  liefert das nächstgelegene gelernte Fenster (Prognosetemperatur aus Open-Meteo)
-  die erwartete Leistung, aus der der Stundenverbrauch errechnet wird
+  1-°C-Außentemperaturfenster und Tagesstunde** gelernt
+  (`mess_schalt_temperature_power`, PK `bucket, day_key, hour`): je Fenster für
+  jede der 24 Stunden bis zu **30 Messtage** (gezählt über verschiedene Tage), pro
+  Tag/Stunde die zeitgewichtete mittlere Leistung; der Modellwert je Stunde ist
+  deren **Mittel** (bewusst begrenzt statt dauerhaftem Mittelwert, damit die
+  Anpassung nicht mit der Zeit abflacht). Die Stunde ist nötig, weil der
+  Heiz-/Kühlbedarf je Tageszeit variiert. Ein Fenster wird nur an Tagen belegt, an
+  denen diese Außentemperatur real auftrat — dadurch kann der Sommer die
+  Winterkurve (und umgekehrt) nicht überschreiben. In der Prognose liefert das
+  nächstgelegene gelernte Fenster (Prognosetemperatur aus Open-Meteo) je Stunde
+  die erwartete Leistung — der Stundenwert des Fensters, sonst dessen Mittel über
+  alle 24 Stunden —, aus der der Stundenverbrauch errechnet wird
   (`kWh = W/1000 × Stunden`). Eine gemessene **0 W** ist dabei eine gültige
   Beobachtung des Fensters; das Leistungsdiagramm erscheint, sobald ein Messtag in
   ein Fenster einfließt oder eine Außentemperatur vorliegt. Der Balken zeigt das
-  30-Tage-Mittel, eine Markierungslinie den Wert des aktuellen Tages. Das
-  Stunden-Energielog (`mess_schalt_function_hourly`) speist dieses Heizmodell
-  **nicht**; es dient nur der Jahres-Grundlastkorrektur und der Tagesanzeige.
+  Mittel über alle 24 Stunden, eine Markierungslinie den Wert des aktuellen Tages;
+  ein **Klick** öffnet die **24-Stunden-Kurve** des Fensters. Alt-Datenbanken
+  werden migriert, indem das bisherige Tagesmittel gleichmäßig auf alle 24 Stunden
+  verteilt wird (die Balkenhöhe bleibt gleich, die Stundenkurve verfeinert sich
+  beim Weiterlernen). Das Stunden-Energielog (`mess_schalt_function_hourly`) speist
+  dieses Heizmodell **nicht**; es dient nur der Jahres-Grundlastkorrektur und der
+  Tagesanzeige.
   Persistente Verhaltensmodelle (`prognosis_config.behavior_model/_active`):
   `grid_parallel` bewertet ausschließlich Reserve und Netzbedarf bis zum nächsten
   Ladebeginn; spätere Tage sind wegen des verfügbaren Netzes irrelevant und
@@ -557,11 +607,15 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
       Schalten auf. Ohne Status-Topic gilt weiterhin der interne Soll-Zustand.
   - **Wallbox** (`/wallbox`): verwaltet mehrere PKW-Wallboxen, einzeln anlegbar wie die
     PV-Anlagen (`wallbox/boxes.js`, Tabellen `wallboxes`/`wallbox_counter_state`/
-    `wallbox_summary_state`). Je Box ein Pflicht-**Steuer-Topic** sowie optional Status
-    (sonst Steuer-Topic als Ist-Stand), Leistung (W/kW), fortlaufender Zähler (Wh/kWh),
-    Soll-Leistung, „Fahrzeug angesteckt" (true/false), Fahrzeug-SoC (%) und ein
-    bidirektionales **Modus-Sync-Topic**; dazu Maximalleistung, Fahrzeug-Akkugröße
-    und **Lastabwurf-Phase**.
+    `wallbox_summary_state`). Je Box ein Pflicht-**Steuer-Topic** (reiner Aktor:
+    homeESS schaltet die Wallbox darüber, keine Bedienerkennung), optional ein
+    bidirektionales **Steuerung-Sync-Topic** (an/aus: homeESS spiegelt den
+    Schaltzustand darauf und erkennt externe Nutzerschaltungen – siehe unten),
+    optional Status (sonst Sync- bzw. Steuer-Topic als Ist-Stand), Leistung (W/kW),
+    fortlaufender Zähler (Wh/kWh), Soll-Leistung, „Fahrzeug angesteckt" (true/false),
+    Fahrzeug-SoC (%) und ein bidirektionales **Modus-Sync-Topic** (nur der Ladeplan:
+    1 = Privat, 2 = Beruflich, 3 = Immer voll); dazu Maximalleistung,
+    Fahrzeug-Akkugröße und **Lastabwurf-Phase**.
     - *Verbrauch* je Box Tag/Woche/Monat/Jahr + Vorjahr (`wallbox/aggregation.js`,
       `buildWallboxSnapshot` im 60-s-Job, Vorbild `stromverbrauch/aggregation.js`); ohne
       Zähler-Topic aus der Leistung integriert. **SoC-Schätzung** aus der seit Einstecken
@@ -607,25 +661,31 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
     - *Sonderfälle* in `decideWallboxAction` (planner.js, testbar): **Ladestart-Neustart**
       (hängt die Ist-Leistung trotz Befehl nach `stall_timeout_seconds` unter
       `stall_power_w`, 1 Minute aus/ein, gedeckelte Versuche — **nur bei `plugged === true`**,
-      damit ohne eingestecktes Auto kein Aus/Ein-Takten entsteht); **manuell EIN am Broker** →
-      einmalige Volladung bis Leistungsabfall unter Leerlaufschwelle;
-      **manuell AUS am Broker** → aus bis Folgetag mit PV größer als Eigenverbrauch plus
-      Wallboxleistung und ausreichender Hausakku-Reserve; das **„angesteckt"-Signal dient
+      damit ohne eingestecktes Auto kein Aus/Ein-Takten entsteht); **extern EIN am
+      Steuerung-Sync-Topic** → einmalige Volladung bis Leistungsabfall unter
+      Leerlaufschwelle; **extern AUS am Steuerung-Sync-Topic** → aus bis Folgetag mit
+      PV größer als Eigenverbrauch plus Wallboxleistung und ausreichender
+      Hausakku-Reserve; das **„angesteckt"-Signal dient
       ausschließlich der Ladeüberwachung** (Stall-/Neustart-Schleife: angesteckt + Ladung
       aktiv + SoC unter Voll ⇒ Leistung muss fließen) und darf weder Ladefreigabe noch
       Volladung noch Prognose-Ladebedarf sperren — manche Fahrzeuge melden „angesteckt"
       erst, nachdem die Ladung freigegeben wurde (Henne-Ei), zudem ist das Mobilfunk-Signal
       möglich falsch-negativ. Ist laut Plan oder Anforderung eine Ladung erforderlich, wird
-      immer eingeschaltet. Manuelle Schaltungen werden ausschließlich über das Steuer-Topic
-      erkannt. Erwartete Readbacks eigener Automatikbefehle werden konsumiert und nicht
-      als Nutzerwunsch gewertet; das Status-Topic ist reiner Ist-Zustand. **Nach jedem
-      MQTT-(Wieder-)Verbindungsaufbau** (Connect-Epoch aus dem MQTT-Client) öffnet die
-      Steuerschleife je Box ein kurzes **Re-Baseline-Fenster** (45 s): der erneut
-      eingespielte retained-Steuer-Topic-Wert wird nur als Ausgangszustand übernommen,
-      nie als Nutzerschaltung. Damit ändert ein Neustart, Adapter-Reconnect oder
-      Topic-Refresh den Schaltzustand nicht (auto bleibt auto, aus bleibt aus) — der
-      Broker liefert beim Reconnect alle retained-Werte erneut, u. U. mit dem echten
-      Gerätezustand, was sonst als „Nutzer hat geschaltet" fehlgedeutet würde.
+      immer eingeschaltet.
+    - *An/Aus-Kanäle strikt getrennt (Regeln 1–3, keine Rückkopplung):* Das
+      **Steuer-Topic ist reiner Aktor** (homeESS schreibt an/aus, kein Readback). Das
+      **Steuerung-Sync-Topic** ist der bidirektionale An/Aus-Schalter: (1) Schaltet die
+      Automatik, spiegelt homeESS den Zustand darauf und **bleibt auf Automatik**; jeder
+      eigene Spiegel-Write wird als erwarteter Readback konsumiert und **nie** als
+      Nutzerschaltung gewertet. (2)/(3) Nur eine **extern** ausgelöste Wertänderung dort
+      (nicht von homeESS gespiegelt) wechselt auf Vollladen bzw. Aus. Der gewählte Stand
+      liegt neustart-resistent in `control_mode`. **Nach jedem MQTT-(Wieder-)Verbindungs-
+      aufbau** (Connect-Epoch aus dem MQTT-Client) öffnet die Steuerschleife je Box ein
+      kurzes **Re-Baseline-Fenster (45 s)**: der erneut eingespielte retained-Sync-Wert
+      wird nur als Ausgangszustand übernommen, nie als Nutzerschaltung. Damit ändert ein
+      Neustart, Adapter-Reconnect oder Topic-Refresh den Schaltmodus nicht — nur ein
+      direkt beobachteter, nicht selbst ausgelöster Wechsel zählt. Das Status-Topic ist
+      reiner Ist-Zustand.
     - *Nächster Ladebeginn*: wird gerade nicht geladen, übernimmt die Automatik den
       Ladebeginn aus dem gemeinsamen Mehr-Wallbox-Vorausplan. `predictNextChargeStart`
       bleibt Fallback und behandelt insbesondere die manuelle Sperre. Die Steuerschleife legt
@@ -897,13 +957,14 @@ MQTT.md                   Referenz: ioBroker-MQTT-Regeln
 - `grid_control_log(id, ts, category 'info'|'action'|'critical', message,
   values_text)` — Audit-Log, automatisch auf 2000 Einträge beschnitten.
 - `wallboxes(id, name, max_power_w, battery_capacity_kwh, command_topic,
-  status_topic, power_topic, power_unit 'W'|'kW', counter_topic, counter_unit 'Wh'|'kWh',
-  setpoint_topic, plugged_topic, soc_topic, mode_sync_topic, mode 1|2|3,
-  priority_private/business/full 1–5, min_charge_percent, business_days CSV Mo..So,
-  stall_timeout_seconds, stall_power_w, control_mode 'auto'|'off'|'full')` — je
-  Wallbox eine Zeile (optionales Modul); die beiden Stall-Spalten steuern den
-  Ladestart-Neustart, `control_mode` hält die manuelle Übersteuerung
-  neustart-resistent.
+  control_sync_topic, status_topic, power_topic, power_unit 'W'|'kW', counter_topic,
+  counter_unit 'Wh'|'kWh', setpoint_topic, plugged_topic, soc_topic, mode_sync_topic,
+  mode 1|2|3, priority_private/business/full 1–5, min_charge_percent, business_days
+  CSV Mo..So, stall_timeout_seconds, stall_power_w, control_mode 'auto'|'off'|'full')`
+  — je Wallbox eine Zeile (optionales Modul). `command_topic` ist reiner Aktor,
+  `control_sync_topic` der optionale bidirektionale An/Aus-Schalter (Bedienerkennung);
+  die beiden Stall-Spalten steuern den Ladestart-Neustart, `control_mode` hält die
+  manuelle Übersteuerung neustart-resistent.
 - `wallbox_counter_state(wallbox_id, last_raw_value, day_total, last_day_key,
   plugged_energy_start, last_power_ts)` — Zähler-/Power-Integrationsstand + SoC-Schätzbasis.
 - `wallbox_summary_state(wallbox_id, week/month/year_offset, previous_year_total,
@@ -945,10 +1006,12 @@ MQTT.md                   Referenz: ioBroker-MQTT-Regeln
   Mitglieder anschließend ausschaltet.
 - `mess_schalt_actor_state(actor_id, last_counter_raw, last_progress_ts,
   derived_power_w, counter_total_kwh, day_key, day_start_kwh, year_key,
-  year_start_kwh, prev_year_kwh)` — Ableitungszustand für „Leistung aus
-  Zählerfortschritt" (0 W nach über 10 min ohne Fortschritt), interner Zähler
-  sowie Tages-/Jahres-Baselines für die Gruppen-Verbrauchssummen
-  (heute/Jahr/Vorjahr).
+  year_start_kwh, prev_year_kwh, power_energy_kwh, power_energy_day_start_kwh,
+  last_power_ts)` — Ableitungszustand für „Leistung aus Zählerfortschritt" (0 W
+  nach über 10 min ohne Fortschritt), interner Zähler sowie Tages-/Jahres-Baselines
+  für die Gruppen-Verbrauchssummen (heute/Jahr/Vorjahr). Die drei `power_energy*`-
+  Felder halten die aus der Live-Leistung integrierte Tagesenergie für die
+  Zähler-Gegenprobe (Warnung bei Wh↔kWh-Fehlkonfiguration).
 - `mess_schalt_function_hourly(function_key, day_key, hour, consumption_kwh,
   temperature)` + `mess_schalt_function_state(id=1, last_sample_ts)` — je Funktion
   und Stunde integrierte Energie samt energiegewichteter Außentemperatur der

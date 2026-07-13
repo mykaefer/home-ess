@@ -247,7 +247,17 @@ function openDatabase() {
         primary_kwh REAL,
         self_kwh REAL,
         reconciled INTEGER NOT NULL DEFAULT 0,
+        incomplete INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (day_key, hour)
+      )`
+    );
+    // Gesundheit der Verbrauchserfassung: Zeitpunkt des letzten Samples MIT
+    // verbraucherseitigen Daten. Reißt der Abstand über eine volle Stunde, gelten
+    // die dazwischenliegenden Stunden als „unvollständig" (Vortageswert, ausgegraut).
+    db.run(
+      `CREATE TABLE IF NOT EXISTS prognosis_sampling_state (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        last_ok_ts INTEGER
       )`
     );
     db.run(
@@ -376,6 +386,7 @@ function openDatabase() {
         max_power_w REAL NOT NULL DEFAULT 11000,
         battery_capacity_kwh REAL NOT NULL DEFAULT 50,
         command_topic TEXT NOT NULL DEFAULT '',
+        control_sync_topic TEXT NOT NULL DEFAULT '',
         status_topic TEXT NOT NULL DEFAULT '',
         power_topic TEXT NOT NULL DEFAULT '',
         power_unit TEXT NOT NULL DEFAULT 'W',
@@ -508,6 +519,9 @@ function openDatabase() {
         year_key TEXT,
         year_start_kwh REAL,
         prev_year_kwh REAL,
+        power_energy_kwh REAL,
+        power_energy_day_start_kwh REAL,
+        last_power_ts INTEGER,
         FOREIGN KEY (actor_id) REFERENCES mess_schalt_actors(id) ON DELETE CASCADE
       )`
     );
@@ -547,18 +561,21 @@ function openDatabase() {
       )`
     );
     // Heizung / Klima nach Außentemperatur: je 1-°C-Fenster bis zu 30 Messtage,
-    // pro Tag die zeitgewichtete mittlere Leistung (W) bei dieser Temperatur.
+    // pro Tag UND Tagesstunde (0–23) die zeitgewichtete mittlere Leistung (W) bei
+    // dieser Temperatur. Die Stunde ist nötig, weil der Heiz-/Kühlbedarf je Tageszeit
+    // variiert (Kühlen v.a. abends, Heizen morgens zum Aufheizen stärker als abends).
     // Bewusst KEINE lange Historie – ein Fenster wird nur an Tagen belegt, an denen
     // diese Außentemperatur real auftrat (Sommer-Kühlkurve bleibt im Winter stehen).
-    // Der Balken der Prognose-Datenbasis zeigt das 30-Tage-Mittel, die
-    // Markierungslinie den Wert des aktuellen Tages.
+    // Der Balken der Prognose-Datenbasis zeigt das 30-Tage-Mittel über alle 24 Stunden,
+    // der Klick-Dialog die 24-Stunden-Kurve, die Markierungslinie den heutigen Wert.
     db.run(
       `CREATE TABLE IF NOT EXISTS mess_schalt_temperature_power (
         bucket INTEGER NOT NULL,
         day_key TEXT NOT NULL,
+        hour INTEGER NOT NULL DEFAULT 0,
         avg_power_w REAL NOT NULL DEFAULT 0,
         weight_seconds REAL NOT NULL DEFAULT 0,
-        PRIMARY KEY (bucket, day_key)
+        PRIMARY KEY (bucket, day_key, hour)
       )`
     );
     // Energiefluss-Exporte: benannte, öffentlich abrufbare Live-Ansichten des
@@ -643,6 +660,7 @@ function openDatabase() {
     migratePoolConfig(db);
     migrateWallboxes(db);
     migrateMessSchaltActors(db);
+    migrateMessSchaltTemperaturePower(db);
   });
 
   return db;
@@ -685,6 +703,9 @@ function migratePrognosisDailyConsumption(db) {
     if (!existing.has('primary_kwh')) db.run('ALTER TABLE prognosis_hourly_consumption ADD COLUMN primary_kwh REAL');
     if (!existing.has('self_kwh')) db.run('ALTER TABLE prognosis_hourly_consumption ADD COLUMN self_kwh REAL');
     if (!existing.has('reconciled')) db.run('ALTER TABLE prognosis_hourly_consumption ADD COLUMN reconciled INTEGER NOT NULL DEFAULT 0');
+    // incomplete = 1: Stunde konnte nicht sauber erfasst werden (Sampling-Lücke);
+    // consumption_kwh wurde auf den Vortageswert gesetzt, Anzeige ausgegraut.
+    if (!existing.has('incomplete')) db.run('ALTER TABLE prognosis_hourly_consumption ADD COLUMN incomplete INTEGER NOT NULL DEFAULT 0');
   });
 }
 
@@ -1095,6 +1116,12 @@ function migrateWallboxes(db) {
     if (!existing.has('control_mode')) {
       db.run("ALTER TABLE wallboxes ADD COLUMN control_mode TEXT NOT NULL DEFAULT 'auto'");
     }
+    // Getrenntes Steuerung-Sync-Topic (an/aus): homeESS spiegelt hierauf den
+    // Schaltzustand und erkennt externe Nutzerschaltungen; das Steuer-Topic bleibt
+    // reiner Aktor (nur Schreiben, keine Bedienerkennung).
+    if (!existing.has('control_sync_topic')) {
+      db.run("ALTER TABLE wallboxes ADD COLUMN control_sync_topic TEXT NOT NULL DEFAULT ''");
+    }
   });
 }
 
@@ -1178,12 +1205,50 @@ function migrateMessSchaltActors(db) {
     }
     // Tages-/Jahres-Baseline auf dem internen Zähler, plus abgeschlossener
     // Vorjahresverbrauch – für saubere Gruppen-Verbrauchssummen (Tag/Jahr/Vorjahr).
+    // Aus dem Leistungs-Topic integrierte Energie (Tagesbasis) – unabhängig vom
+    // Zähler-Topic. Dient als Plausibilitäts-Gegenprobe: Weicht der Zähler stark
+    // von der aus der Live-Leistung integrierten Energie ab (z. B. Einheit Wh/kWh
+    // vertauscht), wird am Gerät gewarnt.
     for (const [col, decl] of [
       ['day_key', 'TEXT'], ['day_start_kwh', 'REAL'],
       ['year_key', 'TEXT'], ['year_start_kwh', 'REAL'], ['prev_year_kwh', 'REAL'],
+      ['power_energy_kwh', 'REAL'], ['power_energy_day_start_kwh', 'REAL'], ['last_power_ts', 'INTEGER'],
     ]) {
       if (!existing.has(col)) db.run(`ALTER TABLE mess_schalt_actor_state ADD COLUMN ${col} ${decl}`);
     }
+  });
+}
+
+// Heizung / Klima nach Außentemperatur bekommt eine Tagesstunden-Dimension: aus
+// (bucket, day_key) wird (bucket, day_key, hour). Alte DBs haben nur das
+// Tagesmittel – dieses wird gleichmäßig auf alle 24 Stunden verteilt (die
+// tatsächliche Stundenverteilung war bisher unbekannt) und verfeinert sich beim
+// Weiterlernen. So bleibt die Balkenhöhe (Mittel über 24 Stunden) unverändert.
+function migrateMessSchaltTemperaturePower(db) {
+  db.all('PRAGMA table_info(mess_schalt_temperature_power)', (err, rows) => {
+    if (err || !Array.isArray(rows) || rows.length === 0) return;
+    const existing = new Set(rows.map((r) => r.name));
+    if (existing.has('hour')) return; // bereits migriert (bzw. frisch angelegt)
+    db.serialize(() => {
+      db.run('ALTER TABLE mess_schalt_temperature_power RENAME TO mess_schalt_temperature_power_old');
+      db.run(
+        `CREATE TABLE mess_schalt_temperature_power (
+          bucket INTEGER NOT NULL,
+          day_key TEXT NOT NULL,
+          hour INTEGER NOT NULL DEFAULT 0,
+          avg_power_w REAL NOT NULL DEFAULT 0,
+          weight_seconds REAL NOT NULL DEFAULT 0,
+          PRIMARY KEY (bucket, day_key, hour)
+        )`
+      );
+      db.run(
+        `INSERT INTO mess_schalt_temperature_power (bucket, day_key, hour, avg_power_w, weight_seconds)
+         WITH RECURSIVE h(n) AS (SELECT 0 UNION ALL SELECT n + 1 FROM h WHERE n < 23)
+         SELECT bucket, day_key, n, avg_power_w, weight_seconds / 24.0
+           FROM mess_schalt_temperature_power_old, h`
+      );
+      db.run('DROP TABLE mess_schalt_temperature_power_old');
+    });
   });
 }
 

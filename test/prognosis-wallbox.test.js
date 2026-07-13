@@ -16,7 +16,7 @@ test('Wallbox-Prognose lernt Verbrauch und Ladezeit je Box und Wochentag getrenn
   const db = new sqlite3.Database(':memory:');
   await run(db, `CREATE TABLE wallboxes (
     id INTEGER PRIMARY KEY, name TEXT, max_power_w REAL, battery_capacity_kwh REAL,
-    command_topic TEXT, status_topic TEXT, power_topic TEXT, power_unit TEXT,
+    command_topic TEXT, control_sync_topic TEXT, status_topic TEXT, power_topic TEXT, power_unit TEXT,
     counter_topic TEXT, counter_unit TEXT, setpoint_topic TEXT, plugged_topic TEXT,
     soc_topic TEXT, mode_sync_topic TEXT, mode INTEGER, priority_private INTEGER,
     priority_business INTEGER, priority_full INTEGER, min_charge_percent INTEGER,
@@ -35,7 +35,7 @@ test('Wallbox-Prognose lernt Verbrauch und Ladezeit je Box und Wochentag getrenn
     wallbox_id INTEGER PRIMARY KEY, year_offset REAL, previous_year_total REAL)`);
   await run(db, `CREATE TABLE wallbox_counter_state (
     wallbox_id INTEGER PRIMARY KEY, day_total REAL)`);
-  const values = `(?, ?, 11000, 50, '', '', '', 'W', '', 'kWh', '', '', '', '', 1, 5, 3, 4, 30, 100, '', 18, 120, 200, 'three_phase', 'auto')`;
+  const values = `(?, ?, 11000, 50, '', '', '', '', 'W', '', 'kWh', '', '', '', '', 1, 5, 3, 4, 30, 100, '', 18, 120, 200, 'three_phase', 'auto')`;
   await run(db, `INSERT INTO wallboxes VALUES ${values}`, [1, 'Auto A']);
   await run(db, `INSERT INTO wallboxes VALUES ${values}`, [2, 'Auto B']);
   await run(db, `INSERT INTO wallbox_summary_state VALUES (1, 20, 0), (2, 8, 0)`);

@@ -51,6 +51,7 @@ function boxToFormValues(box) {
     maxPowerW: box.maxPowerW ?? '',
     batteryCapacityKwh: box.batteryCapacityKwh ?? '',
     commandTopic: box.commandTopic || '',
+    controlSyncTopic: box.controlSyncTopic || '',
     statusTopic: box.statusTopic || '',
     powerTopic: box.powerTopic || '',
     powerUnit: box.powerUnit || 'W',

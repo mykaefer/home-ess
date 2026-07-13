@@ -80,13 +80,14 @@ function renderActorRow(actor) {
     ? `<label class="ms-toggle" title="Ein-/Ausschalten (Einschalten nur bei freigegebener Priorität)"><input type="checkbox" id="ms-switch-${actor.id}" onchange="toggleActor(${actor.id}, this.checked)"${actor.statusOn === true ? ' checked' : ''}><span class="ms-toggle-slider"></span></label>`
     : '<span aria-hidden="true"></span>';
   const counter = actor.hasCounter
-    ? `<span class="ms-row-counter${staleClass(actor.counterStale)}" id="ms-counter-${actor.id}" title="Zähler · ${escapeHtml(actor.counterFreshness)}">${escapeHtml(actor.counterDisplay)}${actor.counterStale ? ' ⚠' : ''}</span>`
+    ? `<span class="ms-row-counter${actor.counterWarning ? ' ms-row-counter--warn' : ''}" id="ms-counter-${actor.id}" title="${actor.counterWarning ? escapeHtml(actor.counterWarningText) : `Interner Zählerstand (aus dem Zählerfortschritt gebildet) · Rohwert zuletzt ${escapeHtml(actor.counterFreshness)}`}">${escapeHtml(actor.counterDisplay)}${actor.counterWarning ? ' ⚠' : ''}</span>`
     : '<span class="ms-row-counter" aria-hidden="true"></span>';
   const muted = !actor.hasSwitch || (actor.hasSwitch && !actor.alwaysOn);
-  return `              <div class="ms-row" data-id="${actor.id}">
+  const offlineTitle = actor.offline ? `Nicht verbunden – kein Messwert seit ${actor.offlineSince}` : '';
+  return `              <div class="ms-row${actor.offline ? ' ms-row--offline' : ''}" data-id="${actor.id}">
                 <span class="widget-drag" title="Zum Verschieben ziehen" aria-hidden="true">⠿</span>
-                <span class="${statusDotClass(actor.statusOn)}${staleClass(actor.statusStale)}" id="ms-status-${actor.id}" title="Status · ${escapeHtml(actor.statusFreshness)}"></span>
-                <span class="ms-row-name">${escapeHtml(actor.name)}</span>
+                <span class="${statusDotClass(actor.statusOn)}${staleClass(actor.statusStale)}${actor.offline ? ' is-offline' : ''}" id="ms-status-${actor.id}" title="${actor.offline ? escapeHtml(offlineTitle) : `Status · ${escapeHtml(actor.statusFreshness)}`}"></span>
+                <span class="ms-row-name"><span class="ms-offline-badge" id="ms-offline-${actor.id}"${actor.offline ? ` title="${escapeHtml(offlineTitle)}"` : ' hidden'}>offline</span>${escapeHtml(actor.name)}</span>
                 <span class="ms-prio${muted ? ' ms-prio--muted' : ''}" id="ms-prio-${actor.id}" title="Betriebsart bzw. aktive Priorität, auf die dieses Gerät beim Betriebslevel reagiert">${escapeHtml(metaLabel(actor))}</span>
                 <span class="ms-row-power${staleClass(actor.powerStale)}" id="ms-power-${actor.id}" title="Leistung · ${escapeHtml(actor.powerFreshness)}">${escapeHtml(actor.powerDisplay)}${actor.powerStale ? ' ⚠' : ''}</span>
                 ${counter}
@@ -713,10 +714,11 @@ ${renderUngrouped(ungrouped)}
     }
 
     // --- Live-Aktualisierung ------------------------------------------------
-    function applyStatusDot(el, statusOn, stale, freshness) {
+    function applyStatusDot(el, statusOn, stale, freshness, offlineTitle) {
       if (!el) return;
-      el.className = 'ms-status-dot ' + (statusOn === true ? 'is-on' : statusOn === false ? 'is-off' : 'is-unknown') + (stale ? ' ms-value--stale' : '');
-      el.title = 'Status · ' + (freshness || 'noch kein Wert empfangen');
+      el.className = 'ms-status-dot ' + (statusOn === true ? 'is-on' : statusOn === false ? 'is-off' : 'is-unknown')
+        + (stale ? ' ms-value--stale' : '') + (offlineTitle ? ' is-offline' : '');
+      el.title = offlineTitle || ('Status · ' + (freshness || 'noch kein Wert empfangen'));
     }
 
     async function refreshValues() {
@@ -733,11 +735,23 @@ ${renderUngrouped(ungrouped)}
           }
           var counter = document.getElementById('ms-counter-' + a.id);
           if (counter && a.counterDisplay != null) {
-            counter.textContent = a.counterDisplay + (a.counterStale ? ' ⚠' : '');
-            counter.classList.toggle('ms-value--stale', !!a.counterStale);
-            counter.title = 'Zähler · ' + a.counterFreshness;
+            // Interner Zählerstand: nie „veraltet" (immer bekannt); nur die
+            // Wh/kWh-Gegenprobe-Warnung wird markiert.
+            counter.textContent = a.counterDisplay + (a.counterWarning ? ' ⚠' : '');
+            counter.classList.remove('ms-value--stale');
+            counter.classList.toggle('ms-row-counter--warn', !!a.counterWarning);
+            counter.title = a.counterWarning ? a.counterWarningText
+              : 'Interner Zählerstand (aus dem Zählerfortschritt gebildet) · Rohwert zuletzt ' + a.counterFreshness;
           }
-          applyStatusDot(document.getElementById('ms-status-' + a.id), a.statusOn, a.statusStale, a.statusFreshness);
+          var offlineTitle = a.offline ? ('Nicht verbunden – kein Messwert seit ' + a.offlineSince) : '';
+          applyStatusDot(document.getElementById('ms-status-' + a.id), a.statusOn, a.statusStale, a.statusFreshness, offlineTitle);
+          var offBadge = document.getElementById('ms-offline-' + a.id);
+          if (offBadge) {
+            offBadge.hidden = !a.offline;
+            if (a.offline) offBadge.title = offlineTitle;
+          }
+          var row = document.querySelector('.ms-row[data-id="' + a.id + '"]');
+          if (row) row.classList.toggle('ms-row--offline', !!a.offline);
           // Toggle (nur bei manuellen Geräten) spiegelt immer den bestätigten
           // Ist-Zustand. Ein angeklicktes Element behält sonst den Browserfokus
           // und würde bis zum Neuladen nicht mehr aktualisiert.

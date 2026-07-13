@@ -7,7 +7,7 @@ const sqlite3 = require('sqlite3').verbose();
 const { cacheKey, createActor, updateActor } = require('../src/messen-schalten/actors');
 const {
   buildActorSnapshot, readActorValues, readGroupSums, readGroupPowerTree, derivedPowerFromState, STALL_MS, VALUE_STALE_MS,
-  applyPeriodRollover, computeActorEnergy, buildGroupEnergyTree,
+  applyPeriodRollover, computeActorEnergy, buildGroupEnergyTree, counterPowerMismatch,
 } = require('../src/messen-schalten/aggregation');
 
 function dbRun(db, sql, params = []) {
@@ -32,7 +32,7 @@ async function freshDb() {
     load_shed_enabled INTEGER NOT NULL DEFAULT 0,
     load_shed_phase TEXT NOT NULL DEFAULT 'l1',
     switch_group_id INTEGER)`);
-  await dbRun(db, 'CREATE TABLE mess_schalt_actor_state (actor_id INTEGER PRIMARY KEY, last_counter_raw REAL, last_progress_ts INTEGER, derived_power_w REAL, counter_total_kwh REAL, day_key TEXT, day_start_kwh REAL, year_key TEXT, year_start_kwh REAL, prev_year_kwh REAL)');
+  await dbRun(db, 'CREATE TABLE mess_schalt_actor_state (actor_id INTEGER PRIMARY KEY, last_counter_raw REAL, last_progress_ts INTEGER, derived_power_w REAL, counter_total_kwh REAL, day_key TEXT, day_start_kwh REAL, year_key TEXT, year_start_kwh REAL, prev_year_kwh REAL, power_energy_kwh REAL, power_energy_day_start_kwh REAL, last_power_ts INTEGER)');
   return db;
 }
 
@@ -477,4 +477,111 @@ test('readGroupPowerTree: Gesamt bleibt null, wenn Ast keinerlei Werte liefert',
   ]);
   assert.equal(tree2.get(1).ebeneW, null);
   assert.equal(tree2.get(1).gesamtW, 300);
+});
+
+// --- Zähler-Gegenprobe (Guardrail gegen stille Fehlzählung, z. B. Wh statt kWh) ---
+
+test('counterPowerMismatch warnt, wenn Zähler-Energie stark von der Leistungs-Energie abweicht', () => {
+  const actor = { counterTopic: 'c', powerTopic: 'p' };
+  // Zähler zählt heute fast nichts, Leistung integriert 0,08 kWh → Faktor >> 3 → warnen.
+  assert.equal(
+    counterPowerMismatch(actor, { counterTotalKwh: 100.0004, dayStartKwh: 100, powerEnergyKwh: 0.08, powerEnergyDayStart: 0 }).warn,
+    true
+  );
+  // Konsistent (0,075 vs 0,08) → keine Warnung.
+  assert.equal(
+    counterPowerMismatch(actor, { counterTotalKwh: 100.075, dayStartKwh: 100, powerEnergyKwh: 0.08, powerEnergyDayStart: 0 }).warn,
+    false
+  );
+  // Zu wenig Energie am Tagesanfang (< 0,05 kWh) → keine Warnung trotz Divergenz.
+  assert.equal(
+    counterPowerMismatch(actor, { counterTotalKwh: 100, dayStartKwh: 100, powerEnergyKwh: 0.02, powerEnergyDayStart: 0 }).warn,
+    false
+  );
+  // Ohne Leistungs-Topic nicht bewertbar.
+  assert.equal(counterPowerMismatch({ counterTopic: 'c' }, { counterTotalKwh: 100, dayStartKwh: 0 }), null);
+});
+
+test('buildActorSnapshot integriert die Leistungs-Energie und warnt bei fehlkonfiguriertem Zähler', async () => {
+  const db = await freshDb();
+  await dbRun(db, "INSERT INTO mess_schalt_actors (id, name, power_topic, counter_topic, counter_unit) VALUES (1, 'Server', 'p.1', 'c.1', 'kWh')");
+  const t0 = new Date('2026-06-15T09:00:00Z').getTime();
+  // Zähler steht praktisch (z. B. Wh statt kWh → 1000× zu klein), Leistung 240 W dauerhaft.
+  await buildActorSnapshot(db, cacheFrom([[cacheKey(1, 'power'), 240], [cacheKey(1, 'counter'), 100]]), t0);
+  await buildActorSnapshot(db, cacheFrom([[cacheKey(1, 'power'), 240], [cacheKey(1, 'counter'), 100.0002]]), t0 + 10 * 60 * 1000);
+  await buildActorSnapshot(db, cacheFrom([[cacheKey(1, 'power'), 240], [cacheKey(1, 'counter'), 100.0004]]), t0 + 20 * 60 * 1000);
+  const [v] = await readActorValues(db, cacheFrom([[cacheKey(1, 'power'), 240], [cacheKey(1, 'counter'), 100.0004]]), null, t0 + 20 * 60 * 1000);
+  assert.equal(v.counterWarning, true);
+  assert.ok(v.powerTodayKwh > 0.05);   // Leistung wurde integriert (~0,08 kWh)
+  assert.ok(v.counterTodayKwh < 0.01); // Zähler zählte kaum
+  await new Promise((resolve) => db.close(resolve));
+});
+
+test('buildActorSnapshot: konsistenter Zähler löst keine Warnung aus', async () => {
+  const db = await freshDb();
+  await dbRun(db, "INSERT INTO mess_schalt_actors (id, name, power_topic, counter_topic, counter_unit) VALUES (1, 'Server', 'p.1', 'c.1', 'kWh')");
+  const t0 = new Date('2026-06-15T09:00:00Z').getTime();
+  // Zähler wächst passend zur Leistung (240 W über 10 min ≈ 0,04 kWh).
+  await buildActorSnapshot(db, cacheFrom([[cacheKey(1, 'power'), 240], [cacheKey(1, 'counter'), 100]]), t0);
+  await buildActorSnapshot(db, cacheFrom([[cacheKey(1, 'power'), 240], [cacheKey(1, 'counter'), 100.04]]), t0 + 10 * 60 * 1000);
+  await buildActorSnapshot(db, cacheFrom([[cacheKey(1, 'power'), 240], [cacheKey(1, 'counter'), 100.08]]), t0 + 20 * 60 * 1000);
+  const [v] = await readActorValues(db, cacheFrom([[cacheKey(1, 'power'), 240], [cacheKey(1, 'counter'), 100.08]]), null, t0 + 20 * 60 * 1000);
+  assert.equal(v.counterWarning, false);
+  await new Promise((resolve) => db.close(resolve));
+});
+
+test('buildActorSnapshot integriert Leistungs-Energie auch für Geräte ohne Zähler-Topic', async () => {
+  const db = await freshDb();
+  await dbRun(db, "INSERT INTO mess_schalt_actors (id, name, power_topic) VALUES (1, 'AC-PV', 'p.1')");
+  const t0 = new Date('2026-06-15T09:00:00Z').getTime();
+  await buildActorSnapshot(db, cacheFrom([[cacheKey(1, 'power'), 100]]), t0);
+  await buildActorSnapshot(db, cacheFrom([[cacheKey(1, 'power'), 100]]), t0 + 10 * 60 * 1000);
+  const row = await dbGet(db, 'SELECT power_energy_kwh, power_energy_day_start_kwh FROM mess_schalt_actor_state WHERE actor_id = 1');
+  assert.ok(Math.abs(row.power_energy_kwh - 100 * (10 / 60) / 1000) < 1e-9); // 100 W über 10 min
+  // Ohne Zähler-Topic keine Gegenprobe-Warnung.
+  const [v] = await readActorValues(db, cacheFrom([[cacheKey(1, 'power'), 100]]), null, t0 + 10 * 60 * 1000);
+  assert.equal(v.counterWarning, false);
+  await new Promise((resolve) => db.close(resolve));
+});
+
+// --- Geräte-Verbindungsstatus (offline nur bei schweigender Telemetrie) --------
+
+test('readActorValues meldet offline, wenn Leistung/Zähler länger als die Schwelle schweigen', async () => {
+  const db = await freshDb();
+  await dbRun(db, "INSERT INTO mess_schalt_actors (id, name, power_topic, counter_topic, counter_unit) VALUES (1, 'Server', 'p.1', 'c.1', 'kWh')");
+  const now = 5_000_000_000_000;
+  // Beide Telemetrie-Topics zuletzt vor 40 min empfangen (> 30 min) → offline.
+  const cache = new Map([
+    [cacheKey(1, 'power'), { value: 240, receivedAt: now - 40 * 60 * 1000 }],
+    [cacheKey(1, 'counter'), { value: 100, receivedAt: now - 40 * 60 * 1000 }],
+  ]);
+  const [v] = await readActorValues(db, cache, null, now);
+  assert.equal(v.offline, true);
+  await new Promise((resolve) => db.close(resolve));
+});
+
+test('readActorValues: frische Leistung hält das Gerät online, auch wenn der Zähler alt ist', async () => {
+  const db = await freshDb();
+  await dbRun(db, "INSERT INTO mess_schalt_actors (id, name, power_topic, counter_topic, counter_unit) VALUES (1, 'Server', 'p.1', 'c.1', 'kWh')");
+  const now = 5_000_000_000_000;
+  // Leistung frisch, Zähler-Topic seit 40 min still → Gerät ist verbunden (nicht offline),
+  // und der Zähler wird ohnehin nicht als „veraltet" geführt.
+  const cache = new Map([
+    [cacheKey(1, 'power'), { value: 240, receivedAt: now - 30 * 1000 }],
+    [cacheKey(1, 'counter'), { value: 100, receivedAt: now - 40 * 60 * 1000 }],
+  ]);
+  const [v] = await readActorValues(db, cache, null, now);
+  assert.equal(v.offline, false);
+  await new Promise((resolve) => db.close(resolve));
+});
+
+test('readActorValues: reines Schalt-Gerät (ohne Telemetrie) wird nie als offline gemeldet', async () => {
+  const db = await freshDb();
+  await dbRun(db, "INSERT INTO mess_schalt_actors (id, name, switch_topic) VALUES (1, 'Licht', 's.1')");
+  const now = 5_000_000_000_000;
+  // Schalt-Topic vor 3 h empfangen (Licht lange aus) – kein Telemetrie-Topic ⇒ nicht offline.
+  const cache = new Map([[cacheKey(1, 'switch'), { value: '0', receivedAt: now - 3 * 60 * 60 * 1000 }]]);
+  const [v] = await readActorValues(db, cache, null, now);
+  assert.equal(v.offline, false);
+  await new Promise((resolve) => db.close(resolve));
 });

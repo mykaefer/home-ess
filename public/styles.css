@@ -1399,6 +1399,16 @@ h2 .cmd-confirm { font-size: 13px; vertical-align: middle; }
     opacity: 1;
 }
 
+/* Touch-Geräte kennen kein Hover: Bearbeiten/Entfernen sonst unerreichbar. Auf
+   Zeigergeräten (Desktop) bleiben die Aktionen bis zum Hover dezent ausgeblendet. */
+@media (hover: none) {
+    .widget-actions,
+    .widget-group-actions,
+    .ms-row .widget-actions {
+        opacity: 1;
+    }
+}
+
 .widget-icon-btn {
     border: none;
     background: transparent;
@@ -2282,11 +2292,15 @@ h2 .cmd-confirm { font-size: 13px; vertical-align: middle; }
 .forecast-day-body { display: grid; grid-template-columns: minmax(220px, 5fr) minmax(200px, 4fr); gap: 18px; align-items: end; }
 .forecast-hours { min-width: 0; }
 .forecast-hours-chart { display: flex; align-items: flex-end; gap: 2px; height: 64px; border-bottom: 1px solid #e2e8f0; }
-.fh-cell { position: relative; flex: 1 1 0; height: 100%; display: flex; align-items: flex-end; }
+.fh-cell { position: relative; flex: 1 1 0; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; }
 .fh-bar { display: block; width: 100%; min-height: 1px; border-radius: 2px 2px 0 0; }
 .fh-bar--soll { background: #2563eb; }
 .fh-bar--ist { background: #0d9488; }
+/* Gestapelter Heiz-/Kühlbedarf über der Grundlast (Balken oben drauf). */
+.fh-bar--climate { background: #f97316; border-radius: 2px 2px 0 0; }
+.fh-bar--climate + .fh-bar { border-radius: 0; }
 .fh-plan { position: absolute; left: -1px; right: -1px; height: 0; border-top: 2px solid #334155; z-index: 2; pointer-events: none; }
+.fh-key--climate { background: #f97316; }
 .forecast-hours-axis { display: flex; justify-content: space-between; margin-top: 3px; font-size: 10px; color: #94a3b8; }
 .forecast-hours-legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 7px; font-size: 11px; color: #64748b; }
 .forecast-hours-legend span { display: inline-flex; align-items: center; gap: 5px; }
@@ -2308,6 +2322,11 @@ h2 .cmd-confirm { font-size: 13px; vertical-align: middle; }
 .db-cell--future { background: repeating-linear-gradient(135deg, rgba(148,163,184,0.06) 0 4px, transparent 4px 8px); border-radius: 3px; }
 .db-cell--future .db-bar { display: none; }
 .db-cell--replaced .db-bar--primary { background: #cbd5e1; }
+/* Stunde ohne saubere Erfassung (Sampling-Lücke): ausgegraut + schraffiert, damit
+   erkennbar ist, dass hier nichts gemessen wurde (Wert = Vortageswert). */
+.db-cell--incomplete { background: repeating-linear-gradient(135deg, rgba(148,163,184,0.10) 0 4px, transparent 4px 8px); border-radius: 3px; cursor: help; }
+.db-cell--incomplete .db-bar { background: #cbd5e1 !important; opacity: 0.5; }
+.db-key--incomplete { background: repeating-linear-gradient(135deg, #cbd5e1 0 3px, #fff 3px 6px); border: 1px solid #cbd5e1; }
 .db-mark { position: absolute; left: 10%; right: 10%; height: 0; border-top: 2px solid #b45309; z-index: 2; pointer-events: none; }
 .db-chart-axis { display: flex; justify-content: space-between; margin-top: 3px; font-size: 10px; color: #94a3b8; }
 .db-legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 8px; font-size: 11px; color: #64748b; }
@@ -2333,6 +2352,20 @@ h2 .cmd-confirm { font-size: 13px; vertical-align: middle; }
    unabhängig davon, ob das Fenster beschriftet ist. */
 .tb-tick { position: absolute; bottom: -16px; left: 0; right: 0; text-align: center; font-size: 10px; color: #94a3b8; white-space: nowrap; }
 .tb-axis { margin-top: 6px; font-size: 11px; }
+/* Anklickbare Temperaturfenster (öffnen die 24-Stunden-Kurve im Dialog). */
+.tb-cell--clickable { cursor: pointer; }
+.tb-cell--clickable:hover .tb-bar { filter: brightness(1.12); outline: 1px solid rgba(15,23,42,0.25); }
+
+/* 24-Stunden-Kurve eines Temperaturfensters (Klick-Dialog): je Tagesstunde die
+   mittlere Leistung (W), plus Markierung des heutigen Werts. */
+.hc-chart { margin-top: 4px; min-width: 320px; }
+.hc-chart-bars { display: flex; align-items: flex-end; gap: 3px; height: 140px; margin-bottom: 20px; border-bottom: 1px solid #e2e8f0; }
+.hc-cell { position: relative; flex: 1 1 0; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; }
+.hc-bar { display: block; width: 74%; max-width: 18px; min-height: 1px; border-radius: 2px 2px 0 0; }
+.hc-cell--empty .hc-bar { background: repeating-linear-gradient(135deg, rgba(148,163,184,0.18) 0 3px, transparent 3px 6px) !important; }
+.hc-mark { position: absolute; left: 0; right: 0; height: 0; border-top: 2px dashed #0f172a; pointer-events: none; }
+.hc-tick { position: absolute; bottom: -16px; left: 0; right: 0; text-align: center; font-size: 10px; color: #94a3b8; white-space: nowrap; }
+.hc-axis { margin-top: 6px; font-size: 11px; }
 
 .forecast-details { margin-top: 20px; align-items: start; }
 .forecast-facts { margin: 0; }
@@ -2821,6 +2854,13 @@ h2 .cmd-confirm { font-size: 13px; vertical-align: middle; }
     text-align: right;
     white-space: nowrap;
 }
+/* Zähler-Gegenprobe: Zähler-Energie weicht heute stark von der aus der Live-
+   Leistung integrierten Energie ab (vermutlich Einheit Wh/kWh vertauscht). */
+.ms-row-counter--warn {
+    color: #b91c1c;
+    font-weight: 700;
+    cursor: help;
+}
 
 .ms-row .ms-toggle {
     margin-top: 0;
@@ -2858,6 +2898,26 @@ h2 .cmd-confirm { font-size: 13px; vertical-align: middle; }
 .ms-status-dot.is-on { background: #2ecc71; box-shadow: 0 0 0 2px rgba(46, 204, 113, 0.25); }
 .ms-status-dot.is-off { background: #94a3b8; box-shadow: 0 0 0 2px rgba(148, 163, 184, 0.2); }
 .ms-status-dot.is-unknown { background: #cbd5e1; }
+/* „Nicht verbunden": Telemetrie des Geräts schweigt seit > Schwelle. Roter Ring
+   sticht heraus, unabhängig vom (evtl. veralteten) An/Aus-Zustand. */
+.ms-status-dot.is-offline { background: #fff; box-shadow: 0 0 0 2px #dc2626; }
+
+/* „offline"-Kennzeichnung am Gerätenamen. */
+.ms-offline-badge {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    color: #b91c1c;
+    background: #fee2e2;
+    border-radius: 999px;
+    padding: 0 6px;
+    margin-right: 5px;
+    vertical-align: middle;
+}
+.ms-offline-badge[hidden] { display: none; }
+.ms-row--offline .ms-row-name { color: #b91c1c; }
 
 .ms-group-sum {
     font-size: 13px;
@@ -2952,6 +3012,9 @@ h2 .cmd-confirm { font-size: 13px; vertical-align: middle; }
     padding: 8px;
 }
 .ef-svg { display: block; }
+/* Vertikaler (eingerückter) Modus: das SVG füllt die Containerbreite und wird über
+   das viewBox-Seitenverhältnis hoch – kein horizontales Scrollen mehr am Handy. */
+.ef-svg--vertical { width: 100%; height: auto; }
 .ef-empty { padding: 24px 12px; }
 
 /* Kanten: dünne Basislinie + animierter, gestrichelter Fluss darüber. Die
@@ -2987,6 +3050,8 @@ h2 .cmd-confirm { font-size: 13px; vertical-align: middle; }
 /* Stift-Button je Gruppe zum Öffnen des Farbwählers. */
 .ef-edit { cursor: pointer; opacity: 0; transition: opacity 0.12s ease; }
 .ef-node-group:hover .ef-edit { opacity: 1; }
+/* Touch: kein Hover – Farb-Stift dauerhaft sichtbar. */
+@media (hover: none) { .ef-edit { opacity: 1; } }
 .ef-edit circle { fill: #fff; stroke: #cbd5e1; stroke-width: 1; }
 .ef-edit:hover circle { stroke: #64748b; }
 .ef-edit-icon { font-size: 11px; fill: #475569; }
@@ -3231,7 +3296,7 @@ h2 .cmd-confirm { font-size: 13px; vertical-align: middle; }
 /* Kompakte Geräte-Zeile: Drag-Fläche · Status · Name · Leistung. */
 .sg-row {
     display: grid;
-    grid-template-columns: 24px 12px minmax(0, 1fr) 90px;
+    grid-template-columns: 24px 12px minmax(0, 1fr) 90px auto;
     align-items: center;
     gap: 10px;
     padding: 2px 12px 2px 6px;
@@ -3241,6 +3306,58 @@ h2 .cmd-confirm { font-size: 13px; vertical-align: middle; }
     font-size: 13px;
     line-height: 1.4;
 }
+
+/* „×" (Aus der Gruppe lösen): nur in Gruppen-Dropzones anbieten, nicht im Pool
+   (dort sind die Geräte bereits frei). Klickbare Alternative zum Zurückziehen. */
+.sg-row-remove {
+    border: none;
+    background: transparent;
+    color: #94a3b8;
+    font-size: 18px;
+    line-height: 1;
+    padding: 0 4px;
+    cursor: pointer;
+    justify-self: end;
+}
+.sg-row-remove:hover { color: #b91c1c; }
+.sg-dropzone[data-group=""] .sg-row-remove { display: none; }
+
+/* „+ Gerät hinzufügen" je Gruppe: öffnet den Auswahldialog freier Geräte. */
+.sg-add-device {
+    width: 100%;
+    margin-top: 4px;
+    padding: 7px 10px;
+    border: 1px dashed #cbd5e1;
+    border-radius: 6px;
+    background: #f8fafc;
+    color: #475569;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+}
+.sg-add-device:hover { border-color: #94a3b8; background: #f1f5f9; }
+
+/* Auswahldialog freier Geräte. */
+.sg-picker-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 55vh;
+    overflow-y: auto;
+    margin: 4px 0 8px;
+}
+.sg-picker-item {
+    text-align: left;
+    padding: 10px 12px;
+    border: 1px solid #e2e6ea;
+    border-radius: 6px;
+    background: #fff;
+    color: #0f172a;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+}
+.sg-picker-item:hover { border-color: #2563eb; background: #eff6ff; }
 
 .sg-dropzone .sg-row:first-child {
     border-top: none;
@@ -4059,6 +4176,22 @@ body,
         row-gap: 4px;
     }
 
+    /* „Sonstige Verbraucher"-Fußzeile folgt sonst dem festen 8-Spalten-Raster und
+       läuft am Handy über die Breite hinaus – auf Handy zu einer flexiblen Zeile
+       auflösen (Name links, Leistung rechts). */
+    .ms-sonstige {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        column-gap: 10px;
+        row-gap: 2px;
+    }
+    .ms-sonstige .ms-row-name { flex: 1 1 auto; min-width: 0; }
+    .ms-sonstige .ms-row-power { grid-column: auto; margin-left: auto; }
+
+    /* Toolbar-Knöpfe (Gruppe/Gerät hinzufügen) umbrechen statt zu überlaufen. */
+    .panel-head .dashboard-toolbar { flex-wrap: wrap; }
+
     /* ── Adapter (Übersicht + Instanzen) ──────────────────────────────── */
     .adapter-filter-toggle {
         width: 100%;
@@ -4182,5 +4315,15 @@ body,
     .sg-col {
         height: auto;
         overflow-y: visible;
+    }
+
+    /* Handy: nur die Gruppen-Spalte. Freie Geräte werden über den
+       „+ Gerät hinzufügen"-Dialog zugeordnet, nicht per Drag & Drop. Die
+       Pool-Spalte bleibt im DOM (Quelle des Auswahldialogs), nur ausgeblendet. */
+    .sg-col--pool { display: none; }
+    .sg-row .widget-drag { display: none; }
+    .sg-row {
+        grid-template-columns: 12px minmax(0, 1fr) 80px auto;
+        gap: 8px;
     }
 }

@@ -17,13 +17,16 @@ function statusDotClass(statusOn) {
   return 'ms-status-dot is-unknown';
 }
 
-// Kompakte Geräte-Zeile (beide Spalten): Drag-Fläche, Status, Name, Leistung.
+// Kompakte Geräte-Zeile (beide Spalten): Drag-Fläche, Status, Name, Leistung, Lösen.
+// Der „×"-Button (Lösen) wird per CSS nur in Gruppen-Dropzones gezeigt, nicht im
+// Pool – so ist die Zuordnung auch ohne Drag & Drop (Touch) bedienbar.
 function renderActorRow(actor) {
   return `              <div class="sg-row" data-id="${actor.id}">
                 <span class="widget-drag" title="Zum Zuordnen in eine Schaltgruppe ziehen" aria-hidden="true">⠿</span>
                 <span class="${statusDotClass(actor.statusOn)}" id="sg-status-${actor.id}"></span>
                 <span class="sg-row-name">${escapeHtml(actor.name)}</span>
                 <span class="sg-row-power" id="sg-power-${actor.id}">${escapeHtml(actor.powerDisplay)}</span>
+                <button type="button" class="sg-row-remove" title="Aus der Schaltgruppe lösen" aria-label="Aus der Schaltgruppe lösen" onclick="unassignActor(${actor.id})">×</button>
               </div>`;
 }
 
@@ -58,7 +61,9 @@ function renderGroupCard(group) {
                 <button type="button" class="widget-icon-btn" title="Schaltgruppe entfernen" onclick="openDeleteGroupDialog(${group.id}, ${toJsStringLiteral(group.name)})">🗑</button>
               </div>
             </div>
-            <div class="sg-group-body">${renderActorList(group.actors, group.id)}</div>
+            <div class="sg-group-body">${renderActorList(group.actors, group.id)}
+              <button type="button" class="sg-add-device" onclick="openDevicePicker(${group.id}, ${toJsStringLiteral(group.name)})">+ Gerät hinzufügen</button>
+            </div>
           </div>`;
 }
 
@@ -86,6 +91,22 @@ function renderGroupDialog() {
               <button type="button" class="secondary-button" onclick="closeGroupDialog()">Abbrechen</button>
             </div>
           </form>
+        </dialog>`;
+}
+
+// Auswahldialog freier Geräte für den „+ Gerät hinzufügen"-Button einer Gruppe.
+// Die Liste wird im Client aus den aktuell nicht zugeordneten Geräten (Pool)
+// gefüllt – so funktioniert das Zuordnen auch ohne Drag & Drop (Touch/Handy).
+function renderDevicePickerDialog() {
+  return `        <dialog id="sgDevicePicker" class="value-dialog">
+          <div class="dialog-form">
+            <h3>Gerät hinzufügen zu „<span id="sgPickerGroupName"></span>"</h3>
+            <p class="muted">Nicht zugeordnete Geräte aus Messen + Schalten. Antippen ordnet das Gerät der Gruppe zu.</p>
+            <div id="sgPickerList" class="sg-picker-list"></div>
+            <div class="button-row">
+              <button type="button" class="secondary-button" onclick="closeDevicePicker()">Schließen</button>
+            </div>
+          </div>
         </dialog>`;
 }
 
@@ -142,7 +163,8 @@ ${groupBlocks}
         </div>
 
         ${renderGroupDialog()}
-        ${renderDeleteGroupDialog()}`;
+        ${renderDeleteGroupDialog()}
+        ${renderDevicePickerDialog()}`;
 
   const script = `
     var groupConfigs = ${JSON.stringify(groupConfigs)};
@@ -252,6 +274,78 @@ ${groupBlocks}
         var badge = document.getElementById('sg-group-count-' + (zones[z].dataset.group || 'none'));
         if (badge) badge.textContent = zones[z].querySelectorAll('.sg-row').length;
       }
+    }
+
+    // --- Zuordnen/Lösen per Klick (Touch-tauglich, ohne Drag & Drop) ----------
+    var pickerGroupId = null;
+    function poolZone() { return document.querySelector('.sg-col--pool .sg-dropzone'); }
+    function groupZone(id) { return document.querySelector('.sg-group[data-group-id="' + id + '"] .sg-dropzone'); }
+
+    // Zuordnung an den Server melden; die DOM-Verschiebung erfolgt bereits vorher.
+    function assignActor(actorId, groupId) {
+      fetch('/messen-schalten/schaltgruppen/assign', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ actorId: Number(actorId), groupId: groupId })
+      }).then(function () { setTimeout(refreshValues, 300); }).catch(function () {});
+    }
+
+    function unassignActor(actorId) {
+      var row = document.querySelector('.sg-row[data-id="' + actorId + '"]');
+      var zone = poolZone();
+      if (row && zone) zone.appendChild(row);
+      assignActor(actorId, null);
+      updateCounts();
+    }
+
+    function openDevicePicker(groupId, groupName) {
+      pickerGroupId = groupId;
+      var dialog = document.getElementById('sgDevicePicker');
+      if (!dialog) return;
+      document.getElementById('sgPickerGroupName').textContent = groupName || '';
+      renderPickerList();
+      if (typeof dialog.showModal === 'function') dialog.showModal();
+    }
+    function closeDevicePicker() {
+      var d = document.getElementById('sgDevicePicker');
+      if (d) d.close();
+      pickerGroupId = null;
+    }
+
+    function renderPickerList() {
+      var list = document.getElementById('sgPickerList');
+      if (!list) return;
+      list.innerHTML = '';
+      var zone = poolZone();
+      var rows = zone ? zone.querySelectorAll('.sg-row') : [];
+      if (!rows.length) {
+        var empty = document.createElement('p');
+        empty.className = 'muted';
+        empty.textContent = 'Keine freien Geräte verfügbar.';
+        list.appendChild(empty);
+        return;
+      }
+      for (var i = 0; i < rows.length; i++) {
+        (function (row) {
+          var id = Number(row.dataset.id);
+          var nameEl = row.querySelector('.sg-row-name');
+          var btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'sg-picker-item';
+          btn.textContent = nameEl ? nameEl.textContent : ('Gerät ' + id);
+          btn.onclick = function () { addDeviceToGroup(id); };
+          list.appendChild(btn);
+        })(rows[i]);
+      }
+    }
+
+    function addDeviceToGroup(actorId) {
+      if (pickerGroupId == null) return;
+      var row = document.querySelector('.sg-row[data-id="' + actorId + '"]');
+      var target = groupZone(pickerGroupId);
+      if (row && target) target.appendChild(row);
+      assignActor(actorId, pickerGroupId);
+      renderPickerList();
+      updateCounts();
     }
 
     function initDragAndDrop() {

@@ -199,13 +199,15 @@ function planCharge(box, ctx = {}) {
 // Sonderfälle über dem Basisplan. Mutiert `state` (in-memory je Box) und liefert die
 // effektiv zu schaltende Aktion. Testbar ohne MQTT/DB.
 //
-// state: { output:'on'|'off'|null, changedAt, lastBrokerStatus,
-//          brokerStatusInitialized, expectedBrokerStatus, manualFull,
+// state: { output:'on'|'off'|null, changedAt, lastSyncValue,
+//          syncInitialized, expectedSyncValue, syncRebaselineUntil, manualFull,
 //          manualFullSawCharging, manualOff, manualOffDay, chargeStartedAt,
 //          restartUntil, restartAttempts }
-// ctx:   { plan, brokerStatus:'on'|'off'|null, powerW, pvPowerW,
+// ctx:   { plan, syncStatus:'on'|'off'|null, powerW, pvPowerW,
 //          selfConsumptionW, houseBatterySoc, houseBatteryMinSoc, soc, todayKey,
 //          levelAllows, now }
+// `syncStatus` ist der am Steuerung-Sync-Topic beobachtete An/Aus-Wert. Nur eine
+// EXTERNE Änderung dort (nicht von homeESS selbst gespiegelt) ist ein Bedienwunsch.
 // Rückgabe: { on, setpointW, priority, bypassHold, reason }
 function decideWallboxAction(box, state, ctx) {
   const { plan } = ctx;
@@ -214,43 +216,41 @@ function decideWallboxAction(box, state, ctx) {
   const settleOk = !state.changedAt || (now - state.changedAt) >= SETTLE_MS;
 
   // Reconnect-Fenster: Nach einem MQTT-Wiederverbindungsaufbau spielt der Broker
-  // alle retained-Werte erneut ein – auch den des Steuer-Topics, u. U. mit dem
-  // echten (abweichenden) Gerätezustand. Solange das Fenster offen ist, wird jeder
-  // Steuer-Topic-Wert nur als Ausgangszustand übernommen und NIE als Nutzerschaltung
-  // gewertet (Regel 3: ein Reconnect/Refresh ändert den Schaltmodus nicht).
-  const rebaselining = state.brokerRebaselineUntil != null && now < state.brokerRebaselineUntil;
-  if (state.brokerRebaselineUntil != null && now >= state.brokerRebaselineUntil) {
-    state.brokerRebaselineUntil = null;
+  // alle retained-Werte erneut ein – auch den des Steuerung-Sync-Topics, u. U. mit
+  // einem abweichenden Wert. Solange das Fenster offen ist, wird jeder Sync-Wert nur
+  // als Ausgangszustand übernommen und NIE als Nutzerschaltung gewertet (Regel 3:
+  // ein Reconnect/Refresh ändert den Schaltmodus nicht).
+  const rebaselining = state.syncRebaselineUntil != null && now < state.syncRebaselineUntil;
+  if (state.syncRebaselineUntil != null && now >= state.syncRebaselineUntil) {
+    state.syncRebaselineUntil = null;
   }
 
-  // Den ersten Broker-Wert nach einem Prozessstart nur als Ausgangszustand
-  // übernehmen. Andernfalls würde eine bereits laufende Ladung fälschlich als
-  // manuelles Einschalten gelten und bis 99 % weiterladen.
-  // Bestätigt der Broker exakt den zuletzt von der Automatik gesendeten Wert,
-  // ist das nur unser eigener Readback und ausdrücklich kein Nutzerwunsch.
-  const ownReadback = ctx.brokerStatus && state.expectedBrokerStatus === ctx.brokerStatus;
+  // Den ersten Sync-Wert nach einem Prozessstart nur als Ausgangszustand übernehmen.
+  // Andernfalls würde eine bereits laufende Ladung fälschlich als manuelles
+  // Einschalten gelten. Entspricht der Sync-Wert exakt dem zuletzt von homeESS
+  // gespiegelten Wert, ist das nur unser eigener Readback und kein Nutzerwunsch.
+  const ownReadback = ctx.syncStatus && state.expectedSyncValue === ctx.syncStatus;
   if (ownReadback) {
-    state.expectedBrokerStatus = null;
-    state.brokerStatusInitialized = true;
-    state.lastBrokerStatus = ctx.brokerStatus;
-    if (state.output == null) state.output = ctx.brokerStatus;
-  } else if (ctx.brokerStatus && (!state.brokerStatusInitialized || rebaselining)) {
+    state.expectedSyncValue = null;
+    state.syncInitialized = true;
+    state.lastSyncValue = ctx.syncStatus;
+    if (state.output == null) state.output = ctx.syncStatus;
+  } else if (ctx.syncStatus && (!state.syncInitialized || rebaselining)) {
     // Erstwert nach (Wieder-)Verbindung: nur Ausgangszustand, keine Bedienerkennung.
-    state.brokerStatusInitialized = true;
-    state.lastBrokerStatus = ctx.brokerStatus;
-    if (state.output == null) state.output = ctx.brokerStatus;
-  // (2)/(3) Manuelle Schaltung am Broker erkennen: ein späterer Statuswechsel, den
-  // wir nicht selbst kommandiert haben (Broker-Status weicht vom zuletzt gesendeten
-  // Befehl ab).
-  } else if (settleOk && ctx.brokerStatus && ctx.brokerStatus !== state.lastBrokerStatus) {
-    if (ctx.brokerStatus === 'on' && state.output !== 'on') {
-      // Manuell EIN → einmalig voll laden, sofern die Modus-Priorität es zulässt.
+    state.syncInitialized = true;
+    state.lastSyncValue = ctx.syncStatus;
+    if (state.output == null) state.output = ctx.syncStatus;
+  // (2)/(3) Externe Schaltung am Steuerung-Sync-Topic erkennen: ein späterer
+  // Wertwechsel, den homeESS nicht selbst gespiegelt hat.
+  } else if (settleOk && ctx.syncStatus && ctx.syncStatus !== state.lastSyncValue) {
+    if (ctx.syncStatus === 'on' && state.output !== 'on') {
+      // Extern EIN → einmalig voll laden, sofern die Modus-Priorität es zulässt.
       if (ctx.levelAllows) state.manualFull = true;
       state.manualFullSawCharging = false;
       state.manualOff = false;
       state.manualOffDay = '';
-    } else if (ctx.brokerStatus === 'off' && state.output === 'on') {
-      // Manuell AUS → aus bleiben bis Folgetag, PV erstmals > Wallbox-Leistung.
+    } else if (ctx.syncStatus === 'off' && state.output === 'on') {
+      // Extern AUS → aus bleiben bis Folgetag, PV erstmals > Wallbox-Leistung.
       state.manualOff = true;
       state.manualOffDay = ctx.todayKey;
       state.manualFull = false;
@@ -259,7 +259,7 @@ function decideWallboxAction(box, state, ctx) {
       state.restartAttempts = 0;
     }
   }
-  if (ctx.brokerStatus) state.lastBrokerStatus = ctx.brokerStatus;
+  if (ctx.syncStatus) state.lastSyncValue = ctx.syncStatus;
 
   let on = plan.desiredOn;
   let setpointW = plan.setpointW;

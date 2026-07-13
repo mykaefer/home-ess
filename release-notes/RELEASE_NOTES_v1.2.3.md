@@ -1,32 +1,52 @@
-# homeESS v1.2.3 – Wallbox neustart-fest & Heizung/Klima nach Leistung
+# homeESS v1.2.3 – Wallbox-An/Aus sauber getrennt & Heizung/Klima nach Leistung
 
-**v1.2.3** behebt einen ungewollten „Aus"-Sprung der Wallbox-Steuerung nach
-Neustart/Reconnect und stellt das Lernmodell für **Heizung / Klima** von Energie
-auf **mittlere Leistung je 1-°C-Außentemperaturfenster** um.
+**v1.2.3** trennt die An/Aus-Kanäle der Wallbox sauber (behebt Rückkopplungen der
+Automatik in beide Richtungen) und stellt das Lernmodell für **Heizung / Klima**
+von Energie auf **mittlere Leistung je 1-°C-Außentemperaturfenster** um.
 
 ## Behoben
 
-### Wallbox: Neustart/Reconnect schaltet nicht mehr ungewollt auf „Aus"
+### Wallbox: An/Aus-Kanäle getrennt – keine Rückkopplung durch die Automatik
 
-- Bei jedem MQTT-(Wieder-)Verbindungsaufbau spielt der Broker alle retained-Werte
-  erneut ein — auch den des **Steuer-Topics**, u. U. mit dem echten (abweichenden)
-  Gerätezustand (z. B. wenn das Relais/der Adapter beim CCU-Neustart kurz „aus"
-  meldet und kein separates Status-Topic konfiguriert ist).
-- Der bisherige Neustart-Schutz entschärfte nur den **allerersten** Wert nach
-  Prozessstart. Ein **späterer Adapter-Reconnect** wurde als „Nutzer hat
-  ausgeschaltet" fehlgedeutet — und seit die manuelle Übersteuerung persistiert
-  wird (1.2.1/1.2.2), über Neustarts hinweg festgehalten. Ergebnis: Die Steuerung
-  sprang ohne Zutun auf „Aus".
-- Die Steuerschleife öffnet nach jedem Reconnect (Connect-Epoch aus dem
-  MQTT-Client) je Box ein kurzes **Re-Baseline-Fenster (45 s)**: der erneut
-  eingespielte Steuer-Topic-Wert wird nur als **Ausgangszustand** übernommen, nie
-  als Nutzerschaltung. Damit gilt wieder verlässlich: **Neustart, Adapter-Reconnect
-  oder Topic-Refresh ändern den Schaltzustand nicht** (auto bleibt auto, aus bleibt
-  aus). Echte Nutzerschaltungen im laufenden Betrieb werden weiter sofort erkannt.
+Bisher diente **ein** Steuer-Topic zugleich als Aktor (Schalten) **und** als
+Rückmelde-/Bedienkanal. Dadurch deutete homeESS eigene Schalt-Readbacks bzw. den
+Gerätezustand nach einem Reconnect als Nutzerschaltung fehl:
 
-> **Hinweis:** Stand die Steuerung durch den alten Fehler bereits fälschlich auf
-> „Aus", einmalig über die Oberfläche zurück auf Automatik stellen — danach hält
-> der Fix sie dort.
+- Schaltete die **Automatik** die Ladung ein, sprang die Steuerung fälschlich auf
+  **Vollladen** und verließ den Automatikmodus (**Regel 1 verletzt**).
+- Ein **Adapter-Reconnect** wurde als externes „Aus" fehlgedeutet und – seit die
+  Übersteuerung persistiert wird (1.2.1/1.2.2) – über Neustarts hinweg festgehalten.
+
+Neu sind die Kanäle strikt getrennt:
+
+- Das **Steuer-Topic** ist ein **reiner Aktor**: homeESS schaltet die Wallbox
+  darüber, liest es aber nie zur Bedienerkennung zurück.
+- Ein neues, optionales **Steuerung-Sync-Topic** ist der bidirektionale
+  An/Aus-Schalter. homeESS **spiegelt** darauf den aktuellen Zustand (Regel 1: bleibt
+  dabei auf Automatik) und wertet **nur eine extern ausgelöste Änderung** (nicht von
+  homeESS geschrieben) als Bedienbefehl:
+  - **extern EIN** → einmalige Volladung bis 100 %/Leistungsabfall bzw. bis der
+    Stecker gezogen wird, danach zurück auf Automatik;
+  - **extern AUS während der Ladung** → aus bis zum nächsten Ladebeginn am Folgetag,
+    dann zurück auf Automatik.
+- Der gewählte Stand liegt **neustart-resistent** in der Datenbank. Ein
+  **Re-Baseline-Fenster (45 s)** nach jedem MQTT-(Wieder-)Verbindungsaufbau stellt
+  sicher, dass **Neustart, Adapter-Reconnect oder Topic-Refresh nie** als externe
+  Schaltung gelten – nur ein direkt beobachteter, nicht selbst ausgelöster Wechsel
+  zählt.
+
+### Wallbox: Modus-Sync-Topic nur noch für den Ladeplan
+
+- Das **Modus-Sync-Topic** hält ausschließlich den Ladeplan bidirektional synchron:
+  **1 = Privat, 2 = Beruflich, 3 = Immer voll** (im Formular erläutert). Es schaltet
+  die Ladung nicht ein oder aus – das übernimmt das Steuerung-Sync-Topic.
+
+> **Hinweis zur Einrichtung:** In der Wallbox-Konfiguration das neue
+> **Steuerung-Sync-Topic (an/aus)** eintragen (z. B. den bisherigen Schalter-
+> Datenpunkt). Ohne dieses Topic gibt es keine externe An/Aus-Bedienung mehr –
+> die Ladung läuft dann rein nach Automatik bzw. den Umschaltern in der Oberfläche.
+> Stand die Steuerung durch den alten Fehler noch auf „Aus"/„Vollladen", einmal
+> über die Oberfläche auf Automatik zurückstellen.
 
 ### Prognose: Balken sitzen wieder auf einer Nulllinie
 

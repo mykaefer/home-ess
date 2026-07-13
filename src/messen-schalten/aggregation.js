@@ -19,6 +19,20 @@ const { localCalendar } = require('../local-time');
 const STALL_MS = 10 * 60 * 1000;   // > 10 min ohne Zählerfortschritt ⇒ 0 W
 const POWER_ON_THRESHOLD_W = 1;    // ab dieser Leistung gilt ein Gerät als „an"
 const VALUE_STALE_MS = 5 * 60 * 1000; // nur passive Frischebewertung, kein /get
+// „Nicht verbunden": erst wenn die PERIODISCHEN Messtopics (Leistung/Zähler) eines
+// Geräts länger als dies schweigen. Bewusst deutlich länger als VALUE_STALE_MS und
+// bewusst NUR auf Telemetrie – Schalt-/Status-Topics sind ereignisgetrieben (ein
+// lange ausgeschaltetes Gerät ist nicht „offline").
+const DEVICE_OFFLINE_MS = 30 * 60 * 1000;
+// Aus dem Leistungs-Topic integrierte Energie: ein Intervall länger als dies
+// (Neustart, Adapterausfall) wird nicht integriert (kein künstlicher Sprung).
+const MAX_POWER_INTEGRATE_MS = 10 * 60 * 1000;
+// Plausibilitäts-Gegenprobe Zähler ↔ Leistung: erst ab dieser am Tag
+// akkumulierten Energie bewerten (Rauschschutz kleiner Werte) …
+const MISMATCH_MIN_KWH = 0.05;
+// … und erst ab diesem Faktor zwischen Zähler- und Leistungs-Energie warnen
+// (fängt den typischen 1000×-Fehler durch vertauschte Wh/kWh-Einheit).
+const MISMATCH_FACTOR = 3;
 
 function dbAll(db, sql, params = []) {
   return new Promise((resolve, reject) => db.all(sql, params, (err, rows) => (err ? reject(err) : resolve(rows || []))));
@@ -76,7 +90,8 @@ async function loadStates(db) {
   const rows = await dbAll(
     db,
     `SELECT actor_id, last_counter_raw, last_progress_ts, derived_power_w, counter_total_kwh,
-            day_key, day_start_kwh, year_key, year_start_kwh, prev_year_kwh
+            day_key, day_start_kwh, year_key, year_start_kwh, prev_year_kwh,
+            power_energy_kwh, power_energy_day_start_kwh, last_power_ts
      FROM mess_schalt_actor_state`
   );
   const map = new Map();
@@ -91,6 +106,9 @@ async function loadStates(db) {
       yearKey: row.year_key || null,
       yearStartKwh: parseNumber(row.year_start_kwh),
       prevYearKwh: parseNumber(row.prev_year_kwh),
+      powerEnergyKwh: parseNumber(row.power_energy_kwh),
+      powerEnergyDayStart: parseNumber(row.power_energy_day_start_kwh),
+      lastPowerTs: row.last_power_ts == null ? null : Number(row.last_power_ts),
     });
   }
   return map;
@@ -101,8 +119,9 @@ async function saveState(db, actorId, state) {
     db,
     `INSERT INTO mess_schalt_actor_state
        (actor_id, last_counter_raw, last_progress_ts, derived_power_w, counter_total_kwh,
-        day_key, day_start_kwh, year_key, year_start_kwh, prev_year_kwh)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        day_key, day_start_kwh, year_key, year_start_kwh, prev_year_kwh,
+        power_energy_kwh, power_energy_day_start_kwh, last_power_ts)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(actor_id) DO UPDATE SET
        last_counter_raw = excluded.last_counter_raw,
        last_progress_ts = excluded.last_progress_ts,
@@ -112,11 +131,17 @@ async function saveState(db, actorId, state) {
        day_start_kwh = excluded.day_start_kwh,
        year_key = excluded.year_key,
        year_start_kwh = excluded.year_start_kwh,
-       prev_year_kwh = excluded.prev_year_kwh`,
+       prev_year_kwh = excluded.prev_year_kwh,
+       power_energy_kwh = excluded.power_energy_kwh,
+       power_energy_day_start_kwh = excluded.power_energy_day_start_kwh,
+       last_power_ts = excluded.last_power_ts`,
     [actorId, state.lastCounterRaw, state.lastProgressTs, state.derivedPowerW, state.counterTotalKwh,
       state.dayKey == null ? null : state.dayKey, state.dayStartKwh == null ? null : state.dayStartKwh,
       state.yearKey == null ? null : state.yearKey, state.yearStartKwh == null ? null : state.yearStartKwh,
-      state.prevYearKwh == null ? null : state.prevYearKwh]
+      state.prevYearKwh == null ? null : state.prevYearKwh,
+      state.powerEnergyKwh == null ? null : state.powerEnergyKwh,
+      state.powerEnergyDayStart == null ? null : state.powerEnergyDayStart,
+      state.lastPowerTs == null ? null : state.lastPowerTs]
   );
 }
 
@@ -135,19 +160,57 @@ function derivedPowerFromState(state, now) {
 // „dieses Jahr" ergeben sich beim Lesen als (Zählerstand − Baseline). Beim
 // Jahreswechsel wird der abgeschlossene Jahresverbrauch als Vorjahr festgehalten.
 function applyPeriodRollover(state, calendar) {
+  if (!calendar) return;
+  const dayChanged = state.dayKey !== calendar.dateKey;
   const total = state.counterTotalKwh;
-  if (total == null || !calendar) return;
-  if (state.dayKey !== calendar.dateKey || state.dayStartKwh == null) {
-    state.dayKey = calendar.dateKey;
-    state.dayStartKwh = total;
-  }
-  if (state.yearKey !== calendar.yearKey || state.yearStartKwh == null) {
-    if (state.yearKey != null && state.yearStartKwh != null) {
-      state.prevYearKwh = Math.max(0, total - state.yearStartKwh);
+  // Zähler-Baseline (Tag/Jahr) nur führen, wenn ein interner Zähler existiert.
+  if (total != null) {
+    if (dayChanged || state.dayStartKwh == null) state.dayStartKwh = total;
+    if (state.yearKey !== calendar.yearKey || state.yearStartKwh == null) {
+      if (state.yearKey != null && state.yearStartKwh != null) {
+        state.prevYearKwh = Math.max(0, total - state.yearStartKwh);
+      }
+      state.yearKey = calendar.yearKey;
+      state.yearStartKwh = total;
     }
-    state.yearKey = calendar.yearKey;
-    state.yearStartKwh = total;
   }
+  // Leistungs-integrierte Tagesbasis unabhängig vom Zähler führen (auch für Geräte
+  // ganz ohne Zähler-Topic).
+  if (state.powerEnergyKwh != null && (dayChanged || state.powerEnergyDayStart == null)) {
+    state.powerEnergyDayStart = state.powerEnergyKwh;
+  }
+  // dayKey erst setzen, nachdem beide Tagesbasen gezogen wurden.
+  if (dayChanged) state.dayKey = calendar.dateKey;
+}
+
+// Live-Leistung des Geräts (aus dem Leistungs-Topic) über das vergangene Intervall
+// zu Energie integrieren und in `power_energy_kwh` fortschreiben. Nur für Geräte
+// mit Leistungs-Topic; ein zu langes Intervall (Neustart/Ausfall) wird übersprungen.
+// Reine Mutation von `next`; die Tagesbasis zieht applyPeriodRollover.
+function integratePowerEnergy(next, actor, cache, now) {
+  if (!actor.powerTopic) return;
+  const powerW = powerToWatt(getCacheNumber(cache, cacheKey(actor.id, 'power')), actor.powerUnit);
+  if (powerW == null) return;
+  if (next.powerEnergyKwh == null) next.powerEnergyKwh = 0;
+  if (next.lastPowerTs != null) {
+    const dtMs = now - next.lastPowerTs;
+    if (dtMs > 0 && dtMs <= MAX_POWER_INTEGRATE_MS) {
+      next.powerEnergyKwh += Math.max(0, powerW) * (dtMs / 3600000) / 1000;
+    }
+  }
+  next.lastPowerTs = now;
+}
+
+// Fortschreibung für Geräte mit Leistungs-Topic, aber ohne Zähler-Topic: nur die
+// aus der Live-Leistung integrierte Energie (für die Zähler-Gegenprobe). Ohne
+// Zähler-Topic gibt es keinen internen Zählerstand/keine Leistungsableitung.
+async function updatePowerOnlyState(db, cache, actor, prevState, calendar, now) {
+  const prev = prevState
+    || { lastCounterRaw: null, lastProgressTs: null, derivedPowerW: null, counterTotalKwh: null };
+  const next = { ...prev };
+  integratePowerEnergy(next, actor, cache, now);
+  applyPeriodRollover(next, calendar);
+  await saveState(db, actor.id, next);
 }
 
 // Virtuelle Zählung für ein Gerät ohne Leistungs- und Zähler-Topic, aber mit
@@ -186,7 +249,13 @@ async function buildActorSnapshot(db, cache, now = Date.now()) {
   const calendar = localCalendar(cache, mqttConfig.timezone, new Date(now));
   for (const actor of actors) {
     if (!actor.counterTopic) {
-      await updateVirtualState(db, cache, actor, states.get(actor.id), calendar, now);
+      // Ohne Zähler-Topic: mit Leistungs-Topic nur die Leistungs-Energie
+      // integrieren (Gegenprobe/Anzeige), sonst die virtuelle Nennleistungs-Zählung.
+      if (actor.powerTopic) {
+        await updatePowerOnlyState(db, cache, actor, states.get(actor.id), calendar, now);
+      } else {
+        await updateVirtualState(db, cache, actor, states.get(actor.id), calendar, now);
+      }
       continue;
     }
     const raw = counterToKwh(getCacheNumber(cache, cacheKey(actor.id, 'counter')), actor.counterUnit);
@@ -223,6 +292,8 @@ async function buildActorSnapshot(db, cache, now = Date.now()) {
       next.lastCounterRaw = raw;
       next.lastProgressTs = now;
     }
+    // Zusätzlich die Live-Leistung integrieren (Gegenprobe zum Zähler).
+    integratePowerEnergy(next, actor, cache, now);
     applyPeriodRollover(next, calendar);
     await saveState(db, actor.id, next);
   }
@@ -313,6 +384,15 @@ async function readActorValues(db, cache, actors, now = Date.now()) {
         : counterToKwh(getCacheNumber(cache, cacheKey(actor.id, 'counter')), actor.counterUnit))
       : (isVirtualRated && state && state.counterTotalKwh != null ? state.counterTotalKwh : null);
     const virtualEntry = isVirtualRated ? statusEntry : null;
+    const mismatch = counterPowerMismatch(actor, state);
+    // Lebenszeichen des Geräts nur aus periodischer Telemetrie (Leistung/Zähler,
+    // auch die virtuelle Zählung liefert ein Statustopic als Frischebezug). Ohne
+    // Telemetrie lässt sich „verbunden" nicht bewerten ⇒ nie offline melden.
+    const telemetryEntries = [powerEntry, counterEntry, virtualEntry]
+      .filter((e) => e && e.receivedAt > 0);
+    const lastSeenAt = telemetryEntries.length
+      ? Math.max(...telemetryEntries.map((e) => e.receivedAt)) : null;
+    const offline = lastSeenAt != null && now - lastSeenAt > DEVICE_OFFLINE_MS;
     return {
       id: actor.id,
       name: actor.name,
@@ -334,8 +414,33 @@ async function readActorValues(db, cache, actors, now = Date.now()) {
       powerFromRated: isVirtualRated,
       hasSwitch: !!actor.switchTopic,
       alwaysOn: actor.alwaysOn,
+      counterWarning: mismatch ? mismatch.warn : false,
+      counterTodayKwh: mismatch ? mismatch.counterTodayKwh : null,
+      powerTodayKwh: mismatch ? mismatch.powerTodayKwh : null,
+      offline,
+      lastSeenAt,
     };
   });
+}
+
+// Plausibilitäts-Gegenprobe für Geräte mit Zähler- UND Leistungs-Topic: Weicht die
+// heute aus der Live-Leistung integrierte Energie stark (Faktor ≥ MISMATCH_FACTOR)
+// von der Zähler-Energie ab, ist der Zähler vermutlich fehlkonfiguriert (typisch:
+// Einheit Wh statt kWh → 1000×-Fehler). Erst ab MISMATCH_MIN_KWH bewertet, damit
+// kleine Werte am Tagesanfang nicht warnen. Liefert null, wenn nicht bewertbar.
+function counterPowerMismatch(actor, state) {
+  if (!actor || !actor.counterTopic || !actor.powerTopic || !state) return null;
+  const counterTodayKwh = state.counterTotalKwh != null && state.dayStartKwh != null
+    ? Math.max(0, state.counterTotalKwh - state.dayStartKwh) : null;
+  const powerTodayKwh = state.powerEnergyKwh != null && state.powerEnergyDayStart != null
+    ? Math.max(0, state.powerEnergyKwh - state.powerEnergyDayStart) : null;
+  if (counterTodayKwh == null || powerTodayKwh == null) {
+    return { warn: false, counterTodayKwh, powerTodayKwh };
+  }
+  const hi = Math.max(counterTodayKwh, powerTodayKwh);
+  const lo = Math.min(counterTodayKwh, powerTodayKwh);
+  const warn = hi >= MISMATCH_MIN_KWH && lo < hi / MISMATCH_FACTOR;
+  return { warn, counterTodayKwh, powerTodayKwh };
 }
 
 // Verbrauchssumme (Leistung, W) je Gruppe: Summe der Geräteleistungen der Mitglieder.
@@ -555,10 +660,12 @@ async function readGroupEnergyTree(db, groups) {
 }
 
 module.exports = {
-  STALL_MS, VALUE_STALE_MS, POWER_ON_THRESHOLD_W,
+  STALL_MS, VALUE_STALE_MS, POWER_ON_THRESHOLD_W, DEVICE_OFFLINE_MS,
+  MAX_POWER_INTEGRATE_MS, MISMATCH_MIN_KWH, MISMATCH_FACTOR,
   buildActorSnapshot, readActorValues, readGroupSums, readGroupPowerTree,
   applyPeriodRollover, computeActorEnergy, buildGroupEnergyTree, readGroupEnergyTree,
   derivedPowerFromState, resolvePowerW, resolveStatus, resolveTopicStatus,
-  ratedPowerWatt, updateVirtualState,
+  ratedPowerWatt, updateVirtualState, updatePowerOnlyState, integratePowerEnergy,
+  counterPowerMismatch,
   powerToWatt, counterToKwh, parseNumber, parseBool,
 };

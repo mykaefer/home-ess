@@ -3,25 +3,52 @@
 Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
-## [1.2.3] — 2026-07-11
+## [1.2.4] — 2026-07-13
 
 ### Behoben
 
-- **Wallbox: Neustart/Reconnect schaltet die Steuerung nicht mehr ungewollt auf
-  „Aus".** Bei jedem MQTT-(Wieder-)Verbindungsaufbau spielt der Broker alle
-  retained-Werte erneut ein — auch den des Steuer-Topics, u. U. mit dem echten
-  (abweichenden) Gerätezustand. Der bisherige Neustart-Schutz entschärfte nur den
-  allerersten Wert nach Prozessstart; ein späterer Adapter-Reconnect wurde als
-  „Nutzer hat ausgeschaltet" fehlgedeutet und (seit der Persistenz-Änderung in
-  1.2.1/1.2.2) über Neustarts hinweg festgehalten. Die Steuerschleife öffnet nach
-  jedem Reconnect (Connect-Epoch aus dem MQTT-Client) je Box ein kurzes
-  **Re-Baseline-Fenster (45 s)**: der erneut eingespielte Steuer-Topic-Wert gilt
-  nur als Ausgangszustand, nie als Nutzerschaltung. Damit bleibt der Schaltzustand
-  über Neustart, Adapter-Reconnect und Topic-Refresh unverändert (auto bleibt auto,
-  aus bleibt aus).
+- **Prognose: Selbstzählung fällt nicht mehr mit den Netzzählern aus.** Die
+  verbraucherseitige **Selbstzählung** lief im Erfassungs-Job hinter dem Early-Return,
+  der einen echten **Netzzähler**-Wert verlangt. Fehlten die Netzzähler (Verbindungs­abbruch/
+  Inselbetrieb), wurde die grid-**unabhängige** Selbstzählung fälschlich mit übersprungen –
+  Bilanz **und** Selbstzählung brachen dann gemeinsam ein und der Guard konnte nichts
+  ersetzen (Symptom: einzelne Stunden mit nahezu 0 kWh trotz laufender Verbraucher). Die
+  Selbstzählung wird jetzt **unabhängig** von den Netzzählern integriert; nur die zähler-/
+  bilanzbasierte Erfassung braucht weiterhin einen echten Zählerwert.
+- **Wallbox: An/Aus-Kanäle sauber getrennt — keine Rückkopplung mehr durch die
+  Automatik (Regeln 1–3).** Bisher diente das eine **Steuer-Topic** zugleich als
+  Aktor und als Rückmelde-/Bedienkanal. Dadurch konnte homeESS die eigenen
+  Schalt-Readbacks (bzw. den Gerätezustand nach einem Reconnect) als Nutzerschaltung
+  fehldeuten: Schaltete die Automatik ein, sprang die Steuerung fälschlich auf
+  **Vollladen** und verließ den Automatikmodus (Regel 1 verletzt); ein
+  Adapter-Reconnect sprang auf **Aus**. Jetzt ist das **Steuer-Topic ein reiner
+  Aktor** (homeESS schaltet die Wallbox, kein Readback) und ein neues, optionales
+  **Steuerung-Sync-Topic** übernimmt den bidirektionalen An/Aus-Schalter: homeESS
+  spiegelt darauf den Zustand und wertet **nur eine extern ausgelöste Änderung**
+  (nicht selbst geschrieben) als Bedienbefehl — EIN → Vollladen bis 100 %/
+  Leistungsabfall bzw. Stecker gezogen, dann zurück auf Automatik; AUS während der
+  Ladung → aus bis zum nächsten Ladebeginn am Folgetag. Schaltet die Automatik,
+  bleibt es auf Automatik. Der gewählte Stand liegt neustart-resistent in der DB;
+  ein **Re-Baseline-Fenster (45 s)** nach jedem MQTT-(Wieder-)Verbindungsaufbau
+  stellt sicher, dass Neustart, Adapter-Reconnect oder Topic-Refresh **nie** als
+  externe Schaltung gelten (nur ein direkt beobachteter, nicht selbst ausgelöster
+  Wechsel zählt).
+- **Wallbox: Modus-Sync-Topic ist ausschließlich der Ladeplan.** Das Modus-Sync-Topic
+  hält nur den Lademodus bidirektional synchron: **1 = Privat, 2 = Beruflich,
+  3 = Immer voll** (im Formular erläutert). Es schaltet die Ladung nicht ein/aus.
 - **Prognose: Balken des Heizung/Klima-Diagramms sitzen auf einer Nulllinie.** Die
   Achsen-Beschriftungen lagen im Balkenfluss und verschoben beschriftete Balken
   nach oben; sie sind jetzt unter der Nulllinie verankert.
+- **Messen + Schalten: Zählerstand wird nicht mehr fälschlich als „veraltet"
+  markiert.** Der angezeigte Zählerstand ist ein interner, aus dem Zählerfortschritt
+  gebildeter Wert – er ist immer bekannt und kann nicht veralten. Die Frische-Prüfung
+  des Zähler-Topics löste bisher ein irreführendes „⚠ veraltet" aus, obwohl das Gerät
+  verbunden war (nur das Zähler-Topic hatte länger nichts gesendet).
+- **Messen + Schalten: Aktionen (Bearbeiten/Entfernen) sind auf Touch erreichbar.**
+  Die ✎/🗑-Schaltflächen an Geräten und Gruppen waren per Hover ausgeblendet und
+  damit am Handy unbenutzbar; auf Touch-Geräten (`hover: none`) sind sie jetzt
+  dauerhaft sichtbar. Zudem am Handy behoben: seitlich überlaufende „Sonstige
+  Verbraucher"-Zeile und umbrechende Toolbar.
 
 ### Geändert
 
@@ -38,6 +65,67 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
   prognostizierten Außentemperatur den erwarteten Verbrauch
   (`kWh = W/1000 × Stunden`). Das Diagramm zeigt je Fenster das **30-Tage-Mittel
   (W)** als Balken und den **heutigen Wert** als Markierungslinie.
+- **Prognose: Heizung/Klima-Modell zusätzlich nach Tagesstunde.** Jedes
+  Temperaturfenster hält nun für **jede der 24 Tagesstunden** eine eigene mittlere
+  Leistung vor (Tabelle `mess_schalt_temperature_power` um die Spalte `hour`
+  erweitert, PK `bucket, day_key, hour`), weil der Heiz-/Kühlbedarf je Tageszeit
+  variiert (Kühlen v. a. abends, Heizen morgens zum Aufheizen stärker als abends).
+  Die Prognose plant den Heizungs-/Klimabedarf je Stunde nach der **stundengenauen**
+  Fensterleistung (noch ungelernte Stunden fallen auf das Fenstermittel zurück).
+  Das Temperatur-Balkendiagramm zeigt weiterhin das **Mittel über alle 24 Stunden**;
+  ein **Klick auf einen Balken** öffnet einen Dialog mit der **24-Stunden-Kurve**
+  dieses Fensters (mittlere Leistung je Stunde plus heutige Markierung). Alt-DBs
+  werden migriert, indem das bisherige Tagesmittel gleichmäßig auf alle 24 Stunden
+  verteilt wird — die Balkenhöhe bleibt gleich, die Stundenkurve schärft sich beim
+  Weiterlernen.
+
+### Hinzugefügt
+
+- **Prognose: Fehlererkennung der Verbrauchserfassung.** Kann eine Stunde nicht sauber
+  erfasst werden (Verbindungsabbruch, fehlende Daten, Prozess-Downtime), wird sie erkannt
+  und als **unvollständig** markiert: der Lernwert wird auf den **Vortageswert** gesetzt
+  (keine falsche Kurve mehr) und die Stunde in der „Datenbasis"-Ansicht **ausgegraut**
+  (die erfassten Rohwerte primary/self bleiben zur Nachschau stehen). Störungen werden
+  zusätzlich in eine **Logdatei** (`data/prognosis-sampling.log`) geschrieben. Neue Spalte
+  `prognosis_hourly_consumption.incomplete` und Tabelle `prognosis_sampling_state`.
+- **Prognose: gestapelter Heiz-/Kühlbedarf im Stundenprofil.** Im 24-h-Stundenprofil
+  der Tagesprognosen sitzt der erwartete Heizungs-/Klimabedarf je Stunde als
+  **gestapelter Balken über der Grundlast** und zeigt, zu welcher Stunde mit welchem
+  Zusatzbedarf zu rechnen ist. Die Grundlastberechnung selbst bleibt davon unberührt
+  (reine, additive Anzeige).
+- **Energiefluss-Diagramm vertikal auf schmalen Viewports (Handy).** Statt des breiten
+  horizontalen Flusses (der am Handy nur seitlich scrollbar war) zeichnet die Seite bei
+  ≤ 760 px einen **schmalen Stamm mit eingerückten Zweigen**, einheitlich von oben nach
+  unten: Einzel-PV-Anlagen → PV gesamt → Netz → **Batterie** stehen (eingerückt) **über**
+  dem Eigenverbrauch, darunter die Verbrauchergruppen (per Einrückung verschachtelt, mit
+  jeder Verzweigung dünner). Jede Kante läuft in einem **eigenen senkrechten Kanal** im
+  Einrück-Spalt links der Knoten (nächstes Kind außen, ferne innen), sodass die Linien
+  **nebeneinander** liegen, **nie durch einen Knoten** queren und sich am Eigenverbrauch zu
+  einem dickeren Bündel sammeln und nach unten ausdünnen. Die Einrückung je Ebene ist
+  **dynamisch**: je mehr Kinder (z. B. Gruppen unter dem Eigenverbrauch), desto breiter der
+  Kanal-Spalt und desto tiefer die Einrückung – die wenigen Quellen oben bleiben schmal.
+  Die Batterie ist wie eine Quelle angebunden (genau wie die Anlagen an PV gesamt), nicht
+  als Seitenlinie. Ein Knoten je Zeile → immer handy-schmal, kein horizontales Scrollen.
+  Der Farb-Stift je Gruppe ist auf Touch dauerhaft sichtbar. Desktop behält das horizontale
+  Layout; bei Breitenwechsel wird automatisch umgezeichnet.
+- **Schaltgruppen ohne Drag & Drop bedienbar (Touch/Handy).** Jede Gruppe hat einen
+  **„+ Gerät hinzufügen"**-Button, der einen Auswahldialog der freien Geräte öffnet;
+  ein **„×"** je Gerätezeile löst es wieder aus der Gruppe. Beides klickbasiert und
+  damit auf dem Handy nutzbar (Drag & Drop bleibt auf dem Desktop). Am Handy zeigt die
+  Seite nur noch die Gruppenspalte; die freien Geräte sind über den Dialog erreichbar.
+- **Messen + Schalten: dediziertes „nicht verbunden"-Signal am Gerät.** Schweigt die
+  **periodische Telemetrie** eines Geräts (Leistung/Zähler) länger als 30 min, wird es
+  sichtbar als **offline** markiert (roter Statuspunkt-Ring + „offline"-Kennzeichnung
+  am Namen). Bewusst nur aus Telemetrie – Schalt-/Status-Topics sind ereignisgetrieben
+  (ein lange ausgeschaltetes Gerät ist nicht offline).
+- **Messen + Schalten: Warnung bei unplausiblem Zähler (Wh/kWh-Gegenprobe).** Für
+  Geräte mit Leistungs- UND Zähler-Topic wird zusätzlich die aus der Live-Leistung
+  integrierte Tagesenergie geführt. Weicht der Zähler heute stark davon ab
+  (Faktor ≥ 3 ab 0,05 kWh) — typisch bei vertauschter Einheit **Wh statt kWh**
+  (1000×-Fehler, der die Gruppen-Verbrauchssummen still auf ~0 zieht) —, zeigt die
+  Zählerzelle ein rotes **⚠** mit erklärendem Hinweis. Die Zählung selbst bleibt
+  unverändert (nur Hinweis); neue Spalten in `mess_schalt_actor_state`
+  (`power_energy_kwh`, `power_energy_day_start_kwh`, `last_power_ts`).
 
 ## [1.2.2] — 2026-07-10
 

@@ -50,6 +50,12 @@
     var dx = (p2.x - p1.x) * 0.5;
     return 'M' + p1.x + ',' + p1.y + ' C' + (p1.x + dx) + ',' + p1.y + ' ' + (p2.x - dx) + ',' + p2.y + ' ' + p2.x + ',' + p2.y;
   }
+  // Orthogonaler Polylinien-Pfad (vertikales Kanal-Layout). Punktreihenfolge =
+  // Laufrichtung der Fluss-Animation (erster Punkt = Quelle).
+  function polyD(points) {
+    return 'M' + points[0].x + ',' + points[0].y
+      + points.slice(1).map(function (p) { return ' L' + p.x + ',' + p.y; }).join('');
+  }
 
   // Ausgangs-Baum inkl. synthetischer „Sonstige"-Blätter.
   function groupLN(g) {
@@ -69,8 +75,13 @@
     return roots;
   }
 
-  // --- Layout: Snapshot -> Knoten + Kanten mit Koordinaten -------------------
-  function layout(data, showEnergy) {
+  // --- Layout-Dispatcher: horizontal (Desktop) oder vertikal (schmal/Handy) ---
+  function layout(data, showEnergy, vertical) {
+    return vertical ? layoutV(data, showEnergy) : layoutH(data, showEnergy);
+  }
+
+  // --- Horizontales Layout (Spalten = Ebenen): Snapshot -> Knoten + Kanten ----
+  function layoutH(data, showEnergy) {
     var PAD = 24, COL_GAP = 88, ROW_GAP = 16;
     var NODE_H = showEnergy ? 48 : 32, PLANT_H = 30;
     var W_PLANT = 128, W_SRC = 176, W_CENTRAL = 176, W_GROUP = 172;
@@ -165,6 +176,136 @@
       empty: nodes.length <= 1 && !hasPv && !hasGrid && !hasBattery };
   }
 
+  // --- Vertikales Layout (schmaler Stamm, eingerückte Zweige, oben -> unten) ---
+  // Ein Knoten je Zeile (immer handy-schmal). Reihenfolge von oben nach unten:
+  // Einzel-PV-Anlagen → PV gesamt → Netz → Batterie (eingerückt) → Eigenverbrauch →
+  // Verbrauchergruppen (eingerückt verschachtelt). Der Fluss läuft überall nach unten
+  // in den Eigenverbrauch hinein bzw. aus ihm heraus. Jede Kante läuft in einem
+  // EIGENEN senkrechten Kanal im Einrück-Spalt LINKS der Kinder → Linien nebeneinander,
+  // queren nie einen Knoten, bündeln am Eigenverbrauch (dicker) und dünnen nach unten
+  // aus. Die Einrückung je Eltern-Knoten ist DYNAMISCH: je mehr Kinder (z. B. Gruppen
+  // unter dem Eigenverbrauch), desto breiter der Kanal-Spalt und damit die Einrückung.
+  function layoutV(data, showEnergy) {
+    var PAD = 16, ROW_GAP = 12;
+    var NODE_H = showEnergy ? 46 : 30;
+    var WV = 214;
+    // Kanal-Abstand + Ränder; die Einrückung eines Zweigs ergibt sich aus der Zahl
+    // seiner Geschwister, sodass die Kanäle stets CH_STEP auseinanderliegen.
+    var CH_STEP = 11, CH_IN = 6, CH_OUT = 6, MIN_INDENT = 22;
+    function childIndent(count) {
+      return Math.max(MIN_INDENT, CH_IN + Math.max(0, count - 1) * CH_STEP + CH_OUT);
+    }
+
+    var ev = data.eigenverbrauch || {};
+    var plants = (data.pv && data.pv.plants) ? data.pv.plants : [];
+    var hasPv = plants.length > 0 || (data.pv && data.pv.totalW != null);
+    var hasGrid = data.grid && data.grid.powerW != null;
+    var hasBattery = data.battery && data.battery.present;
+
+    // 1) Knoten in Zeilenreihenfolge (Y) anlegen; X folgt in Schritt 3.
+    var nodes = [], links = [], byKey = {}, cursor = PAD;
+    function addNode(spec) {
+      var n = { key: spec.key, kind: spec.kind, id: spec.id, x: 0, y: cursor, w: WV, h: NODE_H,
+        title: spec.title, powerW: spec.powerW, accent: spec.accent || spec.color, color: spec.color, sub: spec.sub,
+        meterGroup: spec.meterGroup, deactivated: spec.deactivated, todayKwh: spec.todayKwh, yearKwh: spec.yearKwh,
+        parentKey: spec.parentKey, flowIn: spec.flowIn === true };
+      cursor += NODE_H + ROW_GAP;
+      nodes.push(n); byKey[n.key] = n;
+      return n;
+    }
+
+    // Quellen zuerst (oben), Eltern jeweils UNTER ihren Kindern (Fluss nach unten).
+    if (hasPv) {
+      plants.forEach(function (p) {
+        addNode({ key: 'plant-' + p.id, kind: 'pv-plant', title: p.name, powerW: p.powerW,
+          accent: COLORS.pv, color: COLORS.pv, parentKey: 'pv', flowIn: true });
+      });
+      addNode({ key: 'pv', kind: 'pv', title: 'PV gesamt', powerW: data.pv.totalW, accent: COLORS.pv, color: COLORS.pv,
+        todayKwh: data.pv.todayKwh, yearKwh: data.pv.yearKwh, parentKey: 'central', flowIn: true });
+    }
+    if (hasGrid) {
+      addNode({ key: 'grid', kind: 'grid', title: 'Netz', powerW: data.grid.powerW, accent: COLORS.grid, color: COLORS.grid,
+        todayKwh: data.grid.todayKwh, yearKwh: data.grid.yearKwh, parentKey: 'central', flowIn: data.grid.powerW >= 0 });
+    }
+    // Batterie wie eine Quelle eingerückt ÜBER dem Eigenverbrauch (angebunden wie die
+    // PV-Anlagen an PV gesamt); Fluss hinein beim Entladen, hinaus beim Laden.
+    if (hasBattery) {
+      var soc = data.battery.soc, pw = data.battery.powerW;
+      addNode({ key: 'battery', kind: 'battery', title: 'Batterie', powerW: pw, accent: COLORS.battery, color: COLORS.battery,
+        sub: (soc != null ? Math.round(soc) + ' %' : '') + (pw != null && pw < 0 ? ' entlädt' : (pw != null && pw > 0 ? ' lädt' : '')),
+        parentKey: 'central', flowIn: pw != null && pw < 0 });
+    }
+
+    var central = addNode({ key: 'central', kind: 'central', title: 'Eigenverbrauch',
+      powerW: ev.powerW == null ? null : ev.powerW, accent: COLORS.central,
+      todayKwh: ev.todayKwh, yearKwh: ev.yearKwh });
+
+    // Verbraucher darunter, eingerückt verschachtelt (Eltern ÜBER ihren Kindern).
+    function placeConsumer(node, parentKey) {
+      addNode({ key: node.key, kind: node.kind, id: node.id, title: node.title, powerW: node.powerW,
+        accent: node.color, color: node.color, meterGroup: node.meterGroup, deactivated: node.deactivated,
+        todayKwh: node.todayKwh, yearKwh: node.yearKwh, parentKey: parentKey });
+      (node.children || []).forEach(function (c) { placeConsumer(c, node.key); });
+    }
+    outputRoots(data).forEach(function (r) { placeConsumer(r, 'central'); });
+
+    // 2) Kinder je Eltern in „über" / „unter" trennen (Seite anhand der Zeile).
+    var kids = {}; // parentKey -> { above: [], below: [] }
+    nodes.forEach(function (n) {
+      var p = n.parentKey && byKey[n.parentKey];
+      if (!p) return;
+      var e = kids[n.parentKey] || (kids[n.parentKey] = { above: [], below: [] });
+      (n.y < p.y ? e.above : e.below).push(n);
+    });
+
+    // 3) X ausgehend vom Eigenverbrauch vergeben: die Einrückung einer Kinderreihe
+    //    wächst mit ihrer Anzahl (breiterer Kanal-Spalt). Über/unter werden getrennt
+    //    bestimmt – so bleiben die wenigen Quellen oben schmal, die vielen Gruppen
+    //    unten rücken entsprechend weiter ein.
+    central.x = PAD;
+    var maxRight = central.x + central.w;
+    function assignX(node) {
+      var e = kids[node.key];
+      if (!e) return;
+      ['above', 'below'].forEach(function (side) {
+        var list = e[side];
+        if (!list.length) return;
+        var ind = childIndent(list.length);
+        list.forEach(function (c) { c.x = node.x + ind; if (c.x + c.w > maxRight) maxRight = c.x + c.w; });
+        list.forEach(assignX);
+      });
+    }
+    assignX(central);
+
+    // 4) Kanten: je Eltern und Seite ein eigener Kanal je Kind (nächstes Kind außen,
+    //    ferne innen → auch die kurzen Stichlinien kreuzen sich nicht).
+    Object.keys(kids).forEach(function (pk) {
+      var p = byKey[pk], e = kids[pk];
+      ['above', 'below'].forEach(function (side) {
+        var list = e[side], K = list.length;
+        if (!K) return;
+        var childX = list[0].x; // alle Kinder derselben Seite haben dieselbe x
+        var innerX = p.x + CH_IN, outerX = childX - CH_OUT;
+        var step = K > 1 ? (outerX - innerX) / (K - 1) : 0;
+        var sorted = list.slice().sort(function (a, b) { return Math.abs(a.y - p.y) - Math.abs(b.y - p.y); });
+        sorted.forEach(function (c, j) {
+          var cx = outerX - j * step;                       // nächstes Kind außen
+          var edgeY = side === 'above' ? p.y : p.y + p.h;   // obere/untere Elternkante
+          var midY = c.y + c.h / 2;
+          var pts = [{ x: cx, y: edgeY }, { x: cx, y: midY }, { x: c.x, y: midY }];
+          var into = c.flowIn === true;                     // Fluss Kind -> Eltern
+          links.push({ key: 'l-' + c.key, powerW: c.powerW, color: c.color || c.accent, deactivated: c.deactivated,
+            d: polyD(into ? pts.slice().reverse() : pts) });
+        });
+      });
+    });
+
+    var width = maxRight + PAD;
+    var height = cursor - ROW_GAP + PAD;
+    return { nodes: nodes, links: links, width: Math.ceil(width), height: Math.ceil(height), vertical: true,
+      empty: nodes.length <= 1 && !hasPv && !hasGrid && !hasBattery };
+  }
+
   function EFDiagram(svg, opts) {
     opts = opts || {};
     var state = { sig: '', nodeEls: {}, linkEls: {}, showEnergy: true };
@@ -174,15 +315,19 @@
       if (attrs) for (var k in attrs) e.setAttribute(k, attrs[k]);
       return e;
     }
+    function linkPath(link) {
+      return link.d || pathD(link.p1, link.p2);
+    }
     function buildLink(link) {
-      var base = el('path', { class: 'ef-base', d: pathD(link.p1, link.p2) });
-      var flow = el('path', { d: pathD(link.p1, link.p2) });
+      var d = linkPath(link);
+      var base = el('path', { class: 'ef-base', d: d });
+      var flow = el('path', { d: d });
       svg.appendChild(base);
       svg.appendChild(flow);
       return { base: base, flow: flow };
     }
     function updateLink(refs, link) {
-      var d = pathD(link.p1, link.p2);
+      var d = linkPath(link);
       refs.base.setAttribute('d', d);
       refs.flow.setAttribute('d', d);
       var dur = link.deactivated ? 0 : animDur(link.powerW);
@@ -246,19 +391,26 @@
 
     function draw(data, drawOpts) {
       var showEnergy = (drawOpts && 'showEnergy' in drawOpts) ? !!drawOpts.showEnergy : (opts.showEnergy !== false);
+      var vertical = (drawOpts && 'vertical' in drawOpts) ? !!drawOpts.vertical : !!opts.vertical;
       state.showEnergy = showEnergy;
-      var model = layout(data, showEnergy);
+      var model = layout(data, showEnergy, vertical);
       var sig = model.nodes.map(function (n) { return n.key; }).join('|')
         + '::' + model.links.map(function (l) { return l.key; }).join('|')
-        + '::' + (showEnergy ? 1 : 0);
+        + '::' + (showEnergy ? 1 : 0) + '::' + (vertical ? 'v' : 'h');
       if (sig !== state.sig) {
         while (svg.firstChild) svg.removeChild(svg.firstChild);
         state.nodeEls = {}; state.linkEls = {};
         svg.setAttribute('viewBox', '0 0 ' + model.width + ' ' + model.height);
-        if (!opts.fitViewport) {
+        // Vertikal (wie fitViewport): keine festen Pixelmaße – das SVG skaliert per
+        // CSS auf die Containerbreite (viewBox bestimmt das Seitenverhältnis).
+        if (opts.fitViewport || vertical) {
+          svg.removeAttribute('width');
+          svg.removeAttribute('height');
+        } else {
           svg.setAttribute('width', model.width);
           svg.setAttribute('height', model.height);
         }
+        if (svg.classList) svg.classList.toggle('ef-svg--vertical', !!vertical);
         model.links.forEach(function (l) { state.linkEls[l.key] = buildLink(l); });
         model.nodes.forEach(function (n) { state.nodeEls[n.key] = buildNode(n); });
         state.sig = sig;
@@ -274,5 +426,7 @@
     };
   }
 
-  window.EFDiagram = EFDiagram;
+  if (typeof window !== 'undefined') window.EFDiagram = EFDiagram;
+  // Für gezielte Geometrie-Tests (Node): das reine Layout ist DOM-frei.
+  if (typeof module !== 'undefined' && module.exports) module.exports = { EFDiagram: EFDiagram, layout: layout };
 })();

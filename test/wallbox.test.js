@@ -9,7 +9,9 @@ const {
   RESTART_OFF_MS, SURPLUS_ON_W,
 } = require('../src/wallbox/planner');
 const { houseSurplusWatt, syncControlModePersistence } = require('../src/wallbox/automation');
-const { createWallbox, updateWallbox, getWallbox, setWallboxControlMode } = require('../src/wallbox/boxes');
+const {
+  createWallbox, updateWallbox, getWallbox, setWallboxControlMode, buildWallboxStateDefinitions,
+} = require('../src/wallbox/boxes');
 const {
   updateWallboxCounter, updateWallboxSummary, loadSummaryState, loadCounterState,
   estimateSoc, recordWallboxHistory,
@@ -28,6 +30,7 @@ async function freshDb() {
     max_power_w REAL NOT NULL DEFAULT 11000,
     battery_capacity_kwh REAL NOT NULL DEFAULT 50,
     command_topic TEXT NOT NULL DEFAULT '',
+    control_sync_topic TEXT NOT NULL DEFAULT '',
     status_topic TEXT NOT NULL DEFAULT '',
     power_topic TEXT NOT NULL DEFAULT '',
     power_unit TEXT NOT NULL DEFAULT 'W',
@@ -105,6 +108,26 @@ test('Steuerungs-Übersteuerung wird persistiert (neustart-resistent)', async ()
   // Ungültige Werte fallen auf 'auto' zurück.
   await setWallboxControlMode(db, box.id, 'unsinn');
   assert.equal((await getWallbox(db, box.id)).controlMode, 'auto');
+  await new Promise((resolve) => db.close(resolve));
+});
+
+test('Steuerung-Sync-Topic wird persistiert und getrennt vom Aktor abonniert', async () => {
+  const db = await freshDb();
+  const box = await createWallbox(db, {
+    name: 'WB', maxPowerW: 11000, batteryCapacityKwh: 50,
+    commandTopic: 'wb.0.enabled', controlSyncTopic: 'wb.0.switch',
+  });
+  assert.equal(box.controlSyncTopic, 'wb.0.switch');
+  assert.equal((await getWallbox(db, box.id)).controlSyncTopic, 'wb.0.switch');
+
+  // Nur das Steuerung-Sync-Topic wird zur Bedienerkennung abonniert; der Aktor
+  // (Steuer-Topic) ist reines Schreiben und taucht ohne Status-Topic nur als
+  // Ist-Stand-Fallback auf – hier deckt ihn bereits der Sync-Ist-Stand ab.
+  const defs = buildWallboxStateDefinitions([box]);
+  const byId = new Map(defs.map((d) => [d.id, d.topic]));
+  assert.equal(byId.get(cacheKey(box.id, 'controlSync')), 'wb.0.switch');
+  assert.equal(byId.has(cacheKey(box.id, 'command')), false); // Aktor nicht abonniert
+  assert.equal(byId.get(cacheKey(box.id, 'status')), 'wb.0.switch'); // Ist-Stand aus Sync
   await new Promise((resolve) => db.close(resolve));
 });
 
@@ -361,8 +384,8 @@ test('Beruflich: freier Tag fällt auf die Privatregel zurück', () => {
 
 function freshState() {
   return {
-    output: null, changedAt: 0, setpointW: null, lastBrokerStatus: null,
-    brokerStatusInitialized: true, expectedBrokerStatus: null,
+    output: null, changedAt: 0, setpointW: null, lastSyncValue: null,
+    syncInitialized: true, expectedSyncValue: null,
     manualFull: false, manualFullSawCharging: false,
     manualOff: false, manualOffDay: '',
     chargeStartedAt: null, restartUntil: 0, restartAttempts: 0,
@@ -372,39 +395,39 @@ function freshState() {
 function baseDecideCtx(over = {}) {
   return {
     plan: { desiredOn: false, setpointW: null, priority: 3 },
-    brokerStatus: null, powerW: null, pvPowerW: null, selfConsumptionW: 0,
+    syncStatus: null, powerW: null, pvPowerW: null, selfConsumptionW: 0,
     houseBatterySoc: 30, houseBatteryMinSoc: 20, soc: null, plugged: true,
     todayKey: '2026-06-30', levelAllows: true, now: 1_000_000,
     ...over,
   };
 }
 
-test('Erster Broker-Status nach Neustart löst keine manuelle Volladung aus', () => {
+test('Erster Sync-Wert nach Neustart löst keine manuelle Volladung aus', () => {
   const box = { id: 1, maxPowerW: 3000, setpointTopic: '' };
   const s = freshState();
-  s.brokerStatusInitialized = false;
+  s.syncInitialized = false;
   const d = decideWallboxAction(box, s, baseDecideCtx({
     plan: { desiredOn: false, setpointW: null, priority: 5,
       reason: 'Privat: nur Überschuss' },
-    brokerStatus: 'on', soc: 51,
+    syncStatus: 'on', soc: 51,
   }));
 
-  assert.equal(s.lastBrokerStatus, 'on');
-  assert.equal(s.brokerStatusInitialized, true);
+  assert.equal(s.lastSyncValue, 'on');
+  assert.equal(s.syncInitialized, true);
   assert.equal(s.manualFull, false);
   assert.equal(d.on, false);
 });
 
-test('Erst eine spätere Broker-Wertänderung löst manuelles Vollladen aus', () => {
+test('Erst eine spätere externe Sync-Wertänderung löst manuelles Vollladen aus', () => {
   const box = { id: 1, maxPowerW: 3000, setpointTopic: '' };
   const s = freshState();
-  s.brokerStatusInitialized = false;
+  s.syncInitialized = false;
 
-  decideWallboxAction(box, s, baseDecideCtx({ brokerStatus: 'off' }));
+  decideWallboxAction(box, s, baseDecideCtx({ syncStatus: 'off' }));
   assert.equal(s.manualFull, false);
 
   const d = decideWallboxAction(box, s, baseDecideCtx({
-    brokerStatus: 'on', levelAllows: true, now: 1_030_000,
+    syncStatus: 'on', levelAllows: true, now: 1_030_000,
   }));
   assert.equal(s.manualFull, true);
   assert.equal(d.on, true);
@@ -414,39 +437,39 @@ test('Readback eines Automatikbefehls ist kein manueller Schaltwunsch', () => {
   const box = { id: 1, maxPowerW: 3000, setpointTopic: '' };
   const s = freshState();
   s.output = 'on';
-  s.lastBrokerStatus = 'off';
-  s.expectedBrokerStatus = 'on';
+  s.lastSyncValue = 'off';
+  s.expectedSyncValue = 'on';
 
   const d = decideWallboxAction(box, s, baseDecideCtx({
     plan: { desiredOn: true, setpointW: null, priority: 5 },
-    brokerStatus: 'on',
+    syncStatus: 'on',
   }));
 
-  assert.equal(s.expectedBrokerStatus, null);
-  assert.equal(s.lastBrokerStatus, 'on');
+  assert.equal(s.expectedSyncValue, null);
+  assert.equal(s.lastSyncValue, 'on');
   assert.equal(s.manualFull, false);
   assert.equal(d.on, true);
 });
 
-test('Manuell EIN am Broker löst einmalige Volladung aus (wenn Level es zulässt)', () => {
+test('Extern EIN am Sync-Topic löst einmalige Volladung aus (wenn Level es zulässt)', () => {
   const box = { id: 1, maxPowerW: 11000, setpointTopic: 'x' };
   const s = freshState();
-  s.output = 'off'; s.lastBrokerStatus = 'off';
+  s.output = 'off'; s.lastSyncValue = 'off';
   // Plan würde nicht laden; Broker meldet plötzlich „on".
   const d = decideWallboxAction(box, s, baseDecideCtx({
     plan: { desiredOn: false, setpointW: null, priority: 3 },
-    brokerStatus: 'on', levelAllows: true,
+    syncStatus: 'on', levelAllows: true,
   }));
   assert.equal(s.manualFull, true);
   assert.equal(d.on, true);
   assert.equal(d.setpointW, 11000);
 });
 
-test('Manuell EIN wird ignoriert, wenn die Modus-Priorität es nicht zulässt', () => {
+test('Extern EIN wird ignoriert, wenn die Modus-Priorität es nicht zulässt', () => {
   const box = { id: 1, maxPowerW: 11000, setpointTopic: 'x' };
   const s = freshState();
-  s.output = 'off'; s.lastBrokerStatus = 'off';
-  const d = decideWallboxAction(box, s, baseDecideCtx({ brokerStatus: 'on', levelAllows: false }));
+  s.output = 'off'; s.lastSyncValue = 'off';
+  const d = decideWallboxAction(box, s, baseDecideCtx({ syncStatus: 'on', levelAllows: false }));
   assert.equal(s.manualFull, false);
   assert.equal(d.on, false);
 });
@@ -462,14 +485,14 @@ test('Prioritäts-Gate sperrt auch Immer-voll bei vollem Fahrzeug', () => {
   assert.equal(d.on, false);
 });
 
-test('Manuell AUS sperrt bis Folgetag mit PV über Wallbox-Leistung', () => {
+test('Extern AUS sperrt bis Folgetag mit PV über Wallbox-Leistung', () => {
   const box = { id: 1, maxPowerW: 11000, setpointTopic: 'x' };
   const s = freshState();
-  s.output = 'on'; s.lastBrokerStatus = 'on';
+  s.output = 'on'; s.lastSyncValue = 'on';
   // Broker meldet „off" obwohl wir „on" kommandiert hatten → manuell aus.
   let d = decideWallboxAction(box, s, baseDecideCtx({
     plan: { desiredOn: true, setpointW: 11000, priority: 3 },
-    brokerStatus: 'off', todayKey: '2026-06-30',
+    syncStatus: 'off', todayKey: '2026-06-30',
   }));
   assert.equal(s.manualOff, true);
   assert.equal(d.on, false);
@@ -477,50 +500,50 @@ test('Manuell AUS sperrt bis Folgetag mit PV über Wallbox-Leistung', () => {
   // Gleicher Tag, viel PV → bleibt gesperrt.
   d = decideWallboxAction(box, s, baseDecideCtx({
     plan: { desiredOn: true, setpointW: 11000, priority: 3 },
-    brokerStatus: 'off', todayKey: '2026-06-30', pvPowerW: 15000,
+    syncStatus: 'off', todayKey: '2026-06-30', pvPowerW: 15000,
   }));
   assert.equal(d.on, false);
 
   // Folgetag, PV unter Wallbox-Leistung → weiter gesperrt.
   d = decideWallboxAction(box, s, baseDecideCtx({
     plan: { desiredOn: true, setpointW: 11000, priority: 3 },
-    brokerStatus: 'off', todayKey: '2026-07-01', pvPowerW: 8000,
+    syncStatus: 'off', todayKey: '2026-07-01', pvPowerW: 8000,
   }));
   assert.equal(d.on, false);
 
   // Folgetag, PV erstmals über Wallbox-Leistung → Sperre fällt, Plan greift wieder.
   d = decideWallboxAction(box, s, baseDecideCtx({
     plan: { desiredOn: true, setpointW: 11000, priority: 3 },
-    brokerStatus: 'off', todayKey: '2026-07-01', pvPowerW: 12000,
+    syncStatus: 'off', todayKey: '2026-07-01', pvPowerW: 12000,
   }));
   assert.equal(s.manualOff, false);
   assert.equal(d.on, true);
 });
 
-test('Reconnect/Refresh des Steuer-Topics schaltet nicht auf AUS (Regel 3)', () => {
+test('Reconnect/Refresh des Sync-Topics schaltet nicht auf AUS (Regel 3)', () => {
   const box = { id: 1, maxPowerW: 11000, setpointTopic: '' };
   // Laufender Automatikbetrieb, Fahrzeug lädt: output='on', Baseline etabliert.
   const s = freshState();
   s.output = 'on';
-  s.lastBrokerStatus = 'on';
+  s.lastSyncValue = 'on';
   // Ein Reconnect hat das Baseline-Fenster geöffnet; der Broker spielt jetzt den
   // retained-Wert '0' (Gerät meldet echten Aus-Zustand) erneut ein.
-  s.brokerRebaselineUntil = 1_040_000;
+  s.syncRebaselineUntil = 1_040_000;
   const d = decideWallboxAction(box, s, baseDecideCtx({
     plan: { desiredOn: true, setpointW: null, priority: 3 },
-    brokerStatus: 'off', now: 1_000_000,
+    syncStatus: 'off', now: 1_000_000,
   }));
   // Nur Ausgangszustand übernommen, KEINE manuelle Aus-Übersteuerung.
   assert.equal(s.manualOff, false);
-  assert.equal(s.lastBrokerStatus, 'off');
+  assert.equal(s.lastSyncValue, 'off');
   assert.equal(d.on, true); // Automatik lädt weiter
 
   // Nach Ablauf des Fensters wird eine echte Nutzerschaltung wieder erkannt.
   s.output = 'on';
-  s.lastBrokerStatus = 'on';
+  s.lastSyncValue = 'on';
   decideWallboxAction(box, s, baseDecideCtx({
     plan: { desiredOn: true, setpointW: null, priority: 3 },
-    brokerStatus: 'off', now: 1_050_000,
+    syncStatus: 'off', now: 1_050_000,
   }));
   assert.equal(s.manualOff, true);
 });

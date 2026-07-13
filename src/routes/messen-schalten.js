@@ -66,6 +66,18 @@ function groupSumDisplay(tree) {
 function counterDisplay(kwh) {
   return kwh == null ? '— kWh' : `${numberFmt2.format(kwh)} kWh`;
 }
+// Warntext der Zähler-Gegenprobe: Zähler-Energie weicht heute stark von der aus
+// der Live-Leistung integrierten Energie ab (typisch: Einheit Wh/kWh vertauscht).
+function counterWarningText(value) {
+  if (!value || value.counterWarning !== true) return '';
+  const c = value.counterTodayKwh == null ? '—' : `${numberFmt2.format(value.counterTodayKwh)} kWh`;
+  const p = value.powerTodayKwh == null ? '—' : `${numberFmt2.format(value.powerTodayKwh)} kWh`;
+  const tooLow = value.counterTodayKwh != null && value.powerTodayKwh != null
+    && value.counterTodayKwh < value.powerTodayKwh;
+  return `Zähler unplausibel: heute ${c} laut Zähler, aber ${p} aus der Live-Leistung integriert`
+    + `${tooLow ? ' — Zähler zählt viel zu wenig' : ' — Zähler zählt viel zu viel'}. `
+    + 'Bitte die Zähler-Einheit prüfen (Wh ↔ kWh).';
+}
 function freshnessDisplay(receivedAt) {
   if (!receivedAt) return 'noch kein Wert empfangen';
   const seconds = Math.max(0, Math.floor((Date.now() - receivedAt) / 1000));
@@ -94,10 +106,17 @@ function toViewActor(actor, value, groupsById) {
     counterDisplay: counterDisplay(v.counterKwh),
     statusStale: v.statusStale === true,
     powerStale: v.powerStale === true,
-    counterStale: v.counterStale === true,
+    // Der Zählerstand ist ein interner, aus dem Zählerfortschritt gebildeter Wert –
+    // er ist immer bekannt und wird bewusst NICHT als „veraltet" markiert. Eine
+    // fehlende Verbindung zeigt sich an der Leistung/dem Status (powerStale).
     statusFreshness: freshnessDisplay(v.statusReceivedAt),
     powerFreshness: v.powerInferredOff ? '0 W aus bestätigtem AUS-Zustand abgeleitet' : freshnessDisplay(v.powerReceivedAt),
     counterFreshness: freshnessDisplay(v.counterReceivedAt),
+    counterWarning: v.counterWarning === true,
+    counterWarningText: counterWarningText(v),
+    // Gerät „nicht verbunden": periodische Telemetrie schweigt seit > Schwelle.
+    offline: v.offline === true,
+    offlineSince: v.offline ? freshnessDisplay(v.lastSeenAt) : '',
     priority: effectivePriority(actor, groupsById),
     priorityFromGroup: fromGroup,
     loadShedEnabled: actor.loadShedEnabled === true,

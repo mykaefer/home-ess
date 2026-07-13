@@ -193,17 +193,23 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
   und funktionszugeordnete Messen-+-Schalten-Geräte (Licht, Waschen, Warmwasser,
   Heizung / Klima, Kochen) werden ebenfalls aus dem reinen Hausbedarf entfernt und
   anschließend separat eingeplant — Heizung / Klima als **mittlere Leistung (W)
-  je 1-°C-Außentemperaturfenster** (unterer Sammelbereich **< -20 °C**, oberer
-  **> 50 °C**), die übrigen Funktionen je Wochentag. Je Fenster werden bis zu
-  **30 Messtage** vorgehalten (pro Tag die mittlere Leistung bei dieser
-  Temperatur); der Modellwert ist deren Mittel. Ein Fenster wird nur an Tagen
-  belegt, an denen diese Außentemperatur real auftrat, sodass die Sommer- die
-  Winterkurve nicht überschreibt. Der Heizungs-/Klimabedarf wird **je
-  Prognosestunde** aus der Fensterleistung nach der prognostizierten
-  Außentemperatur zu erwartetem Verbrauch errechnet (`kWh = W/1000 × Stunden`,
-  nicht im Tagesdurchschnitt) und auf der Prognoseseite unter der Datenbasis als
-  **Balkendiagramm über die Temperaturfenster** dargestellt (Balken =
-  30-Tage-Mittel, Markierungslinie = heutiger Wert). E-Auto-Ladung wird ausschließlich aus dem aktuellen Fahrzeugbedarf
+  je 1-°C-Außentemperaturfenster und Tagesstunde** (unterer Sammelbereich
+  **< -20 °C**, oberer **> 50 °C**), die übrigen Funktionen je Wochentag. Je
+  Fenster wird für **jede der 24 Tagesstunden** die mittlere Leistung über bis zu
+  **30 Messtage** vorgehalten, weil der Heiz-/Kühlbedarf je Tageszeit variiert
+  (Kühlen v. a. abends, Heizen morgens zum Aufheizen stärker als abends). Ein
+  Fenster wird nur an Tagen belegt, an denen diese Außentemperatur real auftrat,
+  sodass die Sommer- die Winterkurve nicht überschreibt. Der Heizungs-/Klimabedarf
+  wird **je Prognosestunde** aus der stundengenauen Fensterleistung nach der
+  prognostizierten Außentemperatur zu erwartetem Verbrauch errechnet
+  (`kWh = W/1000 × Stunden`, nicht im Tagesdurchschnitt; noch ungelernte Stunden
+  fallen auf das Fenstermittel zurück). Auf der Prognoseseite erscheint unter der
+  Datenbasis ein **Balkendiagramm über die Temperaturfenster** (Balken = Mittel
+  über alle 24 Stunden, Markierungslinie = heutiger Wert); ein **Klick auf einen
+  Balken** öffnet die **24-Stunden-Kurve** dieses Fensters. Im Stundenprofil der
+  Tagesprognosen sitzt der erwartete Heiz-/Kühlbedarf zusätzlich als **gestapelter
+  Balken** über der Grundlast (die Grundlastberechnung selbst bleibt unberührt).
+  E-Auto-Ladung wird ausschließlich aus dem aktuellen Fahrzeugbedarf
   (Fahrzeug-SoC) und der gewählten Ladestrategie geplant; historische
   Ladezeiten erzeugen keine Lastprognose.
   Ungelernte Wochentage übernehmen ausschließlich die Lernkurve des jüngsten
@@ -297,9 +303,12 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
     rückwirkend aber vollständig bereinigt.
 - 🚗 **Wallbox** (optionales Modul, aktivierbar unter `/module`):
   - Mehrere Wallboxen einzeln anlegbar (wie die PV-Anlagen). Je Box ein
-    Pflicht-**Steuer-Topic** sowie optional Status, Leistung (W/kW), fortlaufender
-    Zähler (Wh/kWh), Soll-Leistung, „Fahrzeug angesteckt" und Fahrzeug-SoC (%);
-    zusätzlich Maximalleistung und Fahrzeug-Akkugröße.
+    Pflicht-**Steuer-Topic** (reiner Aktor: homeESS schaltet die Wallbox darüber),
+    optional ein bidirektionales **Steuerung-Sync-Topic** (an/aus-Schalter: homeESS
+    spiegelt den Zustand darauf, externe Änderungen gelten als Bedienbefehl), sowie
+    optional Status, Leistung (W/kW), fortlaufender Zähler (Wh/kWh), Soll-Leistung,
+    „Fahrzeug angesteckt" und Fahrzeug-SoC (%); zusätzlich Maximalleistung und
+    Fahrzeug-Akkugröße.
   - **Verbrauchszählung** je Box für Tag/Woche/Monat/Jahr inkl. Vorjahr; ohne
     Zähler-Topic aus der Leistung abgeleitet. Fehlt das SoC-Topic, wird der
     Ladezustand aus der seit Einstecken geladenen Energie geschätzt.
@@ -314,8 +323,9 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
     das Ladegerät aktiviert. Mit
     Soll-Leistungs-Topic wird vorsichtig gegen den Live-Überschuss moduliert;
     ohne Sollwert startet die Box erst bei vollständig gedeckter Ladeleistung.
-    Optionaler **Modus-Sync** über ein eigenes Topic. Jede Box besitzt zusätzlich
-    eine **Lastabwurf-Phase** (`L1`, `L2`, `L3` oder `Drehstrom`).
+    Optionaler **Modus-Sync** über ein eigenes Topic – nur für den Ladeplan
+    (1 = Privat, 2 = Beruflich, 3 = Immer voll), bidirektional gehalten. Jede Box
+    besitzt zusätzlich eine **Lastabwurf-Phase** (`L1`, `L2`, `L3` oder `Drehstrom`).
   - Als **Verbraucher am Betriebslevel-Handler** angemeldet (Priorität des aktiven
     Modus): Einschalten nur nach Freigabe, Zwangsabschaltung bei Levelabfall.
   - Bei aktiver Grid-Control-Wechselrichterlast nimmt die Wallbox ebenfalls am
@@ -323,12 +333,17 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
     anderen Lastabwurf-Verbrauchern priorisiert abgeworfen bzw. später wieder
     freigegeben.
   - **Sonderfälle**: hängt der Ladestart trotz Befehl unter der Leerlaufschwelle, wird
-    nach einer konfigurierbaren Vorgabezeit kurz aus-/eingeschaltet; manuelles Einschalten
-    am Broker löst eine einmalige Volladung bis zum Leistungsabfall aus;
-    manuelles Ausschalten hält bis zum Folgetag mit vollständiger PV-Deckung und
-    ausreichender Hausakku-Reserve an; das „angesteckt"-Signal dient ausschließlich
-    der Ladeüberwachung (Neustart-Schleife) und sperrt weder Ladefreigabe noch
-    Planung — manche Fahrzeuge erkennen den Stecker erst nach der Freigabe.
+    nach einer konfigurierbaren Vorgabezeit kurz aus-/eingeschaltet; **externes
+    Einschalten am Steuerung-Sync-Topic** löst eine einmalige Volladung bis zum
+    Leistungsabfall aus; **externes Ausschalten** hält bis zum Folgetag mit
+    vollständiger PV-Deckung und ausreichender Hausakku-Reserve an. Schaltet die
+    Automatik selbst, bleibt die Steuerung auf **Automatik** (eigene Spiegel-Writes
+    gelten nie als Bedienung); nur ein direkt beobachteter, nicht selbst ausgelöster
+    Wechsel am Sync-Topic zählt – Neustart, Adapter-Reconnect oder Topic-Refresh
+    ändern den Schaltmodus nicht (neustart-resistent in der DB). Das
+    „angesteckt"-Signal dient ausschließlich der Ladeüberwachung (Neustart-Schleife)
+    und sperrt weder Ladefreigabe noch Planung — manche Fahrzeuge erkennen den
+    Stecker erst nach der Freigabe.
   - Die Prognose führt je Wallbox getrennte Tages- und Stundenstatistiken nach
     Wochentag. Gemessene Ladeenergie wird aus dem allgemeinen Hausverbrauch
     herausgerechnet und anschließend als eigener Wallboxbedarf eingeplant. Der

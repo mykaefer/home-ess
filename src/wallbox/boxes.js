@@ -105,6 +105,7 @@ function normalizeRow(row = {}) {
     maxPowerW: parseNumber(row.max_power_w),
     batteryCapacityKwh: parseNumber(row.battery_capacity_kwh),
     commandTopic: row.command_topic || '',
+    controlSyncTopic: row.control_sync_topic || '',
     statusTopic: row.status_topic || '',
     powerTopic: row.power_topic || '',
     powerUnit: normalizeUnit(row.power_unit, POWER_UNITS, 'W'),
@@ -131,8 +132,8 @@ function normalizeRow(row = {}) {
   };
 }
 
-const COLUMNS = `id, name, max_power_w, battery_capacity_kwh, command_topic, status_topic,
-  power_topic, power_unit, counter_topic, counter_unit, setpoint_topic, plugged_topic,
+const COLUMNS = `id, name, max_power_w, battery_capacity_kwh, command_topic, control_sync_topic,
+  status_topic, power_topic, power_unit, counter_topic, counter_unit, setpoint_topic, plugged_topic,
   soc_topic, mode_sync_topic, mode, priority_private, priority_business, priority_full,
   load_shed_phase, min_charge_percent, min_charge_business_percent, business_days,
   business_end_hour, stall_timeout_seconds, stall_power_w, control_mode`;
@@ -160,6 +161,7 @@ function normalizeInput(input = {}) {
     maxPowerW: parseNumber(input.maxPowerW),
     batteryCapacityKwh: parseNumber(input.batteryCapacityKwh),
     commandTopic: normalizeMqttTopic(input.commandTopic || ''),
+    controlSyncTopic: normalizeMqttTopic(input.controlSyncTopic || ''),
     statusTopic: normalizeMqttTopic(input.statusTopic || ''),
     powerTopic: normalizeMqttTopic(input.powerTopic || ''),
     powerUnit: normalizeUnit(input.powerUnit, POWER_UNITS, 'W'),
@@ -203,6 +205,7 @@ function validateInput(input) {
 
 const INSERT_PARAMS = (input, mode) => [
   input.name, input.maxPowerW, input.batteryCapacityKwh, input.commandTopic,
+  input.controlSyncTopic,
   input.statusTopic, input.powerTopic, input.powerUnit, input.counterTopic,
   input.counterUnit, input.setpointTopic, input.pluggedTopic, input.socTopic,
   input.modeSyncTopic, mode, input.priorityPrivate, input.priorityBusiness,
@@ -222,12 +225,12 @@ async function createWallbox(db, rawInput) {
   const result = await dbRun(
     db,
     `INSERT INTO wallboxes
-     (name, max_power_w, battery_capacity_kwh, command_topic, status_topic, power_topic,
+     (name, max_power_w, battery_capacity_kwh, command_topic, control_sync_topic, status_topic, power_topic,
       power_unit, counter_topic, counter_unit, setpoint_topic, plugged_topic, soc_topic,
       mode_sync_topic, mode, priority_private, priority_business, priority_full, load_shed_phase,
       min_charge_percent, min_charge_business_percent, business_days, business_end_hour,
       stall_timeout_seconds, stall_power_w)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     INSERT_PARAMS(input, 1)
   );
   await dbRun(
@@ -256,15 +259,16 @@ async function updateWallbox(db, id, rawInput) {
   await dbRun(
     db,
     `UPDATE wallboxes SET
-       name = ?, max_power_w = ?, battery_capacity_kwh = ?, command_topic = ?, status_topic = ?,
-       power_topic = ?, power_unit = ?, counter_topic = ?, counter_unit = ?, setpoint_topic = ?,
-       plugged_topic = ?, soc_topic = ?, mode_sync_topic = ?, priority_private = ?,
+       name = ?, max_power_w = ?, battery_capacity_kwh = ?, command_topic = ?, control_sync_topic = ?,
+       status_topic = ?, power_topic = ?, power_unit = ?, counter_topic = ?, counter_unit = ?,
+       setpoint_topic = ?, plugged_topic = ?, soc_topic = ?, mode_sync_topic = ?, priority_private = ?,
        priority_business = ?, priority_full = ?, load_shed_phase = ?, min_charge_percent = ?,
        min_charge_business_percent = ?, business_days = ?, business_end_hour = ?,
        stall_timeout_seconds = ?, stall_power_w = ?
      WHERE id = ?`,
     [
       input.name, input.maxPowerW, input.batteryCapacityKwh, input.commandTopic,
+      input.controlSyncTopic,
       input.statusTopic, input.powerTopic, input.powerUnit, input.counterTopic,
       input.counterUnit, input.setpointTopic, input.pluggedTopic, input.socTopic,
       input.modeSyncTopic, input.priorityPrivate, input.priorityBusiness,
@@ -312,18 +316,21 @@ function cacheKey(id, suffix) {
 function buildWallboxStateDefinitions(boxes) {
   const defs = [];
   for (const box of boxes || []) {
-    // Das Steuer-Topic separat abonnieren: nur Änderungen hier können als
-    // Bedienwunsch gelten. Automatik-Readbacks werden in automation.js abgefangen.
-    if (box.commandTopic) defs.push({ id: cacheKey(box.id, 'command'), topic: box.commandTopic });
+    // Steuerung-Sync-Topic (an/aus) abonnieren: nur externe Änderungen hier gelten
+    // als Bedienwunsch. Eigene Spiegel-Writes fängt automation.js ab. Das
+    // Steuer-Topic ist reiner Aktor und wird NICHT zur Bedienerkennung abonniert.
+    if (box.controlSyncTopic) defs.push({ id: cacheKey(box.id, 'controlSync'), topic: box.controlSyncTopic });
     if (box.statusTopic) defs.push({ id: cacheKey(box.id, 'status'), topic: box.statusTopic });
     if (box.powerTopic) defs.push({ id: cacheKey(box.id, 'power'), topic: box.powerTopic });
     if (box.counterTopic) defs.push({ id: cacheKey(box.id, 'counter'), topic: box.counterTopic });
     if (box.pluggedTopic) defs.push({ id: cacheKey(box.id, 'plugged'), topic: box.pluggedTopic });
     if (box.socTopic) defs.push({ id: cacheKey(box.id, 'soc'), topic: box.socTopic });
     if (box.modeSyncTopic) defs.push({ id: cacheKey(box.id, 'modeSync'), topic: box.modeSyncTopic });
-    // Ohne dediziertes Status-Topic dient das Steuer-Topic als Ist-Stand-Quelle.
-    if (!box.statusTopic && box.commandTopic) {
-      defs.push({ id: cacheKey(box.id, 'status'), topic: box.commandTopic });
+    // Ohne dediziertes Status-Topic den Ist-Stand aus dem Steuerung-Sync-Topic
+    // (spiegelt an/aus) oder – falls auch das fehlt – aus dem Steuer-Topic ableiten.
+    if (!box.statusTopic) {
+      const fallback = box.controlSyncTopic || box.commandTopic;
+      if (fallback) defs.push({ id: cacheKey(box.id, 'status'), topic: fallback });
     }
   }
   return defs;

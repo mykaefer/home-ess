@@ -111,10 +111,18 @@ function renderEnergiefluss({ data = {}, exports = [], formMessage = '', formErr
     var PALETTE = ['#0ea5e9', '#6366f1', '#8b5cf6', '#ec4899', '#ef4444', '#f59e0b',
       '#10b981', '#14b8a6', '#0f766e', '#64748b', '#a16207', '#be123c'];
 
+    // Schmale Viewports (Handy) zeichnen das Diagramm vertikal (eingerückter Baum),
+    // breite horizontal. Bei Breitenwechsel wird mit den letzten Daten neu gezeichnet.
+    var verticalMq = window.matchMedia('(max-width: 760px)');
+    var lastData = null;
     function draw(data) {
-      var res = diagram.draw(data, { showEnergy: true });
+      lastData = data;
+      var res = diagram.draw(data, { showEnergy: true, vertical: verticalMq.matches });
       document.getElementById('efEmpty').hidden = !res.empty;
     }
+    function onViewportChange() { if (lastData) draw(lastData); }
+    if (verticalMq.addEventListener) verticalMq.addEventListener('change', onViewportChange);
+    else if (verticalMq.addListener) verticalMq.addListener(onViewportChange);
 
     // --- Colorpicker-Dialog --------------------------------------------------
     var efColorGroupId = null;
