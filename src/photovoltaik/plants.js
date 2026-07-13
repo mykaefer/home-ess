@@ -23,6 +23,14 @@ function parseCutoffPercent(value) {
   return Math.max(0, Math.min(100, parsed));
 }
 
+// Einheit des Ertrags-Rohzählers je Anlage. Intern wird immer in kWh gezählt;
+// ein Wh-Topic wird beim Einlesen durch 1000 geteilt.
+const YIELD_UNIT_OPTIONS = ['kWh', 'Wh'];
+
+function normalizeYieldUnit(value) {
+  return YIELD_UNIT_OPTIONS.includes(value) ? value : 'kWh';
+}
+
 const CELL_TYPE_OPTIONS = [
   'Monokristallin',
   'Polykristallin',
@@ -83,6 +91,7 @@ function normalizePlantRow(row = {}) {
     converterType: row.converter_type || 'Direkt',
     powerTopic: row.power_topic || '',
     todayYieldTopic: row.today_yield_topic || '',
+    todayYieldUnit: normalizeYieldUnit(row.today_yield_unit),
     autoCalibrate: Boolean(row.auto_calibrate),
     sunCutoffMorning: parseCutoffPercent(row.sun_cutoff_morning),
     sunCutoffEvening: parseCutoffPercent(row.sun_cutoff_evening),
@@ -98,7 +107,7 @@ async function listPvPlants(db) {
   const rows = await dbAll(
     db,
     `SELECT id, name, kw_peak, efficiency, orientation, tilt, is_consumer_side, cell_type,
-            converter_type, power_topic, today_yield_topic, auto_calibrate,
+            converter_type, power_topic, today_yield_topic, today_yield_unit, auto_calibrate,
             sun_cutoff_morning, sun_cutoff_evening
      FROM pv_plants
      ORDER BY id ASC`
@@ -112,7 +121,7 @@ async function getPvPlant(db, id) {
   const row = await dbGet(
     db,
     `SELECT id, name, kw_peak, efficiency, orientation, tilt, is_consumer_side, cell_type,
-            converter_type, power_topic, today_yield_topic, auto_calibrate,
+            converter_type, power_topic, today_yield_topic, today_yield_unit, auto_calibrate,
             sun_cutoff_morning, sun_cutoff_evening
      FROM pv_plants
      WHERE id = ?`,
@@ -137,6 +146,7 @@ function normalizePlantInput(input = {}) {
     converterType: String(input.converterType || '').trim(),
     powerTopic: normalizeMqttTopic(input.powerTopic || ''),
     todayYieldTopic: normalizeMqttTopic(input.todayYieldTopic || ''),
+    todayYieldUnit: normalizeYieldUnit(input.todayYieldUnit),
     autoCalibrate: parseCheckbox(input.autoCalibrate),
     sunCutoffMorning: parseCutoffPercent(input.sunCutoffMorning),
     sunCutoffEvening: parseCutoffPercent(input.sunCutoffEvening),
@@ -175,8 +185,8 @@ async function createPvPlant(db, input) {
   const result = await dbRun(
     db,
     `INSERT INTO pv_plants
-     (name, kw_peak, efficiency, orientation, tilt, is_consumer_side, cell_type, converter_type, power_topic, today_yield_topic, auto_calibrate, sun_cutoff_morning, sun_cutoff_evening)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     (name, kw_peak, efficiency, orientation, tilt, is_consumer_side, cell_type, converter_type, power_topic, today_yield_topic, today_yield_unit, auto_calibrate, sun_cutoff_morning, sun_cutoff_evening)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       plant.name,
       plant.kwPeak,
@@ -188,6 +198,7 @@ async function createPvPlant(db, input) {
       plant.converterType,
       plant.powerTopic,
       plant.todayYieldTopic,
+      plant.todayYieldUnit,
       plant.autoCalibrate ? 1 : 0,
       plant.sunCutoffMorning,
       plant.sunCutoffEvening,
@@ -222,7 +233,7 @@ async function updatePvPlant(db, id, input) {
     db,
     `UPDATE pv_plants
      SET name = ?, kw_peak = ?, efficiency = ?, orientation = ?, tilt = ?, is_consumer_side = ?,
-         cell_type = ?, converter_type = ?, power_topic = ?, today_yield_topic = ?, auto_calibrate = ?,
+         cell_type = ?, converter_type = ?, power_topic = ?, today_yield_topic = ?, today_yield_unit = ?, auto_calibrate = ?,
          sun_cutoff_morning = ?, sun_cutoff_evening = ?
      WHERE id = ?`,
     [
@@ -236,6 +247,7 @@ async function updatePvPlant(db, id, input) {
       plant.converterType,
       plant.powerTopic,
       plant.todayYieldTopic,
+      plant.todayYieldUnit,
       plant.autoCalibrate ? 1 : 0,
       plant.sunCutoffMorning,
       plant.sunCutoffEvening,
@@ -251,6 +263,15 @@ async function updatePvPlant(db, id, input) {
     const kwPeakChanged = existing.kwPeak !== plant.kwPeak;
     if (orientationChanged || kwPeakChanged) {
       await dbRun(db, 'DELETE FROM pv_calibration_buckets WHERE plant_id = ?', [id]);
+    }
+    // Wechselt das Ertrags-Topic oder dessen Einheit, ist der bisherige Rohwert
+    // keine gültige Delta-Basis mehr. Nur die Baseline (last_counter_raw) leeren –
+    // der interne Zähler (counter_total_kwh) und die Tagesbasis bleiben, sodass
+    // der Tagesertrag NICHT springt, sondern die Zählung nahtlos weiterläuft.
+    const topicChanged = (existing.todayYieldTopic || '') !== (plant.todayYieldTopic || '');
+    const unitChanged = existing.todayYieldUnit !== plant.todayYieldUnit;
+    if (topicChanged || unitChanged) {
+      await dbRun(db, 'UPDATE pv_aggregation SET last_counter_raw = NULL WHERE plant_id = ?', [id]);
     }
   }
   invalidatePvPlants(db);
@@ -278,6 +299,8 @@ module.exports = {
   CELL_TYPE_DEFAULT_EFFICIENCY,
   DEFAULT_SUN_CUTOFF_PERCENT,
   CONVERTER_TYPE_OPTIONS,
+  YIELD_UNIT_OPTIONS,
+  normalizeYieldUnit,
   listPvPlants,
   invalidatePvPlants,
   getPvPlant,

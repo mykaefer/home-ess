@@ -20,10 +20,104 @@ function dbGet(db, sql, params = []) {
   });
 }
 
+function dbAll(db, sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.all(sql, params, (err, rows) => (err ? reject(err) : resolve(rows || [])));
+  });
+}
+
 function dbRun(db, sql, params = []) {
   return new Promise((resolve, reject) => {
     db.run(sql, params, (err) => (err ? reject(err) : resolve()));
   });
+}
+
+// Rohwert des Ertrags-Zählertopics in kWh: ein Wh-Topic wird durch 1000 geteilt.
+function counterToKwh(value, unit) {
+  if (value == null) return null;
+  return unit === 'Wh' ? value / 1000 : value;
+}
+
+// Ertrags-Zählerstand je Anlage: Das Topic liefert einen ROHZÄHLER (kumulativ).
+// Wie bei allen anderen Zählertopics werden nur die Deltas des Rohwerts in einen
+// internen kWh-Zähler (counterTotalKwh) fortgeschrieben; „heute" ist der
+// Fortschritt seit der Tagesbasis (dayStartKwh). So wird ein Rohwert nie als
+// Tagesertrag übernommen (auch nicht nach einem Topic-/Einheitenwechsel, der die
+// Baseline leert).
+async function loadPlantYieldStates(db) {
+  const rows = await dbAll(
+    db,
+    'SELECT plant_id, last_counter_raw, counter_total_kwh, day_key, day_start_kwh FROM pv_aggregation'
+  );
+  const map = new Map();
+  for (const row of rows) {
+    map.set(row.plant_id, {
+      lastCounterRaw: parseNumber(row.last_counter_raw),
+      counterTotalKwh: parseNumber(row.counter_total_kwh),
+      dayKey: row.day_key || null,
+      dayStartKwh: parseNumber(row.day_start_kwh),
+    });
+  }
+  return map;
+}
+
+async function savePlantYieldState(db, plantId, state) {
+  await dbRun(
+    db,
+    `INSERT INTO pv_aggregation (plant_id, last_counter_raw, counter_total_kwh, day_key, day_start_kwh)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(plant_id) DO UPDATE SET
+       last_counter_raw = excluded.last_counter_raw,
+       counter_total_kwh = excluded.counter_total_kwh,
+       day_key = excluded.day_key,
+       day_start_kwh = excluded.day_start_kwh`,
+    [
+      plantId,
+      state.lastCounterRaw,
+      state.counterTotalKwh,
+      state.dayKey,
+      state.dayStartKwh == null ? null : state.dayStartKwh,
+    ]
+  );
+}
+
+// Reine Fortschreibung eines Anlagen-Ertragszustands: rawKwh ist der bereits in
+// kWh umgerechnete Rohwert (null = unbekannt). Nur Vorwärts-Deltas zählen; eine
+// fehlende Baseline (Neuanlage/Topic-/Einheitenwechsel) und Rückwärtssprünge
+// (Geräte-Reset) basieren nur neu, ohne den aktuellen Rohwert als Sprung in den
+// Ertrag einzurechnen. Beim Tageswechsel wird die Tagesbasis nachgezogen.
+function advancePlantYield(prev, rawKwh, dayKey) {
+  const next = {
+    lastCounterRaw: prev ? prev.lastCounterRaw : null,
+    counterTotalKwh: prev ? prev.counterTotalKwh : null,
+    dayKey: prev ? prev.dayKey : null,
+    dayStartKwh: prev ? prev.dayStartKwh : null,
+  };
+  if (rawKwh != null) {
+    if (next.counterTotalKwh == null) {
+      // Erststart / nach Reset: interner Zähler beginnt bei 0; der aktuelle
+      // Rohwert wird NUR Baseline, kein Sprung in den Ertrag.
+      next.counterTotalKwh = 0;
+    } else if (next.lastCounterRaw != null && rawKwh > next.lastCounterRaw) {
+      next.counterTotalKwh += rawKwh - next.lastCounterRaw;
+    }
+    next.lastCounterRaw = rawKwh;
+  }
+  if (next.counterTotalKwh != null && (next.dayKey !== dayKey || next.dayStartKwh == null)) {
+    next.dayStartKwh = next.counterTotalKwh;
+    next.dayKey = dayKey;
+  }
+  return next;
+}
+
+// Tagesertrag (kWh) aus einem gespeicherten Ertragszustand. Zeigt die Tagesbasis
+// noch auf einen früheren Tag (Job seit Mitternacht noch nicht gelaufen), gilt der
+// Ertrag als 0 — erst der nächste Tick basiert neu.
+function plantTodayKwh(state, dayKey) {
+  if (!state || state.counterTotalKwh == null) return null;
+  if (dayKey != null && state.dayKey !== dayKey) return 0;
+  const base = state.dayStartKwh == null ? state.counterTotalKwh : state.dayStartKwh;
+  return Math.max(0, state.counterTotalKwh - base);
 }
 
 function pad(value) {
@@ -573,6 +667,9 @@ async function buildPhotovoltaikSnapshot(db, cache, plants) {
   const solarContext = buildSolarContext(mqttConfig, cache);
   const factorsMap = await loadFactors(db);
   const bucket = currentBucket(cache);
+  const now = new Date();
+  const dayKey = getDateKey(now);
+  const yieldStates = await loadPlantYieldStates(db);
   const enrichedPlants = [];
   let currentTotal = 0;
   let idealTotal = 0;
@@ -584,7 +681,12 @@ async function buildPhotovoltaikSnapshot(db, cache, plants) {
 
   for (const plant of plants || []) {
     const currentValue = getCacheValue(cache, `pv:${plant.id}:power`);
-    const todayValue = getCacheValue(cache, `pv:${plant.id}:today`);
+    // Ertrags-Topic als Rohzähler behandeln: Delta in den internen kWh-Zähler
+    // fortschreiben und daraus den Tagesertrag (Fortschritt seit Tagesbasis) bilden.
+    const rawYield = counterToKwh(getCacheValue(cache, `pv:${plant.id}:today`), plant.todayYieldUnit);
+    const nextYieldState = advancePlantYield(yieldStates.get(plant.id) || null, rawYield, dayKey);
+    await savePlantYieldState(db, plant.id, nextYieldState);
+    const todayValue = plantTodayKwh(nextYieldState, dayKey);
     const idealBase = calculateIdealPlantPower(plant, solarContext);
     // Wirksamer Kalibrierfaktor (nur bei aktivierter Auto-Kalibrierung + genug
     // Samples) zieht den Idealwert tageszeit-abhängig nach (z. B. Verschattung).
@@ -631,7 +733,7 @@ async function buildPhotovoltaikSnapshot(db, cache, plants) {
   }
 
   const totalTodayValue = hasToday ? todayTotal : null;
-  const state = await updateSummaryState(db, totalTodayValue);
+  const state = await updateSummaryState(db, totalTodayValue, now);
   const effectiveToday = totalTodayValue == null ? 0 : totalTodayValue;
   const weekValue =
     totalTodayValue == null && state.weekOffset === 0 ? null : state.weekOffset + effectiveToday;
@@ -671,6 +773,8 @@ async function readPhotovoltaikValues(db, cache, plants) {
   const factorsMap = await loadFactors(db);
   const bucket = currentBucket(cache);
   const state = await loadSummaryState(db);
+  const dayKey = getDateKey();
+  const yieldStates = await loadPlantYieldStates(db);
 
   let currentTotal = 0;
   let idealTotal = 0;
@@ -687,7 +791,9 @@ async function readPhotovoltaikValues(db, cache, plants) {
     const current = getCacheValue(cache, `pv:${plant.id}:power`);
     const idealBase = calculateIdealPlantPower(plant, solarContext);
     const ideal = idealBase == null ? null : idealBase * effectiveFactor(factorsMap, plant, bucket);
-    const today = getCacheValue(cache, `pv:${plant.id}:today`);
+    // Tagesertrag aus dem persistierten internen Zähler (schreibfrei; die
+    // Fortschreibung erledigt buildPhotovoltaikSnapshot im 60-s-Job).
+    const today = plantTodayKwh(yieldStates.get(plant.id) || null, dayKey);
     const directSunlight = assessDirectSunlight(plant, current, ideal, idealBase, solarContext);
     const sunReference = isSunReference(plant, idealBase, solarContext);
     // Grenzleistung Schatten → direkte Sonne: ab hier gilt die Anlage als besonnt.
@@ -833,4 +939,7 @@ module.exports = {
   formatEnergy,
   isSunReference,
   updateSummaryState,
+  counterToKwh,
+  advancePlantYield,
+  plantTodayKwh,
 };

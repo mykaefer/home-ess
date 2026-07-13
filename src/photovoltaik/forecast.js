@@ -179,6 +179,10 @@ function buildForecast(weather, plants, config, factorsMap = null, nowLocal = nu
   return {
     fetchedAt: weather.fetchedAt,
     days,
+    // Standort für geometrische Clear-Sky-Berechnungen (z. B. Pool-Solarpumpen-
+    // Laufzeit je Prognosestunde). Kommt aus der von Open-Meteo gemeldeten Zelle.
+    latitude: weather.latitude,
+    longitude: weather.longitude,
     locationLabel: formatLocation(weather),
     todayElapsedKwh,
     todayRemainingKwh,

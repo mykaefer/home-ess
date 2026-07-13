@@ -33,6 +33,7 @@ async function freshDb() {
     solar_pump_temp_on_seconds INTEGER NOT NULL DEFAULT 30,
     solar_pump_temp_pause_minutes INTEGER NOT NULL DEFAULT 30,
     solar_pump_temp_use_filter INTEGER NOT NULL DEFAULT 0,
+    solar_pump_rated_power_w REAL,
     filter_pump_status_topic TEXT NOT NULL DEFAULT '',
     filter_pump_command_topic TEXT NOT NULL DEFAULT '',
     filter_pump_priority INTEGER NOT NULL DEFAULT 4,
@@ -46,6 +47,7 @@ async function freshDb() {
     filter_time_3_end TEXT NOT NULL DEFAULT '',
     filter_battery_enabled INTEGER NOT NULL DEFAULT 0,
     filter_battery_soc INTEGER NOT NULL DEFAULT 80,
+    filter_pump_rated_power_w REAL,
     ph_topic TEXT NOT NULL DEFAULT '',
     chlor_topic TEXT NOT NULL DEFAULT ''
   )`);

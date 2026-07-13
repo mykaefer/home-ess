@@ -4140,7 +4140,10 @@ body,
         padding: 8px 12px 8px 10px;
     }
 
-    .ms-status-dot { grid-area: dot; }
+    /* Nur im ms-row-Raster; die Schaltgruppen-Zeilen (.sg-row) nutzen dieselbe
+       Statuspunkt-Klasse, haben aber KEIN „dot"-Grid-Area – ohne diese
+       Eingrenzung würde ihr eigenes Raster zerstört (Name auf 12px gequetscht). */
+    .ms-row .ms-status-dot { grid-area: dot; }
 
     .ms-row-name {
         grid-area: name;
@@ -4325,5 +4328,15 @@ body,
     .sg-row {
         grid-template-columns: 12px minmax(0, 1fr) 80px auto;
         gap: 8px;
+    }
+
+    /* Der Gruppenkopf trägt Titel, Zähler, bis zu drei Badges, den Schalter und
+       zwei Aktionsknöpfe. Ohne Umbruch überschreitet er auf schmalen Geräten die
+       Bildschirmbreite und zieht die ganze Seite breiter als den Viewport (die
+       Seite „skaliert größer" und schiebt die Tab-Bar aus dem Bild). Umbrechen
+       wie beim Messen-+-Schalten-Kopf (.ms-group-head). */
+    .sg-group-head {
+        flex-wrap: wrap;
+        row-gap: 4px;
     }
 }

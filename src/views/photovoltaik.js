@@ -106,7 +106,8 @@ function renderPhotovoltaik({
           cellType: '',
           converterType: '',
           powerTopic: '',
-          todayYieldTopic: ''
+          todayYieldTopic: '',
+          todayYieldUnit: 'kWh'
         });
         if (clearBtn) clearBtn.hidden = true;
       }
@@ -152,6 +153,7 @@ function renderPhotovoltaik({
       document.getElementById('plantConverterType').value = values.converterType || '';
       document.getElementById('plantPowerTopic').value = values.powerTopic || '';
       document.getElementById('plantTodayYieldTopic').value = values.todayYieldTopic || '';
+      document.getElementById('plantTodayYieldUnit').value = values.todayYieldUnit || 'kWh';
     }
 
     function closePlantDialog() {
@@ -431,6 +433,7 @@ function renderPlantDialog({ cellTypeOptions, converterTypeOptions, dialogError,
     converterType: '',
     powerTopic: '',
     todayYieldTopic: '',
+    todayYieldUnit: 'kWh',
   };
   const action =
     dialogMode === 'edit' && editingPlantId != null
@@ -531,8 +534,16 @@ function renderPlantDialog({ cellTypeOptions, converterTypeOptions, dialogError,
                   <input type="text" id="plantPowerTopic" name="powerTopic" value="${escapeHtml(values.powerTopic)}" placeholder="z.B. pv.0.power">
                 </label>
                 <label class="field-block" for="plantTodayYieldTopic">
-                  <span>MQTT Topic Ertrag heute</span>
-                  <input type="text" id="plantTodayYieldTopic" name="todayYieldTopic" value="${escapeHtml(values.todayYieldTopic)}" placeholder="z.B. pv.0.todayYield">
+                  <span>MQTT Topic Ertrags-Zähler</span>
+                  <input type="text" id="plantTodayYieldTopic" name="todayYieldTopic" value="${escapeHtml(values.todayYieldTopic)}" placeholder="z.B. pv.0.totalYield">
+                  <small class="muted">Kumulativer Zählerstand (Rohwert). Es werden nur die Zuwächse als Tagesertrag gezählt.</small>
+                </label>
+                <label class="field-block" for="plantTodayYieldUnit">
+                  <span>Einheit des Ertrags-Zählers</span>
+                  <select id="plantTodayYieldUnit" name="todayYieldUnit">
+                    <option value="kWh"${values.todayYieldUnit === 'Wh' ? '' : ' selected'}>kWh</option>
+                    <option value="Wh"${values.todayYieldUnit === 'Wh' ? ' selected' : ''}>Wh</option>
+                  </select>
                 </label>
               </div>
             </div>
@@ -616,6 +627,7 @@ function serializePlantForClient(plant) {
     converterType: plant.converterType,
     powerTopic: plant.powerTopic,
     todayYieldTopic: plant.todayYieldTopic,
+    todayYieldUnit: plant.todayYieldUnit || 'kWh',
   };
 }
 

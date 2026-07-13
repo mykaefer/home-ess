@@ -70,7 +70,16 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   (☀️/☁️) und globales **Himmelssymbol in der Titelzeile** (☀️/☁️/🌙 je
   Sonnenstand, via `/live/header`). Bewertet wird nur, solange die Anlage als
   **Sonnenreferenz** taugt (siehe Sonnenintensität). Ertrag heute/Woche/Jahr inkl.
-  Vorjahr.
+  Vorjahr. Das **Ertrags-Topic** ist ein **kumulativer Rohzähler** (wie alle
+  Zählertopics): je Anlage schreibt `pv_aggregation` nur die **Deltas** in einen
+  internen kWh-Zähler (`counter_total_kwh`) fort, „heute" ist der Fortschritt seit
+  der Tagesbasis (`day_start_kwh`). Ein Rohwert wird nie als Tagesertrag übernommen;
+  ein **Topic-/Einheitenwechsel** (bzw. Geräte-Reset) leert nur die Baseline
+  (`last_counter_raw`) und basiert ohne Sprung neu. Die **Einheit** je Anlage
+  (`today_yield_unit`, Wh/kWh) rechnet Wh beim Einlesen auf kWh um. Die Summen
+  Σheute/Woche/Jahr laufen weiterhin über `pv_summary_aggregation` (Fortschreibung
+  in `buildPhotovoltaikSnapshot`, 60-s-Job; `readPhotovoltaikValues` liest
+  schreibfrei).
   **PV-Prognose** (`photovoltaik/forecast.js`): Prognosestreifen unter den
   KPI-Kacheln mit erwartetem Tagesertrag (kWh) für Heute + 3 Tage. Quelle ist die
   stündliche Strahlungsprognose von **Open-Meteo** (`wetter/client.js`, kostenlos,
@@ -510,7 +519,14 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   verriegelt einen persistenten Notstromzustand; erst L1/L2/L3 jeweils > 0
   entriegeln ihn. Überalterte Frequenzwerte (Frische-Prüfung) entriegeln **nicht**.
   Dreiphasige Lastschaltung auf Basis der bestehenden Eigenverbrauchsleistung
-  L1–L3 mit separaten Ein-/Ausschaltschwellen und `grid.byLoad`. Globaler Zustand in `operating-state.js`
+  L1–L3 mit separaten Ein-/Ausschaltschwellen und `grid.byLoad`. Die
+  Verriegelung rastet bei Überlast **immer** ein und hält das Netz zugeschaltet,
+  bis alle Phasen unter ihre Rückschaltschwelle fallen — auch wenn der
+  ursprüngliche Schaltgrund wegfällt. Die **kritische Warnung
+  „Wechselrichterlast zu hoch"** wird dagegen nur protokolliert, wenn die Last der
+  **alleinige** Schaltgrund ist: War das Netz bereits aus einem anderen Grund
+  geschaltet, existiert keine Wechselrichter-Obergrenze (das öffentliche Netz
+  kompensiert) und die Meldung entfällt. Globaler Zustand in `operating-state.js`
   (`operatingLevel` 1–5, `emergencyMode` Boolean), visualisiert im Header.
   Dort liegt auch der persistente Tages-Latch `autark`; im Wert-Katalog als
   `operating.autark`. Eine untere SoC-Netzschaltung setzt ihn bis Tagesende false.
@@ -616,6 +632,11 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
     Fahrzeug-SoC (%) und ein bidirektionales **Modus-Sync-Topic** (nur der Ladeplan:
     1 = Privat, 2 = Beruflich, 3 = Immer voll); dazu Maximalleistung,
     Fahrzeug-Akkugröße und **Lastabwurf-Phase**.
+    Konfigurationsregel: Dieselbe physische Wallbox darf zwar zusätzlich unter
+    **Messen + Schalten** zur Leistungserfassung auftauchen, dort aber nur mit
+    Mess-/Zähler-Topics. Wallbox-`command_topic` und `control_sync_topic` nicht
+    erneut als Schalt-/Remote-Topic verwenden, weil sonst die Messen-+-Schalten-
+    Steuerung eigene Aus-Befehle auf die Wallbox-Automatik zurückspiegeln kann.
     - *Verbrauch* je Box Tag/Woche/Monat/Jahr + Vorjahr (`wallbox/aggregation.js`,
       `buildWallboxSnapshot` im 60-s-Job, Vorbild `stromverbrauch/aggregation.js`); ohne
       Zähler-Topic aus der Leistung integriert. **SoC-Schätzung** aus der seit Einstecken
@@ -738,7 +759,10 @@ Parallel zur Desktop-Ansicht entsteht eine vollwertige Smartphone-Ansicht
 (ein Breakpoint ≤ 768px, **Mobile-Layer am Ende von `public/styles.css`**,
 Shell-Bausteine Tab-Bar + Menü-Sheet in `views/layout.js`). Konzept,
 Framework-Regeln und Arbeitsstand je Seite: **[MOBILE.md](MOBILE.md)** —
-bei jeder mobil umgesetzten Seite dort die Checkliste pflegen.
+bei jeder mobil umgesetzten Seite dort die Checkliste pflegen. Der **Zoomfaktor
+ist per Viewport-Meta auf 100 % festgenagelt** (`initial-scale=1`,
+`minimum-scale=1`, `maximum-scale=1`, `user-scalable=no`) — Layouts bleiben 1:1;
+horizontaler Überlauf darf entsprechend nie entstehen.
 
 ## Leitprinzipien (vom Auftraggeber vorgegeben)
 
@@ -915,10 +939,15 @@ MQTT.md                   Referenz: ioBroker-MQTT-Regeln
 - `stromverbrauch_aggregation(id=1, week/year_import/export_offset, previous_year_*, ...)`
 - `stromverbrauch_counter_state(counter_key, last_raw_value, day_total, last_day_key)`
 - `pv_plants(id, name, kw_peak, efficiency, orientation, tilt, is_consumer_side,
-  cell_type, converter_type, power_topic, today_yield_topic, auto_calibrate,
-  sun_cutoff_morning, sun_cutoff_evening)` — die beiden Cutoff-Spalten (Prozent,
-  Default 10) steuern den größenrelativen Sonnenreferenz-Cutoff morgens/abends.
-- `pv_aggregation(plant_id, ...)` / `pv_summary_aggregation(id=1, ...)`
+  cell_type, converter_type, power_topic, today_yield_topic, today_yield_unit,
+  auto_calibrate, sun_cutoff_morning, sun_cutoff_evening)` — die beiden
+  Cutoff-Spalten (Prozent, Default 10) steuern den größenrelativen
+  Sonnenreferenz-Cutoff morgens/abends; `today_yield_unit` (Wh/kWh, Default kWh)
+  ist die Einheit des Ertrags-Rohzählers.
+- `pv_aggregation(plant_id, …, last_counter_raw, counter_total_kwh, day_key,
+  day_start_kwh)` — je Anlage der interne Ertragszähler (Delta-Fortschreibung des
+  Ertrags-Rohzählers + Tagesbasis) / `pv_summary_aggregation(id=1, ...)` — Σ über
+  alle Anlagen (Woche/Jahr/Vorjahr, manueller Abgleich).
 - `pv_calibration_buckets(plant_id, bucket 0..95, factor, sample_count, updated_at,
   window_minutes)` — je Anlage und 15-Min-Tageszeit-Bucket ein langsam nachgeführter
   Kalibrierfaktor (`window_minutes` dokumentiert die Fensterbreite und dient als

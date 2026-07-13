@@ -5,6 +5,8 @@
 // Betriebslevel gegatet und per MQTT geschaltet; jede Box ist als Verbraucher am
 // zentralen Betriebslevel-Handler registriert (siehe LEVEL_HANDLING.md).
 
+const fs = require('fs');
+const path = require('path');
 const mqttClient = require('../mqtt/client');
 const { isEnabled } = require('../modules');
 const levelHandler = require('../operating-level/handler');
@@ -32,6 +34,9 @@ const { computePrognosis } = require('../prognosis/forecast');
 
 const HOLD_MS = 2 * 60 * 1000;        // Mindesthaltedauer für An/Aus-Wechsel
 const SETPOINT_MIN_DELTA_W = 200;     // kleinere Soll-Änderungen nicht senden
+const OWN_SYNC_IGNORE_MS = 60 * 1000;  // Statusfolgen eigener Schaltbefehle ignorieren
+const WALLBOX_DEBUG = /^(1|true)$/i.test(process.env.HOMEESS_WALLBOX_DEBUG || '');
+const WALLBOX_DECISION_LOG = path.join(process.cwd(), 'data', 'wallbox-decision.log');
 
 function consumerId(box) {
   return `wallbox.${box.id}`;
@@ -47,12 +52,13 @@ function boxState(id) {
       // Steuerung-Sync-Topic (an/aus): zuletzt beobachteter Wert, Erstwert-Übernahme,
       // erwarteter eigener Spiegel-Readback und Reconnect-Fenster.
       lastSyncValue: null, syncInitialized: false, expectedSyncValue: null,
-      syncRebaselineUntil: null,
+      syncRebaselineUntil: null, ownSyncUntil: null,
       manualFull: false, manualFullSawCharging: false,
       manualOff: false, manualOffDay: '', lastTodayKey: '',
       chargeStartedAt: null, restartUntil: 0, restartAttempts: 0,
       nextChargeAt: null, nextChargeHour: null,
       loadShedOff: false,
+      lastDecisionLogKey: '',
       // Persistierte Übersteuerung wird beim ersten Tick einmalig übernommen.
       restoredControl: false,
     };
@@ -84,6 +90,7 @@ function sendActuator(box, on) {
 function mirrorControlSync(box, stateForBox, on) {
   if (!box.controlSyncTopic) return;
   stateForBox.expectedSyncValue = on ? 'on' : 'off';
+  stateForBox.ownSyncUntil = Date.now() + OWN_SYNC_IGNORE_MS;
   mqttClient.publish(box.controlSyncTopic, on ? '1' : '0');
 }
 
@@ -94,6 +101,86 @@ function applyOutput(box, stateForBox, on) {
 }
 function sendSetpoint(topic, watt) {
   if (topic && watt != null) mqttClient.publish(topic, String(Math.round(watt)));
+}
+
+function roundLog(value) {
+  const n = parseNumber(value);
+  return n == null ? null : Math.round(n);
+}
+
+function logDecision(box, s, details) {
+  const key = [
+    details.finalOn ? 'on' : 'off',
+    details.planOn ? 'planOn' : 'planOff',
+    details.reason || '',
+    details.levelAllows ? 'levelOk' : 'levelBlocked',
+    details.loadShed ? 'shed' : 'noShed',
+    details.manualMode || 'auto',
+    roundLog(details.surplusW),
+  ].join('|');
+  if (!WALLBOX_DEBUG && key === s.lastDecisionLogKey) return;
+  s.lastDecisionLogKey = key;
+  const payload = {
+    ts: new Date().toISOString(),
+    id: box.id,
+    name: box.name,
+    mode: box.mode,
+    controlMode: details.manualMode,
+    outputBefore: s.output,
+    finalOn: details.finalOn,
+    finalSetpointW: roundLog(details.finalSetpointW),
+    planOn: details.planOn,
+    planSetpointW: roundLog(details.planSetpointW),
+    priority: details.priority,
+    levelAllows: details.levelAllows,
+    loadShed: details.loadShed,
+    reason: details.reason,
+    syncStatus: details.syncStatus,
+    lastSyncValue: s.lastSyncValue,
+    ownSyncUntil: s.ownSyncUntil,
+    manualFull: s.manualFull,
+    manualOff: s.manualOff,
+    values: {
+      surplusW: roundLog(details.surplusW),
+      netzbezugW: roundLog(details.netzbezugW),
+      batteryPowerW: roundLog(details.batteryPowerW),
+      batterySoc: roundLog(details.batterySoc),
+      batteryMinSoc: roundLog(details.batteryMinSoc),
+      pvPowerW: roundLog(details.pvPowerW),
+      selfConsumptionW: roundLog(details.selfConsumptionW),
+      wallboxPowerW: roundLog(details.wallboxPowerW),
+      vehicleSoc: roundLog(details.vehicleSoc),
+      plugged: details.plugged,
+      prognosisAvailable: details.prognosisAvailable,
+      prognosisOverflowKwh: details.prognosisOverflowKwh,
+    },
+  };
+  const line = `[wallbox decision] ${JSON.stringify(payload)}`;
+  console.log(line);
+  try {
+    fs.appendFileSync(WALLBOX_DECISION_LOG, `${line}\n`);
+  } catch (_) {}
+}
+
+function logForceOff(box, s, details = {}) {
+  const payload = {
+    ts: new Date().toISOString(),
+    id: box.id,
+    name: box.name,
+    outputBefore: s.output,
+    reason: details.reason || 'forceOff',
+    currentLevel: typeof levelHandler.currentOperatingLevel === 'function'
+      ? levelHandler.currentOperatingLevel()
+      : null,
+    priority: loadShedPriority(box),
+    manualFull: s.manualFull,
+    manualOff: s.manualOff,
+  };
+  const line = `[wallbox forceOff] ${JSON.stringify(payload)}`;
+  console.log(line);
+  try {
+    fs.appendFileSync(WALLBOX_DECISION_LOG, `${line}\n`);
+  } catch (_) {}
 }
 
 function load(loader, db) {
@@ -304,12 +391,13 @@ async function tick(db) {
     const id = consumerId(box);
     seen.add(id);
 
+    const surplusW = houseSurplusWatt(strom, battery, batterieConfig.minSoc, live.powerW);
     const ctx = {
       soc: live.soc,
       plugged: live.plugged,
       // Eigene Ladeleistung zurückrechnen, ohne dabei vorhandenen Netzbezug zu
       // verlieren (siehe houseSurplusWatt).
-      surplusW: houseSurplusWatt(strom, battery, batterieConfig.minSoc, live.powerW),
+      surplusW,
       hour: calendar.hours,
       minute: calendar.minutes,
       weekday: weekdayMonZero(calendar.dateKey),
@@ -332,9 +420,11 @@ async function tick(db) {
     }
 
     // Sonderfälle (manuelle Schaltung, Ladestart-Neustart, Level-Gate) anwenden.
+    const syncStatus = readControlSync(cache, box);
+    const levelAllows = levelHandler.isAllowed(plan.priority);
     const decision = decideWallboxAction(box, s, {
       plan,
-      syncStatus: readControlSync(cache, box),
+      syncStatus,
       powerW: live.powerW,
       pvPowerW,
       selfConsumptionW: parseNumber(strom.eigenverbrauchPower),
@@ -343,22 +433,49 @@ async function tick(db) {
       soc: live.soc,
       plugged: live.plugged,
       todayKey: calendar.dateKey,
-      levelAllows: levelHandler.isAllowed(plan.priority),
+      levelAllows,
       now,
     });
     // Von der Automatik selbst geänderte Übersteuerung (Freigabe/Volladung/Broker)
     // sofort persistieren, damit sie einen Neustart konsistent übersteht.
     await syncControlModePersistence(db, box, s);
     const wantsOn = decision.on === true;
+    let loadShedApplied = false;
     if (loadShedActive && wantsOn && loadShed.shouldShed(box.loadShedPhase, plan.priority)) {
       decision.on = false;
       decision.setpointW = null;
       s.loadShedOff = true;
+      loadShedApplied = true;
     } else if (wantsOn) {
       s.loadShedOff = false;
     } else {
       s.loadShedOff = false;
     }
+
+    logDecision(box, s, {
+      finalOn: decision.on === true,
+      finalSetpointW: decision.setpointW,
+      planOn: plan.desiredOn === true,
+      planSetpointW: plan.setpointW,
+      priority: plan.priority,
+      levelAllows,
+      loadShed: loadShedApplied,
+      reason: decision.reason || plan.reason,
+      syncStatus,
+      manualMode: controlModeFromState(s),
+      surplusW,
+      netzbezugW: strom.netzbezugPower,
+      batteryPowerW: battery.power,
+      batterySoc: battery.soc,
+      batteryMinSoc: parseNumber(battery.minSoc) ?? batterieConfig.minSoc,
+      pvPowerW,
+      selfConsumptionW: strom.eigenverbrauchPower,
+      wallboxPowerW: live.powerW,
+      vehicleSoc: live.soc,
+      plugged: live.plugged,
+      prognosisAvailable,
+      prognosisOverflowKwh: forecastOverflowById.get(Number(box.id)) ?? null,
+    });
 
     // Soll-Leistung (falls Topic) bei aktiver Ladung modulieren.
     if (box.setpointTopic && decision.on && decision.setpointW != null) {
@@ -421,6 +538,7 @@ async function tick(db) {
 function forceOff(box) {
   if (!box.commandTopic) return;
   const s = boxState(box.id);
+  logForceOff(box, s, { reason: 'operating-level' });
   applyOutput(box, s, false);
   s.output = 'off';
   s.changedAt = Date.now();

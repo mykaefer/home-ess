@@ -3,6 +3,100 @@
 Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [1.2.6] — 2026-07-13
+
+### Behoben
+
+- **Prognose: Pool-Solarpumpe blähte den erwarteten Verbrauch nicht mehr auf.**
+  Die Verbrauchsprognose nahm bisher an, die Pool-Solarpumpe liefe **jede Stunde
+  mit PV-Ertrag** (~16 h/Tag) und rechnete mit der **gelernten** Pumpenleistung,
+  die durch das Toggle-Delta-Sampling oft deutlich überzeichnet war. Dadurch
+  erschienen pro Tag rund 22 kWh reine Pool-Solarlast — mehr als der reale
+  Pool-Jahresverbrauch — und die Tagesprognose verdoppelte sich (z. B. „morgen
+  50 statt 28 kWh"). Jetzt ergibt sich die Solarpumpen-Laufzeit aus dem
+  **geometrischen Clear-Sky-Modell** (Sonnenhöhe über 5°, wolkenunabhängig) und
+  die Leistung aus einer neu **konfigurierbaren Nennleistung** je Pumpe (Solar/
+  Filter). Ist keine Nennleistung gesetzt, bleibt der gelernte Wert die Grundlage.
+  Filterpumpe unverändert nach Zeitfenstern.
+
+- **Wallbox: Automatik-Schaltungen am Steuerung-Sync-Topic bleiben Automatik.**
+  Das Steuerung-Sync-Topic signalisiert weiterhin, ob eine Ladung aktiv ist, wird
+  aber nur noch dann als Bedienaufforderung gewertet, wenn der Wertwechsel dem
+  aktuellen Automatikplan widerspricht. Schaltet homeESS selbst per Automatik ein
+  und der Sync-Wert springt auf **Ein**, wird daraus kein **Vollladen** mehr; schaltet
+  die Automatik aus und der Sync-Wert springt auf **Aus**, entsteht keine manuelle
+  Aus-Sperre. Das gilt ausdrücklich auch für erlaubte Überschussladungen im
+  Beruflich-Modus oberhalb des Mindest-Ladestands. Außerdem ignoriert homeESS für
+  eine kurze Schutzfrist Statusfolgen eigener Schaltbefehle: meldet dasselbe Topic
+  nach einer automatischen Freigabe wieder **Aus** (z. B. weil kein Fahrzeug
+  angesteckt ist und daher keine aktive Ladung entsteht), wird das nicht als
+  manuelles Ausschalten gewertet. Nur echte Nutzeränderungen am entfernten Topic
+  können weiterhin auf **Aus** oder **Vollladen** umschalten.
+  Wichtig für die Konfiguration: Das Wallbox-Steuerung-Sync-Topic darf nicht
+  parallel als Schalt- oder Remote-Topic unter **Messen + Schalten** verwendet
+  werden. Wird dieselbe physische Wallbox dort zusätzlich zur Leistungserfassung
+  angelegt, gehören nur Mess-/Zähler-Topics dorthin; sonst kann die zweite
+  Gerätesteuerung wieder Aus-Befehle auf dasselbe Topic schreiben.
+- **Wallbox: Live-Überschuss hat Vorrang vor dem Ladeplan.** Oberhalb des
+  Mindest-Ladestands darf die Wallbox per Überschussladung laufen. Dieser reale
+  Live-Überschuss schaltet jetzt nicht mehr gegen den vorausschauenden Ladeplan
+  aus: Wenn die aktuell verfügbare Überschussleistung die Wallbox trägt und die
+  Hausakku-Reserve passt, bleibt die Ladung aktiv — auch wenn die Prognose bzw.
+  der Tages-Ladeplan gerade keinen flexiblen Überschuss ausweist. Das gilt auch im
+  Beruflich-Modus oberhalb des Mindest-Ladestands.
+- **Photovoltaik: Ertrags-Topics werden als Rohzähler ausgewertet, nicht als
+  Tagesertrag.** Bisher wurde der Wert des Ertrags-Topics direkt als „Ertrag heute"
+  übernommen (Annahme: ein täglich zurücksetzender Tageszähler). Bei einem
+  **kumulativen Zählerstand** landete dadurch der gesamte Zählerstand als heutiger
+  Ertrag — besonders auffällig beim Neu-Auswählen des Topics. Das Ertrags-Topic wird
+  jetzt **wie alle anderen Zählertopics** behandelt: der Rohwert wird als kumulativer
+  Zähler gelesen, und nur seine **Zuwächse** werden intern (in kWh) fortgeschrieben;
+  „Ertrag heute" ist der Fortschritt seit Tagesbeginn. Rückwärtssprünge
+  (Geräte-Reset) und ein **Topic-/Einheitenwechsel** basieren nur neu, ohne den
+  Rohwert als Sprung in den Ertrag zu übernehmen. Ein einmalig beim Update fälschlich
+  als Ertrag erfasster Zählerstand wird beim Migrieren entfernt (Woche/Jahr-Summen
+  bleiben unberührt).
+
+### Hinzugefügt
+
+- **Photovoltaik: Einheit des Ertrags-Zählers je Anlage (Wh/kWh).** Im
+  Anlagen-Dialog lässt sich einstellen, ob das Ertrags-Topic in **Wh** oder **kWh**
+  liefert; intern wird immer in kWh gezählt (ein Wh-Topic wird durch 1000 geteilt).
+  Vorgabe ist kWh.
+
+## [1.2.5] — 2026-07-13
+
+### Behoben
+
+- **Grid-Control: keine Wechselrichterlast-Warnung mehr, wenn das Netz bereits
+  zugeschaltet ist.** War das Netz schon aus einem anderen Grund geschaltet
+  (SoC, Spannung, Temperatur, Notstrom), meldete die Steuerung trotzdem
+  „Wechselrichterlast zu hoch". Bei zugeschaltetem Netz gibt es aber **keine
+  Wechselrichter-Obergrenze mehr** — Last oberhalb der Schwelle kompensiert das
+  öffentliche Netz automatisch, also ist sie **keine Warnung**. Die kritische
+  Meldung erscheint jetzt nur noch, wenn die **Last der alleinige Schaltgrund**
+  ist. Die **Grid-by-Load-Verriegelung** rastet dennoch ein und hält das Netz
+  zugeschaltet — auch wenn der ursprüngliche Grund wegfällt —, bis **alle**
+  Grid-by-Gründe aus sind, d. h. bis die überlastete Phase wieder unter ihre
+  **untere Schaltschwelle** fällt.
+- **Schaltgruppen (Handy): Gerätenamen werden nicht mehr abgekürzt.** Die
+  Schaltgruppen-Zeilen nutzen dieselbe Statuspunkt-Klasse (`.ms-status-dot`) wie
+  Messen + Schalten. Deren mobile Raster-Regel `grid-area: dot` war **unscoped**
+  und zerstörte das Zeilenraster der Schaltgruppen — der Name wurde auf die
+  12px-Statusspalte gequetscht (nur noch ein Buchstabe + „…"). Die Regel ist jetzt
+  auf `.ms-row` eingegrenzt; die Namen erhalten wieder die volle Breite.
+- **Schaltgruppen (Handy): Seite skaliert nicht mehr über die Bildschirmbreite.**
+  Der Gruppenkopf (Titel, Zähler, bis zu drei Badges, Schalter, zwei
+  Aktionsknöpfe) brach auf schmalen Geräten nicht um und zog die Seite breiter als
+  den Viewport (horizontaler Überlauf, der die untere Tab-Bar aus dem Bild schob).
+  Der Kopf bricht jetzt um (`flex-wrap`), wie bereits beim Messen-+-Schalten-Kopf.
+
+### Geändert
+
+- **Zoomfaktor auf 100 % festgenagelt.** Das Viewport-Meta erlaubt jetzt weder
+  Rein- noch Rauszoomen (`minimum-scale=1, maximum-scale=1, user-scalable=no`), so
+  dass alle Seiten auf allen Geräten in der vorgesehenen 1:1-Darstellung bleiben.
+
 ## [1.2.4] — 2026-07-13
 
 ### Behoben

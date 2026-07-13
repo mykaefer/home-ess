@@ -118,6 +118,54 @@ function minutes(value) {
   return match ? Number(match[1]) * 60 + Number(match[2]) : null;
 }
 
+// Gemessene (Toggle-Delta-)Nennleistung ist oft durch mitschaltende Nebenlasten
+// überzeichnet. Ist im Pool-Setup eine Nennleistung hinterlegt, hat sie Vorrang;
+// sonst greift der gelernte Wert.
+function effectivePowerW(configuredW, learnedW) {
+  const configured = Number(configuredW);
+  if (Number.isFinite(configured) && configured > 0) return configured;
+  return Number(learnedW) || 0;
+}
+
+function dayOfYearFromKey(dateKey) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateKey || ''));
+  if (!match) return null;
+  const date = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  return Math.floor((date - Date.UTC(Number(match[1]), 0, 0)) / 86400000);
+}
+
+// Sonnenhöhe (Grad) für lokale Dezimalstunde – dieselbe geometrische Näherung
+// wie im PV-Clear-Sky-Modell (ohne Längengrad-/Zeitgleichungskorrektur, für die
+// Pumpen-Laufzeitschätzung ausreichend).
+function sunElevationDeg(latitude, dayOfYear, decimalHours) {
+  const rad = Math.PI / 180;
+  const declination = 23.45 * Math.sin(rad * (360 * (284 + dayOfYear)) / 365) * rad;
+  const hourAngle = 15 * (decimalHours - 12) * rad;
+  const lat = latitude * rad;
+  const up = Math.sin(lat) * Math.sin(declination) +
+    Math.cos(lat) * Math.cos(declination) * Math.cos(hourAngle);
+  return Math.asin(Math.max(-1, Math.min(1, up))) / rad;
+}
+
+// Absorber-Wärmeeintrag erst ab etwas Sonnenhöhe; streifendes Licht in der
+// Dämmerung heizt den Pool praktisch nicht.
+const SOLAR_MIN_ELEVATION_DEG = 5;
+
+// Anteil der Stunde (× durationHours), in dem die Sonne unter klarem Himmel hoch
+// genug für die Solarpumpe steht. Ohne Standort null → Aufrufer nutzt Rückfall.
+function clearSkySolarHours(latitude, dateKey, hour, durationHours) {
+  if (latitude == null || !Number.isFinite(Number(latitude))) return null;
+  const dayOfYear = dayOfYearFromKey(dateKey);
+  if (dayOfYear == null) return null;
+  const steps = 12;
+  let onSteps = 0;
+  for (let i = 0; i < steps; i += 1) {
+    const decimalHours = hour + (i + 0.5) / steps;
+    if (sunElevationDeg(Number(latitude), dayOfYear, decimalHours) > SOLAR_MIN_ELEVATION_DEG) onSteps += 1;
+  }
+  return (onSteps / steps) * durationHours;
+}
+
 function windowOverlapHours(start, end, hour) {
   const s = minutes(start); const e = minutes(end);
   if (s == null || e == null || s === e) return 0;
@@ -129,11 +177,20 @@ function windowOverlapHours(start, end, hour) {
 function poolLoadForHour(model, forecast, dateKey, hour, durationHours = 1, batterySoc = null) {
   if (!model || !model.enabled) return { totalKwh: 0, solarKwh: 0, filterKwh: 0 };
   const cfg = model.config || {};
-  const pvKwh = forecast && Array.isArray(forecast.hours)
-    ? forecast.hours.filter((slot) => slot.dateKey === dateKey && Number(slot.hour) === hour)
-      .reduce((sum, slot) => sum + (Number(slot.kwh) || 0), 0)
-    : 0;
-  const solarHours = pvKwh > 0.02 ? durationHours : 0;
+  const solarPowerW = effectivePowerW(cfg.solarPumpRatedPowerW, model.solarPowerW);
+  const filterPowerW = effectivePowerW(cfg.filterPumpRatedPowerW, model.filterPowerW);
+  // Solarpumpen-Laufzeit aus dem geometrischen Clear-Sky-Modell (Sonne hoch
+  // genug für Wärmeeintrag), NICHT aus dem wolkenabhängigen PV-Ertrag – die
+  // Absorberpumpe läuft sonnenstandsgesteuert. Ohne Standort Rückfall auf den
+  // bisherigen PV-Ertrags-Schwellwert.
+  let solarHours = clearSkySolarHours(forecast && forecast.latitude, dateKey, hour, durationHours);
+  if (solarHours == null) {
+    const pvKwh = forecast && Array.isArray(forecast.hours)
+      ? forecast.hours.filter((slot) => slot.dateKey === dateKey && Number(slot.hour) === hour)
+        .reduce((sum, slot) => sum + (Number(slot.kwh) || 0), 0)
+      : 0;
+    solarHours = pvKwh > 0.02 ? durationHours : 0;
+  }
   let filterHours = cfg.filterPumpFollowSolar ? solarHours : Math.min(durationHours,
     [
       [cfg.filterTime1Start, cfg.filterTime1End],
@@ -143,8 +200,8 @@ function poolLoadForHour(model, forecast, dateKey, hour, durationHours = 1, batt
   if (cfg.filterBatteryEnabled && (batterySoc == null || Number(batterySoc) >= Number(cfg.filterBatterySoc || 80))) {
     filterHours = durationHours;
   }
-  const solarKwh = model.solarPowerW / 1000 * solarHours;
-  const filterKwh = model.filterPowerW / 1000 * filterHours;
+  const solarKwh = solarPowerW / 1000 * solarHours;
+  const filterKwh = filterPowerW / 1000 * filterHours;
   return { totalKwh: solarKwh + filterKwh, solarKwh, filterKwh };
 }
 

@@ -34,6 +34,7 @@ function rowToConfig(row) {
     solarPumpTempOnSeconds: row.solar_pump_temp_on_seconds != null ? row.solar_pump_temp_on_seconds : 30,
     solarPumpTempPauseMinutes: row.solar_pump_temp_pause_minutes != null ? row.solar_pump_temp_pause_minutes : 30,
     solarPumpTempUseFilter: !!row.solar_pump_temp_use_filter,
+    solarPumpRatedPowerW: row.solar_pump_rated_power_w != null ? row.solar_pump_rated_power_w : '',
     filterPumpStatusTopic: row.filter_pump_status_topic || '',
     filterPumpCommandTopic: row.filter_pump_command_topic || '',
     filterPumpPriority: row.filter_pump_priority != null ? row.filter_pump_priority : 4,
@@ -47,6 +48,7 @@ function rowToConfig(row) {
     filterTime3End: row.filter_time_3_end || '',
     filterBatteryEnabled: !!row.filter_battery_enabled,
     filterBatterySoc: row.filter_battery_soc != null ? row.filter_battery_soc : 80,
+    filterPumpRatedPowerW: row.filter_pump_rated_power_w != null ? row.filter_pump_rated_power_w : '',
     phTopic: row.ph_topic || '',
     chlorTopic: row.chlor_topic || '',
   };
@@ -81,6 +83,7 @@ function savePoolConfig(db, body, callback) {
     solarPumpTempOnSeconds: int(body.solarPumpTempOnSeconds, 30),
     solarPumpTempPauseMinutes: int(body.solarPumpTempPauseMinutes, 30),
     solarPumpTempUseFilter: body.solarPumpTempUseFilter ? 1 : 0,
+    solarPumpRatedPowerW: float(body.solarPumpRatedPowerW),
     filterPumpStatusTopic: str(body.filterPumpStatusTopic),
     filterPumpCommandTopic: str(body.filterPumpCommandTopic),
     filterPumpPriority: int(body.filterPumpPriority, 4),
@@ -94,6 +97,7 @@ function savePoolConfig(db, body, callback) {
     filterTime3End: str(body.filterTime3End),
     filterBatteryEnabled: body.filterBatteryEnabled ? 1 : 0,
     filterBatterySoc: int(body.filterBatterySoc, 80),
+    filterPumpRatedPowerW: float(body.filterPumpRatedPowerW),
     phTopic: str(body.phTopic),
     chlorTopic: str(body.chlorTopic),
   };
@@ -102,13 +106,13 @@ function savePoolConfig(db, body, callback) {
     `INSERT INTO pool_config
      (id, temperature_topic,
       solar_pump_status_topic, solar_pump_command_topic, solar_pump_priority, solar_pump_phase, solar_pump_max_temp,
-      solar_pump_temp_on_seconds, solar_pump_temp_pause_minutes, solar_pump_temp_use_filter,
+      solar_pump_temp_on_seconds, solar_pump_temp_pause_minutes, solar_pump_temp_use_filter, solar_pump_rated_power_w,
       filter_pump_status_topic, filter_pump_command_topic, filter_pump_priority, filter_pump_phase, filter_pump_follow_solar,
      filter_time_1_start, filter_time_1_end, filter_time_2_start, filter_time_2_end,
       filter_time_3_start, filter_time_3_end,
-      filter_battery_enabled, filter_battery_soc,
+      filter_battery_enabled, filter_battery_soc, filter_pump_rated_power_w,
       ph_topic, chlor_topic)
-     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
        temperature_topic = excluded.temperature_topic,
        solar_pump_status_topic = excluded.solar_pump_status_topic,
@@ -119,6 +123,7 @@ function savePoolConfig(db, body, callback) {
        solar_pump_temp_on_seconds = excluded.solar_pump_temp_on_seconds,
        solar_pump_temp_pause_minutes = excluded.solar_pump_temp_pause_minutes,
        solar_pump_temp_use_filter = excluded.solar_pump_temp_use_filter,
+       solar_pump_rated_power_w = excluded.solar_pump_rated_power_w,
        filter_pump_status_topic = excluded.filter_pump_status_topic,
        filter_pump_command_topic = excluded.filter_pump_command_topic,
        filter_pump_priority = excluded.filter_pump_priority,
@@ -132,16 +137,17 @@ function savePoolConfig(db, body, callback) {
        filter_time_3_end = excluded.filter_time_3_end,
        filter_battery_enabled = excluded.filter_battery_enabled,
        filter_battery_soc = excluded.filter_battery_soc,
+       filter_pump_rated_power_w = excluded.filter_pump_rated_power_w,
        ph_topic = excluded.ph_topic,
        chlor_topic = excluded.chlor_topic`,
     [
       cfg.temperatureTopic,
       cfg.solarPumpStatusTopic, cfg.solarPumpCommandTopic, cfg.solarPumpPriority, cfg.solarPumpPhase, cfg.solarPumpMaxTemp,
-      cfg.solarPumpTempOnSeconds, cfg.solarPumpTempPauseMinutes, cfg.solarPumpTempUseFilter,
+      cfg.solarPumpTempOnSeconds, cfg.solarPumpTempPauseMinutes, cfg.solarPumpTempUseFilter, cfg.solarPumpRatedPowerW,
       cfg.filterPumpStatusTopic, cfg.filterPumpCommandTopic, cfg.filterPumpPriority, cfg.filterPumpPhase, cfg.filterPumpFollowSolar,
       cfg.filterTime1Start, cfg.filterTime1End, cfg.filterTime2Start, cfg.filterTime2End,
       cfg.filterTime3Start, cfg.filterTime3End,
-      cfg.filterBatteryEnabled, cfg.filterBatterySoc,
+      cfg.filterBatteryEnabled, cfg.filterBatterySoc, cfg.filterPumpRatedPowerW,
       cfg.phTopic, cfg.chlorTopic,
     ],
     (err) => {

@@ -34,6 +34,7 @@ function renderPool({ cfg = {}, message = '', solarOutput = null, filterOutput =
     solarPumpTempOnSeconds = 30,
     solarPumpTempPauseMinutes = 30,
     solarPumpTempUseFilter = false,
+    solarPumpRatedPowerW = '',
     filterPumpStatusTopic = '',
     filterPumpCommandTopic = '',
     filterPumpPriority = 4,
@@ -44,6 +45,7 @@ function renderPool({ cfg = {}, message = '', solarOutput = null, filterOutput =
     filterTime3Start = '', filterTime3End = '',
     filterBatteryEnabled = false,
     filterBatterySoc = 80,
+    filterPumpRatedPowerW = '',
     phTopic = '',
     chlorTopic = '',
   } = cfg;
@@ -190,6 +192,12 @@ ${kpiSection}
                        placeholder="30"
                        value="${escapeHtml(String(solarPumpTempPauseMinutes || 30))}">
               </div>
+              <div class="field">
+                <label for="solarPumpRatedPowerW">Nennleistung (W) <span class="pool-optional">(für Prognose)</span></label>
+                <input type="number" min="0" step="1" id="solarPumpRatedPowerW" name="solarPumpRatedPowerW"
+                       placeholder="z.B. 250"
+                       value="${escapeHtml(String(solarPumpRatedPowerW !== '' && solarPumpRatedPowerW != null ? solarPumpRatedPowerW : ''))}">
+              </div>
             </div>
             <label class="checkbox-field" style="margin-top:14px;" for="solarPumpTempUseFilter">
               <input type="checkbox" id="solarPumpTempUseFilter" name="solarPumpTempUseFilter"
@@ -229,6 +237,12 @@ ${kpiSection}
                   ${phaseOptions(filterPumpPhase)}
                 </select>
                 ${gridControlEnabled ? '' : '<input type="hidden" name="filterPumpPhase" value="' + escapeHtml(filterPumpPhase) + '">' }
+              </div>
+              <div class="field">
+                <label for="filterPumpRatedPowerW">Nennleistung (W) <span class="pool-optional">(für Prognose)</span></label>
+                <input type="number" min="0" step="1" id="filterPumpRatedPowerW" name="filterPumpRatedPowerW"
+                       placeholder="z.B. 600"
+                       value="${escapeHtml(String(filterPumpRatedPowerW !== '' && filterPumpRatedPowerW != null ? filterPumpRatedPowerW : ''))}">
               </div>
             </div>
             ${gridControlEnabled ? '' : '<p class="settings-card-hint">Grid-Control ist deaktiviert. Die Lastabwurf-Phase wird erst bei aktivem Modul verwendet.</p>'}

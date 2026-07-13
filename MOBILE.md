@@ -41,6 +41,11 @@
 - `main-content` reserviert unten Platz für die Tab-Bar
   (`env(safe-area-inset-bottom)` für iPhone-Home-Indicator; Viewport-Meta
   mit `viewport-fit=cover`).
+- **Zoom auf 100 % fixiert:** Das Viewport-Meta in `layout.js` erlaubt keinen
+  Zoom (`initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no`).
+  Das Layout wird also nie skaliert — jede Seite muss exakt viewport-breit sein,
+  **horizontaler Überlauf ist ein Fehler** (Symptom: Seite „skaliert größer" und
+  schiebt die Tab-Bar aus dem Bild).
 
 ## Framework-Regeln (gelten automatisch auf allen Seiten)
 
@@ -87,7 +92,7 @@
 | Photovoltaik | ✅ umgesetzt | Anlagenkarten gestapelt, Prognosestreifen 2er-Raster |
 | Batterie | ✅ umgesetzt | komplett durch Framework abgedeckt (KPI-Raster, field-grid kollabiert) |
 | Messen + Schalten | ✅ umgesetzt | Gerätezeile zweizeilig (Name/Leistung/Schalter + Betriebsart/Zähler/Aktionen); **DnD-Ersatz offen** |
-| Schaltgruppen (Unterseite) | ✅ Basis | Spalten stapeln sich (Gruppen, darunter nicht zugeordnete Geräte), Seite scrollt selbst; **DnD-Ersatz offen** |
+| Schaltgruppen (Unterseite) | ✅ Basis | Spalten stapeln sich (Gruppen, darunter nicht zugeordnete Geräte), Seite scrollt selbst; Gruppenkopf bricht um (kein Überlauf), Gerätenamen voll (Statuspunkt-`grid-area` auf `.ms-row` eingegrenzt); **DnD-Ersatz offen** |
 | Adapter / Instanzen | ✅ umgesetzt | Instanz-Zeilen 2-spaltig, Adresse volle Breite |
 | Adapter-States (State-Editor) | ✅ umgesetzt | Register-Tabelle scrollt im eigenen Container (bewusst Tabelle) |
 | States | ✅ umgesetzt | Baum + umbruchfähige Wert-Zeilen (Querschnitt) |

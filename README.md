@@ -14,6 +14,8 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
   Smartphone-Darstellung (≤ 768px): kompakter Header, untere Tab-Bar mit
   Menü-Sheet statt Seitenleiste, Dialoge als Bottom-Sheets und pro Seite eine
   eigene, touchtaugliche Anordnung (kein bloßes Zusammenquetschen der Kacheln).
+  Der Zoomfaktor ist auf 100 % fixiert (kein Pinch-/Doppeltipp-Zoom), damit das
+  Layout auf allen Geräten 1:1 bleibt.
 - 🔐 **Login** mit Passwort und „Passwort merken" (persistentes Cookie).
 - 🖥️ **Dashboard** — frei konfigurierbare **Widgets** in zwei Sorten (Dialog mit
   Tabs): **Wert-Kachel** (jeder berechnete Wert als Live-Kachel, Auswahl über den
@@ -46,7 +48,11 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
   **Direkte-Sonne-Erkennung** je Anlage und globales **Himmelssymbol in der
   Titelzeile** (☀️/☁️/🌙). Ertrag heute/Woche/Jahr inkl. Vorjahr; Button
   **„Wert abgleichen"** (oben rechts) für Wochen-/Jahres-/Vorjahressumme und
-  Minimum/Maximum (Wert + Datum).
+  Minimum/Maximum (Wert + Datum). Das **Ertrags-Topic** ist ein kumulativer
+  **Rohzähler** (wie alle Zählertopics): nur seine Zuwächse werden intern gezählt,
+  „Ertrag heute" ist der Fortschritt seit Tagesbeginn — ein Rohwert wird nie als
+  Tagesertrag übernommen, und ein Topic-Wechsel führt zu keinem Sprung. Je Anlage
+  ist die **Einheit** des Zählers (**Wh/kWh**) einstellbar.
   - **Sonnenreferenz-Cutoff** je Anlage (getrennt morgens/abends, Default 10 %):
     nur Anlagen, auf die die Sonne brauchbar scheint (Idealwert ≥ Anteil der
     kWp-Spitze), zählen für Sonnenintensität und ☀️/☁️ — verhindert falsche
@@ -257,7 +263,12 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
   Betriebslevel 1–5 erscheint als rot-grüne Balkenanzeige in der Titelzeile.
   Eine dreiphasige Wechselrichterlast-Hysterese nutzt die vorhandenen
   Eigenverbrauchsleistungen L1–L3, schaltet bei Überlast einer Phase zu und
-  erst unter allen drei Rückschaltschwellen wieder ab. Der zusätzliche
+  erst unter allen drei Rückschaltschwellen wieder ab. Die Verriegelung hält das
+  Netz zugeschaltet, bis alle Phasen unter die Rückschaltschwelle fallen — auch
+  wenn der ursprüngliche Grund wegfällt. Als **Warnung** gilt die Last nur, wenn
+  sie der alleinige Schaltgrund ist: Bei ohnehin zugeschaltetem Netz kompensiert
+  das öffentliche Netz die Überlast, und die Meldung „Wechselrichterlast zu hoch"
+  entfällt. Der zusätzliche
   phasenbezogene **Lastabwurf** arbeitet davon getrennt mit eigener
   **Maximallast Lastabwurf** je Phase.
   Der globale Katalogwert **Autark** startet jeden Tag auf `true`, sofern keine
@@ -309,6 +320,11 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
     optional Status, Leistung (W/kW), fortlaufender Zähler (Wh/kWh), Soll-Leistung,
     „Fahrzeug angesteckt" und Fahrzeug-SoC (%); zusätzlich Maximalleistung und
     Fahrzeug-Akkugröße.
+    Wird dieselbe physische Wallbox zusätzlich unter **Messen + Schalten** zur
+    Leistungserfassung angelegt, dort keine Schalt-/Remote-Topics auf dieselben
+    Wallbox-Steuer- oder Sync-Topics legen. Für diese Doppelabbildung nur Mess-
+    bzw. Zähler-Topics verwenden, sonst kann Messen + Schalten die Wallbox-
+    Automatik mit eigenen Aus-Befehlen übersteuern.
   - **Verbrauchszählung** je Box für Tag/Woche/Monat/Jahr inkl. Vorjahr; ohne
     Zähler-Topic aus der Leistung abgeleitet. Fehlt das SoC-Topic, wird der
     Ladezustand aus der seit Einstecken geladenen Energie geschätzt.

@@ -90,6 +90,7 @@ function plantToFormValues(plant) {
     converterType: plant.converterType || '',
     powerTopic: plant.powerTopic || '',
     todayYieldTopic: plant.todayYieldTopic || '',
+    todayYieldUnit: plant.todayYieldUnit || 'kWh',
   };
 }
 

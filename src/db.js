@@ -74,6 +74,7 @@ function openDatabase() {
         converter_type TEXT NOT NULL DEFAULT 'Direkt',
         power_topic TEXT,
         today_yield_topic TEXT,
+        today_yield_unit TEXT NOT NULL DEFAULT 'kWh',
         auto_calibrate INTEGER NOT NULL DEFAULT 0,
         sun_cutoff_morning REAL NOT NULL DEFAULT 10,
         sun_cutoff_evening REAL NOT NULL DEFAULT 10
@@ -104,6 +105,10 @@ function openDatabase() {
         last_today_value REAL NOT NULL DEFAULT 0,
         last_rollover_date TEXT NOT NULL DEFAULT '',
         week_key TEXT NOT NULL DEFAULT '',
+        last_counter_raw REAL,
+        counter_total_kwh REAL,
+        day_key TEXT,
+        day_start_kwh REAL,
         FOREIGN KEY (plant_id) REFERENCES pv_plants(id) ON DELETE CASCADE
       )`
     );
@@ -355,7 +360,9 @@ function openDatabase() {
         filter_time_3_end TEXT NOT NULL DEFAULT '',
         filter_battery_enabled INTEGER NOT NULL DEFAULT 0,
         filter_battery_soc INTEGER NOT NULL DEFAULT 80,
-        filter_battery_soc_topic TEXT NOT NULL DEFAULT ''
+        filter_battery_soc_topic TEXT NOT NULL DEFAULT '',
+        solar_pump_rated_power_w REAL,
+        filter_pump_rated_power_w REAL
       )`
     );
     db.run(
@@ -643,6 +650,7 @@ function openDatabase() {
     migrateStromverbrauchAggregation(db);
     seedPvSummaryAggregation(db);
     migratePvPlants(db);
+    migratePvAggregation(db);
     migrateDashboardWidgets(db);
     migrateDashboardGroups(db);
     migrateSunIntensitySamples(db);
@@ -885,6 +893,42 @@ function migratePvPlants(db) {
     }
     if (!existing.has('sun_cutoff_evening')) {
       db.run('ALTER TABLE pv_plants ADD COLUMN sun_cutoff_evening REAL NOT NULL DEFAULT 10');
+    }
+    if (!existing.has('today_yield_unit')) {
+      db.run("ALTER TABLE pv_plants ADD COLUMN today_yield_unit TEXT NOT NULL DEFAULT 'kWh'");
+    }
+  });
+}
+
+// Ertragszähler je PV-Anlage: Das Ertrags-Topic ist ein ROHZÄHLER (kumulativer
+// Zählerstand), aus dem – wie bei allen anderen Zählertopics – nur die Deltas
+// intern fortgeschrieben werden (counter_total_kwh) und „heute" sich als
+// Fortschritt seit dem Tagesstart (day_start_kwh) ergibt. Früher wurde der
+// Rohwert direkt als Tagesertrag genommen; ein Topic-Wechsel schrieb dann den
+// gesamten Zählerstand als heutigen Ertrag. Bestands-DBs bekommen die Spalten
+// nachgerüstet; die Baselines bleiben leer und werden beim ersten Tick gesetzt
+// (ohne Sprung), sodass der Ertrag bei 0 startet.
+function migratePvAggregation(db) {
+  db.all('PRAGMA table_info(pv_aggregation)', (err, rows) => {
+    if (err || !Array.isArray(rows) || rows.length === 0) return;
+    const existing = new Set(rows.map((row) => row.name));
+    if (!existing.has('last_counter_raw')) {
+      db.run('ALTER TABLE pv_aggregation ADD COLUMN last_counter_raw REAL');
+    }
+    if (!existing.has('counter_total_kwh')) {
+      db.run('ALTER TABLE pv_aggregation ADD COLUMN counter_total_kwh REAL');
+    }
+    if (!existing.has('day_key')) {
+      db.run('ALTER TABLE pv_aggregation ADD COLUMN day_key TEXT');
+    }
+    if (!existing.has('day_start_kwh')) {
+      db.run('ALTER TABLE pv_aggregation ADD COLUMN day_start_kwh REAL');
+      // Nur beim erstmaligen Einführen der Delta-Zählung: den zuletzt (per altem
+      // Verfahren als Rohwert) erfassten „heutigen" Gesamtertrag verwerfen, damit
+      // ein fälschlich als Ertrag übernommener Zählerstand nicht stehen bleibt.
+      // Woche/Jahr-Offsets bleiben unberührt (dort steckt ggf. Reales); der
+      // nächste Tageswechsel schreibt dann korrekt ab 0 fort.
+      db.run("UPDATE pv_summary_aggregation SET last_today_value = 0 WHERE id = 1");
     }
   });
 }
@@ -1304,6 +1348,8 @@ function migratePoolConfig(db) {
       { name: 'filter_battery_enabled', sql: 'ALTER TABLE pool_config ADD COLUMN filter_battery_enabled INTEGER NOT NULL DEFAULT 0' },
       { name: 'filter_battery_soc', sql: 'ALTER TABLE pool_config ADD COLUMN filter_battery_soc INTEGER NOT NULL DEFAULT 80' },
       { name: 'filter_battery_soc_topic', sql: "ALTER TABLE pool_config ADD COLUMN filter_battery_soc_topic TEXT NOT NULL DEFAULT ''" },
+      { name: 'solar_pump_rated_power_w', sql: 'ALTER TABLE pool_config ADD COLUMN solar_pump_rated_power_w REAL' },
+      { name: 'filter_pump_rated_power_w', sql: 'ALTER TABLE pool_config ADD COLUMN filter_pump_rated_power_w REAL' },
     ];
     for (const addition of additions) {
       if (!existing.has(addition.name)) db.run(addition.sql);

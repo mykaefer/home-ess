@@ -630,3 +630,147 @@ test('stale grid frequencies do not unlatch emergency mode', async () => {
   mqttClient.getStatus = originalGetStatus;
   await new Promise((resolve) => db.close(resolve));
 });
+
+// Gemeinsames Schema für die Last-Warnungs-Tests: SoC + Last aktiviert.
+async function setupLoadWarningDb() {
+  const db = new sqlite3.Database(':memory:');
+  const exec = (sql) => new Promise((resolve, reject) => db.exec(sql, (err) => err ? reject(err) : resolve()));
+  await exec(`
+    CREATE TABLE modules (key TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE operating_state (id INTEGER PRIMARY KEY, operating_level INTEGER, emergency_mode INTEGER);
+    INSERT INTO operating_state VALUES (1, 2, 0);
+    CREATE TABLE batterie_config (
+      id INTEGER PRIMARY KEY, soc_topic TEXT, power_topic TEXT, voltage_topic TEXT,
+      temperatur_topic TEXT, min_soc_topic TEXT, min_soc INTEGER, battery_type TEXT,
+      cell_count INTEGER, lower_voltage REAL, upper_voltage REAL
+    );
+    INSERT INTO batterie_config VALUES (1, 'battery.soc', '', '', '', '', 20, 'lifepo4', 16, 44.8, 55.2);
+    CREATE TABLE grid_control_config (
+      id INTEGER PRIMARY KEY, grid_command_topic TEXT, feed_in_command_topic TEXT,
+      temperature_warning_topic TEXT, temperature_warning_value TEXT,
+      warning_text_topic TEXT, warning_active_topic TEXT, soc_enabled INTEGER,
+      voltage_enabled INTEGER, temperature_enabled INTEGER, feed_in_allowed INTEGER,
+      soc_lower_offset INTEGER, soc_upper_offset INTEGER, soc_hysteresis INTEGER,
+      voltage_hysteresis REAL, grid_frequency_l1_topic TEXT,
+      grid_frequency_l2_topic TEXT, grid_frequency_l3_topic TEXT,
+      grid_detection_seconds INTEGER, load_enabled INTEGER, load_off_delay_seconds INTEGER,
+      load_shed_max_l1 REAL, load_shed_max_l2 REAL, load_shed_max_l3 REAL,
+      load_on_l1 REAL, load_on_l2 REAL, load_on_l3 REAL,
+      load_off_l1 REAL, load_off_l2 REAL, load_off_l3 REAL
+    );
+    INSERT INTO grid_control_config VALUES
+      (1, 'grid.command', '', '', '1', 'warning.text', 'warning.active', 1, 0, 0, 0, 0, 5, 2, 0.5,
+       'grid.frequency.l1', 'grid.frequency.l2', 'grid.frequency.l3', 30,
+       1, 0, 5000, 5000, 5000, 4000, 4000, 4000, 3000, 3000, 3000);
+    CREATE TABLE grid_control_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, category TEXT NOT NULL,
+      message TEXT NOT NULL, values_text TEXT
+    );
+    CREATE TABLE grid_control_runtime (
+      id INTEGER PRIMARY KEY, load_active INTEGER, load_off_since INTEGER, initialized INTEGER
+    );
+    INSERT INTO grid_control_runtime VALUES (1, 0, 0, 1);
+  `);
+  await operatingState.init(db);
+  await operatingState.setEmergencyMode(db, false);
+  await modulesState.setEnabled(db, 'grid-control', true);
+  return db;
+}
+
+test('Wechselrichterlast bei bereits geschaltetem Netz: keine Warnung, aber Grid-by-Load rastet ein und hält das Netz', async () => {
+  const db = await setupLoadWarningDb();
+  const dbAll = (sql) => new Promise((resolve, reject) => db.all(sql, (err, rows) => err ? reject(err) : resolve(rows || [])));
+  const cache = mqttClient.getCache();
+  cache.clear();
+  const fresh = () => Date.now();
+  cache.set('mqtt.clockDate', { value: '2026-06-28', receivedAt: fresh() });
+  cache.set('gridcontrol.gridFrequencyL1', { value: 50, receivedAt: fresh() });
+  cache.set('gridcontrol.gridFrequencyL2', { value: 50, receivedAt: fresh() });
+  cache.set('gridcontrol.gridFrequencyL3', { value: 50, receivedAt: fresh() });
+
+  const originalPublish = mqttClient.publish;
+  const originalGetStatus = mqttClient.getStatus;
+  mqttClient.publish = () => true;
+  mqttClient.getStatus = () => ({ connected: true });
+
+  try {
+    // SoC unter der Schwelle → Netz an; Last noch niedrig.
+    cache.set('batterie.soc', { value: 10, receivedAt: fresh() });
+    cache.set('stromverbrauch_eigenverbrauch_l1', { value: 1000, receivedAt: fresh() });
+    cache.set('stromverbrauch_eigenverbrauch_l2', { value: 1000, receivedAt: fresh() });
+    cache.set('stromverbrauch_eigenverbrauch_l3', { value: 1000, receivedAt: fresh() });
+    await automation.runNow(db);
+    cache.set('gridcontrol.gridCommand', { value: 1, receivedAt: fresh() });
+    await automation.runNow(db);
+    assert.equal(automation.getState().gridActual, true, 'Netz ist wegen SoC geschaltet');
+    assert.equal(automation.getState().gridByLoad, false);
+
+    // Last überschreitet die Ein-Schwelle, während das Netz schon per SoC an ist.
+    cache.set('stromverbrauch_eigenverbrauch_l1', { value: 4500, receivedAt: fresh() });
+    await automation.runNow(db);
+    assert.equal(automation.getState().gridByLoad, true, 'Grid-by-Load rastet dennoch ein');
+
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    const rows = await dbAll('SELECT category, message FROM grid_control_log');
+    assert.equal(
+      rows.some((r) => /Wechselrichterlast zu hoch/.test(r.message)), false,
+      'keine Last-Warnung, da Netz bereits aus anderem Grund geschaltet war'
+    );
+
+    // SoC erholt sich in den grünen Bereich → der ursprüngliche Grund bricht weg,
+    // die Last hält das Netz weiter geschaltet.
+    cache.set('batterie.soc', { value: 60, receivedAt: fresh() });
+    await automation.runNow(db);
+    assert.equal(automation.getState().gridBySoc, false, 'SoC-Grund ist weg');
+    assert.equal(automation.getState().gridByLoad, true, 'Last hält weiter');
+    assert.equal(automation.getState().gridActual, true, 'Netz bleibt geschaltet, solange die Phase überlastet ist');
+  } finally {
+    mqttClient.publish = originalPublish;
+    mqttClient.getStatus = originalGetStatus;
+    await new Promise((resolve) => db.close(resolve));
+  }
+});
+
+test('Wechselrichterlast als alleiniger Auslöser wird weiterhin als kritisch protokolliert', async () => {
+  const db = await setupLoadWarningDb();
+  const dbAll = (sql) => new Promise((resolve, reject) => db.all(sql, (err, rows) => err ? reject(err) : resolve(rows || [])));
+  const cache = mqttClient.getCache();
+  cache.clear();
+  const fresh = () => Date.now();
+  cache.set('mqtt.clockDate', { value: '2026-06-28', receivedAt: fresh() });
+  cache.set('gridcontrol.gridFrequencyL1', { value: 50, receivedAt: fresh() });
+  cache.set('gridcontrol.gridFrequencyL2', { value: 50, receivedAt: fresh() });
+  cache.set('gridcontrol.gridFrequencyL3', { value: 50, receivedAt: fresh() });
+
+  const originalPublish = mqttClient.publish;
+  const originalGetStatus = mqttClient.getStatus;
+  mqttClient.publish = () => true;
+  mqttClient.getStatus = () => ({ connected: true });
+
+  try {
+    // SoC im grünen Bereich, Netz aus, Last niedrig.
+    cache.set('batterie.soc', { value: 60, receivedAt: fresh() });
+    cache.set('stromverbrauch_eigenverbrauch_l1', { value: 1000, receivedAt: fresh() });
+    cache.set('stromverbrauch_eigenverbrauch_l2', { value: 1000, receivedAt: fresh() });
+    cache.set('stromverbrauch_eigenverbrauch_l3', { value: 1000, receivedAt: fresh() });
+    await automation.runNow(db);
+    assert.equal(automation.getState().gridActual, false, 'Netz ist zunächst aus');
+
+    // Last als einziger Auslöser schaltet das Netz zu → das bleibt eine Warnung.
+    cache.set('stromverbrauch_eigenverbrauch_l1', { value: 4500, receivedAt: fresh() });
+    await automation.runNow(db);
+    assert.equal(automation.getState().gridByLoad, true);
+    assert.equal(automation.getState().gridActual, true);
+
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    const rows = await dbAll('SELECT category, message FROM grid_control_log');
+    assert.ok(
+      rows.some((r) => r.category === 'critical' && /Wechselrichterlast zu hoch/.test(r.message)),
+      'Last als alleiniger Schaltgrund bleibt kritisch protokolliert'
+    );
+  } finally {
+    mqttClient.publish = originalPublish;
+    mqttClient.getStatus = originalGetStatus;
+    await new Promise((resolve) => db.close(resolve));
+  }
+});

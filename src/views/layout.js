@@ -260,7 +260,7 @@ function renderLayout({ title, activePath = '', body = '', script = '' } = {}) {
 <html lang="de">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   <title>${escapeHtml(title || 'homeESS')}</title>
   <link rel="stylesheet" href="/styles.css">
 </head>

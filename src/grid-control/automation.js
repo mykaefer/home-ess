@@ -91,7 +91,14 @@ function recordLog(db, snap) {
   if (snap.voltageLow && !prev.voltageLow) appendLog(db, 'critical', 'Akkuspannung zu niedrig', vals);
   if (snap.voltageHigh && !prev.voltageHigh) appendLog(db, 'critical', 'Akkuspannung zu hoch', vals);
   if (snap.tempWarn && !prev.tempWarn) appendLog(db, 'critical', 'Wechselrichter-Temperaturwarnung aktiv', vals);
-  if (snap.load && !prev.load) appendLog(db, 'critical', 'Wechselrichterlast zu hoch', vals);
+  // Wechselrichterlast nur als kritisch protokollieren, wenn das Netz allein
+  // wegen der Last zugeschaltet wird. War es beim Einrasten der Last-Verriegelung
+  // bereits aus einem anderen Grund geschaltet, existiert keine
+  // Wechselrichter-Obergrenze mehr — alles darüber kompensiert das öffentliche
+  // Netz automatisch, also keine Warnung. Die Grid-by-Load-Verriegelung greift
+  // dennoch (state.load) und hält das Netz, bis alle Phasen unter die
+  // Aus-Schwelle gefallen sind.
+  if (snap.load && !prev.load && !snap.gridByOther) appendLog(db, 'critical', 'Wechselrichterlast zu hoch', vals);
   if (snap.socLow && !prev.socLow) appendLog(db, 'critical', 'Akku-SoC am unteren Limit', vals);
   if (snap.emergency && !prev.emergency) appendLog(db, 'critical', 'Notstrombetrieb aktiviert (kein Netz erkannt)', vals);
   // Erst nach Ablauf des Bestätigungs-Timeouts (COMMAND_CONFIRM_TIMEOUT_MS) als
@@ -523,6 +530,10 @@ async function tick(db) {
   // protokollieren. Nur wenn es überhaupt etwas zu überwachen gibt.
   if (hasMeasurement) {
     const finalState = operatingState.getState();
+    // War das Netz beim Protokollieren schon aus einem Nicht-Last-Grund
+    // geschaltet? Dann ist eine hohe Wechselrichterlast keine Warnung mehr.
+    const gridByOther = state.socLow || state.voltageLow || state.temperature
+      || highForGrid || finalState.emergencyMode;
     recordLog(db, {
       soc: soc == null ? null : Math.round(soc),
       voltage: voltage == null ? null : Math.round(voltage * 10) / 10,
@@ -534,6 +545,7 @@ async function tick(db) {
       voltageLow: !!state.voltageLow,
       voltageHigh: !!state.voltageHigh,
       load: !!state.load,
+      gridByOther: !!gridByOther,
       gridActual: !!state.gridActual,
       feedInActual: !!state.feedInActual,
       emergency: !!finalState.emergencyMode,

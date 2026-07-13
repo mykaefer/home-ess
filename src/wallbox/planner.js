@@ -70,38 +70,30 @@ function privatePlan(box, ctx) {
 
   const liveSurplus = surplusPlan(box, ctx.surplusW);
   const houseSoc = Number(ctx.houseBatterySoc);
-  // Ein bereits voller Hausakku bei gleichzeitig ausreichender Netzeinspeisung ist
-  // keine Prognose, sondern eingetretene Realität (siehe houseSurplusWatt). Das
-  // darf die Tagesprognose nicht mehr verwerfen können, auch wenn diese für den
-  // Rest des Tages (z. B. wegen einer zu vorsichtigen Wetterprognose) keinen
-  // Überschuss mehr erwartet – sonst speist die Anlage ungenutzt ins Netz ein,
-  // während die Prognose behauptet, es gäbe nichts zu verteilen.
-  const liveOverflow = Number.isFinite(houseSoc) &&
-    houseSoc >= HOUSE_BATTERY_FULL_SOC_THRESHOLD && liveSurplus.desiredOn;
-
-  if (!liveOverflow) {
-    // Oberhalb des Mindeststands darf ein kurzer momentaner PV-Peak nicht die
-    // Tagesreserve verbrauchen. Sobald die Prognose heute Netzbedarf oder keine
-    // freie Überschussenergie ausweist, bleibt die flexible Privatladung aus.
-    if (ctx.prognosisAvailable === false) {
-      return { desiredOn: false, setpointW: null,
-        reason: 'Privat: wartet auf vollständige Tagesprognose' };
-    }
-    const forecastOverflow = Number(ctx.prognosisOverflowKwh);
-    if (ctx.prognosisOverflowKwh != null && Number.isFinite(forecastOverflow) &&
-        forecastOverflow <= FORECAST_ENERGY_EPSILON_KWH) {
-      return { desiredOn: false, setpointW: null,
-        reason: 'Privat: Prognose ohne nicht speicherbaren Überschuss' };
-    }
-  }
   const houseMinSoc = Number(ctx.houseBatteryMinSoc);
   if (Number.isFinite(houseSoc) && Number.isFinite(houseMinSoc) &&
       houseSoc <= houseMinSoc + HOUSE_BATTERY_RESERVE_MARGIN_PERCENT) {
     return { desiredOn: false, setpointW: null,
       reason: 'Privat: Hausakku nahe Mindest-SoC' };
   }
+  // Live-Überschuss ist eingetretene Realität und hat Vorrang vor dem
+  // vorausschauenden Ladeplan. Die Prognose darf einen Start vorbereiten, aber
+  // keine gerade gedeckte Überschussladung wieder ausschalten.
+  if (liveSurplus.desiredOn) {
+    return { ...liveSurplus, reason: 'Privat: Live-Überschuss' };
+  }
+  if (ctx.prognosisAvailable === false) {
+    return { desiredOn: false, setpointW: null,
+      reason: 'Privat: wartet auf vollständige Tagesprognose' };
+  }
+  const forecastOverflow = Number(ctx.prognosisOverflowKwh);
+  if (ctx.prognosisOverflowKwh != null && Number.isFinite(forecastOverflow) &&
+      forecastOverflow <= FORECAST_ENERGY_EPSILON_KWH) {
+    return { desiredOn: false, setpointW: null,
+      reason: 'Privat: Prognose ohne nicht speicherbaren Überschuss' };
+  }
   return { ...liveSurplus,
-    reason: liveOverflow ? 'Privat: Hausakku voll, Netzeinspeisung aktiv' : 'Privat: nur Überschuss' };
+    reason: 'Privat: nur Überschuss' };
 }
 
 // Mindest-Ladestand beruflich (Ziel der Garantieladung). Default 100 = das Auto
@@ -200,7 +192,7 @@ function planCharge(box, ctx = {}) {
 // effektiv zu schaltende Aktion. Testbar ohne MQTT/DB.
 //
 // state: { output:'on'|'off'|null, changedAt, lastSyncValue,
-//          syncInitialized, expectedSyncValue, syncRebaselineUntil, manualFull,
+//          syncInitialized, expectedSyncValue, syncRebaselineUntil, ownSyncUntil, manualFull,
 //          manualFullSawCharging, manualOff, manualOffDay, chargeStartedAt,
 //          restartUntil, restartAttempts }
 // ctx:   { plan, syncStatus:'on'|'off'|null, powerW, pvPowerW,
@@ -224,6 +216,10 @@ function decideWallboxAction(box, state, ctx) {
   if (state.syncRebaselineUntil != null && now >= state.syncRebaselineUntil) {
     state.syncRebaselineUntil = null;
   }
+  const ownSyncWindow = state.ownSyncUntil != null && now < state.ownSyncUntil;
+  if (state.ownSyncUntil != null && now >= state.ownSyncUntil) {
+    state.ownSyncUntil = null;
+  }
 
   // Den ersten Sync-Wert nach einem Prozessstart nur als Ausgangszustand übernehmen.
   // Andernfalls würde eine bereits laufende Ladung fälschlich als manuelles
@@ -235,6 +231,14 @@ function decideWallboxAction(box, state, ctx) {
     state.syncInitialized = true;
     state.lastSyncValue = ctx.syncStatus;
     if (state.output == null) state.output = ctx.syncStatus;
+  } else if (ctx.syncStatus && ownSyncWindow) {
+    // Manche Wallboxen nutzen dasselbe Topic gleichzeitig als Steuerung und als
+    // Aktiv-Status. Nach einem homeESS-Schaltbefehl kann deshalb ein Folge-Status
+    // (z. B. "off", weil kein Fahrzeug angesteckt ist) eintreffen. Auch wenn der
+    // Wert nicht dem geschriebenen Befehl entspricht, ist das kein Nutzerwunsch.
+    state.syncInitialized = true;
+    state.lastSyncValue = ctx.syncStatus;
+    if (state.output == null) state.output = ctx.syncStatus;
   } else if (ctx.syncStatus && (!state.syncInitialized || rebaselining)) {
     // Erstwert nach (Wieder-)Verbindung: nur Ausgangszustand, keine Bedienerkennung.
     state.syncInitialized = true;
@@ -243,13 +247,14 @@ function decideWallboxAction(box, state, ctx) {
   // (2)/(3) Externe Schaltung am Steuerung-Sync-Topic erkennen: ein späterer
   // Wertwechsel, den homeESS nicht selbst gespiegelt hat.
   } else if (settleOk && ctx.syncStatus && ctx.syncStatus !== state.lastSyncValue) {
-    if (ctx.syncStatus === 'on' && state.output !== 'on') {
+    const autoWantsOn = plan.desiredOn === true && ctx.levelAllows === true;
+    if (ctx.syncStatus === 'on' && state.output !== 'on' && !autoWantsOn) {
       // Extern EIN → einmalig voll laden, sofern die Modus-Priorität es zulässt.
       if (ctx.levelAllows) state.manualFull = true;
       state.manualFullSawCharging = false;
       state.manualOff = false;
       state.manualOffDay = '';
-    } else if (ctx.syncStatus === 'off' && state.output === 'on') {
+    } else if (ctx.syncStatus === 'off' && state.output === 'on' && autoWantsOn) {
       // Extern AUS → aus bleiben bis Folgetag, PV erstmals > Wallbox-Leistung.
       state.manualOff = true;
       state.manualOffDay = ctx.todayKey;

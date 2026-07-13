@@ -195,10 +195,10 @@ test('Privat ohne Soll-Topic schaltet an der Überschussschwelle', () => {
   assert.equal(planCharge(box, { plugged: true, soc: 50, surplusW: 3000 }).desiredOn, true);
 });
 
-test('Privat lädt oberhalb Mindeststand nur bei nicht speicherbarem Prognose-Überschuss', () => {
+test('Privat lädt oberhalb Mindeststand bei gedecktem Live-Überschuss', () => {
   const box = { mode: 1, maxPowerW: 3000, minChargePercent: 40, priorityPrivate: 5, setpointTopic: '' };
 
-  // Ein momentaner PV-Peak reicht nicht, wenn der Hausakku ihn noch aufnehmen kann.
+  // Unterhalb der festen Wallboxleistung reicht der Live-Überschuss nicht.
   let p = planCharge(box, {
     plugged: true, soc: 51, surplusW: 2300,
     prognosisOverflowKwh: 0,
@@ -213,22 +213,23 @@ test('Privat lädt oberhalb Mindeststand nur bei nicht speicherbarem Prognose-Ü
   });
   assert.equal(p.desiredOn, true);
 
-  // Nur bei prognostizierter freier Energie darf der Live-Überschuss laden.
+  // Ist die feste Wallboxleistung live gedeckt, gewinnt der Überschuss vor dem Ladeplan.
   p = planCharge(box, {
     plugged: true, soc: 51, surplusW: 3000,
-    prognosisOverflowKwh: 2.5,
+    prognosisOverflowKwh: 0,
   });
   assert.equal(p.desiredOn, true);
+  assert.match(p.reason, /Live-Überschuss/);
 });
 
-test('Privat übersteuert eine zu vorsichtige Prognose, wenn der Hausakku bereits voll ist und real eingespeist wird', () => {
+test('Privat übersteuert eine zu vorsichtige Prognose bei gedecktem Live-Überschuss', () => {
   const box = { mode: 1, maxPowerW: 3000, minChargePercent: 40, priorityPrivate: 5, setpointTopic: '' };
   const p = planCharge(box, {
     plugged: true, soc: 52, surplusW: 3500, prognosisOverflowKwh: 0,
     houseBatterySoc: 97, houseBatteryMinSoc: 20,
   });
   assert.equal(p.desiredOn, true);
-  assert.match(p.reason, /Hausakku voll/);
+  assert.match(p.reason, /Live-Überschuss/);
 });
 
 test('Privat lässt die Prognose-Bremse bei vollem Hausakku ohne ausreichenden Live-Überschuss bestehen', () => {
@@ -385,7 +386,7 @@ test('Beruflich: freier Tag fällt auf die Privatregel zurück', () => {
 function freshState() {
   return {
     output: null, changedAt: 0, setpointW: null, lastSyncValue: null,
-    syncInitialized: true, expectedSyncValue: null,
+    syncInitialized: true, expectedSyncValue: null, ownSyncUntil: null,
     manualFull: false, manualFullSawCharging: false,
     manualOff: false, manualOffDay: '',
     chargeStartedAt: null, restartUntil: 0, restartAttempts: 0,
@@ -465,6 +466,51 @@ test('Extern EIN am Sync-Topic löst einmalige Volladung aus (wenn Level es zul�
   assert.equal(d.setpointW, 11000);
 });
 
+test('Automatik-EIN am Sync-Topic löst kein manuelles Vollladen aus', () => {
+  const box = { id: 1, maxPowerW: 11000, setpointTopic: 'x' };
+  const s = freshState();
+  s.output = 'off';
+  s.lastSyncValue = 'off';
+
+  const d = decideWallboxAction(box, s, baseDecideCtx({
+    plan: { desiredOn: true, setpointW: 3500, priority: 3 },
+    syncStatus: 'on',
+    levelAllows: true,
+  }));
+
+  assert.equal(s.manualFull, false);
+  assert.equal(d.on, true);
+  assert.equal(d.setpointW, 3500);
+});
+
+test('Beruflich: Überschussladung oberhalb Mindeststand bleibt Automatik', () => {
+  const box = {
+    id: 1, mode: 2, maxPowerW: 11000, batteryCapacityKwh: 50,
+    minChargePercent: 30, minChargeBusinessPercent: 80,
+    priorityBusiness: 3, priorityPrivate: 5, businessDays: [0],
+    setpointTopic: 'x',
+  };
+  const s = freshState();
+  s.output = 'off';
+  s.lastSyncValue = 'off';
+
+  const plan = planCharge(box, {
+    plugged: true, soc: 96, surplusW: 4200, hour: 12, minute: 0,
+    weekday: 0, tomorrowWeekday: 1, prognosisOverflowKwh: 0,
+    houseBatterySoc: 97, houseBatteryMinSoc: 20,
+  });
+  const d = decideWallboxAction(box, s, baseDecideCtx({
+    plan,
+    syncStatus: 'on',
+    levelAllows: true,
+  }));
+
+  assert.equal(plan.desiredOn, true);
+  assert.equal(s.manualFull, false);
+  assert.equal(d.on, true);
+  assert.equal(d.setpointW, 4200);
+});
+
 test('Extern EIN wird ignoriert, wenn die Modus-Priorität es nicht zulässt', () => {
   const box = { id: 1, maxPowerW: 11000, setpointTopic: 'x' };
   const s = freshState();
@@ -518,6 +564,61 @@ test('Extern AUS sperrt bis Folgetag mit PV über Wallbox-Leistung', () => {
   }));
   assert.equal(s.manualOff, false);
   assert.equal(d.on, true);
+});
+
+test('Automatik-AUS am Sync-Topic löst keine manuelle Aus-Sperre aus', () => {
+  const box = { id: 1, maxPowerW: 11000, setpointTopic: 'x' };
+  const s = freshState();
+  s.output = 'on';
+  s.lastSyncValue = 'on';
+
+  const d = decideWallboxAction(box, s, baseDecideCtx({
+    plan: { desiredOn: false, setpointW: null, priority: 3 },
+    syncStatus: 'off',
+    levelAllows: true,
+  }));
+
+  assert.equal(s.manualOff, false);
+  assert.equal(d.on, false);
+});
+
+test('Aktiv-Status AUS nach eigener Automatik-Freigabe ist kein manuelles Ausschalten', () => {
+  const box = { id: 1, maxPowerW: 11000, setpointTopic: 'x' };
+  const s = freshState();
+  s.output = 'on';
+  s.changedAt = 900_000;
+  s.lastSyncValue = 'on';
+  s.ownSyncUntil = 1_060_000;
+
+  const d = decideWallboxAction(box, s, baseDecideCtx({
+    plan: { desiredOn: true, setpointW: 3500, priority: 3 },
+    syncStatus: 'off',
+    levelAllows: true,
+    now: 1_000_000,
+  }));
+
+  assert.equal(s.manualOff, false);
+  assert.equal(s.lastSyncValue, 'off');
+  assert.equal(d.on, true);
+});
+
+test('AUS am Sync-Topic nach eigener Schutzfrist bleibt manuelles Ausschalten', () => {
+  const box = { id: 1, maxPowerW: 11000, setpointTopic: 'x' };
+  const s = freshState();
+  s.output = 'on';
+  s.changedAt = 900_000;
+  s.lastSyncValue = 'on';
+  s.ownSyncUntil = 990_000;
+
+  const d = decideWallboxAction(box, s, baseDecideCtx({
+    plan: { desiredOn: true, setpointW: 3500, priority: 3 },
+    syncStatus: 'off',
+    levelAllows: true,
+    now: 1_000_000,
+  }));
+
+  assert.equal(s.manualOff, true);
+  assert.equal(d.on, false);
 });
 
 test('Reconnect/Refresh des Sync-Topics schaltet nicht auf AUS (Regel 3)', () => {
