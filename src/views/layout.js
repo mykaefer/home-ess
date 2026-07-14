@@ -140,18 +140,34 @@ function mobileNavScript() {
   return `    (function () {
       var button = document.getElementById('mobile-menu-button');
       var sheet = document.getElementById('mobile-nav-sheet');
-      if (!button || !sheet) return;
+      if (!sheet) return;
       function setOpen(open) {
-        sheet.classList.toggle('is-open', open);
-        document.body.classList.toggle('mobile-nav-open', open);
+        sheet.classList.toggle('is-open', !!open);
+        document.body.classList.toggle('mobile-nav-open', !!open);
       }
-      button.addEventListener('click', function () {
-        // Das Titellogo ist nur in der Smartphone-Ansicht eine Menüschaltfläche.
-        if (!window.matchMedia('(max-width: 768px)').matches) return;
-        setOpen(!sheet.classList.contains('is-open'));
-      });
+      function isOpen() {
+        return sheet.classList.contains('is-open');
+      }
+      if (button) {
+        button.addEventListener('click', function () {
+          // Das Titellogo ist nur in der Smartphone-Ansicht eine Menüschaltfläche.
+          if (!window.matchMedia('(max-width: 768px)').matches) return;
+          setOpen(!isOpen());
+        });
+      }
       var closeButton = document.getElementById('mobile-nav-close');
       if (closeButton) closeButton.addEventListener('click', function () { setOpen(false); });
+
+      // Öffentliche Schnittstelle für die native App-Hülle (WebView):
+      //   window.homeESSApp.openMenu()  – Menü-Sheet per Geste öffnen
+      //   window.homeESSApp.closeMenu() – Menü-Sheet schließen
+      //   window.homeESSApp.toggleMenu()/isMenuOpen() – umschalten/abfragen
+      // Rückgabewert true = ausgeführt, false = kein Menü im DOM.
+      var app = window.homeESSApp || (window.homeESSApp = {});
+      app.openMenu = function () { setOpen(true); return true; };
+      app.closeMenu = function () { setOpen(false); return true; };
+      app.toggleMenu = function () { setOpen(!isOpen()); return isOpen(); };
+      app.isMenuOpen = function () { return isOpen(); };
     })();`;
 }
 

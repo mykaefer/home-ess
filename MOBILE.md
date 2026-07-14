@@ -37,7 +37,19 @@
     Das Logo im Menü-Sheet hat dieselbe Größe wie im Titel (24px).
   - **Menü-Sheet** (vollflächig, `renderMobileNav`): alle Hauptseiten inkl.
     aktivierter Module und Unterseiten, Footer-Seiten (Module,
-    Einstellungen), Abmelden, Copyright/Version.
+    Einstellungen), Abmelden, Copyright/Version. Das Sheet liegt mobil
+    dauerhaft im Layout und ist geschlossen nach links aus dem Bild geschoben
+    (`transform: translateX(-100%)` + `opacity`/`visibility`); beim Öffnen
+    **gleitet es von links nach rechts über den Inhalt und blendet ein**
+    (CSS-Transition im Mobile-Layer, respektiert `prefers-reduced-motion`).
+    Das reine Umschalten von `display` wäre nicht animierbar — daher die
+    Transform-Lösung.
+  - **JS-Schnittstelle für die native App-Hülle:** `mobileNavScript()` in
+    `layout.js` legt `window.homeESSApp` mit `openMenu()`, `closeMenu()`,
+    `toggleMenu()` und `isMenuOpen()` an. Die App-WebView öffnet das Menü so
+    per Wischgeste (`window.homeESSApp && window.homeESSApp.openMenu && window.homeESSApp.openMenu();`).
+    `openMenu()` ignoriert den Breakpoint (expliziter App-Aufruf); der
+    Logo-Button bleibt Smartphone-only.
 - `main-content` reserviert unten Platz für die Tab-Bar
   (`env(safe-area-inset-bottom)` für iPhone-Home-Indicator; Viewport-Meta
   mit `viewport-fit=cover`).

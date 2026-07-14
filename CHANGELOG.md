@@ -3,6 +3,25 @@
 Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [Unreleased]
+
+### Hinzugefügt
+
+- **Mobiles Menü: öffentliche JavaScript-Schnittstelle für die App-Hülle.**
+  Auf jeder Seite steht `window.homeESSApp` mit `openMenu()`, `closeMenu()`,
+  `toggleMenu()` und `isMenuOpen()` bereit. Die native App-WebView kann das
+  Menü-Sheet damit per Wischgeste öffnen, statt den Weg über das Titellogo zu
+  gehen — z. B. `window.homeESSApp && window.homeESSApp.openMenu && window.homeESSApp.openMenu();`.
+  `openMenu()` öffnet bewusst unabhängig vom Breakpoint (expliziter Aufruf der
+  App); der Logo-Button bleibt wie bisher auf die Smartphone-Ansicht beschränkt.
+
+### Geändert
+
+- **Mobiles Menü-Sheet gleitet animiert ein.** Das Sheet schiebt sich passend
+  zur Wischgeste von links nach rechts über den Inhalt und blendet dabei ein
+  (`transform` + `opacity`); Schließen läuft rückwärts. Reine CSS-Lösung,
+  respektiert `prefers-reduced-motion` (nur kurzes Ein-/Ausblenden).
+
 ## [1.2.6] — 2026-07-13
 
 ### Behoben
