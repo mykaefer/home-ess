@@ -4365,3 +4365,204 @@ body,
         row-gap: 4px;
     }
 }
+
+/* -------------------------------------------------------------------------
+   Fernzugriff (/remote-access)
+   Vorbereitende Pairing-Stufe: QR-Anzeige, Countdown, Statuszustände.
+   Nutzt die bestehenden settings-card-/button-Stile; hier nur Ergänzungen.
+   ---------------------------------------------------------------------- */
+.remote-access-panel {
+    margin-top: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    align-items: flex-start;
+}
+
+.remote-access-text,
+.remote-access-hint,
+.remote-access-loading {
+    margin: 0;
+    max-width: 52ch;
+    line-height: 1.45;
+}
+
+.remote-access-hint {
+    color: var(--color-text-soft);
+    font-size: 13px;
+}
+
+.remote-access-state {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+    font-weight: 600;
+}
+
+.remote-access-state--pending { color: var(--color-action); }
+.remote-access-state--done { color: var(--color-text-soft); }
+.remote-access-state--error { color: var(--color-danger); }
+
+.remote-access-subtitle {
+    margin: 0;
+    font-size: 20px;
+}
+
+.remote-access-claim {
+    margin: 0;
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: 6px 14px;
+    max-width: 520px;
+}
+
+.remote-access-claim dt {
+    color: var(--color-text-soft);
+}
+
+.remote-access-claim dd {
+    margin: 0;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    font-weight: 600;
+}
+
+.remote-access-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--color-action);
+    box-shadow: 0 0 0 0 rgba(57, 112, 95, 0.5);
+    animation: remote-access-pulse 1.6s ease-out infinite;
+}
+
+@keyframes remote-access-pulse {
+    0% { box-shadow: 0 0 0 0 rgba(57, 112, 95, 0.45); }
+    70% { box-shadow: 0 0 0 8px rgba(57, 112, 95, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(57, 112, 95, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .remote-access-dot { animation: none; }
+}
+
+/* QR-Code: scharf, auf weißem Grund, ausreichend Weißraum, nicht weichgezeichnet. */
+.remote-access-qr {
+    margin: 0;
+    padding: 16px;
+    background: #ffffff;
+    border: 1px solid var(--color-border);
+    border-radius: 12px;
+    align-self: flex-start;
+}
+
+.remote-access-qr-img {
+    display: block;
+    width: 240px;
+    max-width: 100%;
+    height: auto;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+}
+
+.remote-access-countdown {
+    margin: 0;
+    font-variant-numeric: tabular-nums;
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--color-text);
+}
+
+.remote-access-live {
+    /* Live-Region für Screenreader — visuell dezent, aber vorhanden. */
+    margin: 10px 0 0;
+    min-height: 1.2em;
+    font-size: 13px;
+    color: var(--color-text-soft);
+}
+
+/* Gekoppelte Geräte: Kennzahlen und Geräteliste. */
+.remote-access-devices-summary {
+    margin: 0 0 16px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px 28px;
+}
+
+.remote-access-devices-summary > div {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.remote-access-devices-summary dt {
+    color: var(--color-text-soft);
+    font-size: 13px;
+}
+
+.remote-access-devices-summary dd {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 600;
+}
+
+.remote-access-devices-list {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.remote-access-device {
+    padding: 14px 16px;
+    border: 1px solid var(--color-border);
+    border-radius: 12px;
+    background: var(--color-surface-soft, transparent);
+}
+
+.remote-access-device-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.remote-access-device-name {
+    font-weight: 700;
+    overflow-wrap: anywhere;
+}
+
+.remote-access-device-badge {
+    padding: 2px 10px;
+    border-radius: 999px;
+    font-size: 13px;
+    font-weight: 600;
+    white-space: nowrap;
+    border: 1px solid var(--color-border);
+    color: var(--color-text-soft);
+}
+
+.remote-access-device-badge--active {
+    color: var(--color-action);
+    border-color: var(--color-action);
+}
+
+.remote-access-device-badge--offline {
+    color: var(--color-text-soft);
+}
+
+.remote-access-device-badge--unknown {
+    color: var(--color-danger);
+    border-color: var(--color-danger);
+}
+
+@media (max-width: 768px) {
+    .remote-access-qr-img { width: 220px; }
+    .remote-access-panel .button-row { width: 100%; }
+    .remote-access-panel .button-row button { width: 100%; }
+    .remote-access-claim { grid-template-columns: 1fr; }
+    .remote-access-claim dt { margin-top: 4px; }
+    .remote-access-device .button-row button { width: 100%; }
+}

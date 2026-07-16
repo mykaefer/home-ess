@@ -5,6 +5,7 @@ const { verifyPassword } = require('./password');
 const { createSession, destroySession } = require('./session');
 const renderLogin = require('../views/login');
 const renderDashboard = require('../views/dashboard');
+const pairingState = require('../remote-access/pairing-state');
 
 // Authentifizierungs-Routen: Startseite/Login, Login-Verarbeitung, Logout.
 function authRoutes(db) {
@@ -32,6 +33,9 @@ function authRoutes(db) {
   });
 
   router.get('/logout', (req, res) => {
+    // Beim Logout auch den flüchtigen Pairing-Zustand dieser Session entfernen
+    // (Token/QR aus dem Speicher), bevor die Session zerstört wird.
+    if (req.session) pairingState.removeForOwner(req.session.id);
     destroySession(db, req, res, () => res.redirect('/'));
   });
 

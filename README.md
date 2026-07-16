@@ -417,6 +417,25 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
   Clear-Sky-Modell), MQTT-Broker konfigurieren & Verbindung testen.
 - 📡 MQTT-Verbindungs-Manager mit Reconnect-Handling, Wert-Cache und **Publish**
   (nach den Regeln aus [MQTT.md](MQTT.md)); Live-Updates per SSE (`/live/events`).
+- 📲 **Fernzugriff** (`/remote-access`, Footer-Navigation) — **dauerhafte
+  Kopplung und Relay-Tunnel** mit essrelay: ein angemeldeter Admin fordert eine
+  Pairing-Session an, zeigt den **QR-Code** an, prüft vor der Bestätigung den
+  **Gerätefingerprint**, **bestätigt** den Kopplungswunsch (mit Ed25519-
+  **Instanz-Proof**) und homeESS richtet daraufhin automatisch eine **dauerhafte
+  Identität** ein (**Provisioning**, Status **`paired`**). Danach verbindet sich
+  homeESS als authentifizierte **Origin-WebSocket**-Instanz mit dem Relay und
+  beantwortet Tunnel-Requests der App gegen den lokalen homeESS-Server. Damit ist
+  Fernzugriff ohne eigenes VPN, Portfreigabe oder DynDNS möglich; ein
+  Nutzeraccount ist nicht erforderlich. Die App ist im Google Play Store unter
+  <https://play.google.com/store/apps/details?id=de.mykaefer.homeess>
+  verfügbar; für die Internet-Nutzung ist die **homeESS Remote Lizenz** über den
+  Play Store erforderlich. App und Relay-Server sind ein eigenständiges Add-on
+  und nicht Teil des AGPLv3-lizenzierten homeESS-Servers. Der Browser spricht nie
+  direkt mit dem Relay (`Browser → homeESS → essrelay`); Origin-Token und private
+  Schlüssel bleiben ausschließlich serverseitig.
+  Details zum homeESS-Server: [ARCHITECTURE.md](ARCHITECTURE.md),
+  [SECURITY.md](SECURITY.md), [THREAT_MODEL.md](THREAT_MODEL.md). Die
+  App-/Relay-Schnittstelle ist Teil des eigenständigen proprietären Add-ons.
 - 🚀 **systemd-Service** — startet automatisch beim Systemboot.
 
 Alle Seiten werden **dynamisch** serverseitig gerendert — es gibt keine
@@ -482,8 +501,16 @@ curl -fsSL https://raw.githubusercontent.com/mykaefer/home-ess/main/install.sh |
 
 Das Skript installiert die System- und Node.js-Abhängigkeiten, klont homeESS
 nach `/opt/home-ess`, legt eine neue Datenbank unter
-`/var/lib/home-ess/app.db` an und aktiviert den systemd-Dienst. Eine vorhandene
-Installation oder Datenbank wird aus Sicherheitsgründen nicht überschrieben.
+`/var/lib/home-ess/app.db` an und aktiviert den systemd-Dienst.
+
+Ein erneuter Aufruf desselben Befehls aktualisiert eine bestehende Git-
+Installation unter `/opt/home-ess`: der Dienst wird gestoppt, der Code aus
+`main` aktualisiert, die Produktionsabhängigkeiten werden neu installiert und
+der Dienst wird wieder gestartet. Daten unter `/var/lib/home-ess` bleiben
+erhalten, insbesondere Datenbank und Fernzugriff-Identity-Store.
+
+Existiert `/opt/home-ess`, ist aber kein Git-Checkout, bricht das Skript ab,
+damit eine manuell verwaltete Installation nicht überschrieben wird.
 
 ### Manuelle Installation
 
@@ -505,10 +532,17 @@ Nach dem Login unter **Einstellungen → Neues Passwort** ändern.
 
 ### Konfiguration über Umgebungsvariablen
 
-| Variable      | Default            | Beschreibung                         |
-| ------------- | ------------------ | ------------------------------------ |
-| `PORT`        | `3000`             | HTTP-Port                            |
-| `HOME_ESS_DB` | `./data/app.db`    | Pfad zur SQLite-Datenbank            |
+| Variable                 | Default                        | Beschreibung                                                                 |
+| ------------------------ | ------------------------------ | ---------------------------------------------------------------------------- |
+| `PORT`                   | `3000`                         | HTTP-Port                                                                    |
+| `HOME_ESS_DB`            | `./data/app.db`                | Pfad zur SQLite-Datenbank                                                    |
+| `ESS_RELAY_BASE_URL`     | `https://essrelay.mykaefer.net`| Basis-URL des essrelay für den Fernzugriff/das Pairing. Nur absolute `https://`-URL, ohne Zugangsdaten/Query/Fragment. Wird serverseitig festgelegt und beim Start streng validiert (SSRF-Schutz); nie aus einem Browser-Request übernommen. |
+| `HOME_ESS_INSTANCE_NAME` | `homeESS`                      | Instanzname, den homeESS beim Erstellen einer Pairing-Session an den Relay meldet. |
+| `HOME_ESS_IDENTITY_DIR`  | `<data>/identity`              | Verzeichnis der dauerhaften Ed25519-Instanzidentität (privater Schlüssel + Metadaten). Muss dem Servicebenutzer gehören, nicht weltlesbar (0700/0600). Z. B. `/var/lib/home-ess/identity`. |
+| `ESS_RELAY_WS_URL`       | aus Basis-URL abgeleitet       | WebSocket-URL des Origin-Endpunkts am Relay (`wss://…`). Nur setzen, wenn der Relay den Endpunkt unter anderem Pfad/Host anbietet. |
+| `ESS_RELAY_CONNECTION_DISABLED` | *(leer)*                | `1` schaltet den Origin-WebSocket-Autostart ab (nur Identität/Pairing, keine Verbindung). |
+
+Eine Vorlage aller Variablen liegt in [.env.example](.env.example).
 
 ## Service-Verwaltung
 
@@ -581,3 +615,7 @@ Passwörter werden als scrypt-Hash gespeichert.
 
 GNU Affero General Public License v3.0 (`AGPL-3.0-only`) – siehe
 [LICENSE](LICENSE).
+
+Die Android-App, die homeESS Remote Lizenz und der essrelay-Server sind ein
+eigenständiges Add-on und nicht Bestandteil dieses AGPLv3-lizenzierten
+homeESS-Servers.

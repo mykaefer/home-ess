@@ -5,22 +5,62 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-07-16
+
 ### Hinzugefügt
 
-- **Mobiles Menü: öffentliche JavaScript-Schnittstelle für die App-Hülle.**
-  Auf jeder Seite steht `window.homeESSApp` mit `openMenu()`, `closeMenu()`,
-  `toggleMenu()` und `isMenuOpen()` bereit. Die native App-WebView kann das
-  Menü-Sheet damit per Wischgeste öffnen, statt den Weg über das Titellogo zu
-  gehen — z. B. `window.homeESSApp && window.homeESSApp.openMenu && window.homeESSApp.openMenu();`.
-  `openMenu()` öffnet bewusst unabhängig vom Breakpoint (expliziter Aufruf der
-  App); der Logo-Button bleibt wie bisher auf die Smartphone-Ansicht beschränkt.
+- **Fernzugriff über Relay-Tunnel.** homeESS kann sich per QR-Code dauerhaft mit
+  der Android-App koppeln und danach HTTP-artige Tunnel-Requests der App über den
+  Relay gegen den lokalen homeESS-Server beantworten. Damit ist Zugriff über das
+  Internet ohne eigenes VPN, Portfreigabe oder DynDNS möglich; ein Nutzeraccount
+  ist nicht erforderlich. Für die Internet-Nutzung ist die homeESS Remote Lizenz
+  in der App aus dem Google Play Store erforderlich.
+- **Dauerhafte Ed25519-Instanzidentität.** homeESS erzeugt einen lokalen
+  Identity Store (`HOME_ESS_IDENTITY_DIR`, 0700/0600), signiert Confirm- und
+  WebSocket-Challenge-Nutzlasten mit Node `crypto`, provisioniert nach Confirm
+  automatisch zu `paired` und prüft Instanz-/Gerätefingerprints streng.
+- **Gekoppelte Geräte und Link-Verwaltung.** `/remote-access` zeigt gekoppelte
+  Geräte, Relay-Verbindung und aktive Geräte an, verarbeitet autoritative
+  `linked_devices`-Snapshots sowie `connection_status` und kann Verknüpfungen
+  bidirektional entfernen, ohne lokale Identität oder Schlüssel zu löschen.
+- **Gehärteter serverseitiger Relay-Client.** Pairing, Confirm, Provisioning,
+  Origin-WebSocket und Tunnel laufen ausschließlich serverseitig
+  (`Browser → homeESS → essrelay`); Tokens, QR-URI, private Schlüssel,
+  Signaturen, Headerwerte, Cookies und Bodies werden weder an den Browser
+  ausgegeben noch geloggt.
+- **Neues Seiten-Icon.** Das angehängte homeESS-Logo ist als skalierbares
+  Browser-/App-Icon eingebunden.
+- **Neue Konfiguration.** `ESS_RELAY_BASE_URL`, `ESS_RELAY_WS_URL`,
+  `HOME_ESS_INSTANCE_NAME`, `HOME_ESS_IDENTITY_DIR` und
+  `ESS_RELAY_CONNECTION_DISABLED` steuern Relay, WebSocket und Identity Store.
+- **Mobiles Menü für die App-Hülle.** `window.homeESSApp` stellt `openMenu()`,
+  `closeMenu()`, `toggleMenu()` und `isMenuOpen()` bereit; das mobile Menü-Sheet
+  gleitet passend zur App-Geste ein.
+- **Installationsscript kann bestehende Git-Installationen aktualisieren.** Ein
+  erneuter Aufruf per `curl | sudo bash` stoppt den Dienst, aktualisiert den
+  Checkout aus `main`, installiert Produktionsabhängigkeiten neu und startet
+  homeESS wieder. Datenbank und Identity Store unter `/var/lib/home-ess` bleiben
+  erhalten.
 
 ### Geändert
 
-- **Mobiles Menü-Sheet gleitet animiert ein.** Das Sheet schiebt sich passend
-  zur Wischgeste von links nach rechts über den Inhalt und blendet dabei ein
-  (`transform` + `opacity`); Schließen läuft rückwärts. Reine CSS-Lösung,
-  respektiert `prefers-reduced-motion` (nur kurzes Ein-/Ausblenden).
+- **Version auf 1.3.0 angehoben.** Die internen Zwischenstände nach 1.2.6 werden
+  als ein öffentlicher Release zusammengefasst.
+- **Fernzugriff-Dokumentation konsolidiert.** README, Architektur, Security,
+  Threat Model und Agentenhinweise beschreiben jetzt den fertigen homeESS-Stand
+  aus Pairing, Provisioning, Geräteverwaltung, Origin-WebSocket und Relay-Tunnel
+  sowie die Abgrenzung von App/Relay als eigenständigem proprietären Add-on.
+
+### Sicherheit
+
+- **Tunnel-Requests werden lokal begrenzt und validiert.** homeESS akzeptiert
+  nur definierte Tunnel-Nachrichten, verwirft externe Ziele sowie Hop-by-Hop- und
+  WebSocket-Header, begrenzt Body-/Chunk-Größen, schützt Sequenzen, Timeouts und
+  Backpressure und räumt offene Requests bei Disconnects oder entfernten Links
+  zuverlässig auf.
+- **Gerätestatus ist an autoritative Links gebunden.** `connection_status` kann
+  nur bereits bekannte, vom Relay bestätigte Geräte als aktiv markieren; entfernte
+  oder unbekannte Geräte werden nicht wieder lokal angelegt.
 
 ## [1.2.6] — 2026-07-13
 

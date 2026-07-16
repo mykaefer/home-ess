@@ -12,6 +12,7 @@ readonly DB_PATH="${DATA_DIR}/app.db"
 readonly SERVICE_FILE="/etc/systemd/system/${APP_NAME}.service"
 readonly MIN_NODE_MAJOR=20
 readonly MIN_NODE_MINOR=17
+INSTALL_MODE="install"
 
 info() {
   printf '\n\033[1;34m[homeESS]\033[0m %s\n' "$*"
@@ -57,10 +58,19 @@ check_platform() {
 }
 
 check_installation_target() {
-  [[ ! -e ${INSTALL_DIR} ]] || \
-    fail "${INSTALL_DIR} existiert bereits. Vorhandene Installationen werden nicht überschrieben."
-  [[ ! -e ${DB_PATH} ]] || \
-    fail "${DB_PATH} existiert bereits. Vorhandene Einstellungen werden nicht überschrieben."
+  if [[ -d ${INSTALL_DIR}/.git ]]; then
+    INSTALL_MODE="update"
+    info "Bestehende homeESS-Installation gefunden – Update-Modus"
+    return
+  fi
+
+  if [[ -e ${INSTALL_DIR} ]]; then
+    fail "${INSTALL_DIR} existiert bereits, ist aber kein Git-Checkout. Bitte manuell sichern/prüfen."
+  fi
+
+  if [[ -e ${DB_PATH} ]]; then
+    info "Bestehende Datenbank gefunden – sie wird weiterverwendet"
+  fi
 }
 
 install_base_packages() {
@@ -120,12 +130,52 @@ create_service_account() {
   install -d -m 0750 -o "${APP_USER}" -g "${APP_GROUP}" "${DATA_DIR}"
 }
 
+stop_service_for_update() {
+  if [[ ${INSTALL_MODE} != "update" ]]; then
+    return
+  fi
+
+  if systemctl list-unit-files "${APP_NAME}.service" >/dev/null 2>&1; then
+    info "Stoppe laufenden homeESS-Dienst für das Update"
+    systemctl stop "${APP_NAME}.service" || true
+  fi
+}
+
 clone_application() {
   info "Lade homeESS von GitHub"
-  GIT_TERMINAL_PROMPT=0 git clone --depth 1 "${REPOSITORY_URL}" "${INSTALL_DIR}"
+  GIT_TERMINAL_PROMPT=0 git clone --depth 1 --branch main "${REPOSITORY_URL}" "${INSTALL_DIR}"
   rm -rf "${INSTALL_DIR}/test"
   chown -R root:root "${INSTALL_DIR}"
   chmod -R u=rwX,go=rX "${INSTALL_DIR}"
+}
+
+update_application() {
+  info "Aktualisiere homeESS aus GitHub"
+  cd "${INSTALL_DIR}"
+
+  local remote_url
+  remote_url="$(git config --get remote.origin.url || true)"
+  if [[ -z ${remote_url} ]]; then
+    git remote add origin "${REPOSITORY_URL}"
+  elif [[ ${remote_url} != "${REPOSITORY_URL}" ]]; then
+    info "Setze Git-Remote origin auf ${REPOSITORY_URL}"
+    git remote set-url origin "${REPOSITORY_URL}"
+  fi
+
+  GIT_TERMINAL_PROMPT=0 git fetch --depth 1 origin main
+  git checkout -B main FETCH_HEAD
+  git reset --hard FETCH_HEAD
+  rm -rf "${INSTALL_DIR}/test"
+  chown -R root:root "${INSTALL_DIR}"
+  chmod -R u=rwX,go=rX "${INSTALL_DIR}"
+}
+
+install_or_update_application() {
+  if [[ ${INSTALL_MODE} == "update" ]]; then
+    update_application
+  else
+    clone_application
+  fi
 }
 
 install_dependencies() {
@@ -135,6 +185,13 @@ install_dependencies() {
 }
 
 create_database() {
+  if [[ -e ${DB_PATH} ]]; then
+    info "Bestehende Datenbank bleibt erhalten"
+    chown "${APP_USER}:${APP_GROUP}" "${DB_PATH}"
+    chmod 0640 "${DB_PATH}"
+    return
+  fi
+
   info "Initialisiere eine neue, leere Datenbank"
   install -m 0640 -o "${APP_USER}" -g "${APP_GROUP}" /dev/null "${DB_PATH}"
 }
@@ -171,7 +228,12 @@ EOF
 
   chmod 0644 "${SERVICE_FILE}"
   systemctl daemon-reload
-  systemctl enable --now "${APP_NAME}.service"
+  systemctl enable "${APP_NAME}.service"
+  if [[ ${INSTALL_MODE} == "update" ]]; then
+    systemctl restart "${APP_NAME}.service"
+  else
+    systemctl start "${APP_NAME}.service"
+  fi
 }
 
 verify_installation() {
@@ -185,9 +247,15 @@ verify_installation() {
   address="$(hostname -I 2>/dev/null | awk '{print $1}')"
   address="${address:-localhost}"
 
-  printf '\n\033[1;32mhomeESS wurde erfolgreich installiert.\033[0m\n'
+  if [[ ${INSTALL_MODE} == "update" ]]; then
+    printf '\n\033[1;32mhomeESS wurde erfolgreich aktualisiert.\033[0m\n'
+  else
+    printf '\n\033[1;32mhomeESS wurde erfolgreich installiert.\033[0m\n'
+  fi
   printf 'Weboberfläche: http://%s:3000\n' "${address}"
-  printf 'Erster Login: admin\n'
+  if [[ ${INSTALL_MODE} != "update" ]]; then
+    printf 'Erster Login: admin\n'
+  fi
   printf 'Dienststatus: systemctl status %s\n\n' "${APP_NAME}"
 }
 
@@ -198,7 +266,8 @@ main() {
   install_base_packages
   install_nodejs
   create_service_account
-  clone_application
+  stop_service_for_update
+  install_or_update_application
   install_dependencies
   create_database
   install_systemd_service

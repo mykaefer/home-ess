@@ -50,6 +50,5 @@ build/
 .DS_Store
 Thumbs.db
 
-# Markdown Files
-# RELEASE_NOTES*.md
-# PROJECT_CONTEXT.md
+# Proprietary app/relay interface documentation
+HOMEESS_TRANSPORT_API.md

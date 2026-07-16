@@ -874,6 +874,28 @@ src/
     groups.js             Gruppen-CRUD
     widgets.js            Widget-CRUD (Typen value/info, config-JSON)
     system-info.js        Info-Kachel: Feld-Katalog + Live-System-Werte
+  remote-access/
+    relay-config.js       Auflösung/Validierung der Relay-Basis-URL (SSRF),
+                          Origin-WebSocket-URL + Instanzname
+    relay-client.js       essrelay-Client: create/read/cancel Pairing-Session,
+                          confirm (Instanz-Proof-Body), provision, capabilities,
+                          HTTPS-Zwang, Timeouts, keine Redirects, Größenlimit,
+                          strenge Antwortvalidierung, Fehler-Mapping
+    identity-crypto.js    Reine Ed25519-Crypto: kanonische Proof-/Auth-Nutzlasten,
+                          Signatur/Verifikation, Fingerprint (Hex/Anzeige/Präfix)
+    identity-store.js     Dauerhafte Instanzidentität: Schlüssel erzeugen/laden/
+                          validieren (atomar, 0600/0700), signieren, IDs persistieren
+    pairing-state.js      In-Memory-Pairing-Zustand je Admin-Session, Orchestrierung
+                          Confirm→Provisioning, Retry/Reconciliation, Promise-Lock,
+                          Cleanup, Shutdown (paired persistiert im Identity Store)
+    relay-connection.js   Origin-WebSocket-Client (State-Machine, Challenge-Response,
+                          Reconnect-Backoff, Heartbeat, Tunnel-Dispatch, Shutdown)
+    origin-tunnel.js      Origin-Ende des Relay-Tunnels: HTTP-artige Requests
+                          lokal validieren/ausführen, Antworten streamen,
+                          Timeouts/Backpressure/Cleanup
+    connection-service.js Singleton-Wrapper um genau eine Origin-Verbindung
+    errors.js             Stabile interne Fehlercodes (RemoteAccessError)
+    redact.js             Redaction + Logging der Fernzugriff-Ereignisse
   routes/
     dashboard.js          GET /dashboard + Widget/Gruppen-CRUD + /layout + /data
     stromverbrauch.js     GET /stromverbrauch + Topic/Abgleich-POSTs + /data
@@ -881,6 +903,11 @@ src/
     batterie.js           GET /batterie + POST /batterie/topics + GET /batterie/data
     output.js             GET /output + Output-CRUD + /data
     settings.js           GET /settings, POST password/mqtt/mqtt-test
+    remote-access.js      GET /remote-access + lokale API
+                          POST/GET/DELETE /api/remote-access/pairing,
+                          POST /api/remote-access/pairing/confirm|reject|provision,
+                          GET/POST /api/remote-access/connection[/connect|/disconnect]
+                          (Admin-only, no-store, CSRF-Header)
     live.js               SSE /live/events + /live/header
     modules.js            GET /module + POST /module/:key/enable|disable
     pool.js               GET /pool + POST /pool/config + GET /pool/status
@@ -906,6 +933,9 @@ src/
     batterie.js           Batterie — KPI-Kacheln + SoC-Balken + Config
     output.js             Output — kategorisierte, einklappbare Zeilenliste
     settings.js           Einstellungen
+    remote-access.js      Fernzugriff — Pairing-QR, Countdown, Status-Polling,
+                          Claim-Bestätigung/-Ablehnung, Abbruch
+                          (clientseitiger Controller inline)
     modules.js            Modul-Verwaltung
     pool.js               Pool — KPI-Kacheln + Pumpen-Buttons + Config
     grid-control.js       Grid-Control — Zustände, Config, Bestätigungs-Badges,
@@ -925,6 +955,85 @@ public/energiefluss-diagram.js  Gemeinsame Zeichen-Logik des Energiefluss-
 data/app.db               SQLite (gitignored)
 MQTT.md                   Referenz: ioBroker-MQTT-Regeln
 ```
+
+## Fernzugriff / Pairing / Relay-Tunnel
+
+Seite `/remote-access` („Fernzugriff", Footer-Navigation, nur angemeldete
+Admins). homeESS koppelt sich dauerhaft mit der Android-App und stellt danach den
+Fernzugriff über einen Relay-Tunnel bereit. Für den Nutzer sind weder eigenes
+VPN noch Portfreigabe, DynDNS oder Nutzeraccount erforderlich. Für die Nutzung
+über das Internet ist die **homeESS Remote Lizenz** in der App aus dem Google
+Play Store erforderlich
+(<https://play.google.com/store/apps/details?id=de.mykaefer.homeess>). App und
+Relay-Server sind ein eigenständiges Add-on und nicht Teil des AGPLv3-
+lizenzierten homeESS-Servers.
+
+- **Dauerhafte Ed25519-Instanzidentität** und ein sicherer **Identity Store**
+  (`HOME_ESS_IDENTITY_DIR`, Default `<data>/identity`): privater Schlüssel als
+  PKCS8-DER (0600), Metadaten/IDs in `identity.json` (0600), Verzeichnis 0700,
+  atomar geschrieben, bei Neustart stabil, bei Beschädigung kontrollierter Fehler
+  (keine Neuerzeugung). Privater Schlüssel bleibt lokal, nie an Browser/Relay/Log.
+- **Instanz-Proof of Possession** beim Confirm (Ed25519-Signatur über die
+  kanonische Instanz-Proof-Nutzlast, gebunden an Pairing-ID, Origin-Token-Hash,
+  Instanz- und Gerätefingerprint).
+- **`confirmed` ist nicht terminal.** Der Origin-Token bleibt bis `paired`
+  erhalten. Nach Confirm folgt automatisch das **Provisioning** (idempotent,
+  retriable, mit Reconciliation) → Status **`paired`**.
+- **Persistente Provisioning-Daten** (`instanceId`, `deviceId`, Fingerprints,
+  Gerätename/-plattform, `pairedAt`, Relay-URL, Protokollversion) im Identity
+  Store; Fingerprints werden gegen den lokalen Schlüssel bzw. Claim abgeglichen.
+- **Authentifizierte Origin-WebSocket-Verbindung** (`clientType: homeess`):
+  `hello` → Challenge (streng validiert) → Signatur über die kanonische
+  Auth-Nutzlast → `authenticated`. State-Machine mit Reconnect-Backoff (Jitter),
+  Auth-/Idle-Timeout, Heartbeat und sauberem Shutdown.
+- **Relay-Tunnel**: Bei `relayTunnel: true` verarbeitet homeESS
+  `tunnel_request_start`/`body`/`end`/`cancel`, führt Requests ausschließlich
+  gegen den lokalen homeESS-HTTP-Server aus und streamt Status, Header und
+  Body-Chunks zurück. Hop-by-Hop-/WebSocket-Header, externe Ziele, falsche
+  Sequenzen und übergroße Chunks/Bodies werden abgelehnt; Timeouts,
+  Backpressure, Disconnects und entfernte Links räumen offene Requests auf.
+- **Sichtbare lokale Zustände**: `pending`, `awaiting_confirmation`, `confirming`,
+  `confirmed`, `provisioning`, `paired`, `rejected`, `cancelled`, `expired` plus
+  Verbindungsstatus (nicht verbunden / wird aufgebaut / am Relay authentifiziert
+  / getrennt / fehlgeschlagen). Die UI zeigt vor der Bestätigung den
+  **Gerätefingerprint** und die gekoppelten Geräte samt Laufzeitstatus.
+- **Konfiguration**: `ESS_RELAY_WS_URL` (sonst aus Basis-URL abgeleitet),
+  `HOME_ESS_IDENTITY_DIR`, `ESS_RELAY_CONNECTION_DISABLED=1`.
+
+Details in
+[ARCHITECTURE.md](ARCHITECTURE.md), [SECURITY.md](SECURITY.md),
+[THREAT_MODEL.md](THREAT_MODEL.md). Die App-/Relay-Schnittstelle ist Teil des
+eigenständigen proprietären Add-ons und wird nicht öffentlich dokumentiert.
+
+Eckpunkte:
+
+- **Datenfluss `Browser → homeESS → essrelay`.** Der Browser kommuniziert nie
+  direkt mit dem essrelay; der homeESS-Server ist der Relay-Client.
+- **Neue lokale API-Endpunkte** (Admin-only, `Cache-Control: no-store`,
+  CSRF-Header): `POST` (Session erstellen), `GET` (Status lesen/abgleichen),
+  `DELETE` (abbrechen) unter `/api/remote-access/pairing` plus
+  `POST /api/remote-access/pairing/confirm|reject`.
+- **Serverseitiger Relay-Client** (`src/remote-access/relay-client.js`):
+  `createPairingSession`, `readPairingSessionStatus`, `cancelPairingSession`,
+  `confirmPairingSession`, `rejectPairingSession`.
+- **Relay-Basis-URL** serverseitig über `ESS_RELAY_BASE_URL` (Default
+  `https://essrelay.mykaefer.net`), beim Start streng validiert (SSRF-Schutz);
+  nie aus einem Browser-Request übernommen.
+- **Pairing-Zustand nur im Arbeitsspeicher** (`src/remote-access/pairing-state.js`),
+  je Admin-Session eine aktive Session, Promise-Lock gegen Races. **Keine
+  Persistenz** (DB/Datei/Browser/Log) — nach einem Neustart ist die lokale
+  Zuordnung verloren; eine Relay-Session läuft dort nach ihrer TTL selbst ab.
+- **QR-Code wird vom Relay geliefert** (PNG), von homeESS validiert und nur als
+  Base64-PNG an den authentifizierten Browser gereicht. Der QR enthält den
+  Claim-Token; der **Origin-Token bleibt ausschließlich serverseitig** — nie an
+  den Browser, nie persistiert, nie geloggt (Redaction in
+  `src/remote-access/redact.js`).
+- **Status-Polling** nach `pollIntervalSeconds` (client 2–30 s), nur bei
+  `pending` und `awaiting_confirmation`, ohne Überlappung; **Abbruch**
+  idempotent; **Countdown** auf Basis `expiresAt`.
+- **Provisioning, WebSocket und Tunnel** wie oben beschrieben: nach `confirmed`
+  automatisch `paired`, danach authentifizierte Origin-WebSocket-Verbindung mit
+  Relay-Tunnel für gekoppelte, lizenzierte App-Verbindungen.
 
 ## Datenmodell (SQLite)
 

@@ -38,6 +38,7 @@ const NAV_CORE = [
   },
   { path: '/output', label: 'Output', section: 'main' },
   { path: '/module', label: 'Module', section: 'footer' },
+  { path: '/remote-access', label: 'Fernzugriff', section: 'footer' },
   { path: '/settings', label: 'Einstellungen', section: 'footer' },
 ];
 
@@ -278,6 +279,8 @@ function renderLayout({ title, activePath = '', body = '', script = '' } = {}) {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   <title>${escapeHtml(title || 'homeESS')}</title>
+  <link rel="icon" href="/homeess-icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/homeess-icon.svg">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body class="page-dashboard">

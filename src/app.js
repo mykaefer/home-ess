@@ -30,6 +30,10 @@ const wallboxRoutes = require('./routes/wallbox');
 const messenSchaltenRoutes = require('./routes/messen-schalten');
 const adapterRoutes = require('./routes/adapters');
 const statesRoutes = require('./routes/states');
+const remoteAccessRoutes = require('./routes/remote-access');
+const pairingState = require('./remote-access/pairing-state');
+const identityStore = require('./remote-access/identity-store');
+const connectionService = require('./remote-access/connection-service');
 const { buildWallboxSnapshot, totalWallboxPowerWatt } = require('./wallbox/aggregation');
 const { listWallboxes } = require('./wallbox/boxes');
 const { buildActorSnapshot } = require('./messen-schalten/aggregation');
@@ -79,6 +83,24 @@ function createApp() {
   app.use(messenSchaltenRoutes(db));
   app.use(adapterRoutes(db));
   app.use(statesRoutes(db));
+  app.use(remoteAccessRoutes());
+
+  // Fernzugriff: dauerhafte Instanzidentität und Origin-WebSocket vorbereiten.
+  // Der Relay-Client ist ein optionaler Subdienst — Fehler dürfen den normalen
+  // lokalen Betrieb (MQTT/Dashboard) nie blockieren.
+  identityStore.init(config.IDENTITY_DIR);
+  connectionService.init({ wsUrl: config.RELAY_WS_URL, enabled: config.RELAY_CONNECTION_ENABLED });
+  // Nach erfolgreichem `paired` automatisch die WebSocket-Verbindung starten.
+  pairingState.setHooks({ onPaired: () => connectionService.onPaired() });
+  // Autostart: nur verbinden, wenn bereits eine provisionierte Identität
+  // existiert (read-only, legt sonst kein Schlüsselmaterial an).
+  identityStore.getProvisionedIdentity()
+    .then((prov) => { if (prov && prov.instanceId) connectionService.autostart(); })
+    .catch((err) => console.error('[remote-access] Identity-Store nicht ladbar:', err && err.code));
+
+  // Fernzugriff: periodischer Cleanup abgelaufener/terminaler Pairing-Sessions
+  // (nur In-Memory; unref-Timer hält den Prozess nicht am Leben).
+  pairingState.startCleanup();
 
   const operatingReady = operatingState.init(db).then(() => {
     operatingState.startMqttSync(db);
