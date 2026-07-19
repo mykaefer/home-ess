@@ -1,16 +1,14 @@
 'use strict';
 
-const { renderLayout } = require('./layout');
+// Fragment „Fernzugriff" (Tab der Einstellungsseite). Deckt die Pairing-Stufe
+// mit dauerhafter Identität ab: Pairing-Session anfordern, QR-Code anzeigen,
+// Kopplungsanfrage mit Gerätefingerprint bestätigen/ablehnen, dauerhaftes
+// Provisioning und den Status der authentifizierten Origin-WebSocket-/Tunnel-
+// Verbindung. Liefert Body-HTML und das zugehörige Script getrennt zurück,
+// damit es in die Tab-Struktur der Einstellungen eingebettet werden kann.
 
-// Seite „Fernzugriff“ (/remote-access). Deckt die Pairing-Stufe mit dauerhafter
-// Identität ab: Pairing-Session anfordern, QR-Code anzeigen, Kopplungsanfrage
-// mit Gerätefingerprint bestätigen/ablehnen, dauerhaftes Provisioning und den
-// Status der authentifizierten Origin-WebSocket-/Tunnel-Verbindung.
-
-function renderRemoteAccess() {
-  const body = `        <h1>Fernzugriff</h1>
-
-        <section class="settings-card remote-access-intro">
+function remoteAccessPanel() {
+  const body = `        <section class="settings-card remote-access-intro">
           <div class="settings-card-head">
             <h2>Smartphone koppeln</h2>
             <p class="settings-card-hint">
@@ -52,7 +50,7 @@ function renderRemoteAccess() {
         </section>`;
 
   const script = `${clientScript()}\n${devicesScript()}`;
-  return renderLayout({ title: 'Fernzugriff', activePath: '/remote-access', body, script });
+  return { body, script };
 }
 
 // Der clientseitige Controller. Läuft vollständig gegen die lokalen
@@ -63,6 +61,7 @@ function clientScript() {
       var panel = document.getElementById('ra-panel');
       var live = document.getElementById('ra-status');
       if (!panel) return;
+      var tabPanel = panel.closest ? panel.closest('[data-settings-panel="fernzugriff"]') : null;
 
       var POLL_MIN = 2, POLL_MAX = 30;
       var CONN_POLL_MS = 4000;
@@ -74,6 +73,7 @@ function clientScript() {
       var pollTimer = null, countdownTimer = null, connTimer = null;
       var inFlightPoll = false, busy = false, unmounted = false;
 
+      function isActiveTab() { return !tabPanel || !tabPanel.hidden; }
       function csrfHeaders(extra) {
         var h = { 'X-HomeESS-Request': '1' };
         if (extra) for (var k in extra) h[k] = extra[k];
@@ -358,11 +358,13 @@ function clientScript() {
       // ---- Pairing-Polling ------------------------------------------------
       function schedulePoll() {
         if (pollTimer || unmounted) return;
+        if (!isActiveTab()) return;
         if (!isPollingStatus(state.status) || busy) return;
         pollTimer = setTimeout(function () { pollTimer = null; pollOnce(); }, state.pollIntervalSeconds * 1000);
       }
       function pollOnce() {
         if (inFlightPoll || unmounted) return;
+        if (!isActiveTab()) return;
         if (!isPollingStatus(state.status) || busy) return;
         inFlightPoll = true;
         fetch('/api/remote-access/pairing', { headers: { Accept: 'application/json' }, credentials: 'same-origin' })
@@ -377,10 +379,11 @@ function clientScript() {
       }
 
       // ---- Verbindungsstatus-Polling (nach paired) ------------------------
-      function startConnPolling() { if (connTimer || unmounted) return; pollConnection(); connTimer = setInterval(pollConnection, CONN_POLL_MS); }
+      function startConnPolling() { if (connTimer || unmounted || !isActiveTab()) return; pollConnection(); connTimer = setInterval(pollConnection, CONN_POLL_MS); }
       function stopConnPolling() { if (connTimer) { clearInterval(connTimer); connTimer = null; } }
       function pollConnection() {
         if (unmounted) return;
+        if (!isActiveTab()) return;
         fetch('/api/remote-access/connection', { headers: { Accept: 'application/json' }, credentials: 'same-origin' })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (conn) { if (conn && !unmounted && state.status === 'paired') { state.connection = conn; render(); } })
@@ -454,6 +457,7 @@ function clientScript() {
           });
       }
       function pollStatusNow(fallbackError) {
+        if (!isActiveTab()) return;
         fetch('/api/remote-access/pairing', { headers: { Accept: 'application/json' }, credentials: 'same-origin' })
           .then(function (r) { return r.ok ? r.json() : r.json().then(function (b) { throw b; }); })
           .then(function (view) { applyView(view); })
@@ -461,6 +465,20 @@ function clientScript() {
       }
 
       // ---- Lifecycle ------------------------------------------------------
+      function pauseForInactiveTab() { clearTimers(); stopConnPolling(); }
+      function resumeForActiveTab() {
+        if (unmounted || !isActiveTab()) return;
+        if (state.status === 'unknown') return loadInitialState();
+        if (isPollingStatus(state.status)) { startCountdown(); pollOnce(); }
+        else if (state.status === 'paired') { startConnPolling(); }
+      }
+      function loadInitialState() {
+        if (unmounted || !isActiveTab()) return;
+        fetch('/api/remote-access/pairing', { headers: { Accept: 'application/json' }, credentials: 'same-origin' })
+          .then(function (r) { return r.ok ? r.json() : { status: 'none' }; })
+          .then(function (view) { applyView(view); })
+          .catch(function () { state.status = 'none'; render(); });
+      }
       function stopEverything() { unmounted = true; clearTimers(); stopConnPolling(); }
       window.addEventListener('beforeunload', stopEverything);
       window.addEventListener('pagehide', stopEverything);
@@ -471,12 +489,14 @@ function clientScript() {
           else if (state.status === 'paired') { startConnPolling(); }
         }
       });
+      document.addEventListener('homeess:settings-tab', function () {
+        if (isActiveTab()) resumeForActiveTab();
+        else pauseForInactiveTab();
+      });
 
       // Initialzustand laden.
-      fetch('/api/remote-access/pairing', { headers: { Accept: 'application/json' }, credentials: 'same-origin' })
-        .then(function (r) { return r.ok ? r.json() : { status: 'none' }; })
-        .then(function (view) { applyView(view); })
-        .catch(function () { state.status = 'none'; render(); });
+      if (isActiveTab()) loadInitialState();
+      else render();
     })();`;
 }
 
@@ -492,6 +512,7 @@ function devicesScript() {
       var summaryActive = document.getElementById('ra-devices-active');
       var listNode = document.getElementById('ra-devices-list');
       if (!listNode) return;
+      var tabPanel = listNode.closest ? listNode.closest('[data-settings-panel="fernzugriff"]') : null;
 
       var POLL_MS = 5000;
       var timer = null, inFlight = false, unmounted = false;
@@ -499,6 +520,7 @@ function devicesScript() {
       var removing = {}, removeErrors = {};
       var lastView = { relay: { connected: false }, counts: { paired: 0, active: 0 }, devices: [] };
 
+      function isActiveTab() { return !tabPanel || !tabPanel.hidden; }
       function csrfHeaders(extra) {
         var h = { 'X-HomeESS-Request': '1' };
         if (extra) for (var k in extra) h[k] = extra[k];
@@ -647,10 +669,12 @@ function devicesScript() {
 
       function schedule() {
         if (timer || unmounted) return;
+        if (!isActiveTab()) return;
         timer = setTimeout(function () { timer = null; load(); }, POLL_MS);
       }
       function load() {
         if (inFlight || unmounted) return;
+        if (!isActiveTab()) return;
         inFlight = true;
         fetch('/api/remote-access/devices', { headers: { Accept: 'application/json' }, credentials: 'same-origin' })
           .then(function (r) { return r.ok ? r.json() : null; })
@@ -664,9 +688,13 @@ function devicesScript() {
         if (document.hidden) { if (timer) { clearTimeout(timer); timer = null; } }
         else if (!unmounted) { load(); }
       });
+      document.addEventListener('homeess:settings-tab', function () {
+        if (isActiveTab()) load();
+        else if (timer) { clearTimeout(timer); timer = null; }
+      });
 
-      load();
+      if (isActiveTab()) load();
     })();`;
 }
 
-module.exports = renderRemoteAccess;
+module.exports = { remoteAccessPanel };

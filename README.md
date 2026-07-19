@@ -16,14 +16,17 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
   eigene, touchtaugliche Anordnung (kein bloßes Zusammenquetschen der Kacheln).
   Der Zoomfaktor ist auf 100 % fixiert (kein Pinch-/Doppeltipp-Zoom), damit das
   Layout auf allen Geräten 1:1 bleibt.
-- 🔐 **Login** mit Passwort und „Passwort merken" (persistentes Cookie).
-- 🖥️ **Dashboard** — frei konfigurierbare **Widgets** in zwei Sorten (Dialog mit
-  Tabs): **Wert-Kachel** (jeder berechnete Wert als Live-Kachel, Auswahl über den
-  zentralen **Wertekatalog**) und **Info-Kachel** (System-Infos wie homeESS-/Node-
-  Version, Plattform, CPU-/RAM-Auslastung als Fortschrittsbalken u. a. — Felder per
-  Häkchen wählbar). **Gruppen** mit Titel und Breite (voll/halb/viertel), Anordnung
-  per **Drag & Drop** (Widgets und Gruppen); Widgets per Drag in Gruppen
-  verschiebbar, Widgets/Gruppen bearbeit- und löschbar.
+- 🔐 **Login** mit Nutzerauswahl, Rollen (`Lesen`, `Bedienen`, `Schreiben`) und
+  „Angemeldet bleiben" (persistentes Cookie). Der Erstnutzer ist Administrator
+  und hat dauerhaft alle Rechte.
+- 🖥️ **Dashboard** — mehrere Dashboard-Tabs und frei konfigurierbare **Widgets**
+  in drei Sorten: **Wert-Kachel** (Live-Wert aus dem zentralen Wertekatalog,
+  Größen S/M/L und optionale Wertfarbe), **Schalter-Kachel** (Ein/Aus-Kachel für
+  Geräte und Schaltgruppen) und **Info-Kachel** (System-Infos wie homeESS-/Node-
+  Version, Plattform, CPU-/RAM-Auslastung als Fortschrittsbalken u. a. — Felder
+  per Häkchen wählbar). **Gruppen** mit Titel und Breite (voll/halb/viertel),
+  Anordnung per **Drag & Drop** im Bearbeitungsmodus; Widgets per Drag in
+  Gruppen verschiebbar, Widgets/Gruppen/Tabs bearbeit- und löschbar.
 - ⚡ **Stromverbrauch** — KPI-Kacheln: Eigenverbrauch, Netzbezug, Heute,
   Woche, Jahr (inkl. Vorjahr), konfigurierbare MQTT-Topics je Phase. Der Button
   **„Wert abgleichen"** (oben rechts) setzt zum Tagesstart wahlweise die Wochen-,
@@ -386,8 +389,8 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
   (gestern, Durchschnitt, Minimum/Maximum inkl. Datum, Jahres-/Vorjahressumme) und
   automatisch alle **Adapter-States**. Angelegte Outputs erscheinen als dichte,
   kategorisierte Liste, deren Auf-/Zu-Zustand pro Kategorie gemerkt wird.
-- 🧩 **Module** — Verwaltungsseite zum Aktivieren/Deaktivieren optionaler Module;
-  aktive Module erscheinen automatisch in der Sidebar.
+- 🧩 **Module** — Tab in den **Einstellungen** zum Aktivieren/Deaktivieren
+  optionaler Module; aktive Module erscheinen automatisch im Menü.
 - 🔌 **Adapter** — austauschbare Geräte-Anbindungen (z. B. Modbus) als eigene
   Verzeichnisse unter `/adapter/`, **ohne Eingriff in den Quellcode**. Pro Adapter
   mehrere benannte Instanzen anlegen/aktivieren; jede läuft isoliert als eigener
@@ -412,13 +415,14 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
 - 🌤️ **Sonnenintensität** (% des Clear-Sky-Ideals, auf 100 % gedeckelt):
   aktuell sowie 10-Minuten-/Tages-/Vortagsmittel. Nur Anlagen oberhalb ihres
   größenrelativen Sonnenreferenz-Cutoffs fließen ein.
-- ⚙️ **Einstellungen** (Karten-Layout): Passwort ändern, **Standort & Zeit**
-  (Breiten-/Längengrad, Zeitzone, automatische Zeitumstellung — für das
-  Clear-Sky-Modell), MQTT-Broker konfigurieren & Verbindung testen.
+- ⚙️ **Einstellungen** mit Tabs: **Allgemein** (Standort & Zeit, MQTT-Broker),
+  **Benutzerverwaltung** (Rollen und sichtbare Seiten), **Module** und
+  **Fernzugriff**.
 - 📡 MQTT-Verbindungs-Manager mit Reconnect-Handling, Wert-Cache und **Publish**
   (nach den Regeln aus [MQTT.md](MQTT.md)); Live-Updates per SSE (`/live/events`).
-- 📲 **Fernzugriff** (`/remote-access`, Footer-Navigation) — **dauerhafte
-  Kopplung und Relay-Tunnel** mit essrelay: ein angemeldeter Admin fordert eine
+- 📲 **Fernzugriff** (Tab **Fernzugriff** in den Einstellungen; der alte Pfad
+  `/remote-access` leitet dorthin weiter) — **dauerhafte Kopplung und
+  Relay-Tunnel** mit essrelay: ein angemeldeter Admin fordert eine
   Pairing-Session an, zeigt den **QR-Code** an, prüft vor der Bestätigung den
   **Gerätefingerprint**, **bestätigt** den Kopplungswunsch (mit Ed25519-
   **Instanz-Proof**) und homeESS richtet daraufhin automatisch eine **dauerhafte

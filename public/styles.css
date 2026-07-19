@@ -1306,7 +1306,7 @@ h2 .cmd-confirm { font-size: 13px; vertical-align: middle; }
     white-space: nowrap;
 }
 
-/* Dashboard-Widgets & Gruppen */
+/* Dashboard-Widgets, Gruppen & Tabs */
 .dashboard-toolbar {
     display: flex;
     gap: 8px;
@@ -1314,17 +1314,192 @@ h2 .cmd-confirm { font-size: 13px; vertical-align: middle; }
     align-items: center;
 }
 
-.widget-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
-    gap: 12px;
-    min-height: 64px;
-    margin-top: 12px;
+/* Kompakte Icon-Buttons im Kopfbereich: Stift (Bearbeiten), Plus (Hinzufügen),
+   Haken (Übernehmen). Zustände über .is-active bzw. --confirm. */
+.dashboard-toolbar .icon-button {
+    flex: 0 0 auto;
+    font-size: 16px;
 }
 
-/* Oberster (gruppenloser) Kachelbereich schließt direkt an die Überschrift an. */
-.widget-grid[data-group=""] {
-    margin-top: 0;
+.dashboard-toolbar .icon-button.is-active {
+    background: var(--color-action);
+    border-color: var(--color-action);
+    color: #fff;
+}
+
+.dashboard-toolbar .icon-button--confirm {
+    background: var(--color-action);
+    border-color: var(--color-action);
+    color: #fff;
+}
+
+.dashboard-toolbar .icon-button--confirm:hover {
+    background: var(--color-action-hover);
+}
+
+.dashboard-toolbar .icon-button--confirm.is-busy {
+    opacity: 0.6;
+    pointer-events: none;
+}
+
+.dash-add-wrap {
+    position: relative;
+}
+
+.dash-add-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: 60;
+    min-width: 210px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border-strong);
+    border-radius: 10px;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.16);
+    padding: 6px;
+}
+
+.dash-add-menu button {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: transparent;
+    border: none;
+    border-radius: 7px;
+    padding: 10px 12px;
+    font-size: 14px;
+    color: var(--color-text);
+    cursor: pointer;
+}
+
+.dash-add-menu button:hover {
+    background: var(--color-surface-subtle);
+}
+
+/* Tab-Leiste über die volle Breite; passen nicht alle Tabs in eine Zeile,
+   bricht die Leiste sauber in weitere Zeilen um (keine Scrollbalken). */
+.dash-tabbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0 2px;
+    margin: 4px 0 14px;
+    border-bottom: 1px solid var(--color-border-strong);
+}
+
+.dash-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex: 0 0 auto;
+    padding: 9px 14px;
+    margin-bottom: -1px;
+    border-bottom: 2px solid transparent;
+    color: var(--color-text-soft);
+    font-size: 14px;
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+}
+
+.dash-tab:hover {
+    color: var(--color-text);
+}
+
+.dash-tab.is-active {
+    color: var(--color-action);
+    font-weight: 600;
+    border-bottom-color: var(--color-action);
+}
+
+.dash-tab-label {
+    max-width: 180px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Drag-Griff je Tab: nur im Bearbeitungsmodus sichtbar, macht die Tabs
+   untereinander verschiebbar (gleiches Pointer-Drag wie Widgets/Gruppen). */
+.dash-tab-grip {
+    display: none;
+    align-items: center;
+    cursor: grab;
+    color: #b6bfca;
+    font-size: 13px;
+    line-height: 1;
+    user-select: none;
+    -webkit-user-select: none;
+    padding: 2px;
+}
+
+body.dash-editing .dash-tab-grip {
+    display: inline-flex;
+    touch-action: pan-y;
+}
+
+.dash-tab.tab-dragging {
+    opacity: 0.35;
+}
+
+.dash-tab.tab-drop-before,
+.dash-tab-add.tab-drop-before { box-shadow: inset 2px 0 0 0 #3b82f6; }
+.dash-tab.tab-drop-after { box-shadow: inset -2px 0 0 0 #3b82f6; }
+
+.dash-tab-tools {
+    display: none;
+    gap: 2px;
+}
+
+body.dash-editing .dash-tab-tools {
+    display: inline-flex;
+}
+
+.dash-tab-tools .widget-icon-btn {
+    padding: 3px 5px;
+    font-size: 13px;
+}
+
+.dash-tab-add {
+    flex: 0 0 auto;
+    width: 30px;
+    height: 30px;
+    margin-left: 4px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: 1px dashed var(--color-border-strong);
+    border-radius: 8px;
+    color: var(--color-text-soft);
+    font-size: 15px;
+    cursor: pointer;
+}
+
+.dash-tab-add:hover {
+    background: var(--color-surface-subtle);
+    color: var(--color-text);
+}
+
+/* Das hidden-Attribut muss auch gegen eigene display-Regeln gewinnen (sonst
+   wäre z. B. der Tab-Plus-Button trotz hidden sichtbar). */
+.dash-tab-add[hidden],
+.field-block[hidden] {
+    display: none !important;
+}
+
+.widget-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+    gap: 10px;
+}
+
+/* Im Anzeigemodus reservieren leere Bereiche keinen Platz; erst im
+   Bearbeitungsmodus werden alle Zonen als Drop-Ziele sichtbar. */
+body.dash-editing .widget-dropzone {
+    min-height: 54px;
+    border-radius: 10px;
+    outline: 1px dashed var(--color-border-strong);
+    outline-offset: 3px;
 }
 
 .widget-dropzone.drag-over {
@@ -1337,18 +1512,64 @@ h2 .cmd-confirm { font-size: 13px; vertical-align: middle; }
     position: relative;
     display: flex;
     flex-direction: column;
-    gap: 4px;
     background: #fff;
     border: 1px solid #d0d7de;
     border-radius: 10px;
-    padding: 8px 14px 14px;
     box-shadow: 0 1px 4px rgba(0,0,0,0.06);
     box-sizing: border-box;
     overflow: hidden;
 }
 
-.widget-card.dragging {
-    opacity: 0.45;
+.widget-body {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    padding: 10px 12px 12px;
+}
+
+/* Größenvarianten der Wert-Kacheln: L = Titel klein oben, Wert groß darunter
+   (bisherige Darstellung); M = kompakte Zwischenstufe; S = eine Zeile. */
+.widget-card--size-m .widget-body {
+    padding: 8px 12px 9px;
+}
+
+.widget-card--size-m .widget-label {
+    text-transform: none;
+    font-size: 12px;
+}
+
+.widget-card--size-m .widget-value {
+    font-size: 1.15em;
+}
+
+.widget-card--size-s .widget-body {
+    flex-direction: row;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 7px 10px;
+}
+
+.widget-card--size-s .widget-label {
+    flex: 1 1 auto;
+    min-width: 0;
+    text-transform: none;
+    font-size: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.widget-card--size-s .widget-value {
+    flex: 0 0 auto;
+    font-size: 0.95em;
+    font-variant-numeric: tabular-nums;
+}
+
+.widget-card.dragging,
+.widget-group.group-dragging {
+    opacity: 0.35;
 }
 
 .widget-card.drop-before {
@@ -1359,11 +1580,286 @@ h2 .cmd-confirm { font-size: 13px; vertical-align: middle; }
     box-shadow: inset -3px 0 0 0 #3b82f6, 0 1px 4px rgba(0,0,0,0.06);
 }
 
-.widget-card-head {
+/* Vollflächige Drag-Fläche + dauerhaft sichtbare Bearbeiten-/Löschen-Buttons
+   gibt es NUR im Bearbeitungsmodus; im Anzeigemodus existieren die Overlays
+   nicht sichtbar und reservieren keinen Platz. */
+.widget-edit-bar {
+    display: none;
+}
+
+body.dash-editing .widget-edit-bar {
+    display: inline-flex;
+    gap: 4px;
+    align-items: center;
+}
+
+.widget-card .widget-edit-bar {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    z-index: 3;
+    background: rgba(255, 255, 255, 0.94);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    padding: 2px;
+}
+
+.widget-edit-bar .widget-icon-btn {
+    min-width: 34px;
+    min-height: 34px;
+    padding: 6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 15px;
+    opacity: 1;
+}
+
+.widget-card--size-m .widget-edit-bar .widget-icon-btn {
+    min-width: 30px;
+    min-height: 30px;
+    padding: 5px;
+    font-size: 14px;
+}
+
+.widget-card--size-s .widget-edit-bar {
+    top: 3px;
+    right: 3px;
+    gap: 2px;
+    border-radius: 7px;
+    padding: 1px;
+}
+
+.widget-card--size-s .widget-edit-bar .widget-icon-btn {
+    min-width: 24px;
+    min-height: 24px;
+    padding: 3px;
+    font-size: 12px;
+}
+
+.dash-tab-tools .widget-icon-btn {
+    min-width: 26px;
+    min-height: 26px;
+}
+
+body.dash-editing .widget-card {
+    cursor: grab;
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: pan-y;
+}
+
+body.dash-editing .widget-card .widget-body {
+    padding-right: 84px;
+}
+
+body.dash-editing .widget-card--size-m .widget-body {
+    padding-right: 74px;
+}
+
+body.dash-editing .widget-card--size-s .widget-body {
+    padding-right: 60px;
+}
+
+body.dash-editing .widget-card--switch .switch-surface {
+    pointer-events: none;
+    padding-right: 84px;
+}
+
+body.dash-editing .widget-card--switch.widget-card--size-m .switch-surface {
+    padding-right: 74px;
+}
+
+body.dash-editing .widget-card--switch.widget-card--size-s .switch-surface {
+    padding-right: 60px;
+}
+
+body.dash-dragging,
+body.dash-dragging * {
+    cursor: grabbing !important;
+}
+
+/* Beim Ziehen folgt eine echte Vorschau der Kachel dem Zeiger. */
+.dash-drag-ghost {
+    position: fixed;
+    z-index: 400;
+    margin: 0;
+    pointer-events: none;
+    opacity: 0.92;
+    transform: scale(1.02);
+    box-shadow: 0 14px 34px rgba(0, 0, 0, 0.28);
+}
+
+/* Schalter-Widget: die gesamte Fläche ist die Schaltfläche (kein Rahmen im
+   Rahmen — die Kachel-Hülle bleibt unsichtbar). Doppelte Klasse, damit die
+   späteren Flächen-Grundregeln (.widget-card) die Hülle nicht neu einfärben. */
+.widget-card.widget-card--switch {
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    overflow: visible;
+}
+
+.switch-surface {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 6px;
+    width: 100%;
+    min-height: 76px;
+    padding: 11px 12px;
+    border: 1px solid #d0d7de;
+    border-radius: 10px;
+    background: var(--switch-off-bg, #fff);
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+    cursor: pointer;
+    font: inherit;
+    text-align: left;
+    color: var(--color-text);
+    transition: background 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+}
+
+.switch-surface[data-on="true"] {
+    background: var(--switch-on-bg, linear-gradient(135deg, #fdf0c2, #f8d558));
+    border-color: #e0b62b;
+    box-shadow: 0 0 0 1px rgba(224, 182, 43, 0.25), 0 2px 12px rgba(224, 182, 43, 0.35);
+}
+
+.switch-surface[data-on="unknown"] {
+    border-style: dashed;
+    color: var(--color-text-soft);
+}
+
+.switch-surface.is-pending {
+    opacity: 0.55;
+    cursor: progress;
+}
+
+.switch-name {
+    font-weight: 600;
+    display: block;
+    max-width: 100%;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.switch-state {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #6b7280;
+}
+
+.switch-surface[data-on="true"] .switch-state {
+    color: #7c5e06;
+}
+
+/* Schalter-Größen orientieren sich an den Wert-Widgets: S = eine kompakte
+   Zeile (gleiche Höhe wie ein S-Wert-Widget), M = kompakte Zwischenstufe. */
+.widget-card--switch.widget-card--size-s .switch-surface {
+    flex-direction: row;
+    align-items: baseline;
+    gap: 8px;
+    min-height: 0;
+    padding: 7px 10px;
+}
+
+.widget-card--switch.widget-card--size-s .switch-name {
+    flex: 1 1 auto;
+    font-size: 12px;
+}
+
+.widget-card--switch.widget-card--size-s .switch-state {
+    font-size: 10px;
+}
+
+.widget-card--switch.widget-card--size-m .switch-surface {
+    gap: 3px;
+    min-height: 0;
+    padding: 8px 11px;
+}
+
+.widget-card--switch.widget-card--size-m .switch-name {
+    font-size: 13px;
+}
+
+.switch-error {
+    margin: 4px 0 0;
+    font-size: 12px;
+    color: var(--color-danger);
+}
+
+/* Größen-/Farbwahl in den Widget-Dialogen */
+.size-choice {
+    display: inline-flex;
+    border: 1px solid var(--color-border-strong);
+    border-radius: 8px;
+    overflow: hidden;
+    width: fit-content;
+}
+
+.size-choice label {
+    display: inline-flex;
+    position: relative;
+}
+
+.size-choice input {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.size-choice span {
+    padding: 8px 18px;
+    font-size: 14px;
+    color: var(--color-text-soft);
+    cursor: pointer;
+    border-right: 1px solid var(--color-border);
+}
+
+.size-choice label:last-child span {
+    border-right: none;
+}
+
+.size-choice input:checked + span {
+    background: var(--color-action);
+    color: #fff;
+}
+
+.size-choice input:focus-visible + span {
+    outline: 2px solid var(--color-action);
+    outline-offset: -2px;
+}
+
+.color-choice {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    min-height: 22px;
+    gap: 10px;
+}
+
+.color-choice input[type="color"] {
+    width: 44px;
+    height: 34px;
+    padding: 2px;
+    border: 1px solid var(--color-border-strong);
+    border-radius: 6px;
+    background: #fff;
+    cursor: pointer;
+}
+
+.color-choice-state {
+    font-size: 13px;
+    color: var(--color-text-soft);
+    min-width: 64px;
+}
+
+.color-choice-reset {
+    padding: 6px 10px;
+    font-size: 13px;
 }
 
 .widget-drag {
@@ -1392,11 +1888,6 @@ h2 .cmd-confirm { font-size: 13px; vertical-align: middle; }
     gap: 2px;
     opacity: 0;
     transition: opacity 0.12s ease;
-}
-
-.widget-card:hover .widget-actions,
-.widget-group-head:hover .widget-group-actions {
-    opacity: 1;
 }
 
 /* Touch-Geräte kennen kein Hover: Bearbeiten/Entfernen sonst unerreichbar. Auf
@@ -1561,30 +2052,30 @@ h2 .cmd-confirm { font-size: 13px; vertical-align: middle; }
     display: flex;
     flex-wrap: wrap;
     gap: 16px;
-    margin-top: 16px;
+    margin-top: 14px;
     align-items: flex-start;
+}
+
+/* Leerer Gruppenbereich (keine Gruppen im Tab) reserviert keinen Platz. */
+.widget-groups:empty {
+    display: none;
 }
 
 .widget-group {
     border: 1px solid #d8dee6;
     border-radius: 12px;
-    padding: 12px 14px 16px;
+    padding: 10px 12px 14px;
     background: #fbfcfd;
     box-sizing: border-box;
     flex-grow: 0;
     flex-shrink: 0;
+    min-width: 0;
 }
 
 .widget-group--full { flex-basis: 100%; }
 .widget-group--half { flex-basis: calc(50% - 8px); }
 .widget-group--quarter { flex-basis: calc(25% - 12px); }
 
-@media (max-width: 720px) {
-    .widget-group--half,
-    .widget-group--quarter { flex-basis: 100%; }
-}
-
-.widget-group.group-dragging { opacity: 0.45; }
 .widget-group.group-drop-before { box-shadow: inset 3px 0 0 0 #3b82f6; }
 .widget-group.group-drop-after { box-shadow: inset -3px 0 0 0 #3b82f6; }
 
@@ -1592,29 +2083,37 @@ h2 .cmd-confirm { font-size: 13px; vertical-align: middle; }
     display: flex;
     align-items: center;
     gap: 8px;
+    margin-bottom: 8px;
+    min-height: 26px;
 }
 
 .widget-group-title {
     flex: 1;
     min-width: 0;
-    font-size: 1.05em;
+    font-size: 1.02em;
     font-weight: 700;
     color: #1f2937;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
-.widget-group-drag {
+/* Im Bearbeitungsmodus ist der Gruppenkopf die Drag-Fläche der Gruppe. */
+body.dash-editing .widget-group-head {
     cursor: grab;
-    color: #b6bfca;
-    font-size: 14px;
-    line-height: 1;
-    letter-spacing: 1px;
     user-select: none;
-    padding: 2px 4px;
-    border-radius: 4px;
+    -webkit-user-select: none;
+    touch-action: pan-y;
 }
 
-.widget-group-drag:hover { background: #eef2f7; color: #64748b; }
-.widget-group-drag:active { cursor: grabbing; }
+body.dash-editing .widget-group {
+    outline: 1px dashed var(--color-border-strong);
+    outline-offset: 2px;
+}
+
+.widget-group-head .widget-edit-bar {
+    margin-left: auto;
+}
 
 .plant-meta {
     display: flex;
@@ -4024,13 +4523,28 @@ body,
         gap: 10px;
     }
 
+    /* Dashboard-Kopf bleibt auch mobil einzeilig: Überschrift links, die
+       kompakten Icon-Buttons rechts — in Titelhöhe verkleinert. */
+    .panel-head--row {
+        flex-direction: row;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+    }
+
+    .panel-head--row .dashboard-toolbar .icon-button {
+        width: 30px;
+        height: 30px;
+        font-size: 14px;
+    }
+
     .page-head--split { flex-direction: column; }
     .settings-card { padding: 16px; }
 
-    /* Drag & Drop ist Maus-only: Griffe ausblenden; die am Desktop erst
-       beim Hover sichtbaren Aktions-Buttons sind auf Touch immer sichtbar. */
-    .widget-drag,
-    .widget-group-drag { display: none; }
+    /* Drag & Drop per Griff ist Maus-only (Messen + Schalten/Schaltgruppen):
+       Griffe ausblenden; die am Desktop erst beim Hover sichtbaren
+       Aktions-Buttons sind auf Touch immer sichtbar. */
+    .widget-drag { display: none; }
 
     .widget-actions,
     .widget-group-actions { opacity: 1; }
@@ -4063,12 +4577,44 @@ body,
     /* ── Dashboard ────────────────────────────────────────────────────── */
     .widget-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 10px;
+        gap: 8px;
     }
 
     .widget-card--info { grid-column: 1 / -1; }
-    .widget-value { font-size: 1.3em; }
-    .dashboard-toolbar button { flex: 1 1 auto; }
+    .widget-value { font-size: 1.25em; }
+    .widget-card--size-s .widget-value { font-size: 0.95em; }
+
+    .dashboard-toolbar {
+        justify-content: flex-end;
+    }
+
+    .dash-tab { padding: 9px 11px; }
+    .dash-tab-label { max-width: 130px; }
+
+    /* Gruppenbreiten auf Smartphones: voll bleibt voll, halb bleibt halb,
+       viertel wird als halb dargestellt. Widgets können über ihre
+       Typ-Definition eine volle mobile Breite erzwingen (--mobile-full). */
+    .widget-groups { gap: 10px; }
+    .widget-group--half,
+    .widget-group--quarter { flex-basis: calc(50% - 5px); }
+    .widget-group--mobile-full { flex-basis: 100%; }
+
+    /* In halben Gruppen ist nur Platz für eine Kachelspalte. */
+    .widget-group--half .widget-grid,
+    .widget-group--quarter .widget-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .widget-group--mobile-full .widget-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    body.dash-editing .widget-card .widget-body { padding-right: 74px; }
+    body.dash-editing .widget-card--size-m .widget-body { padding-right: 68px; }
+    body.dash-editing .widget-card--size-s .widget-body { padding-right: 56px; }
+    body.dash-editing .widget-card--switch .switch-surface { padding-right: 74px; }
+    body.dash-editing .widget-card--switch.widget-card--size-m .switch-surface { padding-right: 68px; }
+    body.dash-editing .widget-card--switch.widget-card--size-s .switch-surface { padding-right: 56px; }
 
     /* ── Stromverbrauch ───────────────────────────────────────────────── */
     /* Energie-Tabelle wird je Bereich eine Karte: Titel + Aktuell-Wert oben,
@@ -4566,3 +5112,259 @@ body,
     .remote-access-claim dt { margin-top: 4px; }
     .remote-access-device .button-row button { width: 100%; }
 }
+
+/* ============================================================================
+   Benutzerrollen: Lesen / Bedienen / Schreiben
+   ----------------------------------------------------------------------------
+   Die Body-Klasse (access-read / access-operate / access-write) steuert
+   seitenübergreifend die schreibgeschützte Darstellung. Serverseitig sind
+   schreibende Aktionen ohnehin gesperrt (siehe auth/session.js authorize) –
+   diese Regeln bringen die Oberfläche in Einklang damit:
+     - Lesen:    alle Felder schreibgeschützt, Bearbeiten/Löschen/Hinzufügen,
+                 Drag-Griffe und Topic-Picker ausgeblendet, Schalter gesperrt.
+     - Bedienen: wie Lesen, aber Schalter (Messen + Schalten, Schaltgruppen,
+                 Dashboard-Schalter) bleiben bedienbar.
+     - Schreiben: keine Einschränkung (Standard).
+   ========================================================================== */
+
+/* Formularfelder schreibgeschützt (Lesen + Bedienen). */
+.access-read .main-content input:not([type="hidden"]),
+.access-read .main-content select,
+.access-read .main-content textarea,
+.access-operate .main-content input:not([type="hidden"]),
+.access-operate .main-content select,
+.access-operate .main-content textarea {
+    pointer-events: none;
+    opacity: 0.65;
+    cursor: not-allowed;
+}
+
+/* Bearbeiten-/Aktions-Bedienelemente ausblenden (Lesen + Bedienen). Reine
+   Ansichts-Umschalter (z. B. .value-cat-head zum Auf-/Zuklappen von Kategorien,
+   Dashboard-Tabs zum Umschalten der Ansicht) bleiben bewusst erhalten. */
+.access-read .main-content .widget-icon-btn,
+.access-read .main-content .button-danger,
+.access-read .main-content .secondary-button,
+.access-read .main-content .button-inline,
+.access-read .main-content .module-toggle-btn,
+.access-read .main-content .pump-mode-btn,
+.access-read .main-content .sg-row-remove,
+.access-read .main-content .sg-add-device,
+.access-read .main-content .dashboard-toolbar,
+.access-read .main-content .widget-drag,
+.access-read .main-content .button-row button,
+.access-operate .main-content .widget-icon-btn,
+.access-operate .main-content .button-danger,
+.access-operate .main-content .secondary-button,
+.access-operate .main-content .button-inline,
+.access-operate .main-content .module-toggle-btn,
+.access-operate .main-content .sg-row-remove,
+.access-operate .main-content .sg-add-device,
+.access-operate .main-content .dashboard-toolbar,
+.access-operate .main-content .widget-drag,
+.access-operate .main-content .button-row button {
+    display: none !important;
+}
+
+/* Schalter/Bedienelemente: für „Lesen" gesperrt … */
+.access-read .main-content .ms-toggle,
+.access-read .main-content .switch-surface {
+    pointer-events: none;
+    opacity: 0.6;
+}
+
+/* … für „Bedienen" bleiben die Schalter von Messen + Schalten, Schaltgruppen und
+   die Dashboard-Schalter aktiv (auch die zuvor allgemein gesperrte
+   Toggle-Checkbox wird wieder freigeschaltet). Ebenso bleiben die Bedienelemente
+   für Wallbox-Lademodi/-Steuerung und die Pool-Pumpenmodi (An/Aus/Automatik,
+   `.pump-mode-btn`) bedienbar. Konfiguration/Anlegen/Löschen bleibt gesperrt. */
+.access-operate .main-content .ms-toggle,
+.access-operate .main-content .ms-toggle input,
+.access-operate .main-content .switch-surface,
+.access-operate .main-content .pump-mode-btn {
+    pointer-events: auto;
+    opacity: 1;
+    cursor: pointer;
+}
+
+/* ============================================================================
+   Login: Nutzerauswahl per Klick
+   ========================================================================== */
+.login-userlist {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.login-user {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    padding: 10px 14px;
+    background: #f7f9f8;
+    border: 1px solid #d0d7de;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 15px;
+    color: #1d2925;
+    text-align: left;
+}
+
+.login-user:hover {
+    background: #eef2f0;
+    border-color: #39705f;
+}
+
+.login-user-avatar {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    flex: 0 0 auto;
+    border-radius: 50%;
+    background: #39705f;
+    color: #fff;
+    font-weight: 700;
+    font-size: 16px;
+}
+
+.login-user-name {
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.login-selected-user {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 4px 0 12px;
+}
+
+.login-back {
+    flex: 0 0 auto;
+    width: 30px;
+    height: 30px;
+    border: 1px solid #d0d7de;
+    border-radius: 6px;
+    background: #f7f9f8;
+    color: #1d2925;
+    font-size: 18px;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.login-back:hover { background: #eef2f0; }
+
+.login-passform[hidden] { display: none; }
+
+/* ============================================================================
+   Benutzerverwaltung (Einstellungen)
+   ========================================================================== */
+.user-list {
+    list-style: none;
+    margin: 0 0 12px;
+    padding: 0;
+    border: 1px solid var(--color-border, #dce3df);
+    border-radius: 10px;
+    overflow: hidden;
+}
+
+.user-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 14px;
+    cursor: pointer;
+    border-top: 1px solid var(--color-border, #dce3df);
+}
+
+.user-row:first-child { border-top: none; }
+.user-row:hover { background: var(--color-surface-subtle, #f7f9f8); }
+.user-row.is-selected { background: var(--color-action-tint, #e6f0ec); }
+
+.user-row-name {
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.user-badge {
+    flex: 0 0 auto;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 2px 10px;
+    border-radius: 999px;
+    background: #eef2f0;
+    color: #445;
+}
+
+.user-badge--admin { background: #39705f; color: #fff; }
+.user-badge--write { background: #dbeafe; color: #1e40af; }
+.user-badge--operate { background: #fef3c7; color: #92400e; }
+.user-badge--read { background: #e5e7eb; color: #374151; }
+
+.user-page-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 6px 16px;
+    margin-top: 6px;
+}
+
+.user-page-check {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    font-weight: 400;
+    color: #334155;
+    cursor: pointer;
+}
+
+.user-page-check input { width: auto; margin: 0; }
+
+#userPagesBlock.is-locked {
+    opacity: 0.6;
+    pointer-events: none;
+}
+
+/* ============================================================================
+   Einstellungen: Tabulatorleiste (Allgemein / Benutzer / Module / Fernzugriff)
+   ========================================================================== */
+.settings-tabbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0 2px;
+    margin: 4px 0 20px;
+    border-bottom: 1px solid var(--color-border-strong, #c8d2cd);
+}
+
+.settings-tab {
+    flex: 0 0 auto;
+    padding: 10px 16px;
+    margin-bottom: -1px;
+    border: none;
+    border-bottom: 2px solid transparent;
+    background: transparent;
+    color: var(--color-text-soft, #68746f);
+    font-size: 15px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.settings-tab:hover { color: var(--color-text, #1d2925); }
+
+.settings-tab.is-active {
+    color: var(--color-action, #39705f);
+    font-weight: 600;
+    border-bottom-color: var(--color-action, #39705f);
+}
+
+.settings-panel[hidden] { display: none; }

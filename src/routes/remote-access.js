@@ -8,7 +8,6 @@ const pairingState = require('../remote-access/pairing-state');
 const connectionService = require('../remote-access/connection-service');
 const { buildDevicesView } = require('../remote-access/devices-view');
 const { log } = require('../remote-access/redact');
-const renderRemoteAccess = require('../views/remote-access');
 
 // Fernzugriff-Routen: die Seite /remote-access sowie die lokalen, nur für
 // authentifizierte Admins zugänglichen Pairing-Endpunkte. Der Browser spricht
@@ -95,10 +94,11 @@ function remoteAccessRoutes(options = {}) {
   if (options.identityStore) provisionOptions.identityStore = options.identityStore;
   if (options.backgroundRetry === false) provisionOptions.backgroundRetry = false;
 
-  // Seite (Server-gerendert, im bestehenden Layout).
+  // Fernzugriff ist in die Einstellungsseite (Tab „Fernzugriff") integriert.
+  // Der alte Direktlink bleibt als Weiterleitung erhalten (Lesezeichen/App).
   router.get('/remote-access', requireAuth, (req, res) => {
     noStore(res);
-    res.send(renderRemoteAccess());
+    res.redirect('/settings?tab=remote-access');
   });
 
   // Neue Pairing-Session erstellen.

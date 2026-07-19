@@ -5,6 +5,111 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 
 ## [Unreleased]
 
+## [1.3.2] — 2026-07-19
+
+### Geändert
+
+- **Einstellungen mit Tabs; schlankeres Menü.** Module und Fernzugriff sind keine
+  eigenen Menüpunkte mehr, sondern Tabs der Einstellungsseite. Diese hat oben
+  eine Tabulatorleiste (wie das Dashboard) mit „Allgemeine Einstellungen"
+  (Standort/Zeit + MQTT), „Benutzerverwaltung", „Module" und „Fernzugriff". Die
+  Benutzerverwaltung ist damit ein eigener Tab (aus den allgemeinen Einstellungen
+  herausgelöst). Der untere Menüblock enthält dadurch nur noch „Einstellungen".
+  Die alten Direktlinks `/module` und `/remote-access` leiten auf den passenden
+  Tab weiter.
+- **Fernzugriff-Tab pausiert Hintergrundroutinen.** Pairing-, Verbindungs- und
+  Geräte-Polling laufen auf der Einstellungsseite nur noch, solange der Tab
+  „Fernzugriff" aktiv ist. Beim Wechsel auf andere Einstellungstabs werden die
+  Timer gestoppt und beim Zurückwechseln sauber wieder aufgenommen.
+- **Responsive Gruppenbreiten.** Auf Smartphones wird Viertelbreite als halbe
+  Breite dargestellt (voll bleibt voll, halb bleibt halb); Desktop unverändert.
+  Kompaktere Karten, ruhigere Abstände und einheitliche Icon-Buttons im
+  Dashboard.
+- **Dialoge.** Widget- und Gruppen-Dialog erhalten eine Tab-Auswahl (bei
+  Widgets folgt der Tab der gewählten Gruppe), der Widget-Dialog zusätzlich
+  Größen- und Farbwahl sowie den neuen Schalter-Typ an zweiter Position.
+
+### Hinzugefügt
+
+- **Benutzerverwaltung mit Rollen.** Der bei der Erstinstallation angelegte
+  Zugang ist der Administrator und trägt immer alle Rechte (nicht herabstufbar,
+  nicht löschbar). In den Einstellungen ersetzt eine Benutzer-Box die bisherige
+  Passwort-Box: Benutzer lassen sich anlegen, per Auswahl/Doppelklick bearbeiten
+  und löschen. Jedem Benutzer werden eine Rolle und die im Menü sichtbaren Seiten
+  zugewiesen. Rollen:
+  - **Lesen** – alles schreibgeschützt; Bearbeiten-Dialoge und Topic-Picker
+    gesperrt.
+  - **Bedienen** – wie Lesen, zusätzlich dürfen Bedienelemente betätigt werden:
+    Schalter in Messen + Schalten, Schaltgruppen und Dashboard-Schalter sowie
+    Wallbox-Lademodi/-Steuerung und Pool-Pumpenmodi (An/Aus/Automatik).
+  - **Schreiben** – Vollzugriff ohne Einschränkung.
+
+  Die Durchsetzung erfolgt serverseitig (schreibende Requests ohne ausreichende
+  Rechte werden abgewiesen, gesperrte Seiten sind nicht aufrufbar) und wird
+  seitenübergreifend in der Oberfläche gespiegelt (gesperrte Felder/Buttons,
+  sichtbare Schalter nur bei „Bedienen").
+- **Anmeldung mit Nutzerauswahl.** Der Anmeldebildschirm zeigt die vorhandenen
+  Benutzer zur Auswahl per Klick (kein Tippen des Namens mehr). „Angemeldet
+  bleiben" hält die Sitzung 30 Tage und meldet den gewählten Nutzer beim nächsten
+  Aufruf automatisch an.
+- **Zugriffs-Endpunkt für Adapter-Frontends (`GET /me/access`).** Adapter, deren
+  Oberfläche im Browser läuft, können die Rechte des angemeldeten Nutzers
+  (`read`/`operate`/`write`) abfragen und ihre Bedienelemente daran ausrichten.
+  Adapter-Kindprozesse selbst bleiben von der Rechtelogik unberührt; die
+  eigentliche Durchsetzung bleibt serverseitig. Siehe [ADAPTER.md](ADAPTER.md).
+- **Dashboard-Tabs.** Über eine Tab-Leiste oberhalb des Widget-Bereichs lassen
+  sich mehrere eigenständige Dashboard-Seiten verwalten (anlegen, umbenennen,
+  löschen — nie den letzten Tab). Jede Gruppe und jedes freie Widget gehört zu
+  genau einem Tab (Widgets in Gruppen erben den Tab der Gruppe); bestehende
+  Konfigurationen werden beim Laden automatisch dem Standard-Tab „Übersicht"
+  zugeordnet. Beim Löschen eines Tabs werden enthaltene Gruppen/Widgets auf
+  einen wählbaren Ziel-Tab verschoben; im Bearbeitungsmodus lassen sich die
+  Tabs über einen Drag-Griff umsortieren. Der gewählte Tab bleibt je Sitzung
+  erhalten; passen nicht alle Tabs in eine Zeile, bricht die Leiste mehrzeilig
+  um.
+- **Bearbeitungsmodus fürs Dashboard.** Ein kompakter Stift-Icon-Button ersetzt
+  die großen Kopf-Buttons und aktiviert einen Bearbeitungsmodus mit
+  vollflächiger Drag-Fläche je Widget (Maus, Touch und Stift über Pointer
+  Events, vertikales Scrollen bleibt möglich) und dauerhaft sichtbaren
+  Bearbeiten-/Löschen-Buttons. Im Bearbeitungsmodus wird der Stift zum
+  Übernehmen-Button (Haken), der alle Layout-Änderungen speichert und den
+  Modus nur bei Erfolg beendet; daneben erscheint der Plus-Button
+  (Gruppe/Widget hinzufügen) ausschließlich im Bearbeitungsmodus. Im
+  Anzeigemodus gibt es keine sichtbaren oder platzreservierenden
+  Bearbeitungselemente und keine Hover-Pflicht mehr.
+- **Neuer Widget-Typ „Schalter".** Großflächige Ein/Aus-Kachel für Geräte mit
+  Schalt-Topic und Schaltgruppen aus Messen + Schalten (nutzt deren bestehende
+  Schaltmechanismen inklusive Prioritäts-Gating). Konfigurierbar sind
+  Bezeichnung, Ziel sowie Hintergrundfarben für Ein (Standard: gelb schimmernd)
+  und Aus; mit Pending-Zustand, Fehleranzeige, Schutz vor Mehrfachklicks und
+  Live-Aktualisierung bei externen Zustandsänderungen.
+- **Größenvarianten S/M/L für Wert-Widgets.** S = Titel und Wert in einer
+  Zeile, M = kompakte Zwischenstufe, L = bisherige Darstellung (Standard für
+  Bestandswidgets). Auch der Schalter unterstützt die Größenwahl.
+- **Konfigurierbare Wertfarbe.** Wert-Widgets können den Zahlenwert in einer
+  eigenen Farbe darstellen (validierter Hex-Wert, Standard = bisherige
+  Textfarbe, Titel/Rahmen bleiben unverändert).
+- **Mobile Mindestbreite als Widget-Typ-Eigenschaft.** Zentrale Widget-Typ-
+  Definition (`src/dashboard/widget-types.js`); die Info-Kachel erzwingt damit
+  volle mobile Gruppenbreite — erweiterbar für künftige breite Widget-Typen,
+  ohne Sonderfälle je Widget-Name.
+
+### Behoben
+
+- **Leeres Dashboard beim Startaufruf.** Der direkte Aufruf über `/` zeigte
+  angemeldeten Nutzern zuvor nur Titel und Kopf-Buttons. `/` leitet angemeldete
+  Nutzer jetzt auf die passende Landeseite weiter; `/dashboard` rendert die
+  vollständig initialisierte Dashboard-Ansicht.
+- **Robuster Dashboard-Start über Remote/App.** `/` rendert für angemeldete
+  Nutzer nicht mehr direkt die große Dashboard-HTML-Antwort, sondern leitet klein
+  auf `/dashboard` weiter. Dadurch kommt der erste Response schneller und
+  mobile Relay-Clients brechen die Übertragung nicht vor Bottom-Leiste und
+  Inhalt ab.
+- **Dashboard-Bearbeitung bei kleinen Widgets.** Die Bearbeiten-/Löschen-Buttons
+  skalieren im Bearbeitungsmodus mit der Widget-Größe mit. Lange Schalter-
+  Bezeichnungen werden wie Wert-Widget-Labels gekürzt und sprengen kleine
+  Kacheln nicht mehr.
+
 ## [1.3.0] — 2026-07-16
 
 ### Hinzugefügt

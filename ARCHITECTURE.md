@@ -43,8 +43,9 @@ Session ab und liefert dem Browser nur die für die Darstellung nötigen Daten
 | `src/remote-access/connection-service.js` | Prozessweiter Singleton-Wrapper um genau eine Origin-Verbindung (Init/Autostart/Status/Shutdown). |
 | `src/remote-access/errors.js` | Stabile interne Fehlercodes (`RemoteAccessError`). |
 | `src/remote-access/redact.js` | Redaction + Logging für Fernzugriff-Ereignisse (inkl. Private Key, Signatur, Proof, Nonce, Challenge). |
-| `src/routes/remote-access.js` | Seite `/remote-access` + lokale API `/api/remote-access/pairing[/confirm|/reject|/provision]` und `/api/remote-access/connection[/connect|/disconnect]` (Auth, CSRF, `no-store`). |
-| `src/views/remote-access.js` | Server-gerenderte Seite + clientseitiger Controller (Countdown/Polling/Zustände, Gerätefingerprint, Provisioning, Verbindungsstatus). |
+| `src/routes/remote-access.js` | Kompatibilitätsroute `/remote-access` (Weiterleitung zum Einstellungs-Tab) + lokale API `/api/remote-access/pairing[/confirm|/reject|/provision]` und `/api/remote-access/connection[/connect|/disconnect]` (Auth, CSRF, `no-store`). |
+| `src/views/remote-access.js` | Server-gerendertes Fernzugriff-Panel für den Einstellungs-Tab + clientseitiger Controller (Countdown/Polling/Zustände, Gerätefingerprint, Provisioning, Verbindungsstatus). |
+| `src/views/settings.js` | Einstellungsseite mit Tabs; bindet das Fernzugriff-Panel ein und signalisiert Tab-Wechsel an die Fernzugriff-Controller. |
 
 ### Lokale API-Schicht
 
@@ -95,8 +96,9 @@ gelieferten `pollIntervalSeconds` (clientseitig auf 2–30 s begrenzt), solange
 ist, ohne überlappende Requests.
 Der homeESS-Server fragt dabei den Origin-Status mit
 `Authorization: Pairing-Origin <ORIGIN_TOKEN>` ab. Bei
-`paired`/`rejected`/`expired`/`cancelled`, Seitenwechsel, Tab-Wechsel
-(`visibilitychange`) oder Unload stoppt das Polling; ein einzelner
+`paired`/`rejected`/`expired`/`cancelled`, Wechsel auf einen anderen
+Einstellungs-Tab, Browser-Tab-Wechsel (`visibilitychange`) oder Unload stoppt
+das Polling; ein einzelner
 Relay-Aussetzer führt zu Backoff statt sofortigem Fehler.
 
 ### Countdown, Timeout, Cleanup

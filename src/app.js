@@ -3,7 +3,7 @@
 const express = require('express');
 const config = require('./config');
 const { openDatabase } = require('./db');
-const { sessionMiddleware } = require('./auth/session');
+const { sessionMiddleware, authorize } = require('./auth/session');
 const { loadMqttConfig } = require('./mqtt/config');
 const mqttClient = require('./mqtt/client');
 const { listPvPlants } = require('./photovoltaik/plants');
@@ -23,7 +23,6 @@ const batterieRoutes = require('./routes/batterie');
 const settingsRoutes = require('./routes/settings');
 const outputRoutes = require('./routes/output');
 const liveRoutes = require('./routes/live');
-const modulesRoutes = require('./routes/modules');
 const poolRoutes = require('./routes/pool');
 const gridControlRoutes = require('./routes/grid-control');
 const wallboxRoutes = require('./routes/wallbox');
@@ -66,6 +65,16 @@ function createApp() {
   app.use(express.json());
   app.use(sessionMiddleware(db));
 
+  // Globale Autorisierung nach dem Rechtemodell (read/operate/write + sichtbare
+  // Seiten). openPaths sind ohne Anmeldung erreichbar (Login/Logout und die
+  // öffentlichen Energiefluss-Exporte); sharedPaths bleiben von der
+  // Seiten-Sichtbarkeit ausgenommen (Header-Live-Daten und der Zugriffs-Endpunkt
+  // für Adapter, die jede Seite benötigt).
+  app.use(authorize({
+    openPaths: ['/', '/login', '/logout', '/energiefluss/export'],
+    sharedPaths: ['/live', '/me'],
+  }));
+
   // Routen-Module. Jede Funktionsgruppe liegt in eigener Datei.
   app.use(authRoutes(db));
   app.use(dashboardRoutes(db));
@@ -76,7 +85,6 @@ function createApp() {
   app.use(settingsRoutes(db));
   app.use(outputRoutes(db));
   app.use(liveRoutes(db));
-  app.use(modulesRoutes(db));
   app.use(poolRoutes(db));
   app.use(gridControlRoutes(db));
   app.use(wallboxRoutes(db));

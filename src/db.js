@@ -26,7 +26,14 @@ function openDatabase() {
 
   db.serialize(() => {
     db.run(
-      'CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, password TEXT NOT NULL)'
+      `CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL DEFAULT 'Administrator',
+        password TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'write',
+        is_admin INTEGER NOT NULL DEFAULT 0,
+        visible_pages TEXT
+      )`
     );
     db.run(
       `CREATE TABLE IF NOT EXISTS mqtt_config (
@@ -45,7 +52,7 @@ function openDatabase() {
       )`
     );
     db.run(
-      'CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, expires_at INTEGER NOT NULL)'
+      'CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, expires_at INTEGER NOT NULL, user_id INTEGER)'
     );
     db.run(
       'CREATE TABLE IF NOT EXISTS stromverbrauch_config (id INTEGER PRIMARY KEY CHECK (id = 1), current_topic TEXT, eigenverbrauch_l1_topic TEXT, eigenverbrauch_l2_topic TEXT, eigenverbrauch_l3_topic TEXT, netzbezug_l1_topic TEXT, netzbezug_l2_topic TEXT, netzbezug_l3_topic TEXT, today_topic TEXT, netzbezug_zaehler_l1_topic TEXT, netzbezug_zaehler_l2_topic TEXT, netzbezug_zaehler_l3_topic TEXT, einspeisung_zaehler_l1_topic TEXT, einspeisung_zaehler_l2_topic TEXT, einspeisung_zaehler_l3_topic TEXT, eigenverbrauch_zaehler_l1_topic TEXT, eigenverbrauch_zaehler_l2_topic TEXT, eigenverbrauch_zaehler_l3_topic TEXT)'
@@ -132,11 +139,19 @@ function openDatabase() {
       )`
     );
     db.run(
+      `CREATE TABLE IF NOT EXISTS dashboard_tabs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        position INTEGER NOT NULL DEFAULT 0
+      )`
+    );
+    db.run(
       `CREATE TABLE IF NOT EXISTS dashboard_groups (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         title TEXT NOT NULL,
         width TEXT NOT NULL DEFAULT 'full',
-        position INTEGER NOT NULL DEFAULT 0
+        position INTEGER NOT NULL DEFAULT 0,
+        tab_id INTEGER
       )`
     );
     db.run(
@@ -146,7 +161,8 @@ function openDatabase() {
         type TEXT NOT NULL DEFAULT 'value',
         config TEXT,
         group_id INTEGER,
-        position INTEGER NOT NULL DEFAULT 0
+        position INTEGER NOT NULL DEFAULT 0,
+        tab_id INTEGER
       )`
     );
     db.run(
@@ -656,6 +672,8 @@ function openDatabase() {
     migrateSunIntensitySamples(db);
     migratePvCalibrationBuckets(db);
     migratePlaintextPassword(db);
+    migrateUsers(db);
+    migrateSessions(db);
     seedBatterieConfig(db);
     migrateBatterieConfig(db);
     seedPrognosisConfig(db);
@@ -749,10 +767,55 @@ function migratePrognosisConfig(db) {
   });
 }
 
+// Erstinstallation: der erste Nutzer ist der Administrator. Er trägt immer alle
+// Rechte (is_admin = 1) und kann nicht auf ein eingeschränktes Rollenmodell
+// heruntergestuft werden.
 function seedUser(db) {
   db.get('SELECT COUNT(*) AS cnt FROM users', (err, row) => {
     if (!err && row.cnt === 0) {
-      db.run('INSERT INTO users (password) VALUES (?)', [hashPassword(config.DEFAULT_PASSWORD)]);
+      db.run(
+        "INSERT INTO users (name, password, role, is_admin, visible_pages) VALUES ('Administrator', ?, 'write', 1, NULL)",
+        [hashPassword(config.DEFAULT_PASSWORD)]
+      );
+    }
+  });
+}
+
+// Früher hatte die users-Tabelle nur id + password. Benutzerverwaltung ergänzt
+// Name, Rolle, Admin-Flag und die je Nutzer sichtbaren Seiten. Der bestehende
+// (einzige) Zugang wird dabei zum Administrator.
+function migrateUsers(db) {
+  db.all('PRAGMA table_info(users)', (err, rows) => {
+    if (err || !Array.isArray(rows) || rows.length === 0) return;
+    const existing = new Set(rows.map((r) => r.name));
+    if (!existing.has('name')) {
+      db.run("ALTER TABLE users ADD COLUMN name TEXT NOT NULL DEFAULT 'Administrator'");
+    }
+    if (!existing.has('role')) {
+      db.run("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'write'");
+    }
+    if (!existing.has('is_admin')) {
+      db.run('ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0');
+      // Bestehende Installation: der erste (bislang einzige) Nutzer wird Admin.
+      db.run('UPDATE users SET is_admin = 1 WHERE id = (SELECT MIN(id) FROM users)');
+    }
+    if (!existing.has('visible_pages')) {
+      db.run('ALTER TABLE users ADD COLUMN visible_pages TEXT');
+    }
+  });
+}
+
+// Sessions tragen nachträglich den zugehörigen Nutzer, damit Rechte je Session
+// aufgelöst werden können. Bestehende Sessions ohne Bezug werden dem
+// Administrator zugeordnet (nächster Login vergibt den echten Bezug ohnehin neu).
+function migrateSessions(db) {
+  db.all('PRAGMA table_info(sessions)', (err, rows) => {
+    if (err || !Array.isArray(rows) || rows.length === 0) return;
+    const existing = new Set(rows.map((r) => r.name));
+    if (!existing.has('user_id')) {
+      db.run('ALTER TABLE sessions ADD COLUMN user_id INTEGER', () => {
+        db.run('UPDATE sessions SET user_id = (SELECT MIN(id) FROM users WHERE is_admin = 1) WHERE user_id IS NULL');
+      });
     }
   });
 }
@@ -965,6 +1028,11 @@ function migrateDashboardWidgets(db) {
     if (!existing.has('config')) {
       db.run('ALTER TABLE dashboard_widgets ADD COLUMN config TEXT');
     }
+    // Dashboard-Tabs: gruppenlose Widgets tragen ihre Tab-Zuordnung selbst
+    // (Widgets in Gruppen erben den Tab der Gruppe). NULL = Standard-Tab.
+    if (!existing.has('tab_id')) {
+      db.run('ALTER TABLE dashboard_widgets ADD COLUMN tab_id INTEGER');
+    }
   });
 }
 
@@ -978,6 +1046,10 @@ function migrateDashboardGroups(db) {
     }
     if (!existing.has('position')) {
       db.run('ALTER TABLE dashboard_groups ADD COLUMN position INTEGER NOT NULL DEFAULT 0');
+    }
+    // Dashboard-Tabs: jede Gruppe gehört zu genau einem Tab. NULL = Standard-Tab.
+    if (!existing.has('tab_id')) {
+      db.run('ALTER TABLE dashboard_groups ADD COLUMN tab_id INTEGER');
     }
   });
 }

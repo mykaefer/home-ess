@@ -276,6 +276,35 @@ Adapters wird automatisch und fortlaufend an alle Bezüge dieses Topics verteilt
 - **Blockiere den Event-Loop nicht** dauerhaft; nutze Timer/async für Polling.
   Räume in `stop()` Timer und Verbindungen auf.
 
+## Zugriffsrechte des angemeldeten Nutzers (`GET /me/access`)
+
+homeESS kennt ein Rollenmodell (`read` / `operate` / `write`) und einen
+Administrator mit vollen Rechten. **Adapter-Kindprozesse selbst bleiben davon
+unberührt** — sie stellen bislang keine Rechte bereit und die `host`-API kennt
+keinen Request-Kontext. Adapter-**Frontends**, die im Browser laufen (eigene
+Ansichten mit demselben Session-Cookie), können die Rechte des gerade
+angemeldeten Nutzers jedoch über einen eigenen Endpunkt abfragen und ihre
+Bearbeiten-/Schalt-Elemente entsprechend ein-/ausblenden:
+
+```
+GET /me/access        (Accept: application/json)
+→ 200 { "user": "Name", "role": "read|operate|write",
+        "isAdmin": true|false,
+        "canRead": true, "canOperate": bool, "canWrite": bool }
+→ 401 { "error": "Nicht angemeldet." }
+```
+
+Empfohlene Auswertung im Adapter-Frontend:
+
+- `canWrite` → Vollzugriff (Bearbeiten, Anlegen, Löschen, Schalten).
+- `canOperate` → nur Schalter/Bedienelemente aktiv, keine Konfiguration.
+- sonst (`read`) → alles schreibgeschützt.
+
+Die Durchsetzung erfolgt zusätzlich immer **serverseitig**: schreibende Requests
+werden ohne ausreichende Rechte mit `403` abgewiesen. Der Endpunkt dient rein der
+passenden Darstellung. Künftige Adapter können diese Prüfung so bereits heute in
+ihre eigenen Oberflächen einbauen.
+
 ## Checkliste für einen neuen Adapter
 
 1. Verzeichnis `/adapter/<id>/` anlegen.

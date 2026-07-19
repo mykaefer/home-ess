@@ -8,8 +8,8 @@ Bedrohungsbetrachtung findet sich in [THREAT_MODEL.md](THREAT_MODEL.md).
 
 Der Zugriff auf das Dashboard und alle Fachfunktionen erfordert eine Anmeldung
 (Passwort, gehasht gespeichert). Sessions sind DB-gestützte Cookie-Sessions
-(`httpOnly`, `SameSite=Lax`). Die Fernzugriff-Seite und ihre API sind
-ausschließlich für angemeldete Administratoren erreichbar.
+(`httpOnly`, `SameSite=Lax`). Der Fernzugriff-Tab in den Einstellungen und die
+zugehörige API sind ausschließlich für angemeldete Administratoren erreichbar.
 
 ## Fernzugriff / Pairing
 

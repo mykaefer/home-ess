@@ -1,10 +1,11 @@
 'use strict';
 
-const { renderLayout } = require('./layout');
 const { escapeHtml } = require('./components');
 
-// Module-Verwaltungsseite: zeigt alle optionalen Module mit Status und Toggle.
-function renderModules({ registry = [], enabledKeys = new Set(), message = '' } = {}) {
+// Modul-Verwaltung als Fragment (Tab „Module" der Einstellungsseite): zeigt alle
+// optionalen Module mit Status und Toggle. Liefert reines Inhalts-HTML ohne
+// Layout, damit es in die Tab-Struktur der Einstellungen eingebettet werden kann.
+function modulesPanel({ registry = [], enabledKeys = new Set(), message = '' } = {}) {
   const cards = registry
     .map((mod) => {
       const enabled = enabledKeys.has(mod.key);
@@ -31,14 +32,11 @@ function renderModules({ registry = [], enabledKeys = new Set(), message = '' } 
     })
     .join('\n');
 
-  const body = `        <h1>Module</h1>
-        <p class="muted" style="margin-bottom: 20px;">Optionale Module können hier aktiviert oder deaktiviert werden. Aktivierte Module erscheinen in der Navigation.</p>
+  return `        <p class="muted" style="margin-bottom: 20px;">Optionale Module können hier aktiviert oder deaktiviert werden. Aktivierte Module erscheinen in der Navigation.</p>
         ${message ? `<p class="module-message">${escapeHtml(message)}</p>` : ''}
         <div class="module-list">
 ${cards}
         </div>`;
-
-  return renderLayout({ title: 'Module', activePath: '/module', body });
 }
 
-module.exports = renderModules;
+module.exports = { modulesPanel };

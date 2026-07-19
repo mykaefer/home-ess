@@ -3,6 +3,7 @@
 const { escapeHtml } = require('./components');
 const { getEnabledNavItems } = require('../modules');
 const { statePickerModal, statePickerScript, statePickerAutoAttach } = require('./state-picker');
+const { currentAccess, canSeePage, pageForPath } = require('../auth/access');
 
 let pkgVersion = '—';
 try {
@@ -37,8 +38,8 @@ const NAV_CORE = [
     children: [{ path: '/states', label: 'States' }],
   },
   { path: '/output', label: 'Output', section: 'main' },
-  { path: '/module', label: 'Module', section: 'footer' },
-  { path: '/remote-access', label: 'Fernzugriff', section: 'footer' },
+  // Module und Fernzugriff sind in die Einstellungsseite (Tabs) integriert; der
+  // Footer trägt daher nur noch die Einstellungen.
   { path: '/settings', label: 'Einstellungen', section: 'footer' },
 ];
 
@@ -79,9 +80,19 @@ function renderNavItem(item, activePath) {
         </div>`;
 }
 
-function renderNavLinks(section, activePath) {
+// Ein Navigationspunkt ist sichtbar, wenn die zugehörige Seite für den Nutzer
+// freigeschaltet ist (Administrator/uneingeschränkt: alles sichtbar). Punkte
+// ohne zugeordnete Seite bleiben sichtbar.
+function navItemVisible(item, access) {
+  const pageKey = pageForPath(item.path);
+  if (!pageKey) return true;
+  return canSeePage(access, pageKey);
+}
+
+function renderNavLinks(section, activePath, access) {
   const extra = section === 'main' ? getEnabledNavItems() : [];
   return [...NAV_CORE.filter((item) => item.section === section), ...extra]
+    .filter((item) => navItemVisible(item, access))
     .map((item) => renderNavItem(item, activePath))
     .join('\n          ');
 }
@@ -89,14 +100,17 @@ function renderNavLinks(section, activePath) {
 // Mobile Navigation: untere Tab-Bar + Menü-Sheet mit allen Seiten (inkl.
 // aktivierter Module, Footer-Seiten, Abmelden und Version). Wird immer
 // gerendert, aber nur im Mobile-Layer (styles.css, ≤ 768px) sichtbar.
-function renderMobileNav(activePath) {
-  const tabs = MOBILE_TABS.map((tab) => {
-    const active = tab.path === activePath ? ' active' : '';
-    return `<a class="mobile-tab${active}" href="${tab.path}"><span class="mobile-tab-icon" aria-hidden="true">${tab.icon}</span><span class="mobile-tab-label">${escapeHtml(tab.label)}</span></a>`;
-  }).join('\n      ');
+function renderMobileNav(activePath, access) {
+  const tabs = MOBILE_TABS
+    .filter((tab) => navItemVisible(tab, access))
+    .map((tab) => {
+      const active = tab.path === activePath ? ' active' : '';
+      return `<a class="mobile-tab${active}" href="${tab.path}"><span class="mobile-tab-icon" aria-hidden="true">${tab.icon}</span><span class="mobile-tab-label">${escapeHtml(tab.label)}</span></a>`;
+    }).join('\n      ');
 
   const flatLinks = [];
-  const mainItems = [...NAV_CORE.filter((item) => item.section === 'main'), ...getEnabledNavItems()];
+  const mainItems = [...NAV_CORE.filter((item) => item.section === 'main'), ...getEnabledNavItems()]
+    .filter((item) => navItemVisible(item, access));
   for (const item of mainItems) {
     flatLinks.push({ path: item.path, label: item.label, sub: false });
     for (const child of item.children || []) {
@@ -111,6 +125,7 @@ function renderMobileNav(activePath) {
   };
   const mainLinks = flatLinks.map(renderSheetLink).join('\n        ');
   const footerLinks = NAV_CORE.filter((item) => item.section === 'footer')
+    .filter((item) => navItemVisible(item, access))
     .map((item) => renderSheetLink({ path: item.path, label: item.label, sub: false }))
     .join('\n        ');
 
@@ -273,6 +288,18 @@ function renderLiveScript() {
 
 // renderLayout({ title, activePath, body, script })
 function renderLayout({ title, activePath = '', body = '', script = '' } = {}) {
+  // Zugriffsrechte des aktuellen Nutzers (request-gebunden über AsyncLocalStorage).
+  // Außerhalb eines Requests (Tests/Direktrender) liefert currentAccess() vollen
+  // Zugriff, sodass bestehendes Verhalten unverändert bleibt.
+  const access = currentAccess();
+  // Body-Klasse steuert die zentrale, seitenübergreifende Read-Only-/Bedienen-
+  // Darstellung in styles.css (Formularfelder, Bearbeiten-/Löschen-Buttons,
+  // Drag-Griffe, Topic-Picker gesperrt; bei „bedienen" bleiben Schalter aktiv).
+  const accessClass = access.canWrite
+    ? 'access-write'
+    : access.canOperate
+      ? 'access-operate'
+      : 'access-read';
   return `<!DOCTYPE html>
 <html lang="de">
 <head>
@@ -283,7 +310,7 @@ function renderLayout({ title, activePath = '', body = '', script = '' } = {}) {
   <link rel="apple-touch-icon" href="/homeess-icon.svg">
   <link rel="stylesheet" href="/styles.css">
 </head>
-<body class="page-dashboard">
+<body class="page-dashboard ${accessClass}" data-access="${access.canWrite ? 'write' : access.canOperate ? 'operate' : 'read'}">
   <div class="app-shell">
     <header class="dashboard-header">
       <button type="button" class="header-logo-button" id="mobile-menu-button" aria-controls="mobile-nav-sheet" aria-label="Menü öffnen">
@@ -329,10 +356,10 @@ function renderLayout({ title, activePath = '', body = '', script = '' } = {}) {
     <div class="app-body">
       <aside class="sidebar">
         <div class="sidebar-nav">
-          ${renderNavLinks('main', activePath)}
+          ${renderNavLinks('main', activePath, access)}
         </div>
         <div class="sidebar-footer">
-          ${renderNavLinks('footer', activePath)}
+          ${renderNavLinks('footer', activePath, access)}
           <button class="logout-button" onclick="window.location.href='/logout'">Abmelden</button>
           <div class="sidebar-copyright">
             Copyright (C) 2026 Kevin Käfer | <a class="sidebar-copyright-link" href="https://apps.mykaefer.net" target="_blank" rel="noopener noreferrer">MyKaefer Apps</a><br>
@@ -345,7 +372,7 @@ function renderLayout({ title, activePath = '', body = '', script = '' } = {}) {
 ${body}
       </main>
     </div>
-${renderMobileNav(activePath)}
+${renderMobileNav(activePath, access)}
 ${statePickerModal()}
   </div>
 ${renderLiveScript()}

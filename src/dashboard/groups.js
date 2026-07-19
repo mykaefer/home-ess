@@ -37,25 +37,32 @@ function normalizeWidth(value) {
   return GROUP_WIDTH_VALUES.has(width) ? width : 'full';
 }
 
+function parseTabId(value) {
+  if (value == null || value === '' || value === 'null') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function normalizeGroupRow(row = {}) {
   return {
     id: row.id,
     title: row.title || '',
     width: normalizeWidth(row.width),
     position: row.position == null ? 0 : row.position,
+    tabId: row.tab_id == null ? null : row.tab_id,
   };
 }
 
 async function listGroups(db) {
   const rows = await dbAll(
     db,
-    'SELECT id, title, width, position FROM dashboard_groups ORDER BY position ASC, id ASC'
+    'SELECT id, title, width, position, tab_id FROM dashboard_groups ORDER BY position ASC, id ASC'
   );
   return rows.map(normalizeGroupRow);
 }
 
 async function getGroup(db, id) {
-  const row = await dbGet(db, 'SELECT id, title, width, position FROM dashboard_groups WHERE id = ?', [id]);
+  const row = await dbGet(db, 'SELECT id, title, width, position, tab_id FROM dashboard_groups WHERE id = ?', [id]);
   return row ? normalizeGroupRow(row) : null;
 }
 
@@ -63,6 +70,7 @@ function normalizeGroupInput(input = {}) {
   return {
     title: String(input.title || '').trim(),
     width: normalizeWidth(input.width),
+    tabId: parseTabId(input.tabId),
   };
 }
 
@@ -85,8 +93,8 @@ async function createGroup(db, input) {
   const position = await nextPosition(db);
   const result = await dbRun(
     db,
-    'INSERT INTO dashboard_groups (title, width, position) VALUES (?, ?, ?)',
-    [group.title, group.width, position]
+    'INSERT INTO dashboard_groups (title, width, position, tab_id) VALUES (?, ?, ?, ?)',
+    [group.title, group.width, position, group.tabId]
   );
   return getGroup(db, result.lastID);
 }
@@ -94,17 +102,23 @@ async function createGroup(db, input) {
 async function updateGroup(db, id, input) {
   const group = normalizeGroupInput(input);
   ensureTitle(group);
-  await dbRun(db, 'UPDATE dashboard_groups SET title = ?, width = ? WHERE id = ?', [
+  await dbRun(db, 'UPDATE dashboard_groups SET title = ?, width = ?, tab_id = ? WHERE id = ?', [
     group.title,
     group.width,
+    group.tabId,
     id,
   ]);
   return getGroup(db, id);
 }
 
-// Gruppe löschen: enthaltene Widgets werden wieder zu freien Dashboard-Widgets.
+// Gruppe löschen: enthaltene Widgets werden wieder zu freien Dashboard-Widgets
+// auf dem Tab der gelöschten Gruppe (keine Inhalte verlieren).
 async function deleteGroup(db, id) {
-  await dbRun(db, 'UPDATE dashboard_widgets SET group_id = NULL WHERE group_id = ?', [id]);
+  const group = await getGroup(db, id);
+  await dbRun(db, 'UPDATE dashboard_widgets SET group_id = NULL, tab_id = ? WHERE group_id = ?', [
+    group ? group.tabId : null,
+    id,
+  ]);
   await dbRun(db, 'DELETE FROM dashboard_groups WHERE id = ?', [id]);
 }
 

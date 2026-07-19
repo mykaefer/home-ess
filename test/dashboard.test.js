@@ -61,6 +61,65 @@ test('Info-Widget: nur gewählte, gültige Felder in Katalog-Reihenfolge', async
   db.close();
 });
 
+test('Wert-Widget: Größe/Farbe werden validiert und persistiert, Default L', async () => {
+  const db = await freshDb();
+  const plain = await widgetsRepo.createWidget(db, { sourceId: 'pv.current' });
+  // Bestandskompatibler Standard: ohne Angabe Größe L und Standardfarbe.
+  assert.equal(plain.size, 'l');
+  assert.equal(plain.color, '');
+
+  const styled = await widgetsRepo.createWidget(db, {
+    sourceId: 'pv.today',
+    size: 'm',
+    color: '#E67E22',
+  });
+  assert.equal(styled.size, 'm');
+  assert.equal(styled.color, '#e67e22');
+
+  // Ungültige Werte fallen auf die Defaults zurück (serverseitige Validierung).
+  const invalid = await widgetsRepo.updateWidget(db, styled.id, {
+    sourceId: 'pv.today',
+    size: 'riesig',
+    color: 'rot',
+  });
+  assert.equal(invalid.size, 'l');
+  assert.equal(invalid.color, '');
+  db.close();
+});
+
+test('Schalter-Widget: Ziel Pflicht, Konfiguration wird persistiert', async () => {
+  const db = await freshDb();
+  await assert.rejects(
+    () => widgetsRepo.createWidget(db, { type: 'switch', switchTarget: '' }),
+    /schaltbares/
+  );
+  // Ungültige Zielformate werden verworfen (kein freies Topic-Schreiben).
+  await assert.rejects(
+    () => widgetsRepo.createWidget(db, { type: 'switch', switchTarget: 'topic/evil' }),
+    /schaltbares/
+  );
+
+  const widget = await widgetsRepo.createWidget(db, {
+    type: 'switch',
+    switchTarget: 'actor:7',
+    switchLabel: 'Poolpumpe',
+    onColor: '#ffcc00',
+    offColor: '#dddddd',
+    size: 's',
+  });
+  assert.equal(widget.sourceId, 'actor:7');
+  assert.equal(widget.switchLabel, 'Poolpumpe');
+  assert.equal(widget.onColor, '#ffcc00');
+  assert.equal(widget.offColor, '#dddddd');
+  assert.equal(widget.size, 's');
+
+  const [loaded] = await widgetsRepo.listWidgets(db);
+  assert.equal(loaded.type, 'switch');
+  assert.equal(loaded.sourceId, 'actor:7');
+  assert.equal(loaded.onColor, '#ffcc00');
+  db.close();
+});
+
 test('readSystemInfo liefert Anzeige + Prozent für Auslastungen', () => {
   const info = systemInfo.readSystemInfo();
   assert.ok(info.homeess_version.display);
