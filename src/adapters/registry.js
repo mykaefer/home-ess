@@ -86,6 +86,39 @@ function normalizeDevicePage(raw) {
   };
 }
 
+// Optionale, adapterspezifische Verwaltungsseite. Die Seite selbst bleibt im
+// isolierten Adapterprozess; der Host übernimmt Authentifizierung, Rechte,
+// Layout und begrenzte, auf Platte gestreamte Uploads.
+function normalizeManagementPage(raw, adapterPath) {
+  if (!raw || typeof raw !== 'object') return null;
+  const maxUploadBytes = Number(raw.maxUploadBytes);
+  const result = {
+    label: raw.label ? String(raw.label) : 'Verwalten',
+    maxUploadBytes: Number.isInteger(maxUploadBytes) && maxUploadBytes > 0
+      ? Math.min(maxUploadBytes, 64 * 1024 * 1024)
+      : 2 * 1024 * 1024,
+  };
+  const stylesheet = raw.stylesheet == null ? '' : String(raw.stylesheet).trim();
+  // Styles werden bewusst nur als einzelne, deklarierte Datei direkt aus dem
+  // Adapterwurzelverzeichnis freigegeben. Keine freien statischen Verzeichnisse
+  // und keine relativen Pfade: so kann ein Manifest nie aus seinem Ordner lesen.
+  if (stylesheet) {
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*\.css$/.test(stylesheet)) {
+      console.error(`[adapters] Ungültiges Management-Stylesheet "${stylesheet}" (${adapterPath})`);
+    } else {
+      const stylesheetPath = path.join(adapterPath, stylesheet);
+      try {
+        const stat = fs.lstatSync(stylesheetPath);
+        if (stat.isFile() && !stat.isSymbolicLink()) result.stylesheet = stylesheet;
+        else console.error(`[adapters] Management-Stylesheet ist keine reguläre Datei: ${stylesheetPath}`);
+      } catch (_) {
+        console.error(`[adapters] Management-Stylesheet fehlt: ${stylesheetPath}`);
+      }
+    }
+  }
+  return result;
+}
+
 function readManifest(dir, folderName) {
   const manifestPath = path.join(dir, folderName, 'adapter.json');
   let raw;
@@ -135,6 +168,7 @@ function readManifest(dir, folderName) {
     settings,
     stateEditor: normalizeStateEditor(parsed.stateEditor),
     devicePage: normalizeDevicePage(parsed.devicePage),
+    managementPage: normalizeManagementPage(parsed.managementPage, path.join(dir, folderName)),
     presetsDir: path.join(dir, folderName, 'presets'),
   };
 }

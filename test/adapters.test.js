@@ -225,12 +225,28 @@ test('Host persistiert dynamische Adapter-Instanzdaten via storage-IPC', async (
   await instancesRepo.setEnabled(db, id, true);
   await host.initAdapters(db);
 
-  const entry = { instance: { id, name: 'simstorage' }, manifest: { prefix: 'demo' }, status: {} };
+  const replies = [];
+  const entry = {
+    instance: { id, name: 'simstorage', settings: {} },
+    manifest: { prefix: 'demo' }, status: {},
+    child: { send(message) { replies.push(message); } },
+  };
   host._handleMessage(entry, { type: 'storage', key: 'devices', value: [{ topic: 'plug1', online: true }] });
   await new Promise((r) => setTimeout(r, 150));
 
   const instance = await instancesRepo.getInstance(db, id);
   assert.deepEqual(instance.settings.devices, [{ topic: 'plug1', online: true }]);
+
+  host._handleMessage(entry, {
+    type: 'host-call', requestId: 'persist-1', method: 'storage.set',
+    key: 'binding', value: { state: 'pending' },
+  });
+  await new Promise((r) => setTimeout(r, 50));
+  assert.deepEqual(replies.find((message) => message.requestId === 'persist-1'), {
+    type: 'host-call-result', requestId: 'persist-1', result: true,
+  });
+  const confirmed = await instancesRepo.getInstance(db, id);
+  assert.deepEqual(confirmed.settings.binding, { state: 'pending' });
   await host.stopAll();
   db.close();
 });

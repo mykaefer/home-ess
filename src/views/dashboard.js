@@ -2,7 +2,7 @@
 
 const { renderLayout } = require('./layout');
 const { escapeHtml, statusText } = require('./components');
-const { renderValueCatalog, valueCatalogScript } = require('./value-catalog');
+const { renderLazyValueCatalog, lazyValueCatalogScript } = require('./value-catalog');
 const {
   WIDGET_TYPE_DEFS,
   widgetTypeDef,
@@ -20,7 +20,6 @@ function renderDashboard({
   tabs = [],
   groupsForSelect = [],
   groupWidths = [],
-  internalValues = [],
   switchTargets = [],
   infoFields = [],
   systemInfo = {},
@@ -40,6 +39,9 @@ function renderDashboard({
 } = {}) {
   const ctx = { infoFields, systemInfo };
   const tabTitleById = new Map(tabs.map((tab) => [tab.id, tab.title]));
+  const initialTabId = tabs.some((tab) => tab.id === Number(selectTabId))
+    ? Number(selectTabId)
+    : (tabs[0] ? tabs[0].id : null);
 
   const body = `        <div class="panel-head panel-head--row">
           <div>
@@ -62,15 +64,15 @@ function renderDashboard({
         <p class="error-text" id="dashLayoutError" hidden></p>
 
         <div class="dash-tabbar" id="dashTabbar" role="tablist" aria-label="Dashboard-Tabs">
-${tabs.map((tab) => renderTabButton(tab)).join('\n')}
+${tabs.map((tab) => renderTabButton(tab, tab.id === initialTabId)).join('\n')}
           <button type="button" class="dash-tab-add" id="dashTabAdd" title="Tab hinzufügen" aria-label="Tab hinzufügen" onclick="openTabDialog('add')" hidden>＋</button>
         </div>
 
         <div class="dash-panels" id="dashPanels">
-${tabs.map((tab) => renderTabPanel(tab, ctx)).join('\n')}
+${tabs.map((tab) => renderTabPanel(tab, ctx, tab.id === initialTabId)).join('\n')}
         </div>
 
-        ${renderWidgetDialog({ internalValues, switchTargets, infoFields, tabs, groupsForSelect, tabTitleById, dialogError })}
+        ${renderWidgetDialog({ switchTargets, infoFields, tabs, groupsForSelect, tabTitleById, dialogError })}
         ${renderGroupDialog({ groupWidths, tabs })}
         ${renderTabDialog({ maxTabTitleLength, tabDialogError })}
         ${renderDeleteTabDialog()}
@@ -110,7 +112,7 @@ ${tabs.map((tab) => renderTabPanel(tab, ctx)).join('\n')}
     mobileFull: def.mobileMinWidth === 'full',
   }));
 
-  const script = `${valueCatalogScript()}
+  const script = `${lazyValueCatalogScript()}
 
     var dashboardWidgets = ${JSON.stringify(clientWidgets)};
     var dashboardGroups = ${JSON.stringify(clientGroups)};
@@ -274,6 +276,7 @@ ${tabs.map((tab) => renderTabPanel(tab, ctx)).join('\n')}
         title.textContent = 'Widget hinzufügen';
         setWidgetFormValues({ type: 'value', sourceId: '', groupId: '', tabId: activeTabId, infoFields: null, size: 'l', color: '' });
       }
+      lazyValueCatalogEnsure('widgetSourceId');
       if (typeof dialog.showModal === 'function') dialog.showModal();
     }
 
@@ -313,7 +316,11 @@ ${tabs.map((tab) => renderTabPanel(tab, ctx)).join('\n')}
 
     function setWidgetFormValues(values) {
       setWidgetType(values.type || 'value');
-      valueCatalogSync('widgetSourceId', values.type === 'value' ? (values.sourceId || '') : '');
+      lazyValueCatalogSetSelected(
+        'widgetSourceId',
+        values.type === 'value' ? (values.sourceId || '') : '',
+        values.type === 'value' ? (values.label || values.sourceId || '') : ''
+      );
       document.getElementById('widgetGroupId').value = values.groupId == null || values.groupId === '' ? '' : String(values.groupId);
       document.getElementById('widgetTabId').value = values.tabId == null ? String(activeTabId) : String(values.tabId);
       syncWidgetTabSelect();
@@ -890,8 +897,8 @@ ${tabs.map((tab) => renderTabPanel(tab, ctx)).join('\n')}
 }
 
 // --- Tab-Leiste und Panels ---------------------------------------------------
-function renderTabButton(tab) {
-  return `          <div class="dash-tab" role="tab" data-tab-id="${tab.id}" aria-selected="false" tabindex="0" onclick="onTabClick(${tab.id})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();onTabClick(${tab.id});}">
+function renderTabButton(tab, active = false) {
+  return `          <div class="dash-tab${active ? ' is-active' : ''}" role="tab" data-tab-id="${tab.id}" aria-selected="${active ? 'true' : 'false'}" tabindex="0" onclick="onTabClick(${tab.id})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();onTabClick(${tab.id});}">
             <span class="dash-tab-grip" title="Tab verschieben" aria-hidden="true">⠿</span>
             <span class="dash-tab-label">${escapeHtml(tab.title)}</span>
             <span class="dash-tab-tools">
@@ -901,9 +908,9 @@ function renderTabButton(tab) {
           </div>`;
 }
 
-function renderTabPanel(tab, ctx) {
+function renderTabPanel(tab, ctx, active = false) {
   const ungroupedCards = tab.ungrouped.map((widget) => renderWidgetCard(widget, ctx)).join('\n');
-  return `          <section class="dash-panel" role="tabpanel" data-tab-id="${tab.id}" hidden>
+  return `          <section class="dash-panel" role="tabpanel" data-tab-id="${tab.id}"${active ? '' : ' hidden'}>
             <div class="widget-dropzone widget-grid" data-group="">${ungroupedCards ? `\n${ungroupedCards}\n            ` : ''}</div>
             <div class="widget-groups">
 ${tab.groups.map((group) => renderGroup(group, ctx)).join('\n')}
@@ -1038,7 +1045,7 @@ function renderColorChoice({ fieldId, name, label, defaultPicker }) {
               </div>`;
 }
 
-function renderWidgetDialog({ internalValues, switchTargets, infoFields = [], tabs = [], groupsForSelect = [], tabTitleById = new Map(), dialogError = '' }) {
+function renderWidgetDialog({ switchTargets, infoFields = [], tabs = [], groupsForSelect = [], tabTitleById = new Map(), dialogError = '' }) {
   const typeTabs = WIDGET_TYPE_DEFS
     .map((def, index) => `              <button type="button" class="dialog-tab${index === 0 ? ' is-active' : ''}" data-tab="${def.type}" onclick="setWidgetType('${def.type}')">${escapeHtml(def.label)}</button>`)
     .join('\n');
@@ -1101,7 +1108,7 @@ ${typeTabs}
               </div>
             </div>
             <div class="tab-panel" data-panel="value">
-              ${renderValueCatalog({ values: internalValues, inputId: 'widgetSourceId', name: 'sourceId', selectedId: '', label: 'Wert' })}
+              ${renderLazyValueCatalog({ inputId: 'widgetSourceId', name: 'sourceId', label: 'Wert' })}
               ${renderColorChoice({ fieldId: 'widgetColor', name: 'color', label: 'Farbe des Werts', defaultPicker: '#1a1a2e' })}
             </div>
             <div class="tab-panel" data-panel="switch" hidden>

@@ -105,6 +105,7 @@ async function buildWallboxModel(db, currentDayKey, historyDays = 28, currentHou
       businessDays: box.businessDays,
       businessEndHour: box.businessEndHour,
       hasSetpoint: !!box.setpointTopic,
+      hasPluggedTopic: !!box.pluggedTopic,
       soc: live.soc == null ? null : Number(live.soc),
       plugged: live.plugged == null ? null : !!live.plugged,
       powerW: live.powerW == null ? null : Number(live.powerW),
@@ -212,11 +213,11 @@ function planWallboxSchedule(model, slots = [], storage = null) {
     const energyToMinimum = soc == null ? 0
       : capacity * Math.max(0, (Number(box.minChargePercent) || 0) - soc) / 100;
 
-    // „angesteckt" darf den Bedarf NICHT verwerfen: manche Fahrzeuge melden erst
-    // dann angesteckt, wenn die Ladung bereits freigegeben ist (Henne-Ei). Das
-    // Signal dient ausschließlich der Stall-Überwachung in der Automatik.
-    // Bedarf besteht, sobald ein SoC unter Voll bekannt ist.
-    const hasActualDemand = energyToFull != null;
+    // Ist ein Fahrzeug-/Stecker-Topic konfiguriert, ist nur ein eindeutig
+    // angestecktes Fahrzeug planbar. Ohne Topic bleibt der SoC maßgeblich, weil
+    // der Steckerzustand dann technisch nicht bekannt sein kann.
+    const vehicleAvailable = !box.hasPluggedTopic || box.plugged === true;
+    const hasActualDemand = energyToFull != null && vehicleAvailable;
     if (!hasActualDemand) {
       // Historische Ladungen beschreiben kein wiederkehrendes Haushaltsprofil.
       // Ohne bekannten Fahrzeug-SoC gibt es keinen belastbaren Ladebedarf und

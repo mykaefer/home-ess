@@ -10,7 +10,7 @@ const {
   deleteOutput,
   normalizeOutputInput,
 } = require('../output/outputs');
-const { listInternalValues } = require('../output/internal-values');
+const { listAllStates } = require('../states/repository');
 const outputEngine = require('../output/engine');
 const renderOutput = require('../views/output');
 
@@ -30,7 +30,7 @@ function enrichOutputs(outputs, valuesById) {
 async function renderPage(db, res, options = {}) {
   const [outputs, internalValues] = await Promise.all([
     listOutputs(db),
-    listInternalValues(db, mqttClient.getCache()),
+    listAllStates(db, mqttClient.getCache()),
   ]);
   const valuesById = new Map(internalValues.map((entry) => [entry.id, entry]));
   const enriched = enrichOutputs(outputs, valuesById);
@@ -76,7 +76,7 @@ function outputRoutes(db) {
     try {
       const [outputs, internalValues] = await Promise.all([
         listOutputs(db),
-        listInternalValues(db, mqttClient.getCache()),
+        listAllStates(db, mqttClient.getCache()),
       ]);
       const valuesById = new Map(internalValues.map((entry) => [entry.id, entry]));
       res.json({

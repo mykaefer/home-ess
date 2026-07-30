@@ -3,16 +3,15 @@
 const { renderLayout } = require('./layout');
 const { escapeHtml } = require('./components');
 
-// States-Seite: alle von Adaptern gemeldeten States als einklappbarer Baum
-// (Instanz → Kategorie → State) mit aktuellem Wert. Live-Aktualisierung über den
-// vorhandenen SSE-Kanal (homeess:mqtt) via /states/data.json.
+// Zentrale States-Seite: berechnete Systemwerte und von Adaptern gemeldete
+// States in einem gemeinsamen Baum mit aktuellem Wert.
 function renderStates({ tree = [] } = {}) {
   const blocks = tree.length
     ? tree.map(renderInstanceBlock).join('\n')
-    : '<div class="info-card"><p class="muted">Noch keine Adapter-States vorhanden. Lege auf der <a href="/adapter">Adapter-Seite</a> eine Instanz an und aktiviere sie.</p></div>';
+    : '<div class="info-card"><p class="muted">Noch keine States vorhanden.</p></div>';
 
   const body = `        <h1>States</h1>
-        <p class="muted" style="margin-bottom:16px;">Von Adaptern bereitgestellte Werte. Angesprochen werden sie über <code>prefix://instanz/adresse</code>; hinter Topic-Feldern lassen sie sich direkt auswählen.</p>
+        <p class="muted" style="margin-bottom:16px;">Zentrale Übersicht aller internen Systemwerte und Adapter-States. Adapter-States werden über <code>prefix://instanz/adresse</code> angesprochen und lassen sich hinter Topic-Feldern direkt auswählen.</p>
         <div class="states-tree">
 ${blocks}
         </div>`;
@@ -80,7 +79,7 @@ function renderInstanceBlock(inst) {
     ? inst.categories.map((cat) => renderCategory(cat, 0, `${inst.prefix}://${inst.instanceName}`, '')).join('\n')
     : '          <p class="muted" style="margin:6px 0;">Dieser Adapter hat noch keine States gemeldet.</p>';
 
-  // Virtuelle Blöcke (interne Module wie die Schaltgruppen) haben keinen
+  // System und virtuelle Blöcke haben keinen
   // Adapter-Prozess: sprechender Name statt prefix://instanz, kein Status-Badge.
   const title = inst.virtual
     ? escapeHtml(inst.adapterName || inst.instanceName)

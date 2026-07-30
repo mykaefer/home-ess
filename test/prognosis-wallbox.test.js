@@ -178,14 +178,14 @@ test('historischer Wallbox-Verbrauch erzeugt ohne tatsächlichen Fahrzeugbedarf 
   assert.equal(wallboxForecastForDay(model, '2026-07-03', 0).totalKwh, 0);
 });
 
-test('„nicht angesteckt" verwirft den Ladebedarf nicht (Fahrzeug erkennt Stecker erst nach Freigabe)', () => {
+test('konfiguriertes Fahrzeug-Topic plant nur bei angestecktem Fahrzeug', () => {
   const profile = Array(24).fill(0);
   profile[8] = 1;
   const model = {
     boxes: [{
       id: 1, name: 'Auto', mode: 1, priority: 5, maxPowerW: 11000,
       batteryCapacityKwh: 50, minChargePercent: 30, businessDays: [],
-      soc: 50, plugged: false, todayRemainingKwh: 0,
+      hasPluggedTopic: true, soc: 50, plugged: false, todayRemainingKwh: 0,
       dailyByWeekday: Array(7).fill(0),
       profilesByWeekday: Array.from({ length: 7 }, () => profile),
       samplesByWeekday: Array(7).fill(4),
@@ -196,6 +196,31 @@ test('„nicht angesteckt" verwirft den Ladebedarf nicht (Fahrzeug erkennt Steck
     startMs: Date.UTC(2026, 6, 3, hour), pvKwh: 20, houseKwh: 1,
   }));
 
+  planWallboxSchedule(model, slots);
+  assert.equal(model.boxes[0].plannedEnergyByDate['2026-07-03'], 0);
+  assert.equal(model.boxes[0].nextCharge, null);
+
+  model.boxes[0].plugged = true;
+  planWallboxSchedule(model, slots);
+  assert.ok(model.boxes[0].plannedFlexibleEnergyByDate['2026-07-03'] > 0);
+  assert.ok(model.boxes[0].nextCharge);
+});
+
+test('ohne Fahrzeug-Topic bleibt bekannter SoC als Ladebedarf planbar', () => {
+  const box = {
+    id: 1, name: 'Auto', mode: 1, priority: 5, maxPowerW: 11000,
+    batteryCapacityKwh: 50, minChargePercent: 30, businessDays: [],
+    hasPluggedTopic: false, soc: 50, plugged: null, todayRemainingKwh: 0,
+    dailyByWeekday: Array(7).fill(0),
+    profilesByWeekday: Array.from({ length: 7 }, () => Array(24).fill(1 / 24)),
+    samplesByWeekday: Array(7).fill(4),
+  };
+  const slots = [{
+    dateKey: '2026-07-03', dayIndex: 0, hour: 8, durationHours: 1,
+    startMs: Date.UTC(2026, 6, 3, 8), pvKwh: 20, houseKwh: 1,
+  }];
+
+  const model = { boxes: [box] };
   planWallboxSchedule(model, slots);
   assert.ok(model.boxes[0].plannedFlexibleEnergyByDate['2026-07-03'] > 0);
   assert.ok(model.boxes[0].nextCharge);

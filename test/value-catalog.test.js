@@ -2,7 +2,13 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { buildValueCatalogTree, renderValueCatalog, valueCatalogScript } = require('../src/views/value-catalog');
+const {
+  buildValueCatalogTree,
+  renderValueCatalog,
+  renderLazyValueCatalog,
+  valueCatalogScript,
+  lazyValueCatalogScript,
+} = require('../src/views/value-catalog');
 
 test('Wertekatalog gruppiert mehrstufige Kategorien zu einem Verzeichnisbaum', () => {
   const values = [
@@ -67,4 +73,20 @@ test('Wertekatalog-Client-Script bringt Merken- und Such-Reset-Logik mit', () =>
   assert.ok(script.includes('valueCatalogLoadExpanded'));
   // Beim Leeren der Suche wird der gemerkte Zustand wiederhergestellt.
   assert.ok(script.includes('valueCatalogApplyExpanded'));
+});
+
+test('Lazy-Wertekatalog enthält nur Hülle und lädt Ebenen sowie Suche über den Endpunkt', () => {
+  const html = renderLazyValueCatalog({
+    inputId: 'src',
+    name: 'sourceId',
+    endpoint: '/dashboard/catalog',
+  });
+  assert.match(html, /value-catalog--lazy/);
+  assert.match(html, /data-endpoint="\/dashboard\/catalog"/);
+  assert.ok(!html.includes('class="value-row"'));
+
+  const script = lazyValueCatalogScript();
+  assert.ok(script.includes('lazyValueCatalogLoadCategory'));
+  assert.ok(script.includes('lazyValueCatalogSearch'));
+  assert.ok(script.includes('Weitere Werte laden'));
 });

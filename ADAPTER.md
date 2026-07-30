@@ -21,10 +21,9 @@ Inhalt: [Überblick](#überblick) · [Verzeichnislayout](#verzeichnislayout) ·
   anlegen, einzeln aktivieren/deaktivieren und konfigurieren.
 - Jede **aktive Instanz läuft als eigener Kindprozess** (Isolation, Auto-Restart).
 - Ein Adapter meldet seine **States** (Geräte-Werte). Diese erscheinen auf der
-  **States-Seite** (im Menü als Unterpunkt von **Adapter**) als Baum und lassen
-  sich hinter jedem Topic-Feld per **State-Picker** auswählen; zusätzlich sind sie
-  automatisch im **Wertekatalog** als Quelle für Outputs und Dashboard-Kacheln
-  verfügbar.
+  eigenständigen **States-Hauptseite** neben der Gruppe **System** als Baum und
+  lassen sich hinter jedem Topic-Feld per **State-Picker** auswählen. Dashboard
+  und Output greifen auf denselben zentralen States-Bestand zu.
 - States werden über das Schema **`prefix://instanz/adresse`** angesprochen.
   Topics **ohne** Schema laufen weiter über den zentralen MQTT-Broker — das
   bestehende Verhalten bleibt unverändert.
@@ -135,6 +134,35 @@ per `host.setStorage(storageKey, devices)`. Jeder Eintrag besitzt `address`, `na
 `address`, `name` und `states` (State-Metadaten mit mindestens `address`). homeESS
 stellt Live-Werte dar und speichert frei vergebene Gerätenamen in `customName`.
 
+### Optional: `managementPage` (vollständige Adapterverwaltung)
+
+Adapter mit Pairing-, Geräte-, Konfigurations- oder Firmwareworkflows können eine
+eigene, weiterhin vom Host geschützte Verwaltungsseite deklarieren:
+
+```json
+"managementPage": {
+  "label": "HDP Geräte",
+  "maxUploadBytes": 8388608,
+  "stylesheet": "management.css"
+}
+```
+
+Der Host zeigt den Link an und leitet Requests unter
+`/adapter/instance/<id>/manage/...` an die optionale Adaptermethode
+`handleManagementRequest(request)` weiter. Der Adapterprozess liefert entweder
+`{status,json}`, `{status,redirect}` oder `{status,view:{title,body,script}}`.
+Login, Rollenprüfung, Seitenlayout und Uploadlimits bleiben Aufgabe von homeESS.
+Mit dem optionalen Feld `stylesheet` bindet homeESS eine CSS-Datei aus dem
+Wurzelverzeichnis des Adapters nach dem gemeinsamen Basis-Stylesheet ein. Der
+Dateiname muss auf `.css` enden und darf keine Verzeichniskomponenten enthalten.
+Das Stylesheet gilt damit nur für die vom Adapter gerenderte Verwaltungsseite
+und reist zusammen mit dem portablen Adapter. Es sollte alle Selektoren unter
+einer adapterspezifischen Wurzelklasse kapseln, beispielsweise `.mein-adapter`.
+`application/octet-stream` wird nicht im RAM gepuffert, sondern in eine
+restriktive temporäre Datei gestreamt; der Adapter erhält
+`request.upload={path,size,filename}`. Der Host löscht die Datei nach Abschluss.
+Andere Adapterdateien oder freie Serverpfade werden dadurch nicht veröffentlicht.
+
 ## Die Einstiegsdatei (`index.js`)
 
 Exportiert eine **Factory** `createAdapter(host)`, die ein Adapter-Objekt mit
@@ -189,9 +217,16 @@ Das an die Factory übergebene `host`-Objekt:
 | `host.publishStates(values)` | Meldet mehrere Werte gemeinsam als `[{ address, value }]`. Frische und Werte werden je State aktualisiert, abhängige Regeln erhalten aber nur ein gemeinsames Änderungsereignis. |
 | `host.setConnected(bool, detail?)` | Meldet den **Verbindungszustand** zum Gerät/Dienst (Anzeige auf der Adapter-Seite). `detail` ist ein optionaler Tooltip-Text. |
 | `host.setStorage(key, value)` | Persistiert dynamische Instanzmetadaten unter `settings[key]` (z. B. erkannte Geräte). Der Schlüssel wird atomar in die vorhandenen Einstellungen gemergt und bleibt beim Speichern anderer Formularfelder erhalten. |
+| `await host.persistStorage(key, value)` | Wie `setStorage`, bestätigt aber erst nach erfolgreichem SQLite-Commit. Für Protokollschritte, die nachweislich erst nach dauerhafter lokaler Speicherung beginnen dürfen. Bestehende Adapter verwenden unverändert `setStorage`. |
+| `host.subscribeState(topic, listener)` | Abonniert ereignisgesteuert eine MQTT- oder `prefix://`-Datenquelle und liefert eine idempotente Abmeldefunktion. Ein vorhandener Retained-Wert wird sofort zugestellt. |
+| `host.getInstanceIdentity()` | Liefert die dauerhafte öffentliche homeESS-Instanz-ID und deren Fingerprint, niemals den privaten Schlüssel. |
+| `host.getSecret(key)` | Liest ein Secret aus dem restriktiven, instanzgebundenen Secret-Store. |
+| `host.setSecret(key, value)` | Schreibt ein Secret mit 0600/0700-Rechten außerhalb der normalen Adaptereinstellungen. |
+| `host.deleteSecret(key)` | Entfernt ein Secret der eigenen Instanz. |
 | `host.getConfig()` | Liefert die aktuellen **Instanz-Einstellungen** (Objekt). |
 | `host.log(...args)` | Info-Log in die homeESS-Konsole (mit Adapter-/Instanz-Präfix). |
 | `host.error(...args)` | Fehler-Log. |
+| `host.debug(...args)` / `host.warn(...args)` | Debug- beziehungsweise Warn-Log; Debugausgabe wird nur bei aktivierter Adapterdiagnose geschrieben. |
 | `host.name` | Name der Instanz (Read-only). |
 
 `host.setStates`-Eintrag:
@@ -247,9 +282,8 @@ Adapters wird automatisch und fortlaufend an alle Bezüge dieses Topics verteilt
 
 ## Instanzen & Einstellungen
 
-- Auf der **Adapter-Seite** (Hauptnavigation; „States" klappt als Unterpunkt
-  darunter auf) lassen sich pro
-  Adapter beliebig viele Instanzen anlegen und **einzeln benennen**. Der Name ist
+- Auf der **Adapter-Seite** lassen sich pro Adapter beliebig viele Instanzen
+  anlegen und **einzeln benennen**. Der Name ist
   die Autorität im Topic: `prefix://<name>/…`.
 - Jede Instanz hat **eigene Einstellungen** (gespeichert je Instanz), greift aber
   auf **dieselben Adapterdateien** zu.
@@ -317,6 +351,9 @@ ihre eigenen Oberflächen einbauen.
    aktivieren.
 6. Auf der **States-Seite** prüfen, dass die States mit Live-Werten erscheinen,
    und sie hinter Topic-Feldern per State-Picker auswählen.
+7. Bei komplexer Verwaltung `managementPage` deklarieren und
+   `handleManagementRequest` implementieren; Secrets ausschließlich über den
+   Secret-Store und Quellen über `subscribeState` anbinden.
 
 Als vollständiges, lauffähiges Beispiel dient der mitgelieferte
 **Demo-Adapter** unter [`/adapter/demo/`](adapter/demo/).

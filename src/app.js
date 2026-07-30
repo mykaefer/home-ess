@@ -14,6 +14,7 @@ const { recordSample } = require('./photovoltaik/sun-intensity');
 const { refreshWeather } = require('./photovoltaik/forecast');
 const { loadAllStateDefinitions } = require('./mqtt/state-definitions');
 const outputEngine = require('./output/engine');
+const systemStatesRuntime = require('./states/system-runtime');
 
 const authRoutes = require('./auth/routes');
 const dashboardRoutes = require('./routes/dashboard');
@@ -40,6 +41,7 @@ const { recordFunctionSamples, currentFunctionPowerW } = require('./messen-schal
 const prognosisRoutes = require('./routes/prognosis');
 const { initModules, isEnabled } = require('./modules');
 const adapterHost = require('./adapters/host');
+const adapterSecrets = require('./adapters/secrets');
 const gridControlAutomation = require('./grid-control/automation');
 const operatingState = require('./operating-state');
 const operatingLevelHandler = require('./operating-level/handler');
@@ -72,7 +74,7 @@ function createApp() {
   // für Adapter, die jede Seite benötigt).
   app.use(authorize({
     openPaths: ['/', '/login', '/logout', '/energiefluss/export'],
-    sharedPaths: ['/live', '/me'],
+    sharedPaths: ['/live', '/me', '/states/catalog'],
   }));
 
   // Routen-Module. Jede Funktionsgruppe liegt in eigener Datei.
@@ -97,6 +99,7 @@ function createApp() {
   // Der Relay-Client ist ein optionaler Subdienst — Fehler dürfen den normalen
   // lokalen Betrieb (MQTT/Dashboard) nie blockieren.
   identityStore.init(config.IDENTITY_DIR);
+  adapterSecrets.init(config.IDENTITY_DIR);
   connectionService.init({ wsUrl: config.RELAY_WS_URL, enabled: config.RELAY_CONNECTION_ENABLED });
   // Nach erfolgreichem `paired` automatisch die WebSocket-Verbindung starten.
   pairingState.setHooks({ onPaired: () => connectionService.onPaired() });
@@ -144,12 +147,14 @@ function createApp() {
   outputEngine.init(db).catch(() => {});
   Promise.all([modulesReady, operatingReady])
     .then(() => {
+      systemStatesRuntime.init(db);
       operatingLevelHandler.init();
       gridControlAutomation.init(db);
       batterieMinSocSync.init(db);
       return prognosisBehavior.init(db);
     })
     .catch(() => {
+      systemStatesRuntime.init(db);
       operatingLevelHandler.init();
       gridControlAutomation.init(db);
       batterieMinSocSync.init(db);

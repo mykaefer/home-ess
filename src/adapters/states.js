@@ -103,6 +103,12 @@ async function buildStatesTree(db) {
     };
   });
 
+  blocks.push(...await buildProvidedStatesBlocks(db, cache));
+  return blocks;
+}
+
+async function buildProvidedStatesBlocks(db, cache = bus.getCache()) {
+  const blocks = [];
   for (const provider of statesProviders) {
     const provided = await Promise.resolve().then(() => provider(db, cache)).catch(() => null);
     if (Array.isArray(provided)) blocks.push(...provided.filter(Boolean));
@@ -111,4 +117,11 @@ async function buildStatesTree(db) {
   return blocks;
 }
 
-module.exports = { buildStatesTree, registerStatesProvider, displayValue, forEachState, categoryParts };
+module.exports = {
+  buildStatesTree,
+  buildProvidedStatesBlocks,
+  registerStatesProvider,
+  displayValue,
+  forEachState,
+  categoryParts,
+};

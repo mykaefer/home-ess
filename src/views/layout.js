@@ -31,12 +31,8 @@ const NAV_CORE = [
     ],
   },
   { path: '/prognose', label: 'Prognose', section: 'main' },
-  {
-    path: '/adapter',
-    label: 'Adapter',
-    section: 'main',
-    children: [{ path: '/states', label: 'States' }],
-  },
+  { path: '/adapter', label: 'Adapter', section: 'main' },
+  { path: '/states', label: 'States', section: 'main' },
   { path: '/output', label: 'Output', section: 'main' },
   // Module und Fernzugriff sind in die Einstellungsseite (Tabs) integriert; der
   // Footer trägt daher nur noch die Einstellungen.
@@ -286,8 +282,10 @@ function renderLiveScript() {
   </script>`;
 }
 
-// renderLayout({ title, activePath, body, script })
-function renderLayout({ title, activePath = '', body = '', script = '' } = {}) {
+// renderLayout({ title, activePath, body, script, stylesheets })
+function renderLayout({
+  title, activePath = '', body = '', script = '', stylesheets = [],
+} = {}) {
   // Zugriffsrechte des aktuellen Nutzers (request-gebunden über AsyncLocalStorage).
   // Außerhalb eines Requests (Tests/Direktrender) liefert currentAccess() vollen
   // Zugriff, sodass bestehendes Verhalten unverändert bleibt.
@@ -300,6 +298,10 @@ function renderLayout({ title, activePath = '', body = '', script = '' } = {}) {
     : access.canOperate
       ? 'access-operate'
       : 'access-read';
+  const extraStylesheets = (Array.isArray(stylesheets) ? stylesheets : [])
+    .filter((href) => typeof href === 'string' && href.startsWith('/') && !href.startsWith('//'))
+    .map((href) => `  <link rel="stylesheet" href="${escapeHtml(href)}">`)
+    .join('\n');
   return `<!DOCTYPE html>
 <html lang="de">
 <head>
@@ -309,6 +311,7 @@ function renderLayout({ title, activePath = '', body = '', script = '' } = {}) {
   <link rel="icon" href="/homeess-icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/homeess-icon.svg">
   <link rel="stylesheet" href="/styles.css">
+${extraStylesheets}
 </head>
 <body class="page-dashboard ${accessClass}" data-access="${access.canWrite ? 'write' : access.canOperate ? 'operate' : 'read'}">
   <div class="app-shell">

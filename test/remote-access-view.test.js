@@ -70,3 +70,9 @@ test('Navigation: Fernzugriff/Module sind in die Einstellungen integriert', () =
   const settings = NAV.find((n) => n.path === '/settings');
   assert.ok(settings && settings.section === 'footer', 'Einstellungen im Footer');
 });
+
+test('Navigation: Adapter steht direkt vor States', () => {
+  const adapterIndex = NAV.findIndex((item) => item.path === '/adapter');
+  const statesIndex = NAV.findIndex((item) => item.path === '/states');
+  assert.equal(statesIndex, adapterIndex + 1);
+});

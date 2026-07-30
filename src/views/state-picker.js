@@ -1,9 +1,9 @@
 'use strict';
 
 // Wiederverwendbarer State-Picker. Hinter ein Topic-Feld wird ein kleiner Button
-// gesetzt; ein Klick öffnet einen gemeinsamen Dialog mit dem Adapter-State-Baum
-// (Instanz → Kategorie → State, mit Live-Werten) und übernimmt die gewählte
-// Adresse (prefix://instanz/adresse) in das zugehörige Eingabefeld.
+// gesetzt; ein Klick öffnet einen gemeinsamen Dialog mit dem zentralen State-Baum
+// (System und Adapter, mit Live-Werten) und übernimmt die gewählte Adresse in
+// das zugehörige Eingabefeld.
 //
 // Verwendung in einer Seite:
 //   1) hinter jedes Topic-Input: statePickerButton('inputId')
@@ -197,7 +197,7 @@ function statePickerScript() {
       if (!body) return;
       var data = statePickerData || { instances: [] };
       if (!data.instances || !data.instances.length) {
-        body.innerHTML = '<p class="muted" style="padding:12px;">Noch keine Adapter-States vorhanden. Lege auf der Adapter-Seite eine Instanz an und aktiviere sie.</p>';
+        body.innerHTML = '<p class="muted" style="padding:12px;">Noch keine States vorhanden.</p>';
         return;
       }
       // Ein-/Ausklapp-Zustand einmal je Render laden und beim Aufbau anwenden.
@@ -205,8 +205,9 @@ function statePickerScript() {
       var html = '';
       for (var i = 0; i < data.instances.length; i++) {
         var inst = data.instances[i];
-        var instKey = inst.prefix + '://' + inst.instanceName;
-        html += '<div class="state-inst"><div class="state-inst-name">' + statePickerEsc(instKey) + '</div>';
+        var instKey = inst.system ? 'System' : inst.prefix + '://' + inst.instanceName;
+        var instLabel = inst.system ? 'System' : instKey;
+        html += '<div class="state-inst"><div class="state-inst-name">' + statePickerEsc(instLabel) + '</div>';
         for (var c = 0; c < inst.categories.length; c++) {
           html += statePickerRenderCategory(inst.categories[c], 0, '', instKey);
         }

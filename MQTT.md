@@ -442,6 +442,14 @@ Istwert und sind deshalb keine zulässigen Ziele für verifizierte Outputs.
 
 ---
 
+## Lokale System-Topics
+
+Berechnete homeESS-Systemwerte sind als lesbare Quellen unter
+`system://homeess/<wert-id>` adressierbar, beispielsweise
+`system://homeess/pv.current`. Sie werden lokal aus dem zentralen States-
+Repository weitergeleitet und weder beim MQTT-Broker abonniert noch dorthin
+geschrieben.
+
 ## Subscription-Routing
 
 ### Vorberechnete Topic-Routen

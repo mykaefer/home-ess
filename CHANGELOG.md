@@ -5,6 +5,116 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 
 ## [Unreleased]
 
+### Hinzugefügt
+
+- **Portable Styles für Adapterverwaltungen.** Adapter können über
+  `managementPage.stylesheet` eine eigene CSS-Datei aus ihrem Adapterverzeichnis
+  deklarieren. homeESS liefert ausschließlich diese Datei über die geschützte
+  Management-Route aus und bindet sie nach dem gemeinsamen Basis-Stylesheet ein.
+- **Helligkeit als System-Prognose-State.** `prognose.helligkeit` bildet den
+  Tagesverlauf als Trapez ab: linear von 0 auf 100 % während der bürgerlichen
+  Morgendämmerung, 100-%-Plateau bei vollständig aufgegangener Sonne und linear
+  zurück auf 0 % während der Abenddämmerung. Eine belastbar gemessene
+  Sonnenintensität beeinflusst 60 % des Werts; 40 % diffuses Tageslicht bleiben
+  selbst bei 0 % Sonnenintensität erhalten.
+- **Optionaler HDP-Richtungsindikator.** Die Prozentanzeige kann getrennte
+  Boolean-Topics für Rising und Falling beziehen. Geschwindigkeit,
+  Impulsabstand und Schatten-Dimmung werden gemeinsam konfiguriert. Der Adapter
+  rendert daraus semantikfreie, lokal geloopte `hdtl-delta-v1`-Timelines.
+- **Generischer HDP-Outputclient.** `pixel-timeline-v1` unterstützt absolute und
+  sparse Frames sowie Timeline-Begin, Chunk, Commit, Abort, Play, Stop und
+  Status mit Manifestlimits, korrelierten Antworten und verbindlicher
+  Wiederherstellung nach unsicheren Antworten oder Sitzungsverlust.
+- **Eigenständiger HDP Adapter.** Der neue Adapter entdeckt
+  `_homeess-hdp._tcp.local`-Geräte, koppelt sie exklusiv mit der dauerhaften
+  homeESS-Identität, übernimmt vorhandene Hardwarekonfigurationen und unterstützt
+  die universelle `percentage_indicator`-Anzeige einschließlich State-Auswahl,
+  Skalierung, drei Farbmodi, dynamischer Helligkeit, WebSocket-Laufzeitstatus,
+  Unpair und lokal verifiziertem, gestreamtem OTA.
+- Die Kopplungs- und Konfigurationsseite heißt eindeutig **HDP Kopplung &
+  Verwaltung**; **HDP Geräte** bleibt die kompakte Geräte-/State-Übersicht.
+- **Erweiterte portable Adapter-Host-API.** Adapter können optional eine
+  authentifizierte Management-Seite bereitstellen, begrenzte Binäruploads über
+  temporäre Dateien verarbeiten, beliebige homeESS-States ereignisgesteuert
+  abonnieren, die öffentliche globale Instanzidentität nutzen und Secrets in
+  einem instanzgebundenen 0600/0700-Store ablegen. Bestehende Adapter bleiben
+  unverändert kompatibel.
+
+### Geändert
+
+- **Übersichtliche, portable HDP-Gerätekonfiguration.** Gerätestatus, Anzeigewert,
+  Farbdarstellung, dynamische Helligkeit, Richtungsindikator und Update-Automatik
+  sind als einheitliche Funktionsgruppen angeordnet. Die normalerweise nur bei
+  der Ersteinrichtung benötigte Hardwarekonfiguration liegt in einem eigenen,
+  responsiven Unterdialog; modusabhängige Felder werden nur bei Bedarf gezeigt.
+  Das vollständige HDP-spezifische Styling liegt jetzt im Adapter selbst.
+- **Adapter vor States im Hauptmenü.** Die beiden eigenständigen Menüpunkte
+  wurden getauscht, sodass Adapter jetzt direkt über States steht.
+- **Sonnenintensität zeigt nachts 0 %.** Wenn das Clear-Sky-Modell für alle
+  berechenbaren Anlagen 0 W Idealstrahlung liefert, wird dies als gültiger
+  Nullwert statt als fehlender Wert ausgegeben. Das gilt auch direkt nach einem
+  Neustart, bevor eine im nächtlichen Standby befindliche Anlage erstmals einen
+  Leistungswert sendet. Nachtwerte bleiben aus den Tagesmitteln ausgeschlossen.
+- **Richtungsindikatoren werden zuverlässig deaktiviert.** Entfernte oder
+  gewechselte Rising-/Falling-Topics setzen ihren zwischengespeicherten
+  Booleanzustand sofort auf `false`. Der Adapter rendert anschließend einen
+  absoluten statischen Replace-Frame, der eine laufende Indicator-Timeline
+  verbindlich beendet.
+- **Saubere HDP-Prozentwerte.** Binäre Gleitkommaartefakte aus der Skalierung
+  werden zentral auf drei Nachkommastellen normalisiert. Status, Adapter-State
+  und `state.set` zeigen damit beispielsweise `57` statt
+  `56.99999999999999`.
+- **HDP-Prozentwerte veralten nicht.** Der Adapter verwendet den zuletzt in
+  homeESS vorhandenen Quellenwert unabhängig davon, wie lange er unverändert
+  bleibt. Die sachlich falsche Fünf-Minuten-Warnung und ihr Hintergrundtimer
+  wurden entfernt; bereits persistierte Warnungen werden beim Laden bereinigt.
+- **HDP-Verbindungen sind transparent und dauerhaft retry-fähig.** Geräteansicht
+  und States zeigen jetzt Verbindungsphase, Versuch und nächsten Retry. Fehlerhafte
+  HTTP-Header beim Upgrade und eine Firmware-Ablehnung des normativen
+  `homeess.hello`-Textframes werden eindeutig benannt, während der normative
+  Backoff weiterläuft. Häufige Discovery-Ereignisse werden bei der
+  Adapter-Persistenz zusammengefasst.
+- **Eine zentrale States-Quelle.** Die bisher getrennten berechneten Systemwerte
+  und Adapter-States werden über ein gemeinsames States-Repository bereitgestellt.
+  Die eigenständige States-Hauptseite zeigt interne Werte unter **System** und
+  daneben die Adapter-Instanzen. Dashboard, Output und die bisherigen
+  Wertekatalog-APIs greifen auf dieselbe Quelle zu; gespeicherte Wert-IDs bleiben
+  vollständig kompatibel. Der Topic-Picker zeigt denselben zentralen Baum;
+  berechnete Werte sind dort über lesbare `system://homeess/...`-Topics
+  auswählbar und werden reaktiv an konfigurierte Eingänge weitergeleitet.
+- **HDP vollständig an die präzisierte `HDP.md` angeglichen.** Pairing verwendet
+  ausschließlich `local-binding-key-v1`, persistiert Pending-Key und Nonce vor
+  dem ersten Request, prüft die bytegenaue `binding_id` und aktiviert erst nach
+  `binding_status: match`. Verlorene Pairing-, Config-, Unpair- und
+  OTA-Restart-Antworten folgen den verbindlichen Recoveryregeln.
+- **Klare Zuständigkeitsgrenze für HDP-Ausgaben.** Prozent-, Farb-,
+  Helligkeits- und Richtungssemantik verbleibt vollständig im Adapter. Geräte
+  mit exakt `pixel-timeline-v1` erhalten nur generische `output.frame.set`-
+  Frames oder `hdtl-delta-v1`-Timelines; Hardwaregrenzen und physische
+  Schutzparameter verbleiben in der Firmware. Bereits gekoppelte Geräte ohne
+  Runtime-Profil nutzen weiterhin den isolierten, abwärtskompatiblen
+  Legacy-`state.set`-Pfad. Andere explizite Runtime-Profile werden sichtbar
+  abgelehnt.
+- Discovery validiert den vollständigen TXT-Vertrag. HTTP, WebSocket,
+  Hardwarekonfiguration und OTA erzwingen die normativen Envelopes, Typen,
+  Größen, Auth-Header, Sequenzen, Timeouts und Zustandsgrenzen. Pins und
+  Hardwarelimits kommen ausschließlich aus dem Gerätemanifest; Recoveryzustände
+  verhindern automatische Konfigurationsschreibvorgänge.
+- **Dashboard lädt auch über den Fernzugriff schlank und robust.** Der bisher
+  vollständig in die Seite eingebettete Wertekatalog wird erst beim Öffnen des
+  Widget-Dialogs geladen. Seine aufklappbaren Ebenen laden jeweils nur direkte
+  Unterebenen und sichtbare Werte nach; große Blätter sind auf 100 Werte je
+  Seite begrenzt, die Suche läuft gezielt auf dem Server. Die normalen
+  Dashboard-Liveabfragen lösen nur noch die tatsächlich konfigurierten
+  Widget-Werte auf. Außerdem ist der erste Dashboard-Tab bereits im
+  serverseitigen HTML sichtbar und hängt nicht mehr von der Ausführung des
+  Scripts am Dokumentende ab.
+- **Wallbox-Ladung in der Prognose.** Ist für ein Fahrzeug ein
+  Angesteckt-Topic konfiguriert, wird dessen geplanter Ladebedarf nur noch bei
+  eindeutig angestecktem Fahrzeug in die Verbrauchsprognose eingerechnet. Ohne
+  dieses Topic bleibt die bisherige Planung anhand des bekannten Fahrzeug-SoC
+  erhalten.
+
 ## [1.3.2] — 2026-07-19
 
 ### Geändert

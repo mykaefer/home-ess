@@ -1170,8 +1170,10 @@ Eckpunkte:
   Tageswert pro Tag; Grundlage für die statistischen Jahreswerte (gestern,
   Minimum/Maximum inkl. Datum) im Wert-Katalog. 400 Tage Aufbewahrung.
 
-> **Wert-Katalog** (`output/internal-values.js`): Outputs **und** Dashboard-Widgets
-> beziehen ihre Werte aus demselben Katalog. Enthält PV (Leistungen, Erträge,
+> **Zentrale States-Quelle** (`states/repository.js`, `states/system-values.js`):
+> Outputs, Dashboard-Widgets und die States-Seite beziehen ihre Werte aus
+> demselben Repository. Interne Werte stehen im Baum unter **System**. Enthält
+> PV (Leistungen, Erträge,
 > Sonne), Stromverbrauch (Leistungen, Energien je Zeitraum, Zählersummen),
 > Sonnenintensität, **PV-Prognose** (Tagesertrag heute/morgen/+2/+3 sowie heute
 > bisher / noch erwartet), **Systemprognose** (38 Werte), **Batterie** (Messwerte,
@@ -1179,6 +1181,9 @@ Eckpunkte:
 > **Geräte** und **Verbrauchssummen** (Messen + Schalten) sowie **Pool** und
 > **Wallbox** (wenn das jeweilige Modul aktiv ist). Jeder Eintrag
 > hat `id`, `label`, `value`, `display`.
+> Für Topic-Felder veröffentlicht die System-Runtime dieselben Werte zusätzlich
+> unter `system://homeess/<id>` und routet sie ohne MQTT-Umweg in den jeweils
+> konfigurierten Cache-Key.
 
 ## MQTT Ad-hoc-Subscriptions (Pool und Output-Readback)
 
@@ -1248,9 +1253,11 @@ Quellcode. Vollständiges Regelwerk in [ADAPTER.md](ADAPTER.md); Vorlage:
   PRESET.md). Die **Unit-ID ist Teil jedes Registers** (zusammengesetzter
   Editor-Schlüssel `keyFields:[unitId,address]`) und bildet die erste Adressebene
   `modbus://instanz/<unitId>/<adresse>` — eine Instanz bedient so mehrere Units.
-- **States-Seite** (`/states`, Menü unter Prognose): `src/adapters/states.js`
-  aggregiert gemeldete States (persistiert in `adapter_states`) + Live-Werte aus
-  dem Bus zum Baum. **Adapter-Seite** (`/adapter`, Fußbereich über Module):
+- **States-Hauptseite** (`/states`): `src/states/repository.js` führt die
+  berechneten Systemwerte (`src/states/system-values.js`), virtuelle States und
+  gemeldete Adapter-States (Metadaten in `adapter_states`, Live-Werte aus dem
+  Bus) zu einem Baum zusammen. Die bisherigen Output-Katalogimporte delegieren
+  als Kompatibilitätsschicht dorthin. **Adapter-Seite** (`/adapter`):
   Verwaltung + generische Settings aus dem Manifest-Schema. Die Übersicht
   blendet Adapter ohne aktivierte Instanz standardmäßig aus; ein Schalter oben
   rechts blendet diese Karten bei Bedarf wieder ein. Die Sichtbarkeit wird im

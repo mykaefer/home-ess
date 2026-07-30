@@ -1,0 +1,69 @@
+{
+  "id": "hdp",
+  "name": "HDP Adapter",
+  "prefix": "hdp",
+  "version": "1.0.8",
+  "description": "Direkte Einbindung HDP-kompatibler Sensoren, Aktoren und Anzeigen ohne MQTT oder manuelle Pfadkonfiguration.",
+  "copyright": "Copyright (C) 2026 Kevin Käfer",
+  "multiInstance": false,
+  "main": "index.js",
+  "managementPage": {
+    "label": "HDP Kopplung & Verwaltung",
+    "maxUploadBytes": 8388608,
+    "stylesheet": "management.css"
+  },
+  "devicePage": {
+    "storageKey": "deviceCatalog",
+    "label": "HDP Geräte",
+    "emptyText": "Noch keine HDP-Geräte gefunden. Die Instanz aktivieren und „Geräte suchen“ wählen."
+  },
+  "settings": [
+    {
+      "key": "discoveryIntervalSeconds",
+      "label": "Discovery-Intervall (s)",
+      "type": "number",
+      "default": 30,
+      "hint": "mDNS-Suche nach _homeess-hdp._tcp.local; mindestens 5 Sekunden."
+    },
+    {
+      "key": "offlineAfterSeconds",
+      "label": "Discovery-Timeout (s)",
+      "type": "number",
+      "default": 90,
+      "hint": "Nicht erneut gemeldete Geräte werden danach als nicht erreichbar markiert."
+    },
+    {
+      "key": "releaseSource",
+      "label": "Firmware-Releasequelle",
+      "type": "text",
+      "default": "",
+      "hint": "Vorbereitet für offizielle GitHub-Release-Manifeste; Geräte greifen nie selbst auf diese Quelle zu."
+    },
+    {
+      "key": "firmwarePublicKey",
+      "label": "Firmware-Prüfschlüssel (Ed25519 SPKI, Base64)",
+      "type": "text",
+      "default": "",
+      "hint": "Öffentlicher Release-Schlüssel. Signierte Artefakte werden ohne passenden Schlüssel nicht installiert."
+    },
+    {
+      "key": "updateMode",
+      "label": "Globale Updatepolitik",
+      "type": "select",
+      "default": "manual",
+      "options": [
+        { "value": "manual", "label": "Manuell" },
+        { "value": "notify_only", "label": "Nur benachrichtigen" },
+        { "value": "automatic", "label": "Automatisch" }
+      ],
+      "hint": "Diese Einstellung bleibt ausschließlich im Adapter."
+    },
+    {
+      "key": "updateChannel",
+      "label": "Globaler Release-Kanal",
+      "type": "select",
+      "default": "stable",
+      "options": ["stable", "beta", "development"]
+    }
+  ]
+}

@@ -29,7 +29,11 @@ const {
   MAX_TAB_TITLE_LENGTH,
 } = require('../dashboard/tabs');
 const { listSwitchTargets, readSwitchStates, commandSwitch } = require('../dashboard/switches');
-const { listInternalValues } = require('../output/internal-values');
+const {
+  listCatalogLevel,
+  searchCatalog,
+  resolveInternalValues,
+} = require('../states/catalog');
 const { INFO_FIELDS, readSystemInfo } = require('../dashboard/system-info');
 const renderDashboard = require('../views/dashboard');
 
@@ -56,12 +60,16 @@ function enrichWidget(widget, valuesById, switchStates) {
 // dieselbe vollständig initialisierte Dashboard-Ansicht.
 async function renderPage(db, res, options = {}) {
   const tabs = await listTabs(db);
-  const [groups, widgets, internalValues, switchTargets] = await Promise.all([
+  const [groups, widgets, switchTargets] = await Promise.all([
     listGroups(db),
     listWidgets(db),
-    listInternalValues(db, mqttClient.getCache()),
     listSwitchTargets(db),
   ]);
+  const internalValues = await resolveInternalValues(
+    db,
+    mqttClient.getCache(),
+    widgets.filter((widget) => widget.type === 'value').map((widget) => widget.sourceId)
+  );
   const switchStates = await readSwitchStates(db, mqttClient.getCache(), widgets);
   const valuesById = new Map(internalValues.map((entry) => [entry.id, entry]));
   const enriched = widgets.map((widget) => enrichWidget(widget, valuesById, switchStates));
@@ -92,12 +100,6 @@ async function renderPage(db, res, options = {}) {
       tabs: tabViews,
       groupsForSelect: groups.map((group) => ({ ...group, tabId: groupTabById.get(group.id) })),
       groupWidths: GROUP_WIDTHS,
-      internalValues: internalValues.map((entry) => ({
-        id: entry.id,
-        label: entry.label,
-        display: entry.display,
-        category: entry.category,
-      })),
       switchTargets,
       infoFields: INFO_FIELDS,
       systemInfo: readSystemInfo(),
@@ -131,10 +133,12 @@ function dashboardRoutes(db) {
 
   router.get('/dashboard/data', requireAuth, async (req, res, next) => {
     try {
-      const [widgets, internalValues] = await Promise.all([
-        listWidgets(db),
-        listInternalValues(db, mqttClient.getCache()),
-      ]);
+      const widgets = await listWidgets(db);
+      const internalValues = await resolveInternalValues(
+        db,
+        mqttClient.getCache(),
+        widgets.filter((widget) => widget.type === 'value').map((widget) => widget.sourceId)
+      );
       const switchStates = await readSwitchStates(db, mqttClient.getCache(), widgets);
       const valuesById = new Map(internalValues.map((entry) => [entry.id, entry]));
       res.json({
@@ -152,6 +156,21 @@ function dashboardRoutes(db) {
           }),
         system: readSystemInfo(),
       });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // Der potenziell sehr große Wertekatalog wird hierarchisch und erst beim
+  // Öffnen des Widget-Dialogs geladen. Ein Pfad liefert ausschließlich seine
+  // direkten Unterordner und die unmittelbar darin liegenden Werte.
+  router.get('/dashboard/catalog', requireAuth, async (req, res, next) => {
+    try {
+      const query = String(req.query.q || '').trim();
+      const result = query
+        ? await searchCatalog(db, mqttClient.getCache(), query)
+        : await listCatalogLevel(db, mqttClient.getCache(), req.query.path, req.query.offset);
+      res.json(result);
     } catch (err) {
       next(err);
     }

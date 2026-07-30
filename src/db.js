@@ -642,6 +642,12 @@ function openDatabase() {
         FOREIGN KEY (instance_id) REFERENCES adapter_instances(id) ON DELETE CASCADE
       )`
     );
+    // Der hierarchisch nachgeladene Wertekatalog liest Adapterzweige nach
+    // Instanz und Kategorie. Der Index hält diese Abfragen auch bei vielen
+    // tausend Geräte-States effizient.
+    db.run(
+      'CREATE INDEX IF NOT EXISTS idx_adapter_states_instance_category ON adapter_states (instance_id, category)'
+    );
     // Historisierte, abgeschlossene Tageswerte einzelner Kennzahlen (PV-Ertrag,
     // Netzbezug, Eigenverbrauch) für die
     // Jahres-Statistik (Durchschnitt/Minimum/Maximum inkl. Datum) im
@@ -673,6 +679,7 @@ function openDatabase() {
     migratePvCalibrationBuckets(db);
     migratePlaintextPassword(db);
     migrateUsers(db);
+    migrateStatesVisibility(db);
     migrateSessions(db);
     seedBatterieConfig(db);
     migrateBatterieConfig(db);
@@ -801,6 +808,26 @@ function migrateUsers(db) {
     }
     if (!existing.has('visible_pages')) {
       db.run('ALTER TABLE users ADD COLUMN visible_pages TEXT');
+    }
+  });
+}
+
+// `/states` war früher kein eigener Berechtigungsbereich, sondern ein
+// Navigations-Unterpunkt von Adapter und direkt für jeden angemeldeten Nutzer
+// erreichbar. Beim Herauslösen zur Hauptseite bleibt dieser Zugriff für alle
+// bestehenden expliziten Seitenlisten erhalten.
+function migrateStatesVisibility(db) {
+  db.all('SELECT id, visible_pages FROM users WHERE visible_pages IS NOT NULL', (err, rows) => {
+    if (err || !Array.isArray(rows)) return;
+    for (const row of rows) {
+      let pages;
+      try {
+        pages = JSON.parse(row.visible_pages);
+      } catch (_) {
+        continue;
+      }
+      if (!Array.isArray(pages) || pages.includes('states')) continue;
+      db.run('UPDATE users SET visible_pages = ? WHERE id = ?', [JSON.stringify([...pages, 'states']), row.id]);
     }
   });
 }

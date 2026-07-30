@@ -59,6 +59,8 @@ test('GET / leitet klein auf /dashboard; GET /dashboard liefert das vollständig
   assert.match(dashboard, /class="dash-tabbar"/);
   assert.match(dashboard, /widget-card widget-card--value/);
   assert.match(dashboard, /id="widgetDialog"/);
+  assert.match(dashboard, /value-catalog--lazy/);
+  assert.ok(Buffer.byteLength(dashboard) < 300000, 'Dashboard bettet den vollständigen Wertekatalog nicht mehr ein');
 });
 
 test('Tabs: anlegen, umbenennen, löschen über die Routen', async () => {
@@ -112,6 +114,15 @@ test('GET /dashboard/data liefert Widgets, Schalter und Systeminfo', async () =>
   assert.ok(Array.isArray(data.switches));
   assert.ok(data.system && data.system.homeess_version);
   assert.equal(data.widgets.length, 1);
+});
+
+test('GET /dashboard/catalog liefert zunächst nur die obersten Ebenen', async () => {
+  const res = await fetch(`${baseUrl}/dashboard/catalog`, { headers: { Accept: 'application/json' } });
+  assert.equal(res.status, 200);
+  const data = await res.json();
+  assert.equal(data.path, '');
+  assert.equal(data.items.length, 0);
+  assert.ok(data.nodes.some((node) => node.path === 'System'));
 });
 
 test('POST /dashboard/switch: unbekanntes Widget ergibt 404', async () => {

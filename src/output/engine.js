@@ -7,7 +7,7 @@
 const mqttClient = require('../mqtt/client');
 const { normalizeMqttTopic, isCommandTopic } = require('../mqtt/topics');
 const { listOutputs } = require('./outputs');
-const { listInternalValues } = require('./internal-values');
+const { resolveStates } = require('../states/catalog');
 const metrics = require('../runtime-metrics');
 
 const DEBOUNCE_MS = 1000;
@@ -71,7 +71,10 @@ async function evaluate() {
   evaluating = true;
   try {
     if (!outputs.length) return;
-    const values = await metrics.measure('output.catalog', () => listInternalValues(database, mqttClient.getCache()));
+    const values = await metrics.measure(
+      'output.catalog',
+      () => resolveStates(database, mqttClient.getCache(), outputs.map((output) => output.sourceId))
+    );
     const byId = new Map(values.map((entry) => [entry.id, entry]));
     const cache = mqttClient.getCache();
     const connected = mqttClient.getStatus().connected;

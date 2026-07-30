@@ -1254,6 +1254,11 @@ h2 .cmd-confirm { font-size: 13px; vertical-align: middle; }
     display: flex;
 }
 
+.lazy-value-catalog-more {
+    margin: 8px 10px 10px;
+    width: calc(100% - 20px);
+}
+
 /* Rekursive Adapter-Kategorien als eingerückter Verzeichnisbaum. */
 .value-cat--nested > .value-cat-head {
     padding-left: calc(10px + var(--tree-depth, 1) * 16px);

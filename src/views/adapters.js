@@ -135,6 +135,9 @@ function renderInstanceRow(adapter, inst, status) {
     : adapter.id === 'tasmota'
     ? `<a href="/adapter/instance/${inst.id}/tasmota-devices" class="module-toggle-btn">Geräte</a>`
     : '';
+  const managementLink = adapter.managementPage
+    ? `<a href="/adapter/instance/${inst.id}/manage" class="module-toggle-btn">${escapeHtml(adapter.managementPage.label)}</a>`
+    : '';
 
   return `            <div class="adapter-row" data-instance="${inst.id}" data-enabled="${enabled ? '1' : '0'}" data-running="${running ? '1' : '0'}">
               <span class="adapter-col-name"><strong>${escapeHtml(inst.name)}</strong></span>
@@ -145,6 +148,7 @@ function renderInstanceRow(adapter, inst, status) {
                 <a href="/adapter/instance/${inst.id}" class="module-toggle-btn">Einstellungen</a>
                 ${adapter.stateEditor ? `<a href="/adapter/instance/${inst.id}/states" class="module-toggle-btn">${escapeHtml(adapter.stateEditor.label)}</a>` : ''}
                 ${tasmotaLink}
+                ${managementLink}
                 <form action="/adapter/instance/${inst.id}/${toggleAction}" method="POST">
                   <button type="submit" class="module-toggle-btn ${toggleClass}">${toggleLabel}</button>
                 </form>
@@ -180,8 +184,11 @@ ${fields}
     : adapter.id === 'tasmota'
     ? ` · <a href="/adapter/instance/${instance.id}/tasmota-devices">Geräte ansehen</a>`
     : '';
+  const managementLink = adapter.managementPage
+    ? ` · <a href="/adapter/instance/${instance.id}/manage">${escapeHtml(adapter.managementPage.label)}</a>`
+    : '';
   const body = `        <h1>${escapeHtml(adapter.name)} – ${escapeHtml(instance.name)}</h1>
-        <p class="muted" style="margin-bottom:16px;">Adresse: <code>${escapeHtml(adapter.prefix)}://${escapeHtml(instance.name)}/</code>${editorLink}${tasmotaLink}</p>
+        <p class="muted" style="margin-bottom:16px;">Adresse: <code>${escapeHtml(adapter.prefix)}://${escapeHtml(instance.name)}/</code>${editorLink}${tasmotaLink}${managementLink}</p>
         ${message ? statusText(message, 'success') : ''}
         ${error ? statusText(error) : ''}
         ${hints.map((hint) => `<p class="muted">${escapeHtml(hint)}</p>`).join('')}

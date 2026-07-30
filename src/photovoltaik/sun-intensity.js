@@ -3,15 +3,22 @@
 // Sonnenintensität aus dem Clear-Sky-Modell: Verhältnis der tatsächlichen
 // PV-Gesamtleistung zur idealen Klarhimmel-Leistung, in Prozent und auf 100%
 // gedeckelt. Momentanwerte werden periodisch als Zeitreihe gespeichert, um
-// Mittelwerte (10 Minuten, aktueller Tag, Vortag) zu bilden. Nachts/ohne Daten
-// wird kein Sample erfasst. Tagesmittel beruecksichtigen davon nur Samples, bei
-// denen mindestens eine Anlage oberhalb des Idealwert-Cutoffs liegt.
+// Mittelwerte (10 Minuten, aktueller Tag, Vortag) zu bilden. Nachts wird 0 %
+// erfasst, bei fehlenden Daten dagegen kein Sample. Tagesmittel beruecksichtigen
+// davon nur Samples, bei denen mindestens eine Anlage oberhalb des
+// Idealwert-Cutoffs liegt.
 
 const { listPvPlants } = require('./plants');
-const { readPhotovoltaikValues } = require('./aggregation');
+const {
+  readPhotovoltaikValues,
+  buildSolarContext,
+  getSolarElevationDeg,
+} = require('./aggregation');
 
 const SAMPLE_RETENTION_MS = 2 * 24 * 60 * 60 * 1000; // 2 Tage (für Vortag)
 const TEN_MINUTES_MS = 10 * 60 * 1000;
+const CIVIL_TWILIGHT_ELEVATION_DEG = -6;
+const SUN_INTENSITY_WEIGHT = 0.6;
 
 function pad(value) {
   return String(value).padStart(2, '0');
@@ -40,7 +47,8 @@ function dbGet(db, sql, params = []) {
 }
 
 // Momentane Sonnenintensität in Prozent (0..100) oder null, wenn keine
-// belastbare Klarhimmel-Referenz vorliegt (Nacht, keine Leistungsdaten).
+// belastbare Klarhimmel-Referenz bzw. keine Leistungsdaten vorliegen. Eine durch
+// das Modell eindeutig erkannte Nacht ist dagegen eine Intensität von 0 %.
 //
 // Wichtig: Das Verhältnis wird nur über Anlagen gebildet, die BEIDE Werte liefern
 // (aktuelle Leistung UND Idealwert). Fehlt bei einer Anlage kurz der MQTT-Wert,
@@ -54,7 +62,13 @@ async function computeSunIntensitySample(db, cache) {
   let currentSum = 0;
   let idealSum = 0;
   let hasMatch = false;
+  let hasModeledIdeal = false;
+  let hasPositiveModeledIdeal = false;
   for (const plant of pv.plants) {
+    if (plant.idealBase != null) {
+      hasModeledIdeal = true;
+      if (plant.idealBase > 0) hasPositiveModeledIdeal = true;
+    }
     // Nur Anlagen einbeziehen, die aktuell als Sonnenreferenz taugen (größenrelativer
     // Cutoff je nach Sonnenstand). off-axis-Anlagen – z. B. die große Südanlage
     // morgens – liefern aus Diffuslicht weit mehr als ihr winziges Ideal und würden
@@ -65,7 +79,14 @@ async function computeSunIntensitySample(db, cache) {
     idealSum += plant.ideal;
     hasMatch = true;
   }
-  if (!hasMatch || idealSum <= 0) return null;
+  if (!hasMatch || idealSum <= 0) {
+    // Sind alle berechenbaren Klarhimmel-Idealwerte exakt 0, liegt die Sonne
+    // unter dem Horizont. Das ist ein gültiger Messwert, keine Datenlücke.
+    if (hasModeledIdeal && !hasPositiveModeledIdeal) {
+      return { intensity: 0, dayAverageEligible: false };
+    }
+    return null;
+  }
 
   const percent = (currentSum / idealSum) * 100;
   if (!Number.isFinite(percent)) return null;
@@ -80,6 +101,43 @@ async function computeSunIntensitySample(db, cache) {
 async function computeInstantSunIntensity(db, cache) {
   const sample = await computeSunIntensitySample(db, cache);
   return sample == null ? null : sample.intensity;
+}
+
+// Astronomisches Helligkeitstrapez: Während der bürgerlichen Dämmerung steigt
+// die Helligkeit linear von 0 auf 100 %. Ab dem Horizont bleibt sie bis zum
+// Sonnenuntergang auf dem 100-%-Plateau.
+function astronomicalBrightnessPercent(solarElevationDeg) {
+  if (!Number.isFinite(solarElevationDeg)) return null;
+  if (solarElevationDeg <= CIVIL_TWILIGHT_ELEVATION_DEG) return 0;
+  if (solarElevationDeg >= 0) return 100;
+  return ((solarElevationDeg - CIVIL_TWILIGHT_ELEVATION_DEG) /
+    -CIVIL_TWILIGHT_ELEVATION_DEG) * 100;
+}
+
+// Die gemessene Sonnenintensität beeinflusst 60 % des Trapezes. Die übrigen
+// 40 % bilden das diffuse Tageslicht ab, das auch bei 0 % direkter
+// Sonnenintensität vorhanden bleibt. Ohne belastbare Messung gilt allein das
+// astronomische Trapez.
+function combineBrightnessPercent(trapezoidPercent, sunIntensityPercent) {
+  if (!Number.isFinite(trapezoidPercent)) return null;
+  const trapezoid = Math.max(0, Math.min(100, trapezoidPercent));
+  if (!Number.isFinite(sunIntensityPercent)) return trapezoid;
+  const intensity = Math.max(0, Math.min(100, sunIntensityPercent)) / 100;
+  const factor = (1 - SUN_INTENSITY_WEIGHT) + SUN_INTENSITY_WEIGHT * intensity;
+  return trapezoid * factor;
+}
+
+function computeBrightnessPercent(mqttConfig, cache, sunIntensitySample) {
+  const solarContext = buildSolarContext(mqttConfig, cache);
+  const elevation = getSolarElevationDeg(solarContext);
+  const trapezoid = astronomicalBrightnessPercent(elevation);
+  // Nur eine echte Sonnenreferenz ist eine belastbare Messung für den
+  // Bewölkungseinfluss. Modellierte Nacht-Nullwerte und Dämmerungslücken
+  // verändern den linearen Dämmerungsverlauf nicht.
+  const measuredIntensity = sunIntensitySample && sunIntensitySample.dayAverageEligible
+    ? sunIntensitySample.intensity
+    : null;
+  return combineBrightnessPercent(trapezoid, measuredIntensity);
 }
 
 // Einen Messpunkt erfassen und alte Samples aufräumen.
@@ -121,4 +179,12 @@ async function readSunIntensityAverages(db, now = new Date()) {
   return { last10min: value(tenMin), today: value(today), yesterday: value(yesterday) };
 }
 
-module.exports = { computeInstantSunIntensity, recordSample, readSunIntensityAverages };
+module.exports = {
+  computeSunIntensitySample,
+  computeInstantSunIntensity,
+  computeBrightnessPercent,
+  astronomicalBrightnessPercent,
+  combineBrightnessPercent,
+  recordSample,
+  readSunIntensityAverages,
+};

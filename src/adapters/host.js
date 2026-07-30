@@ -12,11 +12,16 @@ const registry = require('./registry');
 const router = require('./router');
 const instancesRepo = require('./instances');
 const metrics = require('../runtime-metrics');
+const bus = require('../state-bus');
+const identityStore = require('../remote-access/identity-store');
+const secretStore = require('./secrets');
+const crypto = require('crypto');
 
 const RUNTIME_PATH = path.join(__dirname, 'runtime.js');
 const RESTART_BASE_MS = 1000;
 const RESTART_MAX_MS = 30000;
 const STOP_KILL_MS = 3000;
+const MANAGEMENT_TIMEOUT_MS = 180000;
 
 let db = null;
 // Kindprozesse spawnen – überschreibbar für Tests (Fake-Child ohne echten fork).
@@ -29,6 +34,71 @@ function _setForkImpl(fn) {
 const running = new Map();
 // instanceName -> instanceId (für write/read-Routing vom Router)
 const idByName = new Map();
+const managementPending = new Map();
+let requestSequence = 0;
+
+function subscriptionKey(entry, subscriptionId) {
+  return `adapter-sub:${entry.instance.id}:${subscriptionId}`;
+}
+
+function removeSubscriptions(entry) {
+  const mqttClient = require('../mqtt/client');
+  for (const key of entry.subscriptions.values()) mqttClient.unsubscribeAdHoc(key);
+  entry.subscriptions.clear();
+}
+
+async function handleHostCall(entry, msg) {
+  const reply = { type: 'host-call-result', requestId: msg.requestId };
+  try {
+    if (msg.method === 'identity') {
+      const identity = await identityStore.getInstancePublicIdentity();
+      reply.result = {
+        instanceId: `homeess-${identity.fingerprintHex.slice(0, 32)}`,
+        fingerprint: identity.fingerprintHex,
+      };
+    } else if (msg.method === 'secret.get') {
+      reply.result = secretStore.get(entry.instance.id, msg.key);
+    } else if (msg.method === 'secret.set') {
+      secretStore.set(entry.instance.id, msg.key, msg.value);
+      reply.result = true;
+    } else if (msg.method === 'secret.delete') {
+      reply.result = secretStore.remove(entry.instance.id, msg.key);
+    } else if (msg.method === 'storage.set') {
+      await instancesRepo.updateSettingKey(db, entry.instance.id, String(msg.key), msg.value);
+      entry.instance.settings = { ...(entry.instance.settings || {}), [String(msg.key)]: msg.value };
+      reply.result = true;
+    } else {
+      throw new Error('Unbekannter Host-Aufruf.');
+    }
+  } catch (err) {
+    reply.error = err && err.message ? err.message : String(err);
+  }
+  if (entry.child) entry.child.send(reply);
+}
+
+function subscribe(entry, msg) {
+  const topic = String(msg.topic || '').trim();
+  const subscriptionId = String(msg.subscriptionId || '');
+  if (!topic || !subscriptionId) return;
+  const mqttClient = require('../mqtt/client');
+  const oldKey = entry.subscriptions.get(subscriptionId);
+  if (oldKey) mqttClient.unsubscribeAdHoc(oldKey);
+  const key = subscriptionKey(entry, subscriptionId);
+  entry.subscriptions.set(subscriptionId, key);
+  mqttClient.subscribeAdHoc(topic, key);
+  const cached = bus.getCache().get(key);
+  if (cached && entry.child) {
+    entry.child.send({ type: 'state-value', subscriptionId, value: cached.value, receivedAt: cached.receivedAt });
+  }
+}
+
+function unsubscribe(entry, subscriptionId) {
+  const id = String(subscriptionId || '');
+  const key = entry.subscriptions.get(id);
+  if (!key) return;
+  require('../mqtt/client').unsubscribeAdHoc(key);
+  entry.subscriptions.delete(id);
+}
 
 function manifestFor(instance) {
   return registry.getManifest(instance.adapterId);
@@ -103,8 +173,30 @@ function handleMessage(entry, msg) {
         instancesRepo.updateSettingKey(db, entry.instance.id, String(msg.key), msg.value).catch(() => {});
       }
       break;
+    case 'subscribe':
+      subscribe(entry, msg);
+      break;
+    case 'unsubscribe':
+      unsubscribe(entry, msg.subscriptionId);
+      break;
+    case 'host-call':
+      handleHostCall(entry, msg).catch(() => {});
+      break;
+    case 'management-result': {
+      const pending = managementPending.get(String(msg.requestId));
+      if (pending && pending.instanceId === entry.instance.id) {
+        managementPending.delete(String(msg.requestId));
+        clearTimeout(pending.timer);
+        pending.resolve(msg.response || {});
+      }
+      break;
+    }
     case 'log':
-      console.log(`[adapter ${entry.manifest.prefix}://${name}] ${msg.message}`);
+      if (msg.level === 'error') console.error(`[adapter ${entry.manifest.prefix}://${name}] FEHLER: ${msg.message}`);
+      else if (msg.level === 'warn') console.warn(`[adapter ${entry.manifest.prefix}://${name}] WARNUNG: ${msg.message}`);
+      else if (msg.level === 'debug') {
+        if (process.env.HOME_ESS_ADAPTER_DEBUG === '1') console.debug(`[adapter ${entry.manifest.prefix}://${name}] DEBUG: ${msg.message}`);
+      } else console.log(`[adapter ${entry.manifest.prefix}://${name}] ${msg.message}`);
       break;
     case 'error':
       console.error(`[adapter ${entry.manifest.prefix}://${name}] FEHLER: ${msg.message}`);
@@ -123,6 +215,7 @@ function spawnChild(entry) {
 
   child.on('message', (msg) => handleMessage(entry, msg));
   child.on('exit', (code) => {
+    removeSubscriptions(entry);
     entry.child = null;
     entry.status.connected = false;
     if (entry.stopping) {
@@ -157,7 +250,8 @@ function startInstance(instance) {
     console.error(`[adapters] Kein Adapter "${instance.adapterId}" für Instanz "${instance.name}".`);
     return;
   }
-  const entry = { instance, manifest, child: null, restarts: 0, stopping: false, restartTimer: null, status: { connected: false, detail: '' } };
+  const entry = { instance, manifest, child: null, restarts: 0, stopping: false,
+    restartTimer: null, subscriptions: new Map(), status: { connected: false, detail: '' } };
   running.set(instance.id, entry);
   spawnChild(entry);
 }
@@ -166,10 +260,51 @@ function cleanup(instanceId) {
   const entry = running.get(instanceId);
   if (!entry) return;
   if (entry.restartTimer) clearTimeout(entry.restartTimer);
+  removeSubscriptions(entry);
   router.removeInstanceScheme(entry.instance.name);
   idByName.delete(entry.instance.name);
   running.delete(instanceId);
 }
+
+// Leitet einen authentifizierten Management-Request an den isolierten
+// Adapterprozess weiter. Bestehende Adapter ohne managementPage bleiben davon
+// vollständig unberührt.
+function managementRequest(instanceId, request, timeoutMs = MANAGEMENT_TIMEOUT_MS) {
+  const entry = running.get(Number(instanceId));
+  if (!entry || !entry.child || !entry.manifest.managementPage) {
+    return Promise.reject(new Error('Adapterverwaltung ist nicht verfügbar.'));
+  }
+  const requestId = `${process.pid}-${Date.now()}-${++requestSequence}-${crypto.randomBytes(4).toString('hex')}`;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      managementPending.delete(requestId);
+      reject(new Error('Adapterverwaltung hat nicht rechtzeitig geantwortet.'));
+    }, Math.max(1000, Number(timeoutMs) || MANAGEMENT_TIMEOUT_MS));
+    managementPending.set(requestId, { instanceId: entry.instance.id, resolve, reject, timer });
+    try {
+      entry.child.send({ type: 'management', requestId, request });
+    } catch (err) {
+      clearTimeout(timer);
+      managementPending.delete(requestId);
+      reject(err);
+    }
+  });
+}
+
+function deliverSubscriptions(entries, event) {
+  const changed = new Set(event && Array.isArray(event.changedKeys) ? event.changedKeys : []);
+  if (!changed.size) return;
+  for (const entry of entries) {
+    if (!entry.child) continue;
+    for (const [subscriptionId, key] of entry.subscriptions) {
+      if (!changed.has(key)) continue;
+      const cached = bus.getCache().get(key);
+      if (cached) entry.child.send({ type: 'state-value', subscriptionId, value: cached.value, receivedAt: cached.receivedAt });
+    }
+  }
+}
+
+const offBus = bus.onValuesChanged((event) => deliverSubscriptions(running.values(), event));
 
 function stopInstance(instanceId) {
   const entry = running.get(instanceId);
@@ -283,6 +418,9 @@ module.exports = {
   stopAll,
   isRunning,
   getStatus,
+  managementRequest,
   _setForkImpl,
   _handleMessage: handleMessage,
+  _deliverSubscriptions: deliverSubscriptions,
+  _offBus: offBus,
 };

@@ -20,6 +20,7 @@ const instancesRepo = require('../src/adapters/instances');
 const host = require('../src/adapters/host');
 const { openDatabase } = require('../src/db');
 const { listInternalValues } = require('../src/output/internal-values');
+const { buildStatesTree } = require('../src/states/repository');
 
 function writeAdapter(id, prefix) {
   const dir = path.join(ADAPTER_DIR, id);
@@ -71,6 +72,30 @@ test('Adapter-States erscheinen automatisch im Wertekatalog (listInternalValues)
   // Instanz, sodass der Wertekatalog denselben verschachtelten Baum zeigt.
   assert.equal(entry.category, 'Adapter: simcat / Messwerte');
   assert.equal(entry.value, 21.5);
+
+  const tree = await buildStatesTree(db, new Map());
+  assert.equal(tree[0].instanceName, 'system');
+  assert.equal(tree[0].adapterName, 'System');
+  assert.ok(
+    tree[0].categories.some((category) => category.name === 'Photovoltaik'),
+    'berechnete interne Werte stehen in der States-Hauptgruppe System'
+  );
+  const pvCategory = tree[0].categories.find((category) => category.name === 'Photovoltaik');
+  assert.ok(
+    pvCategory.states.some((state) => state.topic.startsWith('system://homeess/')),
+    'Systemwerte sind im Topic-Picker technisch adressierbar'
+  );
+  const prognosisCategory = tree[0].categories.find((category) => category.name === 'Prognose');
+  assert.ok(
+    prognosisCategory.states.some(
+      (state) => state.topic === 'system://homeess/prognose.helligkeit'
+    ),
+    'Helligkeit steht als adressierbarer System-Prognose-State bereit'
+  );
+  assert.ok(
+    tree.some((block) => block.instanceName === 'simcat'),
+    'Adapter-States bleiben als eigene Instanz im zentralen States-Baum'
+  );
 
   await host.stopInstance(id);
   db.close();

@@ -408,10 +408,12 @@ Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
   `system.multicall`) und übernimmt Geräteänderungen unmittelbar als Push-Events.
   Ein optionaler, gleichmäßig verteilter CCU-Cache-Refresh bleibt als
   adaptereigene Absicherung verfügbar und erzeugt keine Funkabfragen.
-- 🗂️ **States** — klappt als Unterpunkt unter **Adapter** auf: Baumansicht aller
-  von Adaptern gemeldeten Werte (Instanz → Kategorie → State) mit Live-Werten;
-  hinter Topic-Feldern direkt per Auswahldialog übernehmbar. Alle States sind
-  zusätzlich automatisch im Wertekatalog als Quelle verfügbar.
+- 🗂️ **States** — eigenständige Hauptseite und zentrale Wertquelle: interne
+  homeESS-Werte stehen unter **System**, daneben die von Adaptern gemeldeten
+  Werte (Instanz → Kategorie → State), jeweils mit Live-Wert. Dashboard und
+  Output wählen aus diesem gemeinsamen Bestand. Technisch adressierbare
+  Systemwerte (`system://homeess/...`), Adapter- und Schaltgruppen-States lassen
+  sich zusätzlich hinter Topic-Feldern per Auswahldialog übernehmen.
 - 🌤️ **Sonnenintensität** (% des Clear-Sky-Ideals, auf 100 % gedeckelt):
   aktuell sowie 10-Minuten-/Tages-/Vortagsmittel. Nur Anlagen oberhalb ihres
   größenrelativen Sonnenreferenz-Cutoffs fließen ein.
@@ -587,8 +589,9 @@ src/
                    Level-Gate-Steuerschleife (Seite „Messen + Schalten")
   operating-state.js  Globaler Zustand (Betriebslevel, Notstrom, Autark-Latch)
   operating-level/    Betriebslevel-Handler / Lastmanagement (handler.js)
-  output/          Wert-Katalog (PV, Prognose, Strom, Batterie, Pool, Sonne),
-                   Output-CRUD, Publish-Engine
+  states/          Zentrales States-Repository, Systemwert-Provider und
+                   hierarchischer Katalog für System- und Adapterwerte
+  output/          Kompatibilitätszugriff, Output-CRUD und Publish-Engine
   dashboard/       Widget- und Gruppen-CRUD
   routes/          Eine Datei je Seite/Feature
   views/           Dynamische HTML-Renderer (je Seite eine Datei),

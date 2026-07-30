@@ -272,4 +272,290 @@ function valueCatalogScript() {
     }`;
 }
 
-module.exports = { renderValueCatalog, valueCatalogScript, buildValueCatalogTree };
+// Lazy-Variante für sehr große Kataloge: Die Seite enthält nur die Hülle. Ebenen
+// und Suchtreffer werden erst bei Bedarf vom Server geholt.
+function renderLazyValueCatalog({
+  inputId,
+  name,
+  selectedId = '',
+  selectedLabel = '',
+  label = 'Interner Wert',
+  endpoint = '/dashboard/catalog',
+} = {}) {
+  const fieldName = name || inputId;
+  return `          <div class="field-block value-catalog value-catalog--lazy" id="catalog-${escapeHtml(inputId)}" data-input="${escapeHtml(inputId)}" data-endpoint="${escapeHtml(endpoint)}">
+            <span>${escapeHtml(label)}</span>
+            <input type="hidden" id="${escapeHtml(inputId)}" name="${escapeHtml(fieldName)}" value="${escapeHtml(selectedId)}">
+            <div class="value-catalog-bar">
+              <input type="text" class="value-catalog-search" placeholder="Wert suchen…" oninput="lazyValueCatalogSearch('${escapeHtml(inputId)}', this.value)">
+              <span class="value-catalog-selected${selectedId ? ' has-value' : ''}" id="${escapeHtml(inputId)}-selected">${selectedId ? escapeHtml(selectedLabel || selectedId) : 'Kein Wert gewählt'}</span>
+            </div>
+            <p class="muted form-hint lazy-value-catalog-status" id="${escapeHtml(inputId)}-status">Katalog wird beim Öffnen geladen.</p>
+            <div class="value-catalog-cats" id="${escapeHtml(inputId)}-tree"></div>
+            <div class="value-catalog-cats" id="${escapeHtml(inputId)}-results" hidden></div>
+          </div>`;
+}
+
+function lazyValueCatalogScript() {
+  return `    var LAZY_VALUE_CATALOG_EXPAND_KEY = 'homeess.valuecatalog.expanded.v1';
+    var lazyValueCatalogExpandedCache = null;
+    var lazyValueCatalogStates = {};
+
+    function lazyValueCatalogExpanded() {
+      if (lazyValueCatalogExpandedCache) return lazyValueCatalogExpandedCache;
+      try { lazyValueCatalogExpandedCache = JSON.parse(localStorage.getItem(LAZY_VALUE_CATALOG_EXPAND_KEY) || '{}') || {}; }
+      catch (_) { lazyValueCatalogExpandedCache = {}; }
+      return lazyValueCatalogExpandedCache;
+    }
+
+    function lazyValueCatalogSaveExpanded() {
+      try { localStorage.setItem(LAZY_VALUE_CATALOG_EXPAND_KEY, JSON.stringify(lazyValueCatalogExpanded())); }
+      catch (_) {}
+    }
+
+    function lazyValueCatalogState(inputId) {
+      if (!lazyValueCatalogStates[inputId]) {
+        lazyValueCatalogStates[inputId] = { rootPromise: null, searchTimer: null, searchSequence: 0 };
+      }
+      return lazyValueCatalogStates[inputId];
+    }
+
+    function lazyValueCatalogNode(inputId, suffix) {
+      return document.getElementById(inputId + suffix);
+    }
+
+    function lazyValueCatalogStatus(inputId, text, error) {
+      var node = lazyValueCatalogNode(inputId, '-status');
+      if (!node) return;
+      node.textContent = text || '';
+      node.classList.toggle('error-text', !!error);
+      node.hidden = !text;
+    }
+
+    function lazyValueCatalogUrl(catalog, params) {
+      var url = catalog.getAttribute('data-endpoint') || '/dashboard/catalog';
+      var query = [];
+      Object.keys(params || {}).forEach(function (key) {
+        if (params[key] == null || params[key] === '') return;
+        query.push(encodeURIComponent(key) + '=' + encodeURIComponent(String(params[key])));
+      });
+      return url + (query.length ? '?' + query.join('&') : '');
+    }
+
+    function lazyValueCatalogFetch(catalog, params) {
+      return fetch(lazyValueCatalogUrl(catalog, params), { headers: { Accept: 'application/json' } })
+        .then(function (response) {
+          if (!response.ok) throw new Error('catalog request failed');
+          return response.json();
+        });
+    }
+
+    function lazyValueCatalogSetSelected(inputId, valueId, label) {
+      var catalog = document.getElementById('catalog-' + inputId);
+      var input = document.getElementById(inputId);
+      if (input) input.value = valueId || '';
+      var selected = lazyValueCatalogNode(inputId, '-selected');
+      if (selected) {
+        selected.textContent = valueId ? (label || valueId) : 'Kein Wert gewählt';
+        selected.classList.toggle('has-value', !!valueId);
+      }
+      if (!catalog) return;
+      var rows = catalog.querySelectorAll('.value-row');
+      for (var i = 0; i < rows.length; i++) {
+        rows[i].classList.toggle('is-selected', !!valueId && rows[i].getAttribute('data-id') === valueId);
+      }
+    }
+
+    function lazyValueCatalogCreateRow(inputId, item) {
+      var row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'value-row';
+      row.setAttribute('data-id', item.id || '');
+      row.setAttribute('data-label', item.label || item.id || '');
+      if (item.category) row.title = item.category;
+      var name = document.createElement('span');
+      name.className = 'value-row-label';
+      name.textContent = item.label || item.id || '';
+      var value = document.createElement('span');
+      value.className = 'value-row-now';
+      value.textContent = item.display == null ? '—' : item.display;
+      row.appendChild(name);
+      row.appendChild(value);
+      row.addEventListener('click', function () {
+        lazyValueCatalogSetSelected(inputId, item.id || '', item.label || item.id || '');
+      });
+      var selected = document.getElementById(inputId);
+      if (selected && selected.value === item.id) row.classList.add('is-selected');
+      return row;
+    }
+
+    function lazyValueCatalogDepth(path) {
+      return Math.max(0, String(path || '').split(' / ').filter(Boolean).length - 1);
+    }
+
+    function lazyValueCatalogSetOpen(cat, open) {
+      cat.classList.toggle('is-open', !!open);
+      var head = cat.querySelector(':scope > .value-cat-head');
+      if (head) head.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+
+    function lazyValueCatalogCreateCategory(inputId, node) {
+      var depth = lazyValueCatalogDepth(node.path);
+      var cat = document.createElement('div');
+      cat.className = 'value-cat' + (depth ? ' value-cat--nested' : '');
+      cat.style.setProperty('--tree-depth', String(depth));
+      cat.setAttribute('data-cat-key', node.path);
+      var head = document.createElement('button');
+      head.type = 'button';
+      head.className = 'value-cat-head';
+      head.setAttribute('aria-expanded', 'false');
+      var caret = document.createElement('span');
+      caret.className = 'value-cat-caret';
+      caret.setAttribute('aria-hidden', 'true');
+      caret.textContent = '▸';
+      var name = document.createElement('span');
+      name.className = 'value-cat-name';
+      name.textContent = node.name || '';
+      var count = document.createElement('span');
+      count.className = 'value-cat-count';
+      count.textContent = node.count == null ? '' : String(node.count);
+      var body = document.createElement('div');
+      body.className = 'value-cat-body';
+      head.appendChild(caret);
+      head.appendChild(name);
+      head.appendChild(count);
+      cat.appendChild(head);
+      cat.appendChild(body);
+      head.addEventListener('click', function () { lazyValueCatalogToggle(inputId, cat); });
+      if (lazyValueCatalogExpanded()[node.path] === true) {
+        lazyValueCatalogSetOpen(cat, true);
+        setTimeout(function () { lazyValueCatalogLoadCategory(inputId, cat); }, 0);
+      }
+      return cat;
+    }
+
+    function lazyValueCatalogAppendPage(inputId, container, data, replace) {
+      if (replace) container.textContent = '';
+      if (replace) {
+        (data.nodes || []).forEach(function (node) {
+          container.appendChild(lazyValueCatalogCreateCategory(inputId, node));
+        });
+      }
+      (data.items || []).forEach(function (item) {
+        container.appendChild(lazyValueCatalogCreateRow(inputId, item));
+      });
+      var oldMore = container.querySelector(':scope > .lazy-value-catalog-more');
+      if (oldMore) oldMore.remove();
+      if (data.nextOffset != null) {
+        var more = document.createElement('button');
+        more.type = 'button';
+        more.className = 'secondary-button lazy-value-catalog-more';
+        more.textContent = 'Weitere Werte laden';
+        more.addEventListener('click', function () {
+          more.disabled = true;
+          lazyValueCatalogLoadPage(inputId, container, data.path || '', data.nextOffset);
+        });
+        container.appendChild(more);
+      }
+    }
+
+    function lazyValueCatalogLoadPage(inputId, container, path, offset) {
+      var catalog = document.getElementById('catalog-' + inputId);
+      if (!catalog) return Promise.resolve();
+      return lazyValueCatalogFetch(catalog, { path: path, offset: offset })
+        .then(function (data) {
+          lazyValueCatalogAppendPage(inputId, container, data, offset === 0);
+          container.setAttribute('data-loaded', 'true');
+          lazyValueCatalogStatus(inputId, '');
+        })
+        .catch(function () {
+          lazyValueCatalogStatus(inputId, 'Werte konnten nicht geladen werden.', true);
+        });
+    }
+
+    function lazyValueCatalogLoadCategory(inputId, cat) {
+      var body = cat.querySelector(':scope > .value-cat-body');
+      if (!body || body.getAttribute('data-loaded') === 'true' || body.getAttribute('data-loading') === 'true') return;
+      body.setAttribute('data-loading', 'true');
+      lazyValueCatalogStatus(inputId, 'Ebene wird geladen …');
+      lazyValueCatalogLoadPage(inputId, body, cat.getAttribute('data-cat-key') || '', 0)
+        .then(function () { body.removeAttribute('data-loading'); });
+    }
+
+    function lazyValueCatalogToggle(inputId, cat) {
+      var open = !cat.classList.contains('is-open');
+      lazyValueCatalogSetOpen(cat, open);
+      var key = cat.getAttribute('data-cat-key');
+      var map = lazyValueCatalogExpanded();
+      if (open) {
+        map[key] = true;
+        lazyValueCatalogLoadCategory(inputId, cat);
+      } else {
+        delete map[key];
+      }
+      lazyValueCatalogSaveExpanded();
+    }
+
+    function lazyValueCatalogEnsure(inputId) {
+      var catalog = document.getElementById('catalog-' + inputId);
+      var tree = lazyValueCatalogNode(inputId, '-tree');
+      if (!catalog || !tree) return Promise.resolve();
+      if (tree.getAttribute('data-loaded') === 'true') return Promise.resolve();
+      var state = lazyValueCatalogState(inputId);
+      if (state.rootPromise) return state.rootPromise;
+      lazyValueCatalogStatus(inputId, 'Katalog wird geladen …');
+      state.rootPromise = lazyValueCatalogLoadPage(inputId, tree, '', 0)
+        .then(function () { state.rootPromise = null; });
+      return state.rootPromise;
+    }
+
+    function lazyValueCatalogSearch(inputId, rawQuery) {
+      var query = (rawQuery || '').trim();
+      var tree = lazyValueCatalogNode(inputId, '-tree');
+      var results = lazyValueCatalogNode(inputId, '-results');
+      var state = lazyValueCatalogState(inputId);
+      if (state.searchTimer) clearTimeout(state.searchTimer);
+      state.searchSequence += 1;
+      var sequence = state.searchSequence;
+      if (query.length < 2) {
+        if (tree) tree.hidden = false;
+        if (results) { results.hidden = true; results.textContent = ''; }
+        lazyValueCatalogStatus(inputId, query ? 'Bitte mindestens zwei Zeichen eingeben.' : '');
+        lazyValueCatalogEnsure(inputId);
+        return;
+      }
+      if (tree) tree.hidden = true;
+      if (results) results.hidden = false;
+      lazyValueCatalogStatus(inputId, 'Suche läuft …');
+      state.searchTimer = setTimeout(function () {
+        var catalog = document.getElementById('catalog-' + inputId);
+        if (!catalog) return;
+        lazyValueCatalogFetch(catalog, { q: query })
+          .then(function (data) {
+            if (sequence !== state.searchSequence || !results) return;
+            results.textContent = '';
+            (data.items || []).forEach(function (item) {
+              results.appendChild(lazyValueCatalogCreateRow(inputId, item));
+            });
+            if (!data.items || !data.items.length) {
+              lazyValueCatalogStatus(inputId, 'Keine passenden Werte gefunden.');
+            } else if (data.truncated) {
+              lazyValueCatalogStatus(inputId, 'Es werden die ersten 100 Treffer angezeigt. Bitte Suche verfeinern.');
+            } else {
+              lazyValueCatalogStatus(inputId, '');
+            }
+          })
+          .catch(function () {
+            if (sequence === state.searchSequence) lazyValueCatalogStatus(inputId, 'Suche fehlgeschlagen.', true);
+          });
+      }, 250);
+    }`;
+}
+
+module.exports = {
+  renderValueCatalog,
+  renderLazyValueCatalog,
+  valueCatalogScript,
+  lazyValueCatalogScript,
+  buildValueCatalogTree,
+};

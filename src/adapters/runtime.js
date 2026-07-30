@@ -11,6 +11,10 @@
 let adapter = null;
 let currentConfig = {};
 let instanceName = '';
+let hostCallSequence = 0;
+let subscriptionSequence = 0;
+const hostCalls = new Map();
+const subscriptions = new Map();
 
 function send(message) {
   if (process.send) {
@@ -23,6 +27,17 @@ function send(message) {
 }
 
 function buildHost() {
+  function hostCall(method, data = {}) {
+    const requestId = `${process.pid}-${Date.now()}-${++hostCallSequence}`;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        hostCalls.delete(requestId);
+        reject(new Error('Host-Aufruf hat nicht rechtzeitig geantwortet.'));
+      }, 10000);
+      hostCalls.set(requestId, { resolve, reject, timer });
+      send({ type: 'host-call', requestId, method, ...data });
+    });
+  }
   return {
     get name() {
       return instanceName;
@@ -58,6 +73,45 @@ function buildHost() {
     setStorage(key, value) {
       if (key == null) return;
       send({ type: 'storage', key: String(key), value });
+    },
+    // Wie setStorage(), bestätigt aber erst nach erfolgreichem SQLite-Commit.
+    // Protokolle mit vorab dauerhaft zu sichernden Transaktionen (z. B. HDP-
+    // Pairing) dürfen erst nach Auflösung dieses Promises fortfahren.
+    persistStorage(key, value) {
+      if (key == null) return Promise.reject(new Error('Persistenzschlüssel fehlt.'));
+      return hostCall('storage.set', { key: String(key), value });
+    },
+    // Beliebige homeESS-Datenquelle (MQTT oder prefix://-Adapter-State)
+    // ereignisgetrieben abonnieren. Liefert eine idempotente Abmeldefunktion.
+    subscribeState(topic, listener) {
+      if (!String(topic || '').trim() || typeof listener !== 'function') {
+        throw new Error('subscribeState benötigt Topic und Listener.');
+      }
+      const subscriptionId = String(++subscriptionSequence);
+      subscriptions.set(subscriptionId, listener);
+      send({ type: 'subscribe', subscriptionId, topic: String(topic).trim() });
+      return () => {
+        if (!subscriptions.delete(subscriptionId)) return;
+        send({ type: 'unsubscribe', subscriptionId });
+      };
+    },
+    getInstanceIdentity() {
+      return hostCall('identity');
+    },
+    getSecret(key) {
+      return hostCall('secret.get', { key: String(key) });
+    },
+    setSecret(key, value) {
+      return hostCall('secret.set', { key: String(key), value: String(value) });
+    },
+    deleteSecret(key) {
+      return hostCall('secret.delete', { key: String(key) });
+    },
+    debug(...args) {
+      send({ type: 'log', level: 'debug', message: args.map(String).join(' ') });
+    },
+    warn(...args) {
+      send({ type: 'log', level: 'warn', message: args.map(String).join(' ') });
     },
     log(...args) {
       send({ type: 'log', level: 'info', message: args.map(String).join(' ') });
@@ -117,6 +171,33 @@ process.on('message', (msg) => {
     }
   } else if (msg.type === 'config') {
     currentConfig = msg.config || {};
+  } else if (msg.type === 'state-value') {
+    const listener = subscriptions.get(String(msg.subscriptionId));
+    if (listener) {
+      try {
+        listener(msg.value, { receivedAt: msg.receivedAt });
+      } catch (err) {
+        send({ type: 'log', level: 'error', message: `State-Listener fehlgeschlagen: ${err.message}` });
+      }
+    }
+  } else if (msg.type === 'host-call-result') {
+    const pending = hostCalls.get(String(msg.requestId));
+    if (!pending) return;
+    hostCalls.delete(String(msg.requestId));
+    clearTimeout(pending.timer);
+    if (msg.error) pending.reject(new Error(String(msg.error)));
+    else pending.resolve(msg.result);
+  } else if (msg.type === 'management') {
+    Promise.resolve()
+      .then(() => {
+        if (!adapter || typeof adapter.handleManagementRequest !== 'function') {
+          return { status: 404, json: { error: 'Adapter stellt keine Verwaltungs-API bereit.' } };
+        }
+        return adapter.handleManagementRequest(msg.request || {});
+      })
+      .then((response) => send({ type: 'management-result', requestId: msg.requestId, response }))
+      .catch((err) => send({ type: 'management-result', requestId: msg.requestId,
+        response: { status: 500, json: { error: err && err.message ? err.message : String(err) } } }));
   }
 });
 

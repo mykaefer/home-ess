@@ -47,6 +47,8 @@ test('accessForUser: Rollen read/operate/write korrekt abgebildet', () => {
 test('pageForPath ordnet Unterrouten der Seite zu; canSeePage prüft Sichtbarkeit', () => {
   assert.equal(accessMod.pageForPath('/messen-schalten/schaltgruppen'), 'messen-schalten');
   assert.equal(accessMod.pageForPath('/stromverbrauch/data'), 'stromverbrauch');
+  assert.equal(accessMod.pageForPath('/states'), 'states');
+  assert.equal(accessMod.pageForPath('/states/data.json'), 'states');
   assert.equal(accessMod.pageForPath('/live/header'), null);
   // Module und Fernzugriff gehören zur Einstellungsseite (Tabs).
   assert.equal(accessMod.pageForPath('/module/pool/enable'), 'settings');
@@ -65,6 +67,23 @@ test('Migration/Seed: erster Nutzer ist Administrator', async () => {
   assert.equal(users.length, 1);
   assert.equal(users[0].isAdmin, true);
   assert.equal(users[0].name, 'Administrator');
+  db.close();
+});
+
+test('Migration: bestehende explizite Seitenlisten behalten Zugriff auf States', async () => {
+  let db = await freshDb();
+  const user = await usersRepo.createUser(db, {
+    name: 'Bestand',
+    password: 'geheim',
+    role: 'read',
+    visiblePages: ['dashboard'],
+  });
+  db.close();
+
+  db = openDatabase();
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  const migrated = await usersRepo.getUser(db, user.id);
+  assert.deepEqual(migrated.visiblePages, ['dashboard', 'states']);
   db.close();
 });
 

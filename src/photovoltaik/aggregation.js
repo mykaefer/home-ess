@@ -934,6 +934,8 @@ module.exports = {
   touchPhotovoltaikAggregation,
   assessHeaderSkyState,
   solarGeometryAt,
+  buildSolarContext,
+  getSolarElevationDeg,
   transposePlaneIrradiance,
   idealPowerFromIrradiance,
   formatEnergy,

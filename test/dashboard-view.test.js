@@ -58,6 +58,13 @@ test('Dashboard rendert Tab-Leiste, Panels und Toolbar-Icon-Buttons', () => {
   assert.match(html, /id="dashTabAdd"[^>]*hidden/);
   assert.ok(!html.includes('dashApplyBtn'));
   assert.ok(!html.includes('Gruppe hinzufuegen</button>'));
+
+  // Der erste Tab ist bereits ohne das Script sichtbar; erst weitere Panels
+  // bleiben verborgen. Ein abgebrochener Remote-Transfer erzeugt so keine
+  // leere Fläche unterhalb der Tab-Leiste.
+  assert.match(html, /class="dash-tab is-active"[^>]*data-tab-id="1"[^>]*aria-selected="true"/);
+  assert.match(html, /class="dash-panel"[^>]*data-tab-id="1">/);
+  assert.match(html, /class="dash-panel"[^>]*data-tab-id="2" hidden>/);
 });
 
 test('Wert-Widget rendert Größenklasse und eigene Wertfarbe', () => {
@@ -144,4 +151,10 @@ test('Dialoge enthalten Tab-Auswahl, Größenwahl und Schalter-Ziele', () => {
   assert.match(html, /option value="schaltgruppe:1"/);
   assert.match(html, /id="tabDialog"/);
   assert.match(html, /id="deleteTabDialog"/);
+  assert.match(html, /value-catalog--lazy/);
+  const lazyCatalog = html.slice(
+    html.indexOf('id="catalog-widgetSourceId"'),
+    html.indexOf('id="widgetColor"')
+  );
+  assert.ok(!lazyCatalog.includes('class="value-row"'));
 });

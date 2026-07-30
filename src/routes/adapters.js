@@ -2,6 +2,9 @@
 
 const express = require('express');
 const net = require('net');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const { requireAuth } = require('../auth/session');
 const registry = require('../adapters/registry');
 const instancesRepo = require('../adapters/instances');
@@ -14,6 +17,47 @@ const renderTasmotaDevices = require('../views/tasmota-devices');
 const renderAdapterDevices = require('../views/adapter-devices');
 const bus = require('../state-bus');
 const { buildSchemeTopic } = require('../mqtt/topics');
+const { renderLayout } = require('../views/layout');
+const adapterSecrets = require('../adapters/secrets');
+
+function streamUpload(req, maxBytes) {
+  return new Promise((resolve, reject) => {
+    const declared = Number(req.headers['content-length']);
+    if (Number.isFinite(declared) && declared > maxBytes) {
+      req.resume();
+      reject(Object.assign(new Error('Upload ist zu groß.'), { status: 413 }));
+      return;
+    }
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'homeess-adapter-upload-'));
+    const file = path.join(dir, 'upload.bin');
+    const out = fs.createWriteStream(file, { flags: 'wx', mode: 0o600 });
+    let bytes = 0;
+    let settled = false;
+    const fail = (err) => {
+      if (settled) return;
+      settled = true;
+      out.destroy();
+      fs.rm(dir, { recursive: true, force: true }, () => {});
+      reject(err);
+    };
+    req.on('data', (chunk) => {
+      bytes += chunk.length;
+      if (bytes > maxBytes) {
+        fail(Object.assign(new Error('Upload ist zu groß.'), { status: 413 }));
+        req.destroy();
+      }
+    });
+    req.on('aborted', () => fail(new Error('Upload wurde abgebrochen.')));
+    req.on('error', fail);
+    out.on('error', fail);
+    out.on('finish', () => {
+      if (settled) return;
+      settled = true;
+      resolve({ file, dir, size: bytes });
+    });
+    req.pipe(out);
+  });
+}
 
 function canBindPort(port) {
   return new Promise((resolve) => {
@@ -176,9 +220,11 @@ function adapterRoutes(db) {
   });
 
   router.post('/adapter/instance/:id/delete', requireAuth, (req, res) => {
+    const instanceId = Number(req.params.id);
     host
-      .stopInstance(Number(req.params.id))
-      .then(() => instancesRepo.deleteInstance(db, Number(req.params.id)))
+      .stopInstance(instanceId)
+      .then(() => instancesRepo.deleteInstance(db, instanceId))
+      .then(() => adapterSecrets.removeInstance(instanceId))
       .then(() => sendOverview(res, { message: 'Instanz gelöscht.' }))
       .catch(() => sendOverview(res, { error: 'Löschen fehlgeschlagen.' }));
   });
@@ -244,6 +290,69 @@ function adapterRoutes(db) {
     ctx.instance = await instancesRepo.getInstance(db, ctx.instance.id);
     res.send(renderAdapterDevices({ adapter: ctx.manifest, instance: ctx.instance, devices: await buildAdapterDevices(ctx),
       message: customName ? `Gerät in „${customName}" umbenannt.` : 'Eigener Gerätename entfernt.' }));
+  });
+
+  // Generische Management-Brücke: Authentifizierung, Rollenprüfung, Layout und
+  // begrenztes Upload-Streaming bleiben im Host. Fachlogik/HTML kommen aus dem
+  // isolierten Adapterprozess über handleManagementRequest(request).
+  router.use('/adapter/instance/:id/manage', requireAuth, async (req, res) => {
+    let upload = null;
+    try {
+      const instance = await instancesRepo.getInstance(db, Number(req.params.id));
+      if (!instance) return res.status(404).send('Instanz nicht gefunden.');
+      const manifest = registry.getManifest(instance.adapterId);
+      if (!manifest || !manifest.managementPage) return res.status(404).send('Keine Adapterverwaltung verfügbar.');
+      const prefix = `/adapter/instance/${instance.id}/manage`;
+      const originalPath = String(req.originalUrl || '').split('?')[0];
+      const subpath = originalPath.startsWith(prefix) ? originalPath.slice(prefix.length) || '/' : '/';
+      if (req.method === 'GET' && subpath === '/assets/management.css') {
+        if (!manifest.managementPage.stylesheet) return res.status(404).send('Kein Adapter-Stylesheet vorhanden.');
+        const stylesheetPath = path.join(manifest.dir, manifest.managementPage.stylesheet);
+        return res.type('text/css').set('Cache-Control', 'private, max-age=300').sendFile(stylesheetPath);
+      }
+      const contentType = String(req.headers['content-type'] || '').split(';')[0].toLowerCase();
+      if (contentType === 'application/octet-stream') {
+        upload = await streamUpload(req, manifest.managementPage.maxUploadBytes);
+      }
+      const response = await host.managementRequest(instance.id, {
+        method: req.method,
+        path: subpath,
+        basePath: prefix,
+        query: req.query || {},
+        body: upload ? null : (req.body || {}),
+        upload: upload ? { path: upload.file, size: upload.size,
+          filename: String(req.headers['x-upload-filename'] || 'upload.bin').slice(0, 255) } : null,
+        access: {
+          canRead: !!(req.access && req.access.canRead),
+          canOperate: !!(req.access && req.access.canOperate),
+          canWrite: !!(req.access && req.access.canWrite),
+          isAdmin: !!(req.access && req.access.isAdmin),
+        },
+      });
+      const status = Math.max(100, Math.min(599, Number(response && response.status) || 200));
+      if (response && response.redirect) return res.redirect(status >= 300 && status < 400 ? status : 303, String(response.redirect));
+      if (response && response.json !== undefined) return res.status(status).json(response.json);
+      if (response && response.view) {
+        return res.status(status).send(renderLayout({
+          title: response.view.title || `${manifest.name} – ${manifest.managementPage.label}`,
+          activePath: '/adapter',
+          body: String(response.view.body || ''),
+          script: String(response.view.script || ''),
+          stylesheets: manifest.managementPage.stylesheet
+            ? [`${prefix}/assets/management.css`]
+            : [],
+        }));
+      }
+      return res.status(status).type('text/plain').send(String((response && response.body) || ''));
+    } catch (err) {
+      const status = Number(err && err.status) || 500;
+      if ((req.headers.accept || '').includes('application/json')) {
+        return res.status(status).json({ error: err && err.message ? err.message : 'Adapterverwaltung fehlgeschlagen.' });
+      }
+      return res.status(status).send(err && err.message ? err.message : 'Adapterverwaltung fehlgeschlagen.');
+    } finally {
+      if (upload) fs.rm(upload.dir, { recursive: true, force: true }, () => {});
+    }
   });
 
   // ── State-Editor (generisch, nur wenn der Adapter stateEditor deklariert) ──────

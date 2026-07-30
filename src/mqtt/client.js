@@ -3,6 +3,8 @@
 const mqtt = require('mqtt');
 const bus = require('../state-bus');
 const adapterRouter = require('../adapters/router');
+const systemRouter = require('../states/system-router');
+const { parseSystemTopic } = require('../states/system-topics');
 const {
   normalizeMqttTopic,
   ioBrokerIdToMqttTopic,
@@ -73,6 +75,7 @@ function buildOptions(cfg) {
 // Adapter-Topics aus den State-Definitionen, die beim letzten buildTopicRoutes
 // am Router registriert wurden – damit ein Rebuild sie sauber abmelden kann.
 let registeredStateSchemeRoutes = [];
+let registeredStateSystemRoutes = [];
 
 // Routing-Tabelle aus den konfigurierten States neu aufbauen (nur exakte Topics).
 // Schema-Topics (prefix://) werden nicht über den Broker, sondern über den
@@ -82,8 +85,17 @@ function buildTopicRoutes() {
   for (const [topic, cacheKey] of registeredStateSchemeRoutes) {
     adapterRouter.unregisterRoute(topic, cacheKey);
   }
+  for (const [topic, cacheKey] of registeredStateSystemRoutes) {
+    systemRouter.unregisterRoute(topic, cacheKey);
+  }
   registeredStateSchemeRoutes = [];
+  registeredStateSystemRoutes = [];
   for (const state of stateDefinitions) {
+    if (parseSystemTopic(state.topic)) {
+      systemRouter.registerRoute(state.topic, String(state.id));
+      registeredStateSystemRoutes.push([state.topic, String(state.id)]);
+      continue;
+    }
     if (isSchemeTopic(state.topic)) {
       adapterRouter.registerRoute(state.topic, String(state.id));
       registeredStateSchemeRoutes.push([state.topic, String(state.id)]);
@@ -265,6 +277,7 @@ function requestStateValue(cacheKey) {
   const key = String(cacheKey);
   const state = stateDefinitions.find((entry) => String(entry.id) === key);
   if (!state || !state.topic) return false;
+  if (parseSystemTopic(state.topic)) return valueCache.has(key);
   const now = Date.now();
   if (now - (stateRequestTimes.get(key) || 0) < STATE_REQUEST_THROTTLE_MS) return false;
   if (!isSchemeTopic(state.topic)) return false;
@@ -290,6 +303,8 @@ function requestStateValue(cacheKey) {
 // als JSON mit ack:false); mqttWriteCandidates liefert dafür nur die
 // Punktnotation.
 function publish(targetTopic, value) {
+  // Berechnete Systemwerte sind lesbare Quellen, aber keine Schreibziele.
+  if (parseSystemTopic(targetTopic)) return false;
   // Adapter-Topics (prefix://) gehen an die zuständige Instanz, nicht an den Broker.
   if (isSchemeTopic(targetTopic)) return adapterRouter.write(targetTopic, value);
   if (!client) return false;
@@ -355,6 +370,7 @@ function registerAdhocRoutes(configuredTopic, cacheKey) {
 // (inkl. Wildcard für Slash-eingebettete State-IDs) neu abonnieren.
 function subscribeAllAdhocTopics() {
   for (const configuredTopic of adhocConfigured.values()) {
+    if (isSchemeTopic(configuredTopic)) continue;
     for (const sub of mqttSubscribeCandidates(configuredTopic)) {
       subscribeTopic(sub);
     }
@@ -366,6 +382,7 @@ function subscribeAllAdhocTopics() {
 function requestAllAdhocValues() {
   if (!client || !connected) return;
   for (const configuredTopic of adhocConfigured.values()) {
+    if (isSchemeTopic(configuredTopic)) continue;
     if (isRadioTopic(configuredTopic)) continue;
     for (const candidate of mqttReadCandidates(configuredTopic)) {
       client.publish(`${candidate}/get`, '');
@@ -378,6 +395,11 @@ function requestAllAdhocValues() {
 // mqttSubscribeCandidates für das eigentliche Abo (inkl. Wildcard bei Slash-States).
 function subscribeAdHoc(configuredTopic, cacheKey) {
   if (!cacheKey) return;
+  if (parseSystemTopic(configuredTopic)) {
+    systemRouter.registerRoute(configuredTopic, cacheKey);
+    adhocConfigured.set(cacheKey, configuredTopic);
+    return;
+  }
   // Adapter-Topics (prefix://) über den Router registrieren statt über den Broker.
   if (isSchemeTopic(configuredTopic)) {
     adapterRouter.registerRoute(configuredTopic, cacheKey);
@@ -404,6 +426,12 @@ function subscribeAdHoc(configuredTopic, cacheKey) {
 function unsubscribeAdHoc(cacheKey) {
   const configuredTopic = adhocConfigured.get(cacheKey);
   if (!configuredTopic) return;
+  if (parseSystemTopic(configuredTopic)) {
+    systemRouter.unregisterRoute(configuredTopic, cacheKey);
+    adhocConfigured.delete(cacheKey);
+    valueCache.delete(cacheKey);
+    return;
+  }
   if (isSchemeTopic(configuredTopic)) {
     adapterRouter.unregisterRoute(configuredTopic, cacheKey);
     adhocConfigured.delete(cacheKey);
@@ -423,6 +451,7 @@ function unsubscribeAdHoc(cacheKey) {
 function requestAdHocValue(cacheKey) {
   const configuredTopic = adhocConfigured.get(cacheKey);
   if (!configuredTopic) return false;
+  if (parseSystemTopic(configuredTopic)) return valueCache.has(cacheKey);
   if (isSchemeTopic(configuredTopic)) return adapterRouter.requestValue(configuredTopic);
   // Funk-Topics werden nie aktiv gepollt; der Aufrufer (z. B. die Readback-
   // Verifikation der Output-Engine) muss auf ereignisgetriebene Werte warten.
