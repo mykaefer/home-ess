@@ -10,15 +10,15 @@ const {
 } = require('./renderer');
 const {
   finite, bounded, scale, interpolateColor, colorStops, validateHardwareConfig,
-  validateDeviceId, RUNTIME_PROFILE,
+  validateDeviceId, RUNTIME_PROFILE, BINARY_RUNTIME_PROFILE,
 } = require('./validation');
 const {
   createAdapterNonce, createBindingKey, validateBindingKey, bindingId,
 } = require('./auth');
 const {
-  validateManifest, selectArtifact, checkCompatibility, validateArtifactFile,
-  uploadFirmware, ReleaseService,
+  validateArtifactFile, uploadFirmware,
 } = require('./firmware');
+const { ReleaseStore, CHANNELS: releaseChannels } = require('./release-store');
 const crypto = require('crypto');
 
 const PROTOCOL_VERSION = '1.0-draft';
@@ -63,6 +63,7 @@ function defaultBindings() {
       sweep_milliseconds: 600, pulse_interval_milliseconds: 4000, dimming_percent: 40,
     },
     display: { fractional_pixel: true },
+    binary: {},
   };
 }
 
@@ -85,7 +86,52 @@ function mergeBindings(value) {
     brightness: { ...base.brightness, ...(input.brightness || {}) },
     indicator: { ...base.indicator, ...(input.indicator || {}) },
     display: { ...base.display, ...(input.display || {}) },
+    binary: input.binary && typeof input.binary === 'object'
+      ? Object.fromEntries(Object.entries(input.binary).map(([pin, binding]) => [pin, { ...(binding || {}) }]))
+      : {},
   };
+}
+
+function binaryBoolean(value, label = 'Binary-Wert') {
+  if (value === true || value === 1 || value === '1'
+      || String(value).toLowerCase() === 'true' || String(value).toLowerCase() === 'on') return true;
+  if (value === false || value === 0 || value === '0'
+      || String(value).toLowerCase() === 'false' || String(value).toLowerCase() === 'off') return false;
+  throw new Error(`${label} muss einen Booleanwert liefern.`);
+}
+
+function normalizeBinaryBindings(bindings, hardwareConfig) {
+  const source = bindings && bindings.binary && typeof bindings.binary === 'object'
+    ? bindings.binary : {};
+  const result = {};
+  for (const pin of (hardwareConfig && Array.isArray(hardwareConfig.pins) ? hardwareConfig.pins : [])) {
+    const current = source[String(pin.pin)] || {};
+    result[String(pin.pin)] = pin.direction === 'output'
+      ? {
+        topic: String(current.topic || '').trim(),
+        invert: current.invert === true,
+      }
+      : {
+        topic: String(current.topic || '').trim(),
+        action: ['state', 'toggle', 'set', 'counter'].includes(current.action)
+          ? current.action : (pin.input_type === 'button' ? 'toggle' : 'state'),
+        set_value: Object.prototype.hasOwnProperty.call(current, 'set_value') ? current.set_value : true,
+        counter_step: Number.isFinite(Number(current.counter_step)) ? Number(current.counter_step) : 1,
+      };
+  }
+  return result;
+}
+
+function binaryEventTarget(binding, currentValue, eventState) {
+  if (binding.action === 'state') return !!eventState;
+  if (binding.action === 'set') return binding.set_value;
+  if (binding.action === 'toggle') return !binaryBoolean(currentValue, 'Binary-Topic');
+  if (binding.action === 'counter') {
+    const current = Number(currentValue);
+    if (!Number.isFinite(current)) throw new Error('Counter-Topic ist nicht numerisch.');
+    return current + Number(binding.counter_step);
+  }
+  throw new Error('Unbekannte Binary-Eingangsaktion.');
 }
 
 function sourceParts(topic) {
@@ -105,12 +151,23 @@ function sanitizeDevice(device) {
   delete copy.unsubscribers;
   delete copy.pendingFirmware;
   delete copy.reconciling;
+  delete copy.pairingInProgress;
   delete copy.sourceTimes;
   delete copy.outputClient;
   delete copy.legacyOutput;
   delete copy.renderQueue;
   delete copy.pendingRender;
+  delete copy.binaryTopicValues;
+  delete copy.binaryStates;
+  delete copy.binaryOutputDesired;
+  delete copy.binaryOutputRunning;
   return copy;
+}
+
+function clearAppliedOutputError(device) {
+  if (!device || !/^\[OUTPUT_[A-Z0-9_]+\]/.test(String(device.lastError || ''))) return false;
+  device.lastError = '';
+  return true;
 }
 
 function displayColor(device) {
@@ -129,8 +186,29 @@ function dynamicBrightness(device) {
       value = bounded(scale(device.rawBrightness, binding), 0, 100, 'Dynamische Helligkeit');
     }
     if (value == null) throw new Error('Unbekannter Helligkeitsmodus.');
-    return value;
+    // homeESS-Quellen dürfen Prozentwerte mit Nachkommastellen liefern (z. B.
+    // die Prognose-Helligkeit). HDP überträgt die Plugin-Helligkeit als
+    // ganzzahligen Prozentwert; deshalb erst an dieser Protokollgrenze runden.
+    return Math.round(value);
   }
+
+function hardwareBrightnessLimit(device) {
+  const config = device && device.hardwareConfig;
+  const output = config && Array.isArray(config.outputs) ? config.outputs[0] : null;
+  const value = output && output.maximum_brightness_percent != null
+    ? output.maximum_brightness_percent
+    : config && config.power && config.power.maximum_brightness_percent;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? Math.max(0, Math.min(100, numeric)) : 100;
+}
+
+function effectiveDynamicBrightness(device, limit = hardwareBrightnessLimit(device)) {
+  if (!device || device.requestedBrightness == null) return null;
+  const dynamic = Number(device.requestedBrightness);
+  const maximum = Number(limit);
+  if (!Number.isFinite(dynamic) || !Number.isFinite(maximum)) return null;
+  return Math.round(dynamic * maximum / 100);
+}
 
 function normalizedPercentage(value) {
   const boundedValue = bounded(value, 0, 100, 'Prozentwert');
@@ -141,6 +219,10 @@ function calculateState(device) {
   device.calculatedPercentage = normalizedPercentage(scale(device.rawPercentage, device.bindings.percentage));
   device.calculatedColor = displayColor(device);
   device.requestedBrightness = dynamicBrightness(device);
+  device.effectiveBrightness = effectiveDynamicBrightness(
+    device, device.reportedBrightnessLimit == null
+      ? hardwareBrightnessLimit(device) : device.reportedBrightnessLimit,
+  );
   const input = {
     percentage: device.calculatedPercentage,
     color: device.calculatedColor,
@@ -180,10 +262,91 @@ function resetChangedIndicatorState(device, previousBindings, nextBindings) {
   }
 }
 
+function bindingNeedsReconcile(device, found) {
+  return device.pairingInProgress !== true
+    && (device.bindingState !== 'active'
+    || device.paired !== true
+    || found.pairingState !== 'paired'
+    || !device.bindingId
+    || found.bindingId !== device.bindingId);
+}
+
+function requestedDeviceName(input, fallback = '') {
+  return String((input && input.device_name) || fallback || '')
+    .trim().slice(0, 100);
+}
+
+const DEVICE_TYPES = Object.freeze(['percentage_indicator', 'binary_io']);
+const DEVICE_TYPE_LABELS = Object.freeze({
+  percentage_indicator: 'Prozentanzeige',
+  binary_io: 'Binary-I/O',
+});
+const DEFAULT_BINARY_PIN_SLOTS = 5;
+
+// Der Gerätetyp ist exklusiv — ein Gerät ist entweder Prozentanzeige oder
+// Binary-I/O, niemals beides. Maßgeblich ist die persistierte Hardware-
+// konfiguration: Das Runtime-Profil folgt ihr erst, nachdem das Gerät den
+// Typwechsel per Neustart übernommen hat. Bis dahin würde eine Auswertung des
+// Profils den bereits abgewählten Typ weiterlaufen lassen.
+function deviceTypeOf(device) {
+  const config = device && device.hardwareConfig;
+  if (config && typeof config === 'object') {
+    if (config.device_type === 'binary_io' || Array.isArray(config.pins)) return 'binary_io';
+    if (typeof config.device_type === 'string' && config.device_type) return 'percentage_indicator';
+  }
+  return device && device.runtimeProfile === BINARY_RUNTIME_PROFILE
+    ? 'binary_io' : 'percentage_indicator';
+}
+
+function isBinaryDevice(device) {
+  return deviceTypeOf(device) === 'binary_io';
+}
+
+// Ein Gerät bietet nur die Typen an, die sein Manifest ausweist. Ältere
+// opaque-id-v1-Geräte kennen ausschließlich die Prozentanzeige.
+function supportedDeviceTypes(manifest) {
+  const declared = manifest && Array.isArray(manifest.device_types) ? manifest.device_types : null;
+  if (!declared || !declared.length) return ['percentage_indicator'];
+  const supported = DEVICE_TYPES.filter((type) => declared.includes(type));
+  return supported.length ? supported : ['percentage_indicator'];
+}
+
+// Ein Wartungsfenster darf über Mitternacht laufen; dann liegt das Ende vor dem
+// Start und der zulässige Bereich ist die Vereinigung beider Tageshälften.
+// Ohne aktiviertes Fenster gilt jede Uhrzeit.
+// Während einer OTA-Transaktion weist das Gerät jede Ausgangsänderung mit
+// DEVICE_BUSY zurück. Der Wunschzustand wird trotzdem gemerkt und nach dem
+// Update angewendet — nur die aussichtslose Übertragung entfällt.
+function otaInProgress(device) {
+  const progress = device && device.otaProgress;
+  return !!(progress && ['uploading', 'ready_to_restart', 'restarting'].includes(progress.state));
+}
+
+function insideMaintenanceWindow(window, now = new Date()) {
+  if (!window || !window.enabled) return true;
+  const minutes = (value, fallback) => {
+    const match = /^(\d{1,2}):(\d{2})$/.exec(String(value || ''));
+    if (!match) return fallback;
+    const total = Number(match[1]) * 60 + Number(match[2]);
+    return total >= 0 && total < 1440 ? total : fallback;
+  };
+  const start = minutes(window.start, 0);
+  const end = minutes(window.end, 0);
+  if (start === end) return true;
+  const current = now.getHours() * 60 + now.getMinutes();
+  return start < end ? current >= start && current < end : current >= start || current < end;
+}
+
+function binaryPinSlots(manifest) {
+  const limit = manifest && manifest.limits && manifest.limits.maximum_binary_pins;
+  if (!Number.isInteger(limit) || limit < 1) return DEFAULT_BINARY_PIN_SLOTS;
+  return Math.min(limit, 32);
+}
+
 function deviceStateCatalog(device) {
   const root = `devices/${encodeURIComponent(device.deviceId)}`;
   const category = `${device.name || device.deviceId} / Status`;
-  return [
+  const states = [
     { address: `${root}/online`, name: 'Online', category },
     { address: `${root}/connection-state`, name: 'Verbindungszustand', category },
     { address: `${root}/next-reconnect`, name: 'Nächster Verbindungsversuch', category },
@@ -201,6 +364,18 @@ function deviceStateCatalog(device) {
     { address: `${root}/config-revision`, name: 'Konfigurationsrevision', category },
     { address: `${root}/last-error`, name: 'Letzter Fehler', category },
   ];
+  if (isBinaryDevice(device)) {
+    const pinCategory = `${device.name || device.deviceId} / Binary-I/O`;
+    for (const pin of (device.hardwareConfig && Array.isArray(device.hardwareConfig.pins)
+      ? device.hardwareConfig.pins : [])) {
+      states.push({
+        address: `${root}/binary/pin-${pin.pin}`,
+        name: `GPIO ${pin.pin} (${pin.direction === 'input' ? pin.input_type : 'output'})`,
+        category: pinCategory,
+      });
+    }
+  }
+  return states;
 }
 
 function createHdpAdapter(host, dependencies = {}) {
@@ -212,11 +387,13 @@ function createHdpAdapter(host, dependencies = {}) {
   let discovery = null;
   let stopped = true;
   let firmwarePoll = null;
+  let rolloutPoll = null;
+  let rolloutRunning = false;
   let managementBase = '';
   const devices = new Map();
   const discovered = new Map();
   const pendingFirmware = new Map();
-  const releaseService = new ReleaseService();
+  const releaseStore = new ReleaseStore();
   let persistQueue = Promise.resolve();
   let persistDirty = false;
   let persistScheduled = false;
@@ -290,6 +467,16 @@ function createHdpAdapter(host, dependencies = {}) {
       { address: `${root}/config-revision`, value: device.configRevision == null ? '' : device.configRevision },
       { address: `${root}/last-error`, value: device.lastError || '' },
     ];
+    if (isBinaryDevice(device)) {
+      for (const pin of (device.hardwareConfig && Array.isArray(device.hardwareConfig.pins)
+        ? device.hardwareConfig.pins : [])) {
+        const state = device.binaryStates && device.binaryStates[String(pin.pin)];
+        values.push({
+          address: `${root}/binary/pin-${pin.pin}`,
+          value: state == null ? '' : !!state,
+        });
+      }
+    }
     host.publishStates(values);
   }
 
@@ -319,8 +506,138 @@ function createHdpAdapter(host, dependencies = {}) {
     device.unsubscribers = [];
   }
 
+  function binaryPin(device, pinNumber) {
+    return device.hardwareConfig && Array.isArray(device.hardwareConfig.pins)
+      ? device.hardwareConfig.pins.find((pin) => pin.pin === Number(pinNumber)) : null;
+  }
+
+  function queueBinaryOutput(device, pinNumber, state) {
+    const key = String(pinNumber);
+    device.binaryOutputDesired = device.binaryOutputDesired || {};
+    device.binaryOutputRunning = device.binaryOutputRunning || {};
+    device.binaryOutputDesired[key] = !!state;
+    if (otaInProgress(device)) return;
+    if (device.binaryOutputRunning[key]) return;
+    device.binaryOutputRunning[key] = true;
+    (async () => {
+      while (Object.prototype.hasOwnProperty.call(device.binaryOutputDesired, key)) {
+        const desired = device.binaryOutputDesired[key];
+        delete device.binaryOutputDesired[key];
+        if (!device.connection || !device.connection.ready) return;
+        const response = await device.connection.request('binary.output.set', {
+          pin: Number(pinNumber), state: desired,
+          config_revision: device.configRevision,
+        });
+        device.binaryStates = device.binaryStates || {};
+        device.binaryStates[key] = response.payload.state;
+        publishDevice(device);
+      }
+    })().catch((error) => setError(device, error, `Binary-Ausgang GPIO ${pinNumber}`))
+      .finally(() => {
+        device.binaryOutputRunning[key] = false;
+        if (Object.prototype.hasOwnProperty.call(device.binaryOutputDesired, key)) {
+          queueBinaryOutput(device, pinNumber, device.binaryOutputDesired[key]);
+        }
+      });
+  }
+
+  // Nach dem Ende einer OTA-Transaktion die zwischenzeitlich zurückgehaltenen
+  // Ausgangswünsche nachziehen. Nach einem erfolgreichen Update erledigt das
+  // ohnehin die zurückkehrende Sitzung; nach einem Fehlschlag gäbe es sonst
+  // keinen Anlass mehr.
+  function flushBinaryOutputs(device) {
+    if (otaInProgress(device)) return;
+    for (const [key, desired] of Object.entries(device.binaryOutputDesired || {})) {
+      queueBinaryOutput(device, Number(key), desired);
+    }
+  }
+
+  function applyBinaryOutputs(device) {
+    for (const pin of (device.hardwareConfig && Array.isArray(device.hardwareConfig.pins)
+      ? device.hardwareConfig.pins : [])) {
+      if (pin.direction !== 'output') continue;
+      const key = String(pin.pin);
+      if (!device.binaryTopicValues
+          || !Object.prototype.hasOwnProperty.call(device.binaryTopicValues, key)) continue;
+      const binding = device.bindings.binary[key];
+      const active = binaryBoolean(device.binaryTopicValues[key], `GPIO ${pin.pin} Topic`);
+      queueBinaryOutput(device, pin.pin, binding.invert ? !active : active);
+    }
+  }
+
+  async function applyBinaryInputEvent(device, payload) {
+    const pin = binaryPin(device, payload.pin);
+    if (!pin || pin.direction !== 'input') return;
+    const key = String(pin.pin);
+    device.binaryStates = device.binaryStates || {};
+    device.binaryStates[key] = payload.state;
+    publishDevice(device);
+    const binding = device.bindings.binary[key];
+    if (!binding || !binding.topic) return;
+    device.binaryTopicValues = device.binaryTopicValues || {};
+    if (['toggle', 'counter'].includes(binding.action)) {
+      if (!Object.prototype.hasOwnProperty.call(device.binaryTopicValues, key)) {
+        throw new Error(`GPIO ${pin.pin}: Topic-Zustand ist noch unbekannt.`);
+      }
+    }
+    const target = binaryEventTarget(binding, device.binaryTopicValues[key], payload.state);
+    await host.writeState(binding.topic, target);
+    device.binaryTopicValues[key] = target;
+  }
+
+  function handleBinaryMessage(device, message) {
+    const payload = message.payload;
+    if (payload.config_revision !== device.configRevision) {
+      host.warn(`HDP ${device.deviceId}: Binary-Nachricht für Revision ${payload.config_revision} ignoriert.`);
+      return;
+    }
+    device.binaryStates = device.binaryStates || {};
+    if (message.type === 'binary.input.snapshot' || message.type === 'binary.status') {
+      for (const entry of [...payload.inputs, ...payload.outputs]) {
+        device.binaryStates[String(entry.pin)] = entry.state;
+      }
+      publishDevice(device);
+      return;
+    }
+    if (message.type === 'binary.output.applied') {
+      device.binaryStates[String(payload.pin)] = payload.state;
+      publishDevice(device);
+      return;
+    }
+    if (message.type === 'binary.input.event') {
+      applyBinaryInputEvent(device, payload)
+        .catch((error) => setError(device, error, `Binary-Eingang GPIO ${payload.pin}`));
+    }
+  }
+
+  function subscribeBinarySources(device) {
+    device.binaryTopicValues = device.binaryTopicValues || {};
+    for (const pin of (device.hardwareConfig && Array.isArray(device.hardwareConfig.pins)
+      ? device.hardwareConfig.pins : [])) {
+      const key = String(pin.pin);
+      const binding = device.bindings.binary[key];
+      if (!binding || !binding.topic) continue;
+      const unsubscribe = host.subscribeState(binding.topic, (value) => {
+        device.binaryTopicValues[key] = value;
+        if (pin.direction === 'output') {
+          try {
+            const active = binaryBoolean(value, `GPIO ${pin.pin} Topic`);
+            queueBinaryOutput(device, pin.pin, binding.invert ? !active : active);
+          } catch (error) {
+            setError(device, error, `Binary-Ausgang GPIO ${pin.pin}`);
+          }
+        }
+      });
+      device.unsubscribers.push(unsubscribe);
+    }
+  }
+
   function applyRuntime(device) {
     try {
+      if (isBinaryDevice(device)) {
+        publishDevice(device);
+        return;
+      }
       const state = calculateState(device);
       if (/^(Datenquelle:|Prozentquelle:|Prozentwertquelle liefert|Farbquelle:|Helligkeitsquelle:|Keine Prozentwertquelle)/.test(device.lastError || '')) {
         device.lastError = '';
@@ -356,6 +673,7 @@ function createHdpAdapter(host, dependencies = {}) {
               } else {
                 await device.outputClient.setFrame(pending.outputId, pending.pixels);
               }
+              if (clearAppliedOutputError(device)) publishDevice(device);
             }
           })().catch((error) => {
             device.lastError = `[${error.code || 'OUTPUT'}] ${error.message}`;
@@ -379,6 +697,10 @@ function createHdpAdapter(host, dependencies = {}) {
   function subscribeSources(device) {
     stopSubscriptions(device);
     device.unsubscribers = [];
+    if (isBinaryDevice(device)) {
+      subscribeBinarySources(device);
+      return;
+    }
     if (!device.bindings.indicator.rising_topic) device.rawRising = false;
     if (!device.bindings.indicator.falling_topic) device.rawFalling = false;
     const subscribe = (topic, key, assign) => {
@@ -429,6 +751,9 @@ function createHdpAdapter(host, dependencies = {}) {
         const remote = await clientFor(device).config();
         device.hardwareConfig = remote;
         device.configRevision = remote.revision;
+        device.bindings.binary = normalizeBinaryBindings(device.bindings, remote);
+        subscribeSources(device);
+        publishCatalog();
         persist();
       },
       maximumMessageBytes: device.manifest && device.manifest.limits
@@ -460,10 +785,27 @@ function createHdpAdapter(host, dependencies = {}) {
       publishDevice(device);
       persist();
       if (device.outputClient) device.outputClient.sessionStarted();
+      if (isBinaryDevice(device)) applyBinaryOutputs(device);
       applyRuntime(device);
+      // Ein zurückgekehrtes Gerät sofort prüfen, statt bis zum nächsten Takt zu
+      // warten — sonst wäre „Update nach Wiederkehr nachholen“ eine Minute
+      // langsamer als nötig.
+      runRollout().catch((error) => host.error(`HDP Rollout: ${error.message}`));
     });
     connection.on('offline', () => {
       device.online = false;
+      device.rssi = null;
+      device.reportedBrightnessLimit = null;
+      device.effectiveBrightness = null;
+      device.estimatedCurrent = null;
+      device.powerLimited = null;
+      if (isBinaryDevice(device)) {
+        device.binaryStates = device.binaryStates || {};
+        for (const pin of (device.hardwareConfig && Array.isArray(device.hardwareConfig.pins)
+          ? device.hardwareConfig.pins : [])) {
+          if (pin.direction === 'output') device.binaryStates[String(pin.pin)] = false;
+        }
+      }
       publishDevice(device);
       persist();
     });
@@ -479,13 +821,25 @@ function createHdpAdapter(host, dependencies = {}) {
     });
     connection.on('status', (status) => {
       device.rssi = status.wifi_rssi == null ? status.rssi : status.wifi_rssi;
-      device.effectiveBrightness = status.effective_brightness;
+      if (status.effective_brightness != null) {
+        device.reportedBrightnessLimit = status.effective_brightness;
+      }
+      device.effectiveBrightness = effectiveDynamicBrightness(
+        device, device.reportedBrightnessLimit == null
+          ? hardwareBrightnessLimit(device) : device.reportedBrightnessLimit,
+      );
       device.estimatedCurrent = status.estimated_current_milliamps;
       device.powerLimited = status.power_limit_active;
       publishDevice(device);
     });
     connection.on('applied', (status) => {
-      device.effectiveBrightness = status.effective_brightness;
+      if (status.effective_brightness != null) {
+        device.reportedBrightnessLimit = status.effective_brightness;
+      }
+      device.effectiveBrightness = effectiveDynamicBrightness(
+        device, device.reportedBrightnessLimit == null
+          ? hardwareBrightnessLimit(device) : device.reportedBrightnessLimit,
+      );
       device.estimatedCurrent = status.estimated_current_milliamps;
       device.powerLimited = status.power_limit_active;
       device.appliedState = status;
@@ -496,6 +850,7 @@ function createHdpAdapter(host, dependencies = {}) {
       if (device.outputClient) device.outputClient.sessionStarted();
       applyRuntime(device);
     });
+    connection.on('binary', (message) => handleBinaryMessage(device, message));
     connection.on('deviceError', (payload) => {
       const rejectedTextFrame = payload.code === 'INVALID_REQUEST'
         && /UTF-8 text messages up to 1024 bytes/i.test(payload.message || '');
@@ -532,12 +887,22 @@ function createHdpAdapter(host, dependencies = {}) {
       });
       return;
     }
+    const restoredBindingState = record.bindingState || (record.paired ? 'active' : 'pending');
     const device = {
       ...record, bindingKey, bindings: mergeBindings(record.bindings),
       updateSettings: { ...defaultUpdateSettings(), ...(record.updateSettings || {}) },
-      bindingState: record.bindingState || (record.paired ? 'active' : 'pending'),
-      paired: false, online: false, unsubscribers: [],
+      bindingState: restoredBindingState,
+      // Ein bereits bestätigtes lokales Binding bleibt auch vor der ersten
+      // Discovery sichtbar. Nur die Erreichbarkeit ist nach einem Neustart
+      // zunächst unbekannt/offline; mDNS gleicht den Zustand anschließend ab.
+      paired: restoredBindingState === 'active',
+      online: false, discoveredOnline: false, connectionState: 'offline',
+      reconnectAttempt: 0, nextReconnectAt: null,
+      rssi: null, effectiveBrightness: null, estimatedCurrent: null, powerLimited: null,
+      reportedBrightnessLimit: null,
+      unsubscribers: [],
     };
+    device.bindings.binary = normalizeBinaryBindings(device.bindings, device.hardwareConfig);
     devices.set(device.deviceId, device);
   }
 
@@ -556,6 +921,8 @@ function createHdpAdapter(host, dependencies = {}) {
     if (local) {
       const addressChanged = local.address !== found.address || local.wsPort !== found.wsPort;
       const runtimeChanged = local.runtimeProfile !== found.runtimeProfile;
+      const firmwareChanged = !!local.manifest && !!found.firmwareVersion
+        && local.firmwareVersion !== found.firmwareVersion;
       Object.assign(local, found, {
         runtimeProfile: found.runtimeProfile || null,
         runtimeCompatible: found.runtimeProfile ? found.runtimeCompatible === true : true,
@@ -570,7 +937,7 @@ function createHdpAdapter(host, dependencies = {}) {
         instanceId: identity.instanceId, bindingKey: local.bindingKey,
       });
       if (found.runtimeMismatch) {
-        local.lastError = `[UNSUPPORTED_RUNTIME_PROFILE] Gerät meldet ${found.runtimeProfile}; erwartet wird ${RUNTIME_PROFILE}.`;
+        local.lastError = `[UNSUPPORTED_RUNTIME_PROFILE] Gerät meldet ${found.runtimeProfile}; unterstützt werden pixel-timeline-v1 und binary-io-v1.`;
         if (local.connection) local.connection.stop();
         publishDevice(local);
         persist();
@@ -590,15 +957,38 @@ function createHdpAdapter(host, dependencies = {}) {
         persist();
         return;
       }
+      if (firmwareChanged) {
+        // Eine neue Firmware darf andere Fähigkeiten, GPIOs und Limits melden.
+        // Ohne diesen Abgleich zeigte die Verwaltung nach einem OTA dauerhaft
+        // das zwischengespeicherte Manifest der Vorgängerversion.
+        refreshManifest(local).catch((error) => setError(local, error, 'Manifestabgleich'));
+      }
       if (local.connection && addressChanged) local.connection.updateDevice(local);
-      reconcileBinding(local).catch((error) => setError(local, error, 'Binding-Abgleich'));
+      const restoredConnectionMissing = local.bindingState === 'active'
+        && local.paired === true && !local.connection;
+      if (bindingNeedsReconcile(local, found) || restoredConnectionMissing) {
+        reconcileBinding(local).catch((error) => setError(local, error, 'Binding-Abgleich'));
+      }
       publishDevice(local);
     }
     persist();
   }
 
+  // Das Manifest beschreibt die Fähigkeiten genau einer Firmwareversion und
+  // wird persistiert. Es darf deshalb nur aus einer frischen Abfrage oder aus
+  // dem Pairingergebnis stammen, niemals aus dem eigenen Zwischenspeicher.
+  async function refreshManifest(device) {
+    const manifest = await clientFor(device).manifest();
+    device.manifest = manifest;
+    clientFor(device).manifestInfo = manifest;
+    if (device.outputClient) device.outputClient.manifest = manifest;
+    persist();
+    publishDevice(device);
+    return manifest;
+  }
+
   async function activate(device, result) {
-    device.manifest = result.manifest || device.manifest || await clientFor(device).manifest();
+    device.manifest = result.manifest || await clientFor(device).manifest();
     clientFor(device).manifestInfo = device.manifest;
     const remoteConfig = result.existingConfig || await clientFor(device).config();
     const deviceStatus = result.status || await clientFor(device).status();
@@ -617,6 +1007,7 @@ function createHdpAdapter(host, dependencies = {}) {
       && ['invalid', 'storage_unavailable'].includes(device.lastBoot.config_load_status));
     device.lastError = '';
     device.bindings = mergeBindings(device.bindings);
+    device.bindings.binary = normalizeBinaryBindings(device.bindings, device.hardwareConfig);
     device.updateSettings = { ...defaultUpdateSettings(), ...(device.updateSettings || config.globalUpdateSettings || {}) };
     await persistRequired();
     publishCatalog();
@@ -631,7 +1022,7 @@ function createHdpAdapter(host, dependencies = {}) {
     try {
       const status = await clientFor(device).pairingStatus(true);
       if (status.binding_status === 'match') {
-        if (device.bindingState !== 'active' || !device.paired) {
+        if (device.bindingState !== 'active' || !device.paired || !device.connection) {
           await activate(device, { bindingId: status.binding_id });
         }
       } else if (status.binding_status === 'unpaired') {
@@ -671,7 +1062,7 @@ function createHdpAdapter(host, dependencies = {}) {
     const found = discovered.get(deviceId);
     if (!found) throw new Error('Gerät wurde nicht per mDNS gefunden.');
     if (found.runtimeMismatch) {
-      throw Object.assign(new Error(`Runtime-Profil ${found.runtimeProfile} ist inkompatibel; erwartet wird ${RUNTIME_PROFILE}.`), {
+      throw Object.assign(new Error(`Runtime-Profil ${found.runtimeProfile} ist inkompatibel; unterstützt werden pixel-timeline-v1 und binary-io-v1.`), {
         code: 'UNSUPPORTED_RUNTIME_PROFILE', status: 426,
       });
     }
@@ -679,7 +1070,6 @@ function createHdpAdapter(host, dependencies = {}) {
     if (found.pairingState === 'paired' && (!existing || existing.bindingState !== 'pending')) {
       throw Object.assign(new Error('Gerät ist bereits mit einer Instanz gekoppelt.'), { code: 'ALREADY_PAIRED' });
     }
-    host.log(`Pairing gestartet: ${deviceId}`);
     const device = existing && existing.bindingState === 'pending' ? existing : {
       ...found, name: found.hostname || deviceId,
       bindingState: 'pending', paired: false,
@@ -688,43 +1078,55 @@ function createHdpAdapter(host, dependencies = {}) {
       updateSettings: { ...defaultUpdateSettings(), ...(config.globalUpdateSettings || {}) },
       online: !!found.online, unsubscribers: [],
     };
-    await host.setSecret(`${SECRET_PREFIX}${deviceId}`, device.bindingKey);
-    devices.set(deviceId, device);
-    await persistRequired();
-    const client = clientFor(device);
-    let result;
-    try {
-      result = await client.pair({
-        instanceId: identity.instanceId,
-        adapterNonce: device.adapterNonce,
-        bindingKey: device.bindingKey,
+    if (device.pairingInProgress) {
+      throw Object.assign(new Error('Für dieses Gerät läuft bereits eine Kopplung.'), {
+        code: 'DEVICE_BUSY', status: 423,
       });
-    } catch (error) {
-      if (error.code === 'ALREADY_PAIRED') {
-        await host.deleteSecret(`${SECRET_PREFIX}${deviceId}`);
-        devices.delete(deviceId);
-        await persistRequired();
-      }
-      throw error;
     }
-    device.name = (result.device && (result.device.device_name || result.device.name)) || device.name;
-    await activate(device, result);
+    device.pairingInProgress = true;
+    host.log(`Pairing gestartet: ${deviceId}`);
     try {
-      device.firmwareInfo = await clientFor(device).firmware();
-      device.firmwareStatus = await clientFor(device).firmwareStatus();
-      if (device.firmwareInfo.ota_port) device.otaPort = device.firmwareInfo.ota_port;
-    } catch (err) {
-      device.lastError = `Firmwarestatus: ${err.message}`;
+      await host.setSecret(`${SECRET_PREFIX}${deviceId}`, device.bindingKey);
+      devices.set(deviceId, device);
+      await persistRequired();
+      const client = clientFor(device);
+      let result;
+      try {
+        result = await client.pair({
+          instanceId: identity.instanceId,
+          adapterNonce: device.adapterNonce,
+          bindingKey: device.bindingKey,
+        });
+      } catch (error) {
+        if (error.code === 'ALREADY_PAIRED') {
+          await host.deleteSecret(`${SECRET_PREFIX}${deviceId}`);
+          devices.delete(deviceId);
+          await persistRequired();
+        }
+        throw error;
+      }
+      device.name = (result.device && (result.device.device_name || result.device.name)) || device.name;
+      await activate(device, result);
+      try {
+        device.firmwareInfo = await clientFor(device).firmware();
+        device.firmwareStatus = await clientFor(device).firmwareStatus();
+        if (device.firmwareInfo.ota_port) device.otaPort = device.firmwareInfo.ota_port;
+      } catch (err) {
+        device.lastError = `Firmwarestatus: ${err.message}`;
+      }
+      await persistRequired();
+      host.log(`Pairing erfolgreich: ${deviceId}`);
+      return sanitizeDevice(device);
+    } finally {
+      device.pairingInProgress = false;
     }
-    await persistRequired();
-    host.log(`Pairing erfolgreich: ${deviceId}`);
-    return sanitizeDevice(device);
   }
 
   async function saveHardwareConfig(deviceId, input) {
     const device = requirePaired(deviceId);
+    const requestedName = requestedDeviceName(input, device.name);
     const manifest = device.manifest || await clientFor(device).manifest();
-    const capabilities = device.runtimeProfile === RUNTIME_PROFILE ? manifest : {
+    const capabilities = device.runtimeProfile ? manifest : {
       ...(manifest.hardware_capabilities || {}),
       maximum_led_count: manifest.limits && manifest.limits.maximum_led_count,
     };
@@ -743,9 +1145,12 @@ function createHdpAdapter(host, dependencies = {}) {
       const result = await clientFor(device).putConfig(expected, validated, capabilities);
       device.hardwareConfig = result;
       device.configRevision = result.revision == null ? expected + 1 : result.revision;
-      device.name = validated.device_name || device.name;
+      device.bindings.binary = normalizeBinaryBindings(device.bindings, result);
+      device.name = requestedName || device.name;
       device.configOrigin = 'homeess';
       if (device.outputClient) device.outputClient.sessionStarted();
+      subscribeSources(device);
+      publishCatalog();
       persist();
       publishDevice(device);
       applyRuntime(device);
@@ -799,11 +1204,50 @@ function createHdpAdapter(host, dependencies = {}) {
     return bindings;
   }
 
+  function validateBinaryBindings(device, input) {
+    const bindings = mergeBindings(input);
+    const source = input && input.binary && typeof input.binary === 'object'
+      ? input.binary : {};
+    for (const pin of (device.hardwareConfig && Array.isArray(device.hardwareConfig.pins)
+      ? device.hardwareConfig.pins : [])) {
+      const current = source[String(pin.pin)] || {};
+      if (!current || typeof current !== 'object' || Array.isArray(current)) {
+        throw new Error(`GPIO ${pin.pin}: Binding ist ungültig.`);
+      }
+      if (pin.direction === 'output' && current.invert != null
+          && typeof current.invert !== 'boolean') {
+        throw new Error(`GPIO ${pin.pin}: invert muss ein Booleanwert sein.`);
+      }
+      if (pin.direction === 'input') {
+        if (current.action != null
+            && !['state', 'toggle', 'set', 'counter'].includes(current.action)) {
+          throw new Error(`GPIO ${pin.pin}: unbekannte Eingangsaktion.`);
+        }
+        if (current.action === 'set'
+            && (typeof current.set_value === 'undefined'
+              || (current.set_value !== null && typeof current.set_value === 'object'))) {
+          throw new Error(`GPIO ${pin.pin}: Setzwert muss ein skalarer JSON-Wert sein.`);
+        }
+        if (current.action === 'counter'
+            && (!Number.isFinite(Number(current.counter_step))
+              || Number(current.counter_step) === 0)) {
+          throw new Error(`GPIO ${pin.pin}: Counter-Schritt muss numerisch und ungleich null sein.`);
+        }
+      }
+    }
+    bindings.binary = normalizeBinaryBindings({ binary: source }, device.hardwareConfig);
+    return bindings;
+  }
+
   function saveBindings(deviceId, input) {
     const device = requirePaired(deviceId);
     const previousBindings = device.bindings;
-    const nextBindings = validateBindings(input.bindings || input);
-    resetChangedIndicatorState(device, previousBindings, nextBindings);
+    const nextBindings = isBinaryDevice(device)
+      ? validateBinaryBindings(device, input.bindings || input)
+      : validateBindings(input.bindings || input);
+    if (!isBinaryDevice(device)) {
+      resetChangedIndicatorState(device, previousBindings, nextBindings);
+    }
     device.bindings = nextBindings;
     device.updateSettings = { ...device.updateSettings, ...(input.updateSettings || {}) };
     stopSubscriptions(device);
@@ -888,61 +1332,89 @@ function createHdpAdapter(host, dependencies = {}) {
     return { info, status };
   }
 
-  async function prepareFirmware(deviceId, body) {
-    const device = requirePaired(deviceId);
-    const manifest = validateManifest(body.manifest || body);
-    const current = await refreshFirmware(device);
-    const firmwareInfo = current.info;
-    if (!['idle', 'failed', 'completed'].includes(current.status.state)) {
-      throw Object.assign(new Error(`Gerät ist für ein Update nicht bereit (${current.status.state}).`), { status: 423, code: 'OTA_ALREADY_RUNNING' });
+  // Welches Release der zentrale Speicher für genau dieses Gerät bereithält.
+  // Liefert immer eine Begründung, damit die Oberfläche erklären kann, warum
+  // kein Update angeboten wird.
+  function firmwareCandidate(device) {
+    if (!device.firmwareInfo || !device.firmwareInfo.name) {
+      return { available: false, reason: 'Firmwareinformationen wurden noch nicht abgerufen.' };
     }
-    const artifact = selectArtifact(manifest, firmwareInfo);
-    checkCompatibility(manifest, artifact, firmwareInfo, { allowDowngrade: !!body.allowDowngrade });
-    pendingFirmware.set(deviceId, { manifest, artifact, allowDowngrade: !!body.allowDowngrade });
-    return { release: manifest.release, artifact, signature: artifact.signature ? 'vorhanden' : 'nicht vorhanden' };
+    const channel = releaseChannels.includes(device.updateSettings.channel)
+      ? device.updateSettings.channel : 'stable';
+    try {
+      return releaseStore.candidateFor(device.firmwareInfo, channel);
+    } catch (error) {
+      return { available: false, reason: error.message };
+    }
   }
 
-  async function upload(deviceId, uploadInfo) {
+  // Überträgt das zentral hinterlegte Release. Der Ablauf bleibt der normative:
+  // lokal prüfen, übertragen, vom Gerät verifizieren lassen — der Neustart
+  // folgt erst danach als eigener Schritt.
+  async function installFirmware(deviceId, options = {}) {
     const device = requirePaired(deviceId);
-    const pending = pendingFirmware.get(deviceId);
-    if (!pending) throw new Error('Firmwaremanifest muss zuerst validiert werden.');
-    if (!uploadInfo || !uploadInfo.path) throw new Error('Firmwaredatei fehlt.');
-    if (uploadInfo.filename && uploadInfo.filename !== pending.artifact.filename) {
-      throw new Error(`Firmwaredatei muss „${pending.artifact.filename}“ heißen.`);
-    }
-    const fileCheck = await validateArtifactFile(uploadInfo.path, pending.artifact, {
-      requireSignature: true,
-      publicKey: releaseService.publicKey,
-    });
-    // Vorhandene Signatur ohne konfigurierten Schlüssel niemals als verifiziert
-    // darstellen oder übertragen.
-    if (pending.artifact.signature && !fileCheck.signature.verified) {
-      throw new Error('Signatur vorhanden, aber im Adapter ist kein öffentlicher Prüfschlüssel konfiguriert.');
-    }
-    device.otaProgress = { state: 'uploading', progress_percent: 0 };
-    const result = await uploadFirmware({
-      file: uploadInfo.path,
-      device,
-      firmwareInfo: device.firmwareInfo,
-      manifest: pending.manifest,
-      artifact: pending.artifact,
-      credentials: { instanceId: identity.instanceId, bindingKey: device.bindingKey },
-      allowDowngrade: pending.allowDowngrade,
-      onProgress(progress) {
-        device.otaProgress = { state: 'uploading', progress_percent: progress.percent,
-          received_bytes: progress.sent, total_bytes: progress.total };
-      },
-    });
-    device.otaProgress = { state: 'ready_to_restart', progress_percent: 100 };
-    device.firmwareStatus = await clientFor(device).firmwareStatus();
-    if (device.firmwareStatus.state !== 'ready_to_restart'
-        || device.firmwareStatus.restart_required !== true) {
-      throw Object.assign(new Error('Gerät bestätigt nach dem Upload keinen restartbereiten OTA-Zustand.'), {
-        code: 'OTA_FINALIZE_FAILED', status: 502,
+    const current = await refreshFirmware(device);
+    if (!['idle', 'failed', 'completed'].includes(current.status.state)) {
+      throw Object.assign(new Error(`Gerät ist für ein Update nicht bereit (${current.status.state}).`), {
+        status: 423, code: 'OTA_ALREADY_RUNNING',
       });
     }
+    const channel = options.channel || device.updateSettings.channel;
+    const candidate = releaseStore.candidateFor(current.info, channel, {
+      allowDowngrade: !!options.allowDowngrade,
+    });
+    if (!candidate.available) {
+      throw Object.assign(new Error(candidate.reason), { status: 409, code: 'OTA_NO_CANDIDATE' });
+    }
+    const fileCheck = await validateArtifactFile(candidate.file, candidate.artifact, {
+      publicKey: releaseStore.publicKey,
+    });
+    try {
+      device.otaProgress = { state: 'uploading', progress_percent: 0 };
+      publishDevice(device);
+      await uploadFirmware({
+        file: candidate.file,
+        device,
+        firmwareInfo: current.info,
+        manifest: candidate.manifest,
+        artifact: candidate.artifact,
+        credentials: { instanceId: identity.instanceId, bindingKey: device.bindingKey },
+        allowDowngrade: !!options.allowDowngrade,
+        onProgress(progress) {
+          device.otaProgress = {
+            state: 'uploading', progress_percent: progress.percent,
+            received_bytes: progress.sent, total_bytes: progress.total,
+          };
+          publishDevice(device);
+        },
+      });
+      device.otaProgress = { state: 'ready_to_restart', progress_percent: 100 };
+      device.firmwareStatus = await clientFor(device).firmwareStatus();
+      if (device.firmwareStatus.state !== 'ready_to_restart'
+          || device.firmwareStatus.restart_required !== true) {
+        throw Object.assign(new Error('Gerät bestätigt nach dem Upload keinen restartbereiten OTA-Zustand.'), {
+          code: 'OTA_FINALIZE_FAILED', status: 502,
+        });
+      }
+    } catch (error) {
+      device.otaProgress = { state: 'failed', progress_percent: 0, message: error.message };
+      flushBinaryOutputs(device);
+      publishDevice(device);
+      throw error;
+    }
+    pendingFirmware.set(deviceId, {
+      manifest: candidate.manifest, artifact: candidate.artifact,
+      allowDowngrade: !!options.allowDowngrade,
+    });
     persist();
-    return { result, fileCheck, status: device.firmwareStatus };
+    return { release: candidate.release, artifact: candidate.artifact, fileCheck, status: device.firmwareStatus };
+  }
+
+  // Ein Klick: übertragen, verifizieren, neu starten, Erfolg nachweisen.
+  async function updateFirmware(deviceId, options = {}) {
+    const prepared = await installFirmware(deviceId, options);
+    const verified = await restartFirmware(deviceId);
+    return { ...prepared, installed: verified.info };
   }
 
   async function restartFirmware(deviceId) {
@@ -979,13 +1451,115 @@ function createHdpAdapter(host, dependencies = {}) {
     throw new Error('Gerät wurde nach dem Firmwareupdate nicht erfolgreich verifiziert.');
   }
 
+  function updateBlockedReason(device, now = new Date()) {
+    if (device.updateSettings.mode !== 'automatic') return 'Updatepolitik steht nicht auf automatisch.';
+    if (!device.online) return 'Gerät ist nicht erreichbar.';
+    if (device.recoveryRequired) return 'Konfigurationsspeicher erfordert Wiederherstellung.';
+    if (device.otaProgress && ['uploading', 'ready_to_restart', 'restarting'].includes(device.otaProgress.state)) {
+      return 'Ein Update läuft bereits.';
+    }
+    // Ein während der Abwesenheit verpasstes Fenster wird einmalig nachgeholt,
+    // sonst bliebe ein Gerät mit nächtlichem Fenster nach längerer Trennung
+    // dauerhaft auf einem alten Stand.
+    if (!insideMaintenanceWindow(device.updateSettings.maintenance_window, now)
+        && !device.missedMaintenanceWindow) {
+      return 'Außerhalb des Wartungsfensters.';
+    }
+    const attempts = device.updateAttempts && device.updateAttempts[device.pendingUpdateVersion];
+    const limit = Math.max(0, number(device.updateSettings.retry_count, 0));
+    if (attempts != null && attempts > limit) {
+      return `Nach ${attempts} Fehlversuchen ausgesetzt; Updatepolitik erlaubt ${limit} Wiederholungen.`;
+    }
+    return null;
+  }
+
+  // Wertet Kanal, Updatepolitik, Wartungsfenster und Wiederholungsgrenze aus.
+  // Bis hierher waren diese Einstellungen reine Anzeige ohne Wirkung.
+  async function runRollout(now = new Date()) {
+    if (stopped || rolloutRunning) return;
+    rolloutRunning = true;
+    try {
+      for (const device of devices.values()) {
+        if (stopped) break;
+        if (device.bindingState !== 'active' || !device.paired) continue;
+        const candidate = firmwareCandidate(device);
+        device.updateAvailable = candidate.available ? candidate.release.version : null;
+        if (!candidate.available) continue;
+        if (device.updateSettings.mode === 'notify_only') {
+          publishDevice(device);
+          continue;
+        }
+        if (!device.online && device.updateSettings.update_when_device_returns_online
+            && device.updateSettings.mode === 'automatic'
+            && insideMaintenanceWindow(device.updateSettings.maintenance_window, now)) {
+          device.missedMaintenanceWindow = true;
+        }
+        const blocked = updateBlockedReason(device, now);
+        if (blocked) {
+          device.updateBlockedReason = blocked;
+          publishDevice(device);
+          continue;
+        }
+        device.updateBlockedReason = null;
+        device.pendingUpdateVersion = candidate.release.version;
+        device.updateAttempts = device.updateAttempts || {};
+        device.updateAttempts[candidate.release.version] =
+          (device.updateAttempts[candidate.release.version] || 0) + 1;
+        host.log(`HDP ${device.deviceId}: automatisches Update auf ${candidate.release.version} wird installiert.`);
+        try {
+          await updateFirmware(device.deviceId);
+          delete device.updateAttempts[candidate.release.version];
+          device.updateAvailable = null;
+          device.missedMaintenanceWindow = false;
+          device.pendingUpdateVersion = null;
+          host.log(`HDP ${device.deviceId}: Update auf ${candidate.release.version} abgeschlossen.`);
+        } catch (error) {
+          setError(device, error, 'Automatisches Update');
+        }
+        persist();
+      }
+    } finally {
+      rolloutRunning = false;
+    }
+  }
+
   function deviceFromForm(body, existing) {
-    if (existing.runtimeProfile === RUNTIME_PROFILE) {
+    const requestedType = String(body.device_type || deviceTypeOf(existing));
+    const available = supportedDeviceTypes(existing.manifest);
+    if (!available.includes(requestedType)) {
+      throw Object.assign(
+        new Error(`Das Gerät unterstützt den Gerätetyp ${requestedType} nicht.`),
+        { code: 'UNSUPPORTED_DEVICE_TYPE', status: 422 },
+      );
+    }
+    if (requestedType === 'binary_io') {
+      const pins = [];
+      const slots = binaryPinSlots(existing.manifest);
+      for (let index = 0; index < slots; index += 1) {
+        const rawPin = body[`binary_pin_${index}`];
+        if (rawPin == null || String(rawPin).trim() === '') continue;
+        const direction = body[`binary_direction_${index}`] === 'output' ? 'output' : 'input';
+        const pin = {
+          pin: number(rawPin, -1), direction,
+          ...(direction === 'input' ? {
+            input_type: body[`binary_input_type_${index}`] === 'button' ? 'button' : 'switch',
+          } : {}),
+        };
+        pins.push(pin);
+      }
       return validateHardwareConfig({
         revision: number(body.revision, existing.configRevision || 0),
-        device_type: existing.hardwareConfig.device_type || 'percentage_indicator',
+        device_type: 'binary_io', pins,
+      }, existing.manifest);
+    }
+    if (existing.runtimeProfile) {
+      const outputs = existing.hardwareConfig && Array.isArray(existing.hardwareConfig.outputs)
+        ? existing.hardwareConfig.outputs : [];
+      return validateHardwareConfig({
+        revision: number(body.revision, existing.configRevision || 0),
+        device_type: 'percentage_indicator',
         outputs: [{
-          output_id: (existing.hardwareConfig.outputs[0] && existing.hardwareConfig.outputs[0].output_id) || 'main',
+          output_id: (outputs[0] && outputs[0].output_id) || 'main',
           output_type: 'argb_strip',
           pin: number(body.argb_pin, 2),
           pixel_count: number(body.led_count, 10),
@@ -1024,7 +1598,32 @@ function createHdpAdapter(host, dependencies = {}) {
     });
   }
 
-  function bindingsFromForm(body) {
+  function bindingsFromForm(body, device) {
+    if (device && isBinaryDevice(device)) {
+      const binary = {};
+      for (const pin of (device.hardwareConfig && Array.isArray(device.hardwareConfig.pins)
+        ? device.hardwareConfig.pins : [])) {
+        const key = String(pin.pin);
+        if (pin.direction === 'output') {
+          binary[key] = {
+            topic: String(body[`binary_topic_${key}`] || '').trim(),
+            invert: bool(body[`binary_invert_${key}`]),
+          };
+        } else {
+          let setValue = true;
+          const raw = String(body[`binary_set_value_${key}`] == null
+            ? 'true' : body[`binary_set_value_${key}`]);
+          try { setValue = JSON.parse(raw); } catch (_) { setValue = raw; }
+          binary[key] = {
+            topic: String(body[`binary_topic_${key}`] || '').trim(),
+            action: String(body[`binary_action_${key}`] || (pin.input_type === 'button' ? 'toggle' : 'state')),
+            set_value: setValue,
+            counter_step: number(body[`binary_counter_step_${key}`], 1),
+          };
+        }
+      }
+      return validateBinaryBindings(device, { binary });
+    }
     return validateBindings({
       percentage: {
         topic: String(body.percentage_topic || '').trim(),
@@ -1063,71 +1662,300 @@ function createHdpAdapter(host, dependencies = {}) {
       `<option value="${pin}"${Number(selected) === Number(pin) ? ' selected' : ''}>GPIO ${pin}</option>`).join('');
   }
 
-  function renderOverview() {
-    const state = snapshot();
-    const found = state.found;
-    const paired = state.paired.filter((d) => d.online);
-    const offline = state.paired.filter((d) => !d.online);
-    const card = (device, pairedDevice = false) => `<div class="settings-card" style="margin-bottom:12px;">
-      <div class="settings-card-head"><h3>${esc(device.name || device.hostname || device.deviceId)}</h3>
-        <span class="status-badge ${device.online ? 'status-ok' : 'status-off'}">${device.online ? 'Online' : 'Offline'}</span></div>
-      <p><code>${esc(device.deviceId)}</code> · ${esc(device.address || device.hostname || '—')}:${esc(device.apiPort || '')}</p>
-      <p class="muted">Firmware ${esc(device.firmwareVersion || (device.firmwareInfo && device.firmwareInfo.version) || '—')} ·
-        ${esc(device.platform || '—')} / ${esc(device.board || '—')} · HDP ${esc(device.protocolVersion || '—')} ·
-        Runtime ${esc(device.runtimeProfile || 'Legacy')} · ${esc(device.deviceType || 'nicht konfiguriert')}</p>
-      ${device.hardwareConfigPresent || device.hardwareConfig ? '<p>Hardwarekonfiguration vorhanden</p>' : ''}
-      ${pairedDevice ? `<p class="muted">Verbindung: ${esc(device.connectionState || (device.online ? 'connected' : 'offline'))}
-        · Versuch ${esc(device.reconnectAttempt || 0)} · nächster Versuch ${esc(device.nextReconnectAt || '—')}</p>` : ''}
-      ${device.configOrigin === 'device' ? '<p class="status-text success">Vorhandene Hardwarekonfiguration vom Gerät übernommen</p>' : ''}
-      ${device.lastError ? `<p class="error-text">${esc(device.lastError)}</p>` : ''}
-      <div class="button-row">
-        ${pairedDevice ? `<a class="module-toggle-btn" href="/adapter/instance/INSTANCE/manage/device/${encodeURIComponent(device.deviceId)}">Konfigurieren</a>` :
-          device.runtimeMismatch ? '<span class="error-text">Inkompatibles Runtime-Profil</span>' :
-          device.pairingState === 'paired'
-            ? '<span class="muted">Bereits mit einer anderen homeESS-Instanz gekoppelt</span>'
-            : `<form method="post" action="/adapter/instance/INSTANCE/manage/api/devices/${encodeURIComponent(device.deviceId)}/pair"><button>Koppeln</button></form>`}
-      </div></div>`;
-    const section = (title, rows, isPaired) => `<section><h2>${title}</h2>${rows.length
-      ? rows.map((d) => card(d, isPaired)).join('')
-      : '<p class="muted">Keine Geräte in diesem Bereich.</p>'}</section>`;
-    return `<h1>HDP Kopplung &amp; Verwaltung</h1>
-      <div class="settings-card"><div class="settings-card-head"><h2>Adapterstatus</h2></div>
-        <p>Discovery: ${state.discoveryRunning ? 'aktiv' : 'inaktiv'} · gefunden: ${found.length} · gekoppelt: ${state.paired.length}</p>
-        <form method="post" action="/adapter/instance/INSTANCE/manage/api/discovery/refresh"><button>Geräte suchen</button></form>
-      </div>
-      ${section('Gefundene Geräte', found, false)}
-      ${section('Gekoppelte Geräte', paired, true)}
-      ${section('Nicht erreichbare Geräte', offline, true)}`;
+  // Kein GPIO wird gesperrt; die Eigenheiten einzelner Pins stehen als Hinweis
+  // an der Auswahl, damit beim Verdrahten klar ist, wo etwas zu beachten ist.
+  function binaryPinNote(device, pin) {
+    const capabilities = (device.manifest && device.manifest.hardware_capabilities) || {};
+    const inList = (key) => Array.isArray(capabilities[key]) && capabilities[key].includes(pin);
+    const notes = [];
+    if (Array.isArray(capabilities.binary_pullup_pins)
+        && !capabilities.binary_pullup_pins.includes(pin)) {
+      notes.push('externer Pull-up nötig');
+    }
+    if (inList('binary_boot_sensitive_pins')) notes.push('Boot-Pin');
+    if (inList('binary_serial_pins')) notes.push('serielle Konsole');
+    return notes.length ? ` · ${notes.join(', ')}` : '';
   }
 
-  function renderDevicePage(device) {
+  function binaryPinLegend(device) {
+    const capabilities = (device.manifest && device.manifest.hardware_capabilities) || {};
+    const list = (key) => (Array.isArray(capabilities[key]) ? capabilities[key] : []);
+    const all = list('binary_pins');
+    const withoutPullup = Array.isArray(capabilities.binary_pullup_pins)
+      ? all.filter((pin) => !capabilities.binary_pullup_pins.includes(pin)) : [];
+    const notes = [];
+    if (withoutPullup.length) {
+      notes.push(`GPIO ${withoutPullup.join(', ')} besitzen keinen nutzbaren internen Pull-up. Als Eingang brauchen sie einen externen 10k gegen 3V3; als Ausgang sind sie uneingeschränkt nutzbar.`);
+    }
+    if (list('binary_boot_sensitive_pins').length) {
+      notes.push(`GPIO ${list('binary_boot_sensitive_pins').join(', ')} bestimmen den Bootmodus. Ein Schalter, der beim Einschalten bereits geschlossen ist, kann den Start blockieren.`);
+    }
+    if (list('binary_serial_pins').length) {
+      notes.push(`GPIO ${list('binary_serial_pins').join(', ')} sind TX/RX der seriellen Konsole; ihre Nutzung kostet die Debugausgabe.`);
+    }
+    return notes.length
+      ? `<ul class="hdp-pin-legend">${notes.map((note) => `<li>${esc(note)}</li>`).join('')}</ul>`
+      : '';
+  }
+
+  function binaryPinRows(device, hardwareConfig) {
+    const allowed = device.manifest && device.manifest.hardware_capabilities
+      && Array.isArray(device.manifest.hardware_capabilities.binary_pins)
+      ? device.manifest.hardware_capabilities.binary_pins : [];
+    const configured = hardwareConfig && Array.isArray(hardwareConfig.pins)
+      ? hardwareConfig.pins : [];
+    return Array.from({ length: binaryPinSlots(device.manifest) }, (_, index) => {
+      const current = configured[index] || {};
+      const options = ['<option value="">Nicht verwendet</option>'].concat(allowed.map((pin) =>
+        `<option value="${pin}"${Number(current.pin) === pin ? ' selected' : ''}>GPIO ${pin}${esc(binaryPinNote(device, pin))}</option>`)).join('');
+      return `<div class="hdp-form-grid hdp-binary-pin-row">
+        <label class="field">Pin ${index + 1}<select name="binary_pin_${index}">${options}</select></label>
+        <label class="field">Richtung<select name="binary_direction_${index}">
+          <option value="input"${current.direction !== 'output' ? ' selected' : ''}>Eingang</option>
+          <option value="output"${current.direction === 'output' ? ' selected' : ''}>Ausgang</option>
+        </select></label>
+        <label class="field">Eingangstyp<select name="binary_input_type_${index}">
+          <option value="switch"${current.input_type !== 'button' ? ' selected' : ''}>Schalter</option>
+          <option value="button"${current.input_type === 'button' ? ' selected' : ''}>Taster</option>
+        </select></label>
+      </div>`;
+    }).join('');
+  }
+
+  function binaryBindingRows(device) {
+    const bindings = device.bindings.binary || {};
+    return (device.hardwareConfig && Array.isArray(device.hardwareConfig.pins)
+      ? device.hardwareConfig.pins : []).map((pin) => {
+      const key = String(pin.pin);
+      const binding = bindings[key] || {};
+      if (pin.direction === 'output') {
+        return `<section class="settings-card hdp-config-card">
+          <div class="settings-card-head"><span class="hdp-section-kicker">GPIO ${pin.pin} · Ausgang</span><h2>Binary-Ausgang</h2></div>
+          <div class="hdp-form-grid"><label class="field hdp-span-full">Topic<input data-state-picker name="binary_topic_${key}" value="${esc(binding.topic || '')}" placeholder="State auswählen"></label></div>
+          <div class="hdp-toggle-row"><label><input type="checkbox" name="binary_invert_${key}"${binding.invert ? ' checked' : ''}> Logik invertieren</label></div>
+        </section>`;
+      }
+      return `<section class="settings-card hdp-config-card">
+        <div class="settings-card-head"><span class="hdp-section-kicker">GPIO ${pin.pin} · ${pin.input_type === 'button' ? 'Taster' : 'Schalter'}</span><h2>Binary-Eingang</h2></div>
+        <div class="hdp-form-grid">
+          <label class="field hdp-span-full">Ziel-Topic<input data-state-picker name="binary_topic_${key}" value="${esc(binding.topic || '')}" placeholder="State auswählen"></label>
+          <label class="field">Aktion<select name="binary_action_${key}">
+            <option value="state"${binding.action === 'state' ? ' selected' : ''}>Eingangszustand übernehmen</option>
+            <option value="toggle"${binding.action === 'toggle' ? ' selected' : ''}>Topic umschalten</option>
+            <option value="set"${binding.action === 'set' ? ' selected' : ''}>Wert setzen</option>
+            <option value="counter"${binding.action === 'counter' ? ' selected' : ''}>Counter erhöhen</option>
+          </select></label>
+          <label class="field">Setzwert (JSON)<input name="binary_set_value_${key}" value="${esc(JSON.stringify(binding.set_value == null ? null : binding.set_value))}"></label>
+          <label class="field">Counter-Schritt<input type="number" step="any" name="binary_counter_step_${key}" value="${esc(binding.counter_step == null ? 1 : binding.counter_step)}"></label>
+        </div>
+      </section>`;
+    }).join('');
+  }
+
+  function rssiSummary(device) {
+    if (!device.online || device.rssi == null || device.rssi === '') return '';
+    const value = Number(device.rssi);
+    if (!Number.isFinite(value)) return '';
+    const level = rssiLevel(device);
+    const quality = level === 4 ? 'Sehr gut' : level === 3 ? 'Gut' : level === 2 ? 'Ausreichend' : 'Schwach';
+    const label = 'WLAN-Signal';
+    return `<div class="hdp-device-fact hdp-signal" title="${esc(`${label}: ${quality}, ${value} dBm`)}">
+      <span class="hdp-fact-label">${label}</span>
+      <span class="hdp-fact-value"><span class="hdp-signal-bars hdp-signal-${level}" aria-hidden="true"><i></i><i></i><i></i><i></i></span>${esc(quality)} <small>${esc(value)} dBm</small></span>
+    </div>`;
+  }
+
+  function rssiLevel(device) {
+    if (device.rssi == null || device.rssi === '') return 0;
+    const value = Number(device.rssi);
+    if (!Number.isFinite(value)) return 0;
+    return value >= -50 ? 4 : value >= -60 ? 3 : value >= -70 ? 2 : 1;
+  }
+
+  function deviceFacts(device) {
+    const firmwareVersion = device.firmwareVersion
+      || (device.firmwareInfo && device.firmwareInfo.version);
+    const update = device.updateAvailable && device.updateAvailable !== firmwareVersion
+      ? `<span class="hdp-update-chip" title="Im Firmwarespeicher liegt eine neuere Version">→ ${esc(device.updateAvailable)}</span>` : '';
+    return [
+      rssiSummary(device),
+      firmwareVersion ? `<div class="hdp-device-fact hdp-device-fact--firmware"><span class="hdp-fact-label">Firmware</span><span class="hdp-fact-value">${esc(firmwareVersion)}${update}</span></div>` : '',
+    ].filter(Boolean).join('');
+  }
+
+  // Zentrale Firmwareablage. Ein Release-Manifest beschreibt dieselbe Firmware
+  // für alle Plattformen und Boards; hochgeladen wird deshalb einmal hier und
+  // nicht mehr je Gerät.
+  function renderFirmwareSection(store = releaseStore.summary()) {
+    const rows = store.map((entry) => {
+      if (!entry.present) {
+        return `<tr><td>${esc(entry.channel)}</td><td colspan="4" class="muted">Kein Release hinterlegt</td><td></td></tr>`;
+      }
+      const artifacts = entry.artifacts.map((artifact) =>
+        `<li${artifact.stored ? '' : ' class="is-missing"'}>${esc(artifact.platform)}/${esc(artifact.board)}/${esc(artifact.variant)} · ${esc(artifact.filename)} · ${Math.round(artifact.size_bytes / 1024)} KiB${artifact.signed ? ' · signiert' : ''}${artifact.stored ? '' : ' · <strong>Datei fehlt</strong>'}</li>`).join('');
+      return `<tr>
+        <td>${esc(entry.channel)}</td>
+        <td>${esc(entry.release.version)}</td>
+        <td>${esc(entry.release.published_at || '—')}<br><small class="muted">Build ${esc(entry.release.build_id || '—')}</small></td>
+        <td><ul class="hdp-artifact-list">${artifacts}</ul></td>
+        <td><span class="status-badge ${entry.complete ? 'status-ok' : 'status-warn'}">${entry.complete ? 'Vollständig' : 'Artefakt fehlt'}</span></td>
+        <td><form method="post" action="/adapter/instance/INSTANCE/manage/api/firmware/channel/${encodeURIComponent(entry.channel)}" onsubmit="return confirm('Release im Kanal ${esc(entry.channel)} wirklich entfernen?');"><button class="button-danger">Entfernen</button></form></td>
+      </tr>`;
+    }).join('');
+    return `<section class="settings-card hdp-device-section hdp-firmware-store">
+      <div class="settings-card-head hdp-list-head"><div><h2>Firmware</h2><p class="settings-card-hint">Eine universelle Firmware für alle HDP-Geräte. Release-Manifest und die zugehörigen Artefakte werden hier einmal hinterlegt; die Geräte ziehen daraus den Kanal, der in ihren Updateeinstellungen steht.</p></div></div>
+      <div class="hdp-form-grid">
+        <div class="field"><label>Release-Manifest (.json)</label><input type="file" id="hdp-release-manifest" accept=".json,application/json"></div>
+        <div class="field"><label>Firmwareartefakt (.bin)</label><input type="file" id="hdp-release-artifact" accept=".bin,application/octet-stream" multiple></div>
+      </div>
+      <div class="button-row"><button type="button" onclick="hdpStoreFirmware()">In den Firmwarespeicher legen</button></div>
+      <pre id="hdp-release-result"></pre>
+      <div class="hdp-table-scroll"><table class="hdp-release-table">
+        <thead><tr><th>Kanal</th><th>Version</th><th>Veröffentlicht</th><th>Artefakte</th><th>Status</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+      ${renderUsbFlashHelp()}
+    </section>`;
+  }
+
+  // Erstinbetriebnahme und Rettung laufen über USB. Im Browser ginge das nur mit
+  // der Web Serial API — die gibt es ausschließlich in Chromium und nur in einem
+  // sicheren Kontext, also unter HTTPS oder auf localhost. Auf einer LAN-Adresse
+  // über HTTP existiert `navigator.serial` schlicht nicht. Deshalb übernimmt ein
+  // eigenständiges Werkzeug den seriellen Teil und holt sich die Firmware aus
+  // genau diesem Speicher.
+  // Der Adapterprozess kennt seine Instanznummer nicht direkt; sie steckt im
+  // Basispfad, den der Host bei jeder Anfrage mitliefert.
+  function publicBasePath() {
+    const match = /\/adapter\/instance\/(\d+)\/manage/.exec(managementBase || '');
+    return match ? `/adapter-public/${match[1]}` : null;
+  }
+
+  function renderUsbFlashHelp() {
+    const publicBase = publicBasePath();
+    const tools = publicBase ? releaseStore.bundledTools() : [];
+    const downloads = tools.length
+      ? `<p class="hdp-tool-downloads">${tools.map((tool) =>
+        `<a class="module-toggle-btn" href="${publicBase}/assets/${encodeURIComponent(tool.filename)}" download>${esc(tool.filename)} herunterladen <small>${Math.round(tool.size_bytes / 1048576)} MB</small></a>`).join(' ')}</p>`
+      : '<p class="settings-card-hint">In dieser Installation liegt kein Flashwerkzeug bei.</p>';
+    return `<details class="hdp-usb-flash">
+      <summary>Über USB flashen</summary>
+      <p class="settings-card-hint">Nötig bei der Erstinbetriebnahme, nach einem Werksreset und für Geräte, deren installierte Firmware ein OTA ablehnt. Das Werkzeug sucht die homeESS-Instanz im lokalen Netz, zieht die oben hinterlegte Firmware, prüft ihre SHA-256 gegen das Manifest und schreibt sie über den seriellen Port.</p>
+      ${downloads}
+      <pre><code>hdp-flash.exe --list
+hdp-flash.exe --channel development</code></pre>
+      <p class="settings-card-hint">Die Serveradresse wird beim ersten Start gesucht und danach gemerkt; mit <code>--server</code> lässt sie sich fest vorgeben. Der Flash wird <strong>nicht</strong> gelöscht: WLAN-Zugang, Pairing und Hardwarekonfiguration bleiben erhalten. Für ein werksreines Gerät <code>--erase</code> ergänzen — danach muss das Gerät neu gekoppelt werden.</p>
+      <p class="settings-card-hint">Werkzeug und Artefakte liegen unter <code>/adapter-public</code> ohne Anmeldung im lokalen Netz bereit. Im Browser passiert das Flashen bewusst nicht: Die Web Serial API setzt HTTPS oder localhost voraus und existiert nur in Chromium.</p>
+    </details>`;
+  }
+
+  function deviceSubtitle(device) {
+    const network = device.address || device.hostname;
+    const details = [];
+    if (network) details.push(network);
+    if (device.deviceType) details.push(device.deviceType);
+    return details.length ? `<p class="hdp-device-subtitle">${details.map(esc).join('<span>·</span>')}</p>` : '';
+  }
+
+  function overviewRevision(state) {
+    return crypto.createHash('sha256').update(JSON.stringify(state)).digest('hex').slice(0, 16);
+  }
+
+  function renderOverview(state = snapshot()) {
+    const byAvailabilityAndName = (left, right) =>
+      Number(!!right.online) - Number(!!left.online)
+      || String(left.name || left.hostname || left.deviceId).localeCompare(
+        String(right.name || right.hostname || right.deviceId), 'de',
+      );
+    const found = state.found.slice().sort(byAvailabilityAndName);
+    const paired = state.paired.slice().sort(byAvailabilityAndName);
+    const onlineCount = paired.filter((device) => device.online).length;
+    const searchValue = (device) => [
+      device.name, device.hostname, device.address, device.deviceId, device.deviceType,
+    ].filter(Boolean).join(' ').toLowerCase();
+    const pairedRow = (device) => {
+      const criticalSignal = device.online && rssiLevel(device) === 1;
+      return `<article class="hdp-device-row${device.online ? '' : ' is-offline'}${criticalSignal ? ' has-critical-signal' : ''}" data-hdp-device data-search="${esc(searchValue(device))}">
+      <div class="hdp-device-identity">
+        <div class="hdp-device-title"><span class="hdp-status-dot" aria-hidden="true"></span><h3>${esc(device.name || device.hostname || device.deviceId)}</h3>
+          <span class="status-badge ${device.online ? criticalSignal ? 'status-warn' : 'status-ok' : 'status-off'}">${device.online ? 'Online' : 'Offline'}</span></div>
+        ${deviceSubtitle(device)}
+      </div>
+      <div class="hdp-device-facts">${deviceFacts(device)}</div>
+      <a class="module-toggle-btn hdp-manage-link" href="/adapter/instance/INSTANCE/manage/device/${encodeURIComponent(device.deviceId)}">Verwalten <span aria-hidden="true">›</span></a>
+      ${device.lastError ? `<p class="hdp-device-alert"><strong>Hinweis:</strong> ${esc(device.lastError)}</p>` : ''}
+    </article>`;
+    };
+    const foundRow = (device) => `<article class="hdp-device-row hdp-device-row--found" data-hdp-device data-search="${esc(searchValue(device))}">
+      <div class="hdp-device-identity">
+        <div class="hdp-device-title"><span class="hdp-status-dot" aria-hidden="true"></span><h3>${esc(device.name || device.hostname || device.deviceId)}</h3>
+          <span class="status-badge status-ok">Verfügbar</span></div>
+        ${deviceSubtitle(device)}
+      </div>
+      <div class="hdp-device-facts">${deviceFacts(device)}</div>
+      <div class="hdp-device-action">${device.runtimeMismatch
+        ? '<span class="error-text">Nicht kompatibel</span>'
+        : device.pairingState === 'paired'
+          ? '<span class="muted">Anderweitig gekoppelt</span>'
+          : `<form method="post" action="/adapter/instance/INSTANCE/manage/api/devices/${encodeURIComponent(device.deviceId)}/pair"><button>Koppeln</button></form>`}</div>
+    </article>`;
+    return `<div class="hdp-overview" data-hdp-revision="${overviewRevision(state)}">
+      <header class="hdp-overview-head">
+        <div><h1>Geräteverwaltung</h1><p>HDP-Geräte auf einen Blick prüfen, koppeln und einzeln verwalten.</p></div>
+        <form method="post" action="/adapter/instance/INSTANCE/manage/api/discovery/refresh">
+          <button class="button-secondary" title="Suche im lokalen Netzwerk neu starten">Geräte suchen</button>
+        </form>
+      </header>
+      <div class="hdp-overview-tools">
+        <div class="hdp-overview-summary" aria-label="Geräteübersicht">
+          <span><strong>${paired.length}</strong> gekoppelt</span>
+          <span class="${onlineCount < paired.length ? 'has-offline' : ''}"><strong>${onlineCount}</strong> online</span>
+          ${found.length ? `<span><strong>${found.length}</strong> neu gefunden</span>` : ''}
+        </div>
+        ${(paired.length + found.length) > 5 ? '<label class="hdp-device-search"><span class="visually-hidden">Geräte filtern</span><input id="hdp-device-search" type="search" placeholder="Geräte filtern …" autocomplete="off"></label>' : ''}
+      </div>
+      <section class="settings-card hdp-device-section">
+        <div class="settings-card-head hdp-list-head"><div><h2>Meine Geräte</h2><p class="settings-card-hint">Status und Empfang sind sofort sichtbar. „Verwalten“ öffnet die Einstellungen des Geräts.</p></div></div>
+        <div class="hdp-device-list">${paired.length
+          ? paired.map(pairedRow).join('')
+          : '<div class="hdp-empty-state"><strong>Noch kein Gerät gekoppelt</strong><span>Starte die Suche und kopple ein verfügbares HDP-Gerät.</span></div>'}</div>
+      </section>
+      ${found.length ? `<section class="settings-card hdp-device-section hdp-found-section">
+        <div class="settings-card-head hdp-list-head"><div><h2>Neue Geräte</h2><p class="settings-card-hint">Diese Geräte wurden im lokalen Netzwerk gefunden und können gekoppelt werden.</p></div></div>
+        <div class="hdp-device-list">${found.map(foundRow).join('')}</div>
+      </section>` : ''}
+      <p id="hdp-filter-empty" class="hdp-filter-empty" hidden>Keine Geräte passen zum Suchbegriff.</p>
+    </div>`;
+  }
+
+  // Die Prozentanzeigenwerte stammen je nach Vertrag aus dem generischen
+  // Ausgang oder dem Legacy-Hardwareobjekt. Bei einem Binary-I/O-Gerät ist
+  // beides leer; der Dialog fällt dann auf die Ersteinrichtungsdefaults zurück.
+  function pixelHardwareView(device) {
     const hw = device.hardwareConfig || {};
-    const genericOutput = Array.isArray(hw.outputs) ? hw.outputs[0] : null;
-    const hardware = genericOutput ? {
-      argb_pin: genericOutput.pin, led_count: genericOutput.pixel_count,
-      led_type: genericOutput.driver, color_order: genericOutput.color_order,
-      reverse: genericOutput.reverse,
-    } : (hw.hardware || {});
-    const display = genericOutput ? {
-      fractional_led: device.bindings.display.fractional_pixel,
-      transition_milliseconds: 0,
-    } : (hw.display || {});
-    const power = genericOutput ? {
-      maximum_brightness_percent: genericOutput.maximum_brightness_percent,
-      maximum_current_milliamps: genericOutput.maximum_current_milliamps,
-      current_per_led_milliamps: genericOutput.current_per_pixel_milliamps,
-    } : (hw.power || {});
-    const offline = genericOutput ? { mode: genericOutput.offline_mode } : (hw.offline || {});
-    const binding = device.bindings;
-    const firmware = device.firmwareInfo || {};
-    const firmwareStatus = device.firmwareStatus || {};
-    const maximumLedCount = device.manifest && device.manifest.limits
-      ? device.manifest.limits.maximum_led_count : 300;
-    const colorOrders = device.manifest && device.manifest.hardware_capabilities
-      && Array.isArray(device.manifest.hardware_capabilities.color_orders)
-      ? device.manifest.hardware_capabilities.color_orders.filter((value) => ['RGB', 'GRB'].includes(value))
-      : ['RGB', 'GRB'];
-    const offlineModes = device.runtimeProfile === RUNTIME_PROFILE
+    const output = Array.isArray(hw.outputs) ? hw.outputs[0] : null;
+    return {
+      hardware: output ? {
+        argb_pin: output.pin, led_count: output.pixel_count, led_type: output.driver,
+        color_order: output.color_order, reverse: output.reverse,
+      } : (hw.hardware || {}),
+      display: output ? {
+        fractional_led: device.bindings.display.fractional_pixel, transition_milliseconds: 0,
+      } : (hw.display || {}),
+      power: output ? {
+        maximum_brightness_percent: output.maximum_brightness_percent,
+        maximum_current_milliamps: output.maximum_current_milliamps,
+        current_per_led_milliamps: output.current_per_pixel_milliamps,
+      } : (hw.power || {}),
+      offline: output ? { mode: output.offline_mode } : (hw.offline || {}),
+    };
+  }
+
+  function offlineModeOptions(device) {
+    // Sobald das Gerät ein Runtime-Profil meldet, gilt nach einem Wechsel auf
+    // die Prozentanzeige der generische Ausgangsvertrag — auch dann, wenn es
+    // aktuell noch als Binary-I/O läuft.
+    return device.runtimeProfile
       ? [
         ['retain_last_frame', 'Letztes Bild beibehalten'],
         ['clear', 'Anzeige ausschalten'],
@@ -1138,13 +1966,151 @@ function createHdpAdapter(host, dependencies = {}) {
         ['turn_off', 'Anzeige ausschalten'],
         ['show_offline_pattern', 'Offline-Muster anzeigen'],
       ];
+  }
+
+  // Ein Dialog für beide Gerätetypen: Sichtbar ist immer nur der Abschnitt des
+  // ausgewählten Typs, die Felder des abgewählten Typs werden zusätzlich
+  // deaktiviert und damit gar nicht erst übertragen.
+  function hardwareDialog(device) {
+    const hw = device.hardwareConfig || {};
+    const { hardware, display, power, offline } = pixelHardwareView(device);
+    const currentType = deviceTypeOf(device);
+    const available = supportedDeviceTypes(device.manifest);
+    const legacy = !device.runtimeProfile;
+    const maximumLedCount = device.manifest && device.manifest.limits
+      ? device.manifest.limits.maximum_led_count : 300;
+    const colorOrders = device.manifest && device.manifest.hardware_capabilities
+      && Array.isArray(device.manifest.hardware_capabilities.color_orders)
+      ? device.manifest.hardware_capabilities.color_orders.filter((value) => ['RGB', 'GRB'].includes(value))
+      : ['RGB', 'GRB'];
+    const typeOptions = available.map((type) =>
+      `<option value="${type}"${type === currentType ? ' selected' : ''}>${esc(DEVICE_TYPE_LABELS[type])}</option>`).join('');
+    const typeHint = available.length > 1
+      ? 'Ein Gerät ist entweder Prozentanzeige oder Binary-I/O. Beim Wechsel startet das Gerät neu.'
+      : 'Dieses Gerät bietet laut Manifest nur diesen Gerätetyp an.';
+    const percentageSections = `
+      <section class="dialog-section" data-hdp-type-panel="percentage_indicator"><div class="dialog-section-head"><h4>LED-Ausgang</h4></div><div class="dialog-grid dialog-grid--three">
+        <label class="field-block">GPIO<select name="argb_pin">${gpioOptions(device, hardware.argb_pin == null ? 2 : hardware.argb_pin)}</select><span class="form-hint muted">Aus dem Gerätemanifest</span></label>
+        <label class="field-block">LED-Anzahl<input type="number" name="led_count" min="1" max="${esc(maximumLedCount)}" value="${esc(hardware.led_count || 10)}"></label>
+        <label class="field-block">LED-Typ<select name="led_type"><option>WS2812</option></select></label>
+        <label class="field-block">Farbreihenfolge<select name="color_order">${colorOrders.map((v) => `<option${hardware.color_order === v ? ' selected' : ''}>${v}</option>`).join('')}</select></label>
+        <label class="field-block">Inaktive LEDs<select name="inactive_led_mode"><option value="off">Aus</option></select></label>
+        ${legacy ? `<label class="field-block">Übergangszeit (ms)<input type="number" min="0" name="transition_milliseconds" value="${esc(display.transition_milliseconds == null ? 250 : display.transition_milliseconds)}"></label>` : ''}
+      </div><div class="hdp-toggle-row hdp-dialog-toggles">
+        <label><input type="checkbox" name="reverse"${hardware.reverse ? ' checked' : ''}> Laufrichtung umkehren</label>
+        ${legacy ? `<label><input type="checkbox" name="fractional_led"${display.fractional_led !== false ? ' checked' : ''}> Anteilige letzte LED</label>` : ''}
+      </div></section>
+      <section class="dialog-section" data-hdp-type-panel="percentage_indicator"><div class="dialog-section-head"><h4>Schutz und Offline-Verhalten</h4></div><div class="dialog-grid dialog-grid--two">
+        <label class="field-block">Hardware-Maximalhelligkeit (%)<input type="number" min="0" max="100" name="maximum_brightness_percent" value="${esc(power.maximum_brightness_percent == null ? 35 : power.maximum_brightness_percent)}"></label>
+        <label class="field-block">Maximalstrom (mA)<input type="number" min="1" name="maximum_current_milliamps" value="${esc(power.maximum_current_milliamps || 500)}"></label>
+        <label class="field-block">Strom je LED (mA)<input type="number" min="1" name="current_per_led_milliamps" value="${esc(power.current_per_led_milliamps || 60)}"></label>
+        <label class="field-block">Bei Verbindungsverlust<select name="offline_mode">${offlineModeOptions(device).map(([value, label]) => `<option value="${value}"${offline.mode === value ? ' selected' : ''}>${label}</option>`).join('')}</select></label>
+      </div></section>`;
+    const binarySection = available.includes('binary_io') ? `
+      <section class="dialog-section" data-hdp-type-panel="binary_io"><div class="dialog-section-head"><h4>Binary-Pins</h4><p class="muted">Eingänge sind aktiv-low und werden 30 ms entprellt. Ausgänge starten und enden offline immer inaktiv.</p>${binaryPinLegend(device)}</div>${binaryPinRows(device, hw)}</section>` : '';
+    return `<dialog id="hdp-hardware-dialog" class="value-dialog hdp-hardware-dialog">
+      <form method="post" action="/adapter/instance/INSTANCE/manage/api/devices/${encodeURIComponent(device.deviceId)}/config" class="dialog-form">
+        <input type="hidden" name="revision" value="${esc(device.configRevision || 0)}">
+        <div class="dialog-hero"><h3>Hardware einrichten</h3><p class="muted">Diese Werte werden direkt auf dem Gerät gespeichert. Sichtbar ist ausschließlich der Abschnitt des gewählten Gerätetyps.</p></div>
+        <section class="dialog-section"><div class="dialog-section-head"><h4>Gerät</h4></div><div class="dialog-grid dialog-grid--two">
+          <label class="field-block">Gerätename<input name="device_name" value="${esc(hw.device_name || device.name || '')}"></label>
+          <label class="field-block">Gerätetyp<select id="hdp-device-type" name="device_type">${typeOptions}</select><span class="form-hint muted">${esc(typeHint)}</span></label>
+        </div></section>
+        ${available.includes('percentage_indicator') ? percentageSections : ''}
+        ${binarySection}
+        <div class="button-row hdp-dialog-actions"><button type="button" class="button-secondary" onclick="this.closest('dialog').close()">Abbrechen</button><button>Hardware auf Gerät speichern</button></div>
+      </form>
+    </dialog>`;
+  }
+
+  // Eine Firmwarekarte für beide Gerätetypen. Zuvor hatte die Binary-Seite eine
+  // eigene Kurzfassung, in der Build, OTA-Fähigkeit, Speicher und Signatur
+  // fehlten.
+  function firmwareCard(device) {
+    const firmware = device.firmwareInfo || {};
+    const status = device.firmwareStatus || {};
+    const progress = device.otaProgress || {};
+    const candidate = firmwareCandidate(device);
+    const bytes = (value) => (Number.isFinite(Number(value))
+      ? `${Math.round(Number(value) / 1024)} KiB` : '—');
+    const running = ['uploading', 'ready_to_restart', 'restarting'].includes(progress.state);
+    const banner = candidate.available
+      ? `<div class="hdp-update-banner is-available">
+          <div><strong>Version ${esc(candidate.release.version)} steht bereit</strong>
+          <span>Kanal ${esc(candidate.channel)} · ${esc(candidate.artifact.filename)} · ${esc(bytes(candidate.artifact.size_bytes))}${candidate.artifact.signature ? ' · signiert' : ''}</span></div>
+          <button type="button" id="hdp-update-button" data-device="${esc(device.deviceId)}"
+            data-armed="0" data-label="Jetzt aktualisieren"
+            onclick="hdpRunUpdate(this)"${running ? ' disabled' : ''}>Jetzt aktualisieren</button>
+        </div>`
+      : `<div class="hdp-update-banner"><div><strong>Kein Update verfügbar</strong><span>${esc(candidate.reason || '—')}</span></div></div>`;
+    return `<section class="settings-card hdp-firmware-card">
+      <div class="settings-card-head"><span class="hdp-section-kicker">Wartung</span><h2>Firmware</h2><p class="settings-card-hint">Die Firmware wird zentral in der Geräteverwaltung hinterlegt; hier wird sie nur noch installiert.</p></div>
+      ${banner}
+      <p id="hdp-update-result" class="hdp-update-result"></p>
+      <div class="hdp-firmware-summary">
+        <p>${esc(firmware.name || '—')} ${esc(firmware.version || '—')} · ${esc(firmware.channel || '—')} · ${esc(firmware.platform || device.platform || '—')}/${esc(firmware.board || device.board || '—')}/${esc(firmware.variant || device.variant || '—')}</p>
+        <p>Build ${esc(firmware.build_id || '—')} · ${esc(firmware.build_timestamp || '—')} · OTA ${firmware.ota_supported ? 'unterstützt' : 'nicht unterstützt'} ·
+          frei/max ${esc(bytes(firmware.free_update_space_bytes))} / ${esc(bytes(firmware.maximum_image_size_bytes))} · Signatur ${esc(firmware.signature_verification || '—')}</p>
+        <p>Status: ${esc(status.state || '—')} · Fortschritt ${esc(progress.progress_percent == null ? (status.progress_percent || 0) : progress.progress_percent)} %${progress.state ? ` · ${esc(progress.state)}` : ''} ${esc(progress.message || status.last_error || '')}</p>
+        ${device.updateBlockedReason ? `<p class="settings-card-hint">Automatik wartet: ${esc(device.updateBlockedReason)}</p>` : ''}
+      </div>
+      ${status.state === 'ready_to_restart' ? `<div class="button-row">
+        <form method="post" action="/adapter/instance/INSTANCE/manage/api/devices/${encodeURIComponent(device.deviceId)}/firmware/restart"><button>Geprüfte Firmware neu starten</button></form>
+      </div>` : ''}
+    </section>`;
+  }
+
+  function renderBinaryDevicePage(device) {
+    const hardware = device.hardwareConfig || {};
+    const firmware = device.firmwareInfo || {};
+    const firmwareStatus = device.firmwareStatus || {};
+    const pins = Array.isArray(hardware.pins) ? hardware.pins : [];
+    const pinSummary = pins.map((pin) => {
+      const state = device.binaryStates && device.binaryStates[String(pin.pin)];
+      return `<div><dt>GPIO ${pin.pin}</dt><dd>${state == null ? '—' : state ? 'Aktiv' : 'Inaktiv'}</dd><small>${pin.direction === 'input' ? (pin.input_type === 'button' ? 'Taster' : 'Schalter') : 'Ausgang'}</small></div>`;
+    }).join('');
+    return `<div class="hdp-device-page">
+      <div class="hdp-device-head"><div>
+        <a class="hdp-back-link" href="/adapter/instance/INSTANCE/manage">← Geräteverwaltung</a>
+        <h1>${esc(device.name || device.deviceId)}</h1>
+        <p class="hdp-device-meta"><code>${esc(device.deviceId)}</code><span>Binary-I/O</span><span>Revision ${esc(device.configRevision)}</span></p>
+      </div><button type="button" class="button-secondary hdp-hardware-open" onclick="hdpOpenHardware()">Hardware einrichten</button></div>
+      ${device.lastError ? `<p class="error-text">${esc(device.lastError)}</p>` : ''}
+      <section class="settings-card hdp-status-card">
+        <div class="settings-card-head hdp-card-head"><div><h2>Gerätestatus</h2><p class="settings-card-hint">${esc(device.address || 'Keine Netzwerkadresse')} · zuletzt verbunden ${esc(device.lastConnectedAt || '—')}</p></div><span class="status-badge ${device.online ? 'status-ok' : 'status-off'}">${device.online ? 'Online' : 'Offline'}</span></div>
+        <dl class="hdp-status-grid"><div><dt>Verbindung</dt><dd>${esc(device.connectionState || 'offline')}</dd><small>binary-io-v1</small></div><div><dt>WLAN</dt><dd>${esc(device.rssi == null ? '—' : `${device.rssi} dBm`)}</dd><small>HDP ${esc(device.protocolVersion || '—')}</small></div>${pinSummary}</dl>
+      </section>
+      <form class="hdp-settings-form" method="post" action="/adapter/instance/INSTANCE/manage/api/devices/${encodeURIComponent(device.deviceId)}/bindings">
+        ${pins.length ? binaryBindingRows(device) : `<section class="settings-card hdp-config-card">
+          <div class="settings-card-head"><h2>Noch keine GPIOs eingerichtet</h2><p class="settings-card-hint">Lege zuerst über „Hardware einrichten“ fest, welche GPIOs als Ein- oder Ausgang arbeiten. Danach erscheint hier für jeden Pin die Topic-Verknüpfung.</p></div>
+        </section>`}
+        <section class="settings-card hdp-config-card"><div class="settings-card-head"><h2>Update-Automatik</h2></div><div class="hdp-form-grid">
+          <label class="field">Updatepolitik<select name="update_mode"><option value="manual"${device.updateSettings.mode === 'manual' ? ' selected' : ''}>Manuell</option><option value="notify_only"${device.updateSettings.mode === 'notify_only' ? ' selected' : ''}>Nur benachrichtigen</option><option value="automatic"${device.updateSettings.mode === 'automatic' ? ' selected' : ''}>Automatisch</option></select></label>
+          <label class="field">Release-Kanal<select name="update_channel"><option value="stable"${device.updateSettings.channel === 'stable' ? ' selected' : ''}>Stabil</option><option value="beta"${device.updateSettings.channel === 'beta' ? ' selected' : ''}>Beta</option><option value="development"${device.updateSettings.channel === 'development' ? ' selected' : ''}>Entwicklung</option></select></label>
+          <input type="hidden" name="update_retry_count" value="${esc(device.updateSettings.retry_count)}"><input type="hidden" name="maintenance_start" value="${esc(device.updateSettings.maintenance_window.start)}"><input type="hidden" name="maintenance_end" value="${esc(device.updateSettings.maintenance_window.end)}">
+        </div><div class="hdp-toggle-row"><label><input type="checkbox" name="update_when_online"${device.updateSettings.update_when_device_returns_online ? ' checked' : ''}> Update nach Wiederkehr nachholen</label><label><input type="checkbox" name="maintenance_enabled"${device.updateSettings.maintenance_window.enabled ? ' checked' : ''}> Wartungsfenster verwenden</label></div></section>
+        <div class="hdp-save-bar"><p>Topic-Verknüpfungen und Aktionen werden ausschließlich in homeESS verarbeitet.</p><button>Binary-I/O-Einstellungen speichern</button></div>
+      </form>
+      ${firmwareCard(device)}
+      <section class="settings-card hdp-danger-card"><div class="settings-card-head"><h2>Gerät entkoppeln</h2></div><form method="post" action="/adapter/instance/INSTANCE/manage/api/devices/${encodeURIComponent(device.deviceId)}/unpair" onsubmit="return confirm('Gerät wirklich entkoppeln?');"><input type="hidden" name="confirmation" value="ENTKOPPELN"><button class="button-danger">Gerät entkoppeln</button></form></section>
+      ${hardwareDialog(device)}
+    </div>`;
+  }
+
+  function renderDevicePage(device) {
+    // Der konfigurierte Gerätetyp entscheidet, nicht das Runtime-Profil: Nach
+    // einem Typwechsel folgt das Profil erst mit dem Geräteneustart.
+    if (isBinaryDevice(device)) return renderBinaryDevicePage(device);
+    const binding = device.bindings;
+    const firmware = device.firmwareInfo || {};
+    const firmwareStatus = device.firmwareStatus || {};
     const runtimeDescription = device.runtimeProfile === RUNTIME_PROFILE
       ? 'Generischer Pixel-Ausgang'
       : 'Legacy-Ausgabe';
     return `<div class="hdp-device-page">
       <div class="hdp-device-head">
         <div>
-          <a class="hdp-back-link" href="/adapter/instance/INSTANCE/manage">← HDP Kopplung &amp; Verwaltung</a>
+          <a class="hdp-back-link" href="/adapter/instance/INSTANCE/manage">← Geräteverwaltung</a>
           <h1>${esc(device.name || device.deviceId)}</h1>
           <p class="hdp-device-meta"><code>${esc(device.deviceId)}</code><span>${esc(runtimeDescription)}</span><span>Revision ${esc(device.configRevision)}</span></p>
         </div>
@@ -1161,7 +2127,7 @@ function createHdpAdapter(host, dependencies = {}) {
           <div><dt>Verbindung</dt><dd>${esc(device.connectionState || (device.online ? 'Verbunden' : 'Offline'))}</dd><small>Versuch ${esc(device.reconnectAttempt || 0)} · nächster ${esc(device.nextReconnectAt || '—')}</small></div>
           <div><dt>WLAN</dt><dd>${esc(device.rssi == null ? '—' : `${device.rssi} dBm`)}</dd><small>HDP ${esc(device.protocolVersion || '—')}</small></div>
           <div><dt>Anzeigewert</dt><dd>${esc(device.calculatedPercentage == null ? '—' : `${device.calculatedPercentage} %`)}</dd><small>Farbe ${esc(device.calculatedColor ? JSON.stringify(device.calculatedColor) : '—')}</small></div>
-          <div><dt>Helligkeit</dt><dd>${esc(device.effectiveBrightness == null ? '—' : `${device.effectiveBrightness} %`)}</dd><small>angefordert ${esc(device.requestedBrightness == null ? '—' : `${device.requestedBrightness} %`)}</small></div>
+          <div><dt>Helligkeit</dt><dd>${esc(device.effectiveBrightness == null ? '—' : `${device.effectiveBrightness} %`)}</dd><small>${esc(device.requestedBrightness == null ? '—' : `${device.requestedBrightness} % von maximal ${hardwareBrightnessLimit(device)} %`)}</small></div>
           <div><dt>Strom</dt><dd>${esc(device.estimatedCurrent == null ? '—' : `${device.estimatedCurrent} mA`)}</dd><small>Begrenzung ${device.powerLimited == null ? 'unbekannt' : device.powerLimited ? 'aktiv' : 'inaktiv'}</small></div>
         </dl>
         ${device.runtimeProfile === RUNTIME_PROFILE
@@ -1210,10 +2176,10 @@ function createHdpAdapter(host, dependencies = {}) {
               <option value="fixed"${binding.brightness.mode === 'fixed' ? ' selected' : ''}>Fester Wert</option>
               <option value="separate_numeric_source"${binding.brightness.mode !== 'fixed' ? ' selected' : ''}>Separate Zahlenquelle</option>
             </select></div>
-            <div class="field" data-hdp-brightness-panel="fixed"><label>Feste Helligkeit (%)</label><input type="number" min="0" max="100" name="brightness_fixed" value="${esc(binding.brightness.fixed)}"></div>
+            <div class="field" data-hdp-brightness-panel="fixed"><label>Feste Helligkeit (% der Hardware-Maximalhelligkeit)</label><input type="number" min="0" max="100" name="brightness_fixed" value="${esc(binding.brightness.fixed)}"></div>
             <div class="field hdp-span-full" data-hdp-brightness-panel="separate_numeric_source"><label>Helligkeitsquelle</label><input data-state-picker name="brightness_topic" value="${esc(binding.brightness.topic)}" placeholder="State auswählen"></div>
             <fieldset class="hdp-range-field" data-hdp-brightness-panel="separate_numeric_source"><legend>Eingangsbereich</legend><label>Minimum<input type="number" step="any" name="brightness_input_min" value="${esc(binding.brightness.input_min)}"></label><label>Maximum<input type="number" step="any" name="brightness_input_max" value="${esc(binding.brightness.input_max)}"></label></fieldset>
-            <fieldset class="hdp-range-field" data-hdp-brightness-panel="separate_numeric_source"><legend>Ausgabebereich</legend><label>Minimum<input type="number" step="any" name="brightness_output_min" value="${esc(binding.brightness.output_min)}"></label><label>Maximum<input type="number" step="any" name="brightness_output_max" value="${esc(binding.brightness.output_max)}"></label></fieldset>
+            <fieldset class="hdp-range-field" data-hdp-brightness-panel="separate_numeric_source"><legend>Ausgabebereich (% der Hardware-Maximalhelligkeit)</legend><label>Minimum<input type="number" step="any" name="brightness_output_min" value="${esc(binding.brightness.output_min)}"></label><label>Maximum<input type="number" step="any" name="brightness_output_max" value="${esc(binding.brightness.output_max)}"></label></fieldset>
           </div>
           <div class="hdp-toggle-row" data-hdp-brightness-panel="separate_numeric_source">
             <label><input type="checkbox" name="brightness_clamp"${binding.brightness.clamp !== false ? ' checked' : ''}> Auf den Wertebereich begrenzen</label>
@@ -1262,22 +2228,7 @@ function createHdpAdapter(host, dependencies = {}) {
         <div class="hdp-save-bar"><p>Wertzuordnung, Darstellung und Update-Automatik werden ausschließlich in homeESS gespeichert.</p><button>Geräteeinstellungen speichern</button></div>
       </form>
 
-      <section class="settings-card hdp-firmware-card"><div class="settings-card-head"><span class="hdp-section-kicker">Wartung</span><h2>Firmware manuell aktualisieren</h2><p class="settings-card-hint">Manifest und Firmware werden lokal geprüft, bevor homeESS sie an das Gerät überträgt.</p></div>
-        <div class="hdp-firmware-summary">
-        <p>${esc(firmware.name || '—')} ${esc(firmware.version || '—')} · ${esc(firmware.channel || '—')} · ${esc(firmware.platform || device.platform || '—')}/${esc(firmware.board || device.board || '—')}/${esc(firmware.variant || device.variant || '—')}</p>
-        <p>Build ${esc(firmware.build_id || '—')} · ${esc(firmware.build_timestamp || '—')} · OTA ${firmware.ota_supported ? 'unterstützt' : 'nicht unterstützt'} ·
-          frei/max ${esc(firmware.free_update_space_bytes || '—')} / ${esc(firmware.maximum_image_size_bytes || '—')} Byte · Signatur ${esc(firmware.signature_verification || '—')}</p>
-        <p>Status: ${esc(firmwareStatus.state || '—')} · Fortschritt ${esc(firmwareStatus.progress_percent || 0)} % · ${esc(firmwareStatus.last_error || '')}</p>
-        </div>
-        <div class="hdp-form-grid">
-          <div class="field"><label>Release-Manifest (.json)</label><input type="file" id="firmware-manifest" accept=".json,application/json"></div>
-          <div class="field"><label>Firmwareartefakt (.bin)</label><input type="file" id="firmware-bin" accept=".bin,application/octet-stream"></div>
-        </div>
-        <div class="button-row"><button type="button" onclick="hdpUploadFirmware('${esc(device.deviceId)}')">Update prüfen und übertragen</button>
-        <form method="post" action="/adapter/instance/INSTANCE/manage/api/devices/${encodeURIComponent(device.deviceId)}/firmware/restart" style="display:inline;"><button>Geprüfte Firmware neu starten</button></form>
-        </div>
-        <pre id="firmware-result"></pre>
-      </section>
+      ${firmwareCard(device)}
       <section class="settings-card hdp-danger-card"><div class="settings-card-head"><h2>Gerät entkoppeln</h2></div>
         <p class="error-text">Das Gerät löscht seine WLAN-Zugangsdaten und startet anschließend im Accesspoint-Modus. Hardwarekonfiguration und Gerätetyp bleiben erhalten.</p>
         <form method="post" action="/adapter/instance/INSTANCE/manage/api/devices/${encodeURIComponent(device.deviceId)}/unpair" onsubmit="return confirm('Gerät wirklich entkoppeln und WLAN-Zugang löschen?');">
@@ -1285,39 +2236,12 @@ function createHdpAdapter(host, dependencies = {}) {
         </form>
       </section>
 
-      <dialog id="hdp-hardware-dialog" class="value-dialog hdp-hardware-dialog">
-        <form method="post" action="/adapter/instance/INSTANCE/manage/api/devices/${encodeURIComponent(device.deviceId)}/config" class="dialog-form">
-          <input type="hidden" name="revision" value="${esc(device.configRevision || 0)}">
-          <div class="dialog-hero"><h3>Hardware einrichten</h3><p class="muted">Diese Werte werden üblicherweise nur bei der Ersteinrichtung geändert und direkt auf dem Gerät gespeichert.</p></div>
-          <section class="dialog-section"><div class="dialog-section-head"><h4>Gerät</h4></div><div class="dialog-grid dialog-grid--two">
-            <label class="field-block">Gerätename<input name="device_name" value="${esc(hw.device_name || device.name || '')}"></label>
-            <label class="field-block">Gerätetyp<input value="Prozentanzeige" disabled></label>
-          </div></section>
-          <section class="dialog-section"><div class="dialog-section-head"><h4>LED-Ausgang</h4></div><div class="dialog-grid dialog-grid--three">
-            <label class="field-block">GPIO<select name="argb_pin">${gpioOptions(device, hardware.argb_pin == null ? 2 : hardware.argb_pin)}</select><span class="form-hint muted">Aus dem Gerätemanifest</span></label>
-            <label class="field-block">LED-Anzahl<input type="number" name="led_count" min="1" max="${esc(maximumLedCount)}" value="${esc(hardware.led_count || 10)}"></label>
-            <label class="field-block">LED-Typ<select name="led_type"><option>WS2812</option></select></label>
-            <label class="field-block">Farbreihenfolge<select name="color_order">${colorOrders.map((v) => `<option${hardware.color_order === v ? ' selected' : ''}>${v}</option>`).join('')}</select></label>
-            <label class="field-block">Inaktive LEDs<select name="inactive_led_mode"><option value="off">Aus</option></select></label>
-            ${device.runtimeProfile === RUNTIME_PROFILE ? '' : `<label class="field-block">Übergangszeit (ms)<input type="number" min="0" name="transition_milliseconds" value="${esc(display.transition_milliseconds == null ? 250 : display.transition_milliseconds)}"></label>`}
-          </div><div class="hdp-toggle-row hdp-dialog-toggles">
-            <label><input type="checkbox" name="reverse"${hardware.reverse ? ' checked' : ''}> Laufrichtung umkehren</label>
-            ${device.runtimeProfile === RUNTIME_PROFILE ? '' : `<label><input type="checkbox" name="fractional_led"${display.fractional_led !== false ? ' checked' : ''}> Anteilige letzte LED</label>`}
-          </div></section>
-          <section class="dialog-section"><div class="dialog-section-head"><h4>Schutz und Offline-Verhalten</h4></div><div class="dialog-grid dialog-grid--two">
-            <label class="field-block">Hardware-Maximalhelligkeit (%)<input type="number" min="0" max="100" name="maximum_brightness_percent" value="${esc(power.maximum_brightness_percent == null ? 35 : power.maximum_brightness_percent)}"></label>
-            <label class="field-block">Maximalstrom (mA)<input type="number" min="1" name="maximum_current_milliamps" value="${esc(power.maximum_current_milliamps || 500)}"></label>
-            <label class="field-block">Strom je LED (mA)<input type="number" min="1" name="current_per_led_milliamps" value="${esc(power.current_per_led_milliamps || 60)}"></label>
-            <label class="field-block">Bei Verbindungsverlust<select name="offline_mode">${offlineModes.map(([value, label]) => `<option value="${value}"${offline.mode === value ? ' selected' : ''}>${label}</option>`).join('')}</select></label>
-          </div></section>
-          <div class="button-row hdp-dialog-actions"><button type="button" class="button-secondary" onclick="this.closest('dialog').close()">Abbrechen</button><button>Hardware auf Gerät speichern</button></div>
-        </form>
-      </dialog>
+      ${hardwareDialog(device)}
     </div>`;
   }
 
-  function page(body, title = 'HDP Kopplung & Verwaltung') {
-    const replaced = String(body).replaceAll('/adapter/instance/INSTANCE/manage', managementBase);
+  function page(body, title = 'Geräteverwaltung') {
+    const replaced = managedBody(body);
     return {
       status: 200,
       view: { title, body: replaced, script: `
@@ -1336,6 +2260,25 @@ function createHdpAdapter(host, dependencies = {}) {
           select.addEventListener('change', sync);
           sync();
         }
+        function hdpBindHardwareType() {
+          var select = document.getElementById('hdp-device-type');
+          if (!select) return;
+          var panels = Array.from(document.querySelectorAll('[data-hdp-type-panel]'));
+          function sync() {
+            panels.forEach(function(panel) {
+              var active = panel.getAttribute('data-hdp-type-panel') === select.value;
+              panel.hidden = !active;
+              // Felder des abgewählten Gerätetyps werden zusätzlich deaktiviert:
+              // Ein verstecktes Feld würde sonst weiter mitgesendet und der
+              // inaktive Typ bliebe mit seinen GPIOs in der Konfiguration.
+              panel.querySelectorAll('input, select, textarea').forEach(function(field) {
+                field.disabled = !active;
+              });
+            });
+          }
+          select.addEventListener('change', sync);
+          sync();
+        }
         function hdpUpdateColorPreview() {
           var preview = document.getElementById('hdp-color-preview');
           if (!preview) return;
@@ -1345,59 +2288,209 @@ function createHdpAdapter(host, dependencies = {}) {
           });
           preview.style.backgroundColor = 'rgb(' + channels.join(',') + ')';
         }
+        function hdpBindDeviceSearch(preservedQuery) {
+          var input = document.getElementById('hdp-device-search');
+          if (!input) return;
+          var rows = Array.from(document.querySelectorAll('[data-hdp-device]'));
+          var empty = document.getElementById('hdp-filter-empty');
+          function filter() {
+            var query = input.value.trim().toLocaleLowerCase('de');
+            var visible = 0;
+            rows.forEach(function(row) {
+              var matches = !query || (row.getAttribute('data-search') || '').includes(query);
+              row.hidden = !matches;
+              if (matches) visible += 1;
+            });
+            if (empty) empty.hidden = visible !== 0;
+          }
+          input.addEventListener('input', filter);
+          if (preservedQuery) {
+            input.value = preservedQuery;
+            filter();
+          }
+        }
+        hdpBindDeviceSearch('');
+        (function hdpStartOverviewUpdates() {
+          var root = document.querySelector('.hdp-overview');
+          if (!root) return;
+          var revision = root.getAttribute('data-hdp-revision') || '';
+          var endpoint = location.pathname.replace(/\\/+$/, '') + '/api/overview';
+          async function tick() {
+            if (!document.hidden) {
+              try {
+                var response = await fetch(endpoint, {
+                  cache: 'no-store',
+                  headers: { Accept: 'application/json' }
+                });
+                if (response.ok) {
+                  var payload = await response.json();
+                  if (payload && payload.revision && payload.revision !== revision
+                      && typeof payload.html === 'string') {
+                    var currentSearch = document.getElementById('hdp-device-search');
+                    var query = currentSearch ? currentSearch.value : '';
+                    root.outerHTML = payload.html;
+                    root = document.querySelector('.hdp-overview');
+                    revision = payload.revision;
+                    hdpBindDeviceSearch(query);
+                  }
+                }
+              } catch (_) { /* Nächster Takt versucht es erneut. */ }
+            }
+            window.setTimeout(tick, 1000);
+          }
+          window.setTimeout(tick, 1000);
+        }());
         hdpBindMode('hdp-color-mode', 'data-hdp-color-panel');
         hdpBindMode('hdp-brightness-mode', 'data-hdp-brightness-panel');
+        hdpBindHardwareType();
+        // Eine aus dem Verlauf wiederhergestellte Seite behält den DOM-Zustand
+        // von damals — inklusive eines noch deaktivierten Knopfes. Ohne dieses
+        // Zurücksetzen bliebe er nach einem Zurück-Navigieren dauerhaft tot.
+        window.addEventListener('pageshow', function (event) {
+          if (!event.persisted) return;
+          document.querySelectorAll('button[data-armed]').forEach(function (button) {
+            button.disabled = false;
+            button.setAttribute('data-armed', '0');
+            button.textContent = button.getAttribute('data-label') || button.textContent;
+          });
+        });
         ['color_r', 'color_g', 'color_b'].forEach(function(name) {
           var field = document.querySelector('[name="' + name + '"]');
           if (field) field.addEventListener('input', hdpUpdateColorPreview);
         });
         hdpUpdateColorPreview();
-        async function hdpUploadFirmware(deviceId) {
-          var out = document.getElementById('firmware-result');
-          var manifestFile = document.getElementById('firmware-manifest').files[0];
-          var bin = document.getElementById('firmware-bin').files[0];
-          if (!manifestFile || !bin) { out.textContent = 'Manifest und BIN-Datei auswählen.'; return; }
+        // Gerätefehler kommen normativ englisch und mit Code. Die geläufigen
+        // Fälle werden erklärt, statt den Rohtext zu zeigen.
+        var HDP_UPDATE_HINTS = {
+          OTA_CONFIG_SCHEMA_INCOMPATIBLE: 'Die installierte Firmware lehnt das neue Konfigurationsschema ab. Ältere Stände prüfen das gegen ihre eigene Migrationstabelle und können künftige Schemata nicht kennen — dieses Gerät muss einmalig per USB geflasht werden.',
+          OTA_DOWNGRADE_NOT_ALLOWED: 'Das Gerät läuft bereits auf einer neueren Version.',
+          OTA_ALREADY_RUNNING: 'Auf dem Gerät läuft bereits ein Update.',
+          OTA_IMAGE_TOO_LARGE: 'Das Image passt nicht in den OTA-Bereich des Geräts.',
+          OTA_INSUFFICIENT_SPACE: 'Auf dem Gerät ist derzeit zu wenig OTA-Speicher frei.',
+          OTA_NO_CANDIDATE: 'Für den Kanal dieses Geräts liegt kein passendes Release bereit.',
+          OTA_AUTH_REQUIRED: 'Das Gerät hat die Binding-Anmeldung abgelehnt.'
+        };
+        // Bewusst per fetch statt als Formular: Ein Formular-POST würde bei einem
+        // Fehler auf die JSON-Antwort navigieren und den Button im
+        // Zurück-Verlauf deaktiviert zurücklassen.
+        async function hdpRunUpdate(button) {
+          var out = document.getElementById('hdp-update-result');
+          // Bewusst kein confirm(): Browser bieten nach mehreren Dialogen an,
+          // weitere zu unterdrücken. Der Aufruf liefert danach still false —
+          // der Knopf wirkt dann tot, ohne dass irgendetwas sichtbar wird.
+          // Die Rückfrage passiert deshalb im Knopf selbst.
+          if (button.getAttribute('data-armed') !== '1') {
+            button.setAttribute('data-armed', '1');
+            button.setAttribute('data-label', button.textContent);
+            button.textContent = 'Wirklich übertragen?';
+            if (out) {
+              out.className = 'hdp-update-result';
+              out.textContent = 'Das Gerät wird nach der Übertragung neu gestartet. Zum Bestätigen erneut klicken.';
+            }
+            window.clearTimeout(button.hdpArmTimer);
+            button.hdpArmTimer = window.setTimeout(function () {
+              button.setAttribute('data-armed', '0');
+              button.textContent = button.getAttribute('data-label') || 'Jetzt aktualisieren';
+              if (out && out.textContent.indexOf('erneut klicken') >= 0) out.textContent = '';
+            }, 8000);
+            return;
+          }
+          window.clearTimeout(button.hdpArmTimer);
+          button.setAttribute('data-armed', '0');
+          var label = button.getAttribute('data-label') || 'Jetzt aktualisieren';
+          button.disabled = true;
+          button.textContent = 'Wird übertragen …';
+          if (out) { out.className = 'hdp-update-result'; out.textContent = 'Übertragung läuft; das Gerät startet anschließend neu.'; }
           try {
-            out.textContent = 'Manifest wird geprüft…';
-            var manifest = JSON.parse(await manifestFile.text());
-            var base = location.pathname.replace(/\\/device\\/[^/]+$/, '');
-            var prepare = await fetch(base + '/api/devices/' + encodeURIComponent(deviceId) + '/firmware/prepare', {
-              method: 'POST', headers: {'Content-Type':'application/json','Accept':'application/json'},
-              body: JSON.stringify({manifest:manifest})
+            var response = await fetch(location.pathname.replace(/\\/+$/, '').replace(/\\/device\\/[^/]+$/, '')
+              + '/api/devices/' + encodeURIComponent(button.getAttribute('data-device')) + '/firmware/update', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+              body: JSON.stringify({ json: true })
             });
-            var prepared = await prepare.json();
-            if (!prepare.ok) throw new Error(prepared.error || 'Manifestprüfung fehlgeschlagen');
-            out.textContent = 'Artefakt wird lokal geprüft…';
-            var statusUrl = base + '/api/devices/' + encodeURIComponent(deviceId) + '/firmware/status';
-            var poll = setInterval(function () {
-              fetch(statusUrl, {headers:{Accept:'application/json'}}).then(function(r){return r.json();}).then(function(s){
-                if (s && s.state && s.state !== 'idle') out.textContent =
-                  'Gerät: ' + s.state + ' · ' + (s.progress_percent || 0) + ' % · ' +
-                  (s.received_bytes || 0) + '/' + (s.total_bytes || 0) + ' Byte';
-              }).catch(function(){});
-            }, 2000);
-            var result = await new Promise(function(resolve, reject) {
-              var xhr = new XMLHttpRequest();
-              xhr.open('POST', base + '/api/devices/' + encodeURIComponent(deviceId) + '/firmware/upload');
-              xhr.setRequestHeader('Content-Type', 'application/octet-stream');
-              xhr.setRequestHeader('Accept', 'application/json');
-              xhr.setRequestHeader('X-Upload-Filename', bin.name);
-              xhr.upload.onprogress = function(e) {
-                if (e.lengthComputable) out.textContent = 'Browser → homeESS: ' + Math.floor(e.loaded * 100 / e.total) + ' %';
-              };
-              xhr.onload = function() {
-                var value = {}; try { value = JSON.parse(xhr.responseText || '{}'); } catch (_) {}
-                if (xhr.status >= 200 && xhr.status < 300) resolve(value);
-                else reject(new Error(value.error || 'Upload fehlgeschlagen'));
-              };
-              xhr.onerror = function(){ reject(new Error('Uploadverbindung abgebrochen')); };
-              xhr.send(bin);
-            }).finally(function(){ clearInterval(poll); });
-            out.textContent = JSON.stringify(result, null, 2);
-            setTimeout(function(){ location.reload(); }, 1000);
-          } catch (err) { out.textContent = err.message; }
+            var result = await response.json();
+            if (!response.ok) {
+              var hint = HDP_UPDATE_HINTS[result.code];
+              throw new Error((hint ? hint + ' ' : '') + '(' + (result.code || 'Fehler') + ': ' + result.error + ')');
+            }
+            if (out) out.textContent = 'Version ' + result.installed.version + ' installiert. Seite wird neu geladen …';
+            setTimeout(function () { location.reload(); }, 1500);
+          } catch (err) {
+            if (out) { out.className = 'hdp-update-result error-text'; out.textContent = err.message; }
+            button.disabled = false;
+            button.textContent = label;
+          }
+        }
+        // Legt Manifest und Artefakte zentral ab. Das Manifest zuerst, weil der
+        // Speicher jedes Artefakt gegen die dort deklarierte Größe und Prüfsumme
+        // verifiziert, bevor er es übernimmt.
+        async function hdpStoreFirmware() {
+          var out = document.getElementById('hdp-release-result');
+          if (!out) return;
+          var manifestInput = document.getElementById('hdp-release-manifest');
+          var artifactInput = document.getElementById('hdp-release-artifact');
+          var manifestFile = manifestInput && manifestInput.files[0];
+          var artifacts = artifactInput ? Array.from(artifactInput.files) : [];
+          if (!manifestFile && !artifacts.length) {
+            out.textContent = 'Release-Manifest und/oder Artefakt auswählen.';
+            return;
+          }
+          var base = location.pathname.replace(/\\/+$/, '');
+          var lines = [];
+          try {
+            if (manifestFile) {
+              out.textContent = 'Manifest wird geprüft …';
+              var response = await fetch(base + '/api/firmware/manifest', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+                body: JSON.stringify({ manifest: JSON.parse(await manifestFile.text()) })
+              });
+              var stored = await response.json();
+              if (!response.ok) throw new Error(stored.error || 'Manifest abgelehnt');
+              lines.push('Kanal ' + stored.channel + ': Version ' + stored.release.version + ' hinterlegt.');
+              if (stored.missing && stored.missing.length) {
+                lines.push('Fehlende Artefakte: ' + stored.missing.join(', '));
+              }
+              out.textContent = lines.join('\\n');
+            }
+            for (var index = 0; index < artifacts.length; index += 1) {
+              var file = artifacts[index];
+              var result = await new Promise(function (resolve, reject) {
+                var xhr = new XMLHttpRequest();
+                xhr.open('POST', base + '/api/firmware/artifact');
+                xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+                xhr.setRequestHeader('Accept', 'application/json');
+                xhr.setRequestHeader('X-Upload-Filename', file.name);
+                xhr.upload.onprogress = function (event) {
+                  if (!event.lengthComputable) return;
+                  out.textContent = lines.concat([
+                    file.name + ': ' + Math.floor(event.loaded * 100 / event.total) + ' % übertragen'
+                  ]).join('\\n');
+                };
+                xhr.onload = function () {
+                  var value = {}; try { value = JSON.parse(xhr.responseText || '{}'); } catch (_) {}
+                  if (xhr.status >= 200 && xhr.status < 300) resolve(value);
+                  else reject(new Error(value.error || 'Artefakt abgelehnt'));
+                };
+                xhr.onerror = function () { reject(new Error('Uploadverbindung abgebrochen')); };
+                xhr.send(file);
+              });
+              lines.push(file.name + ' abgelegt in: '
+                + result.stored.map(function (item) { return item.channel; }).join(', '));
+              out.textContent = lines.join('\\n');
+            }
+            lines.push('Fertig. Seite wird neu geladen …');
+            out.textContent = lines.join('\\n');
+            setTimeout(function () { location.reload(); }, 1200);
+          } catch (err) {
+            out.textContent = lines.concat(['Fehler: ' + err.message]).join('\\n');
+          }
         }` },
     };
+  }
+
+  function managedBody(body) {
+    return String(body).replaceAll('/adapter/instance/INSTANCE/manage', managementBase);
   }
 
   function responseError(err) {
@@ -1416,14 +2509,53 @@ function createHdpAdapter(host, dependencies = {}) {
       if (method !== 'GET' && !(request.access && request.access.canWrite)) {
         return { status: 403, json: { error: 'Schreibberechtigung erforderlich.' } };
       }
-      if (method === 'GET' && path === '/') return page(renderOverview());
+      // Die Firmwaresektion steht bewusst außerhalb von .hdp-overview: Der
+      // Sekundentakt der Übersichtsaktualisierung ersetzt deren outerHTML und
+      // würde eine bereits gewählte Datei sonst wieder verwerfen.
+      if (method === 'GET' && path === '/') {
+        return page(`${renderOverview()}${renderFirmwareSection()}`);
+      }
       if (method === 'GET' && parts[0] === 'device' && parts[1]) {
         const device = requirePaired(parts[1]);
         return page(renderDevicePage(device), `${device.name || device.deviceId} – HDP`);
       }
       if (method === 'GET' && path === '/api/status') return { status: 200, json: snapshot() };
+      if (method === 'GET' && path === '/api/overview') {
+        const state = snapshot();
+        return {
+          status: 200,
+          json: { revision: overviewRevision(state), html: managedBody(renderOverview(state)) },
+        };
+      }
       if (method === 'POST' && path === '/api/discovery/refresh') {
         discovery.refresh();
+        return { status: 303, redirect: managementBase };
+      }
+      // Zentraler Firmwarespeicher: Das Release wird einmal hinterlegt, nicht
+      // je Gerät. Manifest und Artefakt kommen getrennt, weil der Upload immer
+      // genau eine Datei liefert.
+      if (method === 'GET' && path === '/api/firmware') {
+        return { status: 200, json: { channels: releaseStore.summary() } };
+      }
+      if (method === 'POST' && path === '/api/firmware/manifest') {
+        const result = releaseStore.saveManifest(request.body.manifest || request.body);
+        await runRollout().catch(() => {});
+        return {
+          status: 200,
+          json: {
+            channel: result.channel, release: result.manifest.release,
+            missing: result.missing.map((artifact) => artifact.filename),
+          },
+        };
+      }
+      if (method === 'POST' && path === '/api/firmware/artifact') {
+        const result = await releaseStore.saveArtifact(request.upload);
+        await runRollout().catch(() => {});
+        return { status: 200, json: result };
+      }
+      if (method === 'POST' && parts[0] === 'api' && parts[1] === 'firmware'
+          && parts[2] === 'channel' && parts[3]) {
+        releaseStore.removeChannel(parts[3]);
         return { status: 303, redirect: managementBase };
       }
       if (parts[0] !== 'api' || parts[1] !== 'devices' || !parts[2]) return { status: 404, json: { error: 'Unbekannter HDP-Endpunkt.' } };
@@ -1437,12 +2569,17 @@ function createHdpAdapter(host, dependencies = {}) {
       if (method === 'GET' && action === 'config') return { status: 200, json: await clientFor(requirePaired(id)).config() };
       if (method === 'POST' && action === 'config') {
         const device = requirePaired(id);
-        await saveHardwareConfig(id, { expected_revision: request.body.revision, config: deviceFromForm(request.body, device) });
+        await saveHardwareConfig(id, {
+          expected_revision: request.body.revision,
+          device_name: request.body.device_name,
+          config: deviceFromForm(request.body, device),
+        });
         return { status: 303, redirect: `${managementBase}/device/${encodeURIComponent(id)}` };
       }
       if (method === 'PUT' && action === 'config') return { status: 200, json: await saveHardwareConfig(id, request.body) };
       if ((method === 'POST' || method === 'PUT') && action === 'bindings') {
-        const input = method === 'POST' ? bindingsFromForm(request.body) : request.body;
+        const device = requirePaired(id);
+        const input = method === 'POST' ? bindingsFromForm(request.body, device) : request.body;
         const updateSettings = method === 'POST' ? {
           mode: ['manual','notify_only','automatic'].includes(request.body.update_mode) ? request.body.update_mode : 'manual',
           channel: ['stable','beta','development'].includes(request.body.update_channel) ? request.body.update_channel : 'stable',
@@ -1503,8 +2640,14 @@ function createHdpAdapter(host, dependencies = {}) {
       }
       if (method === 'GET' && action === 'firmware') return { status: 200, json: (await refreshFirmware(requirePaired(id))).info };
       if (method === 'GET' && action === 'firmware/status') return { status: 200, json: (await refreshFirmware(requirePaired(id))).status };
-      if (method === 'POST' && action === 'firmware/prepare') return { status: 200, json: await prepareFirmware(id, request.body) };
-      if (method === 'POST' && action === 'firmware/upload') return { status: 200, json: await upload(id, request.upload) };
+      // Ein Klick: Das Gerät zieht das zentral hinterlegte Release seines
+      // Kanals, prüft es, startet neu und wird anschließend verifiziert.
+      if (method === 'POST' && action === 'firmware/update') {
+        const result = await updateFirmware(id, { allowDowngrade: bool(request.body.allow_downgrade) });
+        return request.body && request.body.json
+          ? { status: 200, json: result }
+          : { status: 303, redirect: `${managementBase}/device/${encodeURIComponent(id)}` };
+      }
       if (method === 'POST' && action === 'firmware/restart') {
         const result = await restartFirmware(id);
         return request.body && Object.keys(request.body).length
@@ -1527,16 +2670,27 @@ function createHdpAdapter(host, dependencies = {}) {
         mode: ['manual','notify_only','automatic'].includes(config.updateMode) ? config.updateMode : 'manual',
         channel: ['stable','beta','development'].includes(config.updateChannel) ? config.updateChannel : 'stable',
       };
-      releaseService.source = String(config.releaseSource || '');
+      releaseStore.source = String(config.releaseSource || '');
       if (String(config.firmwarePublicKey || '').trim()) {
-        releaseService.publicKey = crypto.createPublicKey({
+        const publicKey = crypto.createPublicKey({
           key: Buffer.from(String(config.firmwarePublicKey).trim(), 'base64'),
           format: 'der',
           type: 'spki',
         });
-        if (releaseService.publicKey.asymmetricKeyType !== 'ed25519') {
+        if (publicKey.asymmetricKeyType !== 'ed25519') {
           throw new Error('Firmware-Prüfschlüssel ist kein Ed25519-Schlüssel.');
         }
+        releaseStore.publicKey = publicKey;
+      } else {
+        releaseStore.publicKey = null;
+      }
+      // Das Datenverzeichnis liegt außerhalb der Instanz-Settings, weil ein
+      // Firmwareimage den bei jedem Persistieren neu geschriebenen Blob sonst
+      // um Größenordnungen aufblähen würde.
+      try {
+        releaseStore.attach(await host.getDataDirectory());
+      } catch (error) {
+        host.warn(`Firmwarespeicher nicht verfügbar: ${error.message}`);
       }
       for (const record of Array.isArray(config.hdpDevices) ? config.hdpDevices : []) {
         await restoreDevice(record);
@@ -1559,6 +2713,12 @@ function createHdpAdapter(host, dependencies = {}) {
           });
         }
       }, 5 * 60 * 1000);
+      // Der Rollout läuft häufiger als die Statusabfrage, damit ein Gerät ein
+      // enges Wartungsfenster nicht verpasst und ein „nachholen“ nach der
+      // Wiederkehr zeitnah greift.
+      rolloutPoll = setInterval(() => {
+        runRollout().catch((error) => host.error(`HDP Rollout: ${error.message}`));
+      }, 60 * 1000);
       host.setConnected(true, 'HDP-Discovery aktiv');
       persist();
       host.log(`HDP Adapter gestartet (${identity.instanceId}).`);
@@ -1570,6 +2730,8 @@ function createHdpAdapter(host, dependencies = {}) {
       discovery = null;
       if (firmwarePoll) clearInterval(firmwarePoll);
       firmwarePoll = null;
+      if (rolloutPoll) clearInterval(rolloutPoll);
+      rolloutPoll = null;
       for (const device of devices.values()) {
         if (device.connection) device.connection.stop();
         stopSubscriptions(device);
@@ -1584,7 +2746,12 @@ function createHdpAdapter(host, dependencies = {}) {
 module.exports = createHdpAdapter;
 module.exports._test = {
   defaultBindings, defaultUpdateSettings, mergeBindings, sanitizeDevice,
-  sourceParts, displayColor, dynamicBrightness, normalizedPercentage,
+  sourceParts, displayColor, dynamicBrightness, hardwareBrightnessLimit,
+  effectiveDynamicBrightness, normalizedPercentage,
   calculateState, indicatorActive, deviceStateCatalog,
-  resetChangedIndicatorState,
+  resetChangedIndicatorState, bindingNeedsReconcile, requestedDeviceName,
+  clearAppliedOutputError,
+  binaryBoolean, normalizeBinaryBindings, binaryEventTarget,
+  deviceTypeOf, isBinaryDevice, supportedDeviceTypes, binaryPinSlots,
+  insideMaintenanceWindow, otaInProgress,
 };

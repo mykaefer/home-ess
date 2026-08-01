@@ -5,11 +5,17 @@ const {
   bindingHeaders, bindingId, validateBindingId, validateNonce, validateBindingKey,
 } = require('./auth');
 const {
-  PROTOCOL_VERSION, RUNTIME_PROFILE, validateDeviceId, validateInstanceId, validateProtocol, validateHardwareConfig,
+  PROTOCOL_VERSION, RUNTIME_PROFILE, supportedRuntimeProfile,
+  validateDeviceId, validateInstanceId, validateProtocol, validateHardwareConfig,
   parseSemVer,
 } = require('./validation');
 
 const JSON_REQUEST_LIMIT = 3072;
+// Optionale Pineigenschaften aus dem Manifest. Sie sperren keinen GPIO, sondern
+// beschreiben, worauf beim Verdrahten zu achten ist.
+const BINARY_PIN_TRAIT_KEYS = Object.freeze([
+  'binary_pullup_pins', 'binary_boot_sensitive_pins', 'binary_serial_pins',
+]);
 const JSON_RESPONSE_LIMIT = 128 * 1024;
 const GET_RETRY_DELAYS = [250, 500, 1000];
 const ERROR_CODES = new Set([
@@ -23,6 +29,8 @@ const ERROR_CODES = new Set([
   'TIMELINE_OFFSET_MISMATCH', 'TIMELINE_SIZE_MISMATCH', 'TIMELINE_CHECKSUM_MISMATCH',
   'TIMELINE_INVALID_PROGRAM', 'TIMELINE_CAPACITY_EXCEEDED', 'UNSUPPORTED_MESSAGE_TYPE',
   'SEQUENCE_ERROR', 'SESSION_HELLO_TIMEOUT', 'HEARTBEAT_TIMEOUT', 'SESSION_REPLACED', 'DEVICE_BUSY',
+  'BINARY_PIN_NOT_FOUND', 'BINARY_PIN_DIRECTION_MISMATCH',
+  'BINARY_CONFIG_REVISION_MISMATCH',
   'FACTORY_RESET_NOT_ALLOWED', 'INTERNAL_ERROR', 'OTA_AUTH_REQUIRED', 'OTA_ALREADY_RUNNING',
   'OTA_INVALID_METADATA', 'OTA_FIRMWARE_NAME_MISMATCH', 'OTA_PLATFORM_MISMATCH',
   'OTA_BOARD_MISMATCH', 'OTA_VARIANT_MISMATCH', 'OTA_PROTOCOL_INCOMPATIBLE',
@@ -198,7 +206,7 @@ function validateDeviceInfo(data) {
   if (!object(data)) throw new HdpError('Ungültige Geräteinformationen.', { code: 'INVALID_REQUEST', status: 502 });
   validateDeviceId(data.device_id);
   validateProtocol(data.protocol_version);
-  if (data.runtime_profile != null && data.runtime_profile !== RUNTIME_PROFILE) {
+  if (data.runtime_profile != null && !supportedRuntimeProfile(data.runtime_profile)) {
     throw new HdpError('Gerät verwendet ein inkompatibles Runtime-Profil.', {
       code: 'UNSUPPORTED_RUNTIME_PROFILE', status: 426,
     });
@@ -238,7 +246,8 @@ function validateManifestInfo(data) {
     ];
     if (data.protocol_version !== PROTOCOL_VERSION || data.api_version !== 'v1'
         || data.auth_profile !== 'local-binding-key-v1'
-        || data.runtime_profile !== RUNTIME_PROFILE || data.device_type_profile !== 'opaque-id-v1'
+        || !supportedRuntimeProfile(data.runtime_profile)
+        || !['opaque-id-v1', 'boot-dispatch-v1'].includes(data.device_type_profile)
         || !Array.isArray(data.output_types) || !data.output_types.includes('argb_strip')
         || !Array.isArray(data.frame_encodings)
         || !data.frame_encodings.includes('rgb8-base64')
@@ -263,7 +272,7 @@ function validateManifestInfo(data) {
         || data.limits.maximum_timeline_chunk_bytes > data.limits.maximum_timeline_bytes
         || data.limits.maximum_timeline_duration_milliseconds > 86400000) {
       throw new HdpError('Gerätemanifest entspricht nicht pixel-timeline-v1.', {
-        code: data.runtime_profile !== RUNTIME_PROFILE
+        code: !supportedRuntimeProfile(data.runtime_profile)
           ? 'UNSUPPORTED_RUNTIME_PROFILE' : 'INVALID_REQUEST', status: 426,
       });
     }
@@ -273,6 +282,50 @@ function validateManifestInfo(data) {
     if (data.hardware_capabilities.led_types.some((value) => value !== 'WS2812')
         || data.hardware_capabilities.color_orders.some((value) => !['RGB', 'GRB'].includes(value))) {
       throw new HdpError('Manifest enthält nicht unterstützte Hardwarefähigkeiten.', { code: 'INVALID_REQUEST', status: 502 });
+    }
+    if (data.device_type_profile === 'boot-dispatch-v1') {
+      if (!Array.isArray(data.device_types)
+          || !data.device_types.includes('percentage_indicator')
+          || !data.device_types.includes('binary_io')
+          || typeof data.features.binary_input !== 'boolean'
+          || typeof data.features.binary_output !== 'boolean'
+          || !Array.isArray(data.hardware_capabilities.binary_pins)
+          || !Array.isArray(data.hardware_capabilities.binary_input_types)
+          || !data.hardware_capabilities.binary_input_types.includes('switch')
+          || !data.hardware_capabilities.binary_input_types.includes('button')
+          || !Number.isInteger(data.limits.maximum_binary_pins)
+          || data.limits.maximum_binary_pins < 1 || data.limits.maximum_binary_pins > 32
+          || !Number.isInteger(data.limits.binary_input_debounce_milliseconds)
+          || data.limits.binary_input_debounce_milliseconds < 1
+          || data.limits.binary_input_debounce_milliseconds > 1000) {
+        throw new HdpError('Gerätemanifest enthält keinen vollständigen Binary-I/O-Vertrag.', {
+          code: 'INVALID_REQUEST', status: 502,
+        });
+      }
+      const binaryPins = data.hardware_capabilities.binary_pins;
+      if (!binaryPins.length || binaryPins.length > data.limits.maximum_binary_pins
+          || new Set(binaryPins).size !== binaryPins.length
+          || binaryPins.some((pin) => !Number.isInteger(pin) || pin < 0 || pin > 255)) {
+        throw new HdpError('Manifest enthält ungültige Binary-I/O-GPIOs.', {
+          code: 'INVALID_REQUEST', status: 502,
+        });
+      }
+      // Optionale Pineigenschaften. Firmware 0.4.0 meldet sie noch nicht; wo sie
+      // vorhanden sind, müssen es eindeutige Teilmengen von binary_pins sein.
+      for (const key of BINARY_PIN_TRAIT_KEYS) {
+        const trait = data.hardware_capabilities[key];
+        if (trait === undefined) continue;
+        if (!Array.isArray(trait) || new Set(trait).size !== trait.length
+            || trait.some((pin) => !binaryPins.includes(pin))) {
+          throw new HdpError(`Manifest enthält ungültige ${key}.`, {
+            code: 'INVALID_REQUEST', status: 502,
+          });
+        }
+      }
+    } else if (data.runtime_profile !== RUNTIME_PROFILE) {
+      throw new HdpError('Altes Gerätemanifest ist nur mit pixel-timeline-v1 zulässig.', {
+        code: 'UNSUPPORTED_RUNTIME_PROFILE', status: 426,
+      });
     }
     return data;
   }
@@ -664,7 +717,7 @@ class HdpClient {
 }
 
 module.exports = {
-  JSON_REQUEST_LIMIT, HdpError, unwrap, requestJson, sameConfig,
+  JSON_REQUEST_LIMIT, BINARY_PIN_TRAIT_KEYS, HdpError, unwrap, requestJson, sameConfig,
   validatePairingStatus, validateDeviceInfo, validateManifestInfo, validateStatusInfo,
   validateFirmwareInfo, validateFirmwareStatus, HdpClient,
 };

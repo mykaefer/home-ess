@@ -3,6 +3,8 @@
 const { EventEmitter } = require('events');
 const { frameBuffer } = require('./renderer');
 
+const FRAME_INTERVAL_MARGIN_MILLISECONDS = 2;
+
 function sameBuffer(left, right) {
   return Buffer.isBuffer(left) && Buffer.isBuffer(right) && left.equals(right);
 }
@@ -94,6 +96,8 @@ class OutputClient extends EventEmitter {
     this.desired = new Map();
     this.activeTimelines = new Map();
     this.lastFrameAt = new Map();
+    this.frameQueues = new Map();
+    this.reconciled = new Set();
   }
 
   sessionStarted() {
@@ -101,6 +105,7 @@ class OutputClient extends EventEmitter {
     this.frames.clear();
     this.activeTimelines.clear();
     this.lastFrameAt.clear();
+    this.reconciled.clear();
   }
 
   output(outputId) {
@@ -129,7 +134,17 @@ class OutputClient extends EventEmitter {
     }
   }
 
-  async setFrame(outputId, pixels, options = {}) {
+  setFrame(outputId, pixels, options = {}) {
+    const previous = this.frameQueues.get(outputId) || Promise.resolve();
+    const current = previous.catch(() => undefined)
+      .then(() => this.applyFrame(outputId, pixels, options));
+    this.frameQueues.set(outputId, current);
+    return current.finally(() => {
+      if (this.frameQueues.get(outputId) === current) this.frameQueues.delete(outputId);
+    });
+  }
+
+  async applyFrame(outputId, pixels, options = {}) {
     if (this.manifest.features.frame_output !== true) {
       throw Object.assign(new Error('Manifest unterstützt keine Frameausgabe.'), {
         code: 'UNSUPPORTED_MESSAGE_TYPE',
@@ -141,6 +156,15 @@ class OutputClient extends EventEmitter {
     const previous = this.frames.get(outputId);
     const desired = this.desired.get(outputId);
     if (!options.force && desired && desired.kind === 'frame' && sameBuffer(previous, next)) return { unchanged: true };
+    const activeTimeline = this.activeTimelines.get(outputId);
+    if (activeTimeline) {
+      await this.stop(outputId, activeTimeline.timelineId, 'hold');
+      this.activeTimelines.delete(outputId);
+      // Der letzte Timeline-Schritt kann unmittelbar vor der Stop-Bestätigung
+      // physisch ausgegeben worden sein. Ab dieser Bestätigung deshalb einen
+      // vollständigen Frameabstand abwarten.
+      this.lastFrameAt.set(outputId, Date.now());
+    }
     const changes = [];
     if (this.baselines.has(outputId) && previous) {
       for (let index = 0; index < output.pixel_count; index += 1) {
@@ -177,8 +201,18 @@ class OutputClient extends EventEmitter {
     }
     const elapsed = Date.now() - (this.lastFrameAt.get(outputId) || 0);
     const minimum = this.manifest.limits.minimum_frame_interval_milliseconds;
-    if (elapsed < minimum) await delay(minimum - elapsed);
-    const response = await this.requestRecovered('output.frame.set', payload, 5000);
+    if (elapsed < minimum) await delay(minimum - elapsed + FRAME_INTERVAL_MARGIN_MILLISECONDS);
+    let response;
+    try {
+      response = await this.requestRecovered('output.frame.set', payload, 5000);
+    } catch (error) {
+      if (error.code !== 'OUTPUT_RATE_LIMITED') throw error;
+      // Die Gerätezeit ist für den Adapter nicht direkt synchronisierbar. Eine
+      // einmalige Wiederholung nach einem vollen Mindestabstand stellt den
+      // abgewiesenen (und damit noch nicht angewendeten) Frame zuverlässig zu.
+      await delay(minimum + FRAME_INTERVAL_MARGIN_MILLISECONDS);
+      response = await this.requestRecovered('output.frame.set', payload, 5000);
+    }
     if (response.type !== 'output.frame.applied' || !response.payload
         || response.payload.output_id !== outputId || response.payload.frame_id !== frameId
         || response.payload.config_revision !== config.revision
@@ -190,6 +224,9 @@ class OutputClient extends EventEmitter {
     this.lastFrameAt.set(outputId, Date.now());
     this.frames.set(outputId, next);
     this.activeTimelines.delete(outputId);
+    // Ein angewendeter Frame beendet auf dem Gerät jede laufende Timeline; der
+    // Ausgangszustand ist damit auch ohne output.status.get abgeglichen.
+    this.reconciled.add(outputId);
     this.baselines.add(outputId);
     this.desired.set(outputId, { kind: 'frame', pixels });
     this.emit('state', { outputId, mode: 'frame', frameId, timelineId: null });
@@ -209,7 +246,7 @@ class OutputClient extends EventEmitter {
     return result;
   }
 
-  async stop(outputId, timelineId, behavior = 'hold') {
+  async stopOnDevice(outputId, timelineId, behavior) {
     identifier(timelineId, 'Timeline-ID');
     if (!['hold', 'clear'].includes(behavior)) {
       throw Object.assign(new Error('Timeline-Stoppverhalten ist ungültig.'), {
@@ -232,10 +269,40 @@ class OutputClient extends EventEmitter {
         }
       }
     }
-    this.desired.delete(outputId);
     this.activeTimelines.delete(outputId);
     this.frames.delete(outputId);
     this.baselines.delete(outputId);
+  }
+
+  async stop(outputId, timelineId, behavior = 'hold') {
+    await this.stopOnDevice(outputId, timelineId, behavior);
+    this.desired.delete(outputId);
+  }
+
+  // Nach einem Sitzungsneuaufbau ist activeTimelines leer, der Ausgang führt eine
+  // geloopte Timeline aber unverändert weiter. output.timeline.begin würde dann
+  // dauerhaft mit OUTPUT_BUSY abgelehnt, bis zufällig ein Frame den Ausgang
+  // freiräumt. Deshalb den tatsächlichen Ausgangszustand einmal je Sitzung
+  // abgleichen und eine übernommene Timeline vorher stoppen. Die Wunschlage
+  // bleibt dabei erhalten, damit der anschließende Upload sie wiederherstellt.
+  async adoptOutput(outputId) {
+    if (this.reconciled.has(outputId)) return;
+    const status = await this.status(outputId);
+    if (['timeline_playing', 'timeline_scheduled'].includes(status.mode)) {
+      const desired = this.desired.get(outputId);
+      if (desired && desired.kind === 'timeline' && desired.timelineId === status.timeline_id) {
+        // Die Timeline-ID ist inhaltsabgeleitet: Der Ausgang führt bereits genau
+        // die gewünschte Wiedergabe aus. Übernehmen statt neu aufzuspielen, damit
+        // ein Reconnect die Anzeige nicht sichtbar neu startet.
+        this.activeTimelines.set(outputId, {
+          timelineId: status.timeline_id, sha256: desired.timeline.sha256,
+        });
+        this.baselines.add(outputId);
+      } else {
+        await this.stopOnDevice(outputId, status.timeline_id, 'hold');
+      }
+    }
+    this.reconciled.add(outputId);
   }
 
   async abort(timelineId) {
@@ -277,7 +344,19 @@ class OutputClient extends EventEmitter {
       program_size_bytes: timeline.program.length,
       program_sha256: timeline.sha256,
     };
-    const ready = await this.requestRecovered('output.timeline.begin', metadata, 5000);
+    let ready;
+    try {
+      ready = await this.requestRecovered('output.timeline.begin', metadata, 5000);
+    } catch (error) {
+      if (error.code !== 'OUTPUT_BUSY') throw error;
+      // Der Ausgang führt eine dem Adapter unbekannte Timeline aus. Einmalig den
+      // gemeldeten Zustand abgleichen, freiräumen und den Upload wiederholen.
+      const status = await this.status(outputId);
+      if (!['timeline_playing', 'timeline_scheduled'].includes(status.mode)) throw error;
+      await this.stopOnDevice(outputId, status.timeline_id, 'hold');
+      this.reconciled.add(outputId);
+      ready = await this.requestRecovered('output.timeline.begin', metadata, 5000);
+    }
     if (ready.type !== 'output.timeline.ready' || !ready.payload
         || ready.payload.output_id !== outputId || ready.payload.next_offset !== 0
         || ready.payload.timeline_id !== timelineId
@@ -359,12 +438,14 @@ class OutputClient extends EventEmitter {
   }
 
   async setTimeline(outputId, timelineId, timeline) {
+    if (!this.activeTimelines.has(outputId)) await this.adoptOutput(outputId);
     const active = this.activeTimelines.get(outputId);
     if (active && active.timelineId === timelineId
         && active.sha256 === timeline.sha256) return { unchanged: true };
     if (active) {
       await this.stop(outputId, active.timelineId, 'hold');
     }
+    this.reconciled.add(outputId);
     // Vor dem Upload merken: Nach Sitzungsverlust beginnt restoreDesired den
     // flüchtigen Upload normativ wieder mit Begin und Offset 0.
     this.desired.set(outputId, { kind: 'timeline', timelineId, timeline });

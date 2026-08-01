@@ -3,7 +3,7 @@
 const dgram = require('dgram');
 const { EventEmitter } = require('events');
 const {
-  PROTOCOL_VERSION, RUNTIME_PROFILE, validateDeviceId, validatePort, parseSemVer,
+  PROTOCOL_VERSION, supportedRuntimeProfile, validateDeviceId, validatePort, parseSemVer,
 } = require('./validation');
 const { validateBindingId } = require('./auth');
 
@@ -172,8 +172,8 @@ function devicesFromRecords(records, remoteAddress = '') {
       protocolVersion: fields.protocol_version,
       ...(fields.runtime_profile ? { runtimeProfile: fields.runtime_profile } : {}),
       ...(fields.runtime_profile ? {
-        runtimeCompatible: fields.runtime_profile === RUNTIME_PROFILE,
-        runtimeMismatch: fields.runtime_profile !== RUNTIME_PROFILE,
+        runtimeCompatible: supportedRuntimeProfile(fields.runtime_profile),
+        runtimeMismatch: !supportedRuntimeProfile(fields.runtime_profile),
       } : {}),
       firmwareVersion: fields.firmware_version,
       platform: fields.platform,
@@ -252,7 +252,13 @@ class Discovery extends EventEmitter {
       const previous = this.devices.get(device.deviceId);
       const next = { ...previous, ...device, online: true, lastSeenAt: now };
       this.devices.set(device.deviceId, next);
-      this.emit(previous ? 'updated' : 'found', next, previous || null);
+      if (!previous) {
+        this.emit('found', next, null);
+        continue;
+      }
+      const changed = previous.online !== true
+        || Object.keys(device).some((key) => previous[key] !== device[key]);
+      if (changed) this.emit('updated', next, previous);
     }
   }
 

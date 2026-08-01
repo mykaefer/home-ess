@@ -2,13 +2,19 @@
   "id": "hdp",
   "name": "HDP Adapter",
   "prefix": "hdp",
-  "version": "1.0.8",
+  "version": "1.1.0",
   "description": "Direkte Einbindung HDP-kompatibler Sensoren, Aktoren und Anzeigen ohne MQTT oder manuelle Pfadkonfiguration.",
   "copyright": "Copyright (C) 2026 Kevin Käfer",
   "multiInstance": false,
   "main": "index.js",
+  "publicFiles": {
+    "data": "firmware",
+    "assets": "tools",
+    "label": "Firmware und Flashwerkzeug",
+    "hint": "Release-Manifeste, Firmwareartefakte und das mitgelieferte USB-Flashwerkzeug werden ohne Anmeldung im lokalen Netz ausgeliefert. Das Werkzeug kann keine Sitzung führen und die Firmware muss es vor dem Flashen holen können."
+  },
   "managementPage": {
-    "label": "HDP Kopplung & Verwaltung",
+    "label": "Geräteverwaltung",
     "maxUploadBytes": 8388608,
     "stylesheet": "management.css"
   },
@@ -37,18 +43,18 @@
       "label": "Firmware-Releasequelle",
       "type": "text",
       "default": "",
-      "hint": "Vorbereitet für offizielle GitHub-Release-Manifeste; Geräte greifen nie selbst auf diese Quelle zu."
+      "hint": "Vorbereitet für den automatischen Abruf offizieller GitHub-Release-Manifeste. Noch ohne Funktion; die Firmware wird derzeit in der Geräteverwaltung hinterlegt. Geräte greifen nie selbst auf diese Quelle zu."
     },
     {
       "key": "firmwarePublicKey",
       "label": "Firmware-Prüfschlüssel (Ed25519 SPKI, Base64)",
       "type": "text",
       "default": "",
-      "hint": "Öffentlicher Release-Schlüssel. Signierte Artefakte werden ohne passenden Schlüssel nicht installiert."
+      "hint": "Optionaler Vertrauensanker. Ist er gesetzt, werden ausschließlich signierte und verifizierbare Artefakte installiert; ohne Schlüssel bleibt ein selbst gebautes, unsigniertes Image zulässig. Eine ungültige Signatur wird immer abgelehnt."
     },
     {
       "key": "updateMode",
-      "label": "Globale Updatepolitik",
+      "label": "Updatepolitik für neue Geräte",
       "type": "select",
       "default": "manual",
       "options": [
@@ -56,14 +62,15 @@
         { "value": "notify_only", "label": "Nur benachrichtigen" },
         { "value": "automatic", "label": "Automatisch" }
       ],
-      "hint": "Diese Einstellung bleibt ausschließlich im Adapter."
+      "hint": "Vorgabe für neu gekoppelte Geräte; je Gerät änderbar. Bei „Automatisch“ installiert der Adapter neuere Stände des gewählten Kanals selbstständig innerhalb des Wartungsfensters."
     },
     {
       "key": "updateChannel",
-      "label": "Globaler Release-Kanal",
+      "label": "Release-Kanal für neue Geräte",
       "type": "select",
       "default": "stable",
-      "options": ["stable", "beta", "development"]
+      "options": ["stable", "beta", "development"],
+      "hint": "Bestimmt, welches der im Firmwarespeicher hinterlegten Releases ein Gerät zieht."
     }
   ]
 }

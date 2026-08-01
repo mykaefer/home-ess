@@ -7,6 +7,64 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 
 ### Hinzugefügt
 
+- **USB-Flashtool `hdp-flash`.** Ein eigenständiges Werkzeug holt die im
+  Firmwarespeicher hinterlegte Firmware, prüft ihre SHA-256 gegen das Manifest,
+  wählt das exakt passende Artefakt nach Plattform, Board und Variante und
+  schreibt es über den seriellen Port. Der Flash wird dabei nicht gelöscht, also
+  bleiben WLAN, Pairing und Hardwarekonfiguration erhalten; `--erase` erzwingt
+  ein werksreines Gerät. Nötig für die Erstinbetriebnahme und für Geräte, deren
+  installierte Firmware ein OTA ablehnt. Im Browser ist das bewusst nicht
+  umgesetzt: Die Web Serial API setzt einen sicheren Kontext voraus und gibt es
+  nur in Chromium. Das Werkzeug wird mit dem HDP-Adapter ausgeliefert und ist in
+  der Geräteverwaltung unter „Firmware“ herunterladbar. Es sucht die
+  homeESS-Instanz beim Start im lokalen Netz, merkt sich die gefundene Adresse
+  und bietet bei mehreren Treffern eine Auswahl an; eine fest eingebaute Adresse
+  gibt es bewusst nicht. Abgesucht werden die tatsächlichen Netze der
+  Schnittstellen samt Netzmaske — eine `/23` umfasst zwei `/24`-Blöcke, eine
+  `/32` ist eine Einzelroute ohne Nachbarn.
+- **Öffentliche Adapterdateien.** Ein Adapter kann im Manifest zwei
+  Unterverzeichnisse als `publicFiles` erklären: `data` im Datenverzeichnis der
+  Instanz für zur Laufzeit entstehende Dateien und `assets` im
+  Adapterverzeichnis für mitgelieferte. homeESS liefert beide unter
+  `/adapter-public` ohne Anmeldung nur lesend aus — gedacht für Werkzeuge
+  außerhalb des Browsers, die keine Sitzung führen können. Adapter ohne diese
+  Erklärung geben nichts preis, Pfade außerhalb der erklärten Verzeichnisse
+  werden abgewiesen. Die Antwort trägt eine Dienstkennung, damit ein Werkzeug
+  beim Absuchen des Netzes eine homeESS-Instanz sicher erkennt.
+- **Zentraler HDP-Firmwarespeicher statt Upload je Gerät.** Es gibt genau eine
+  universelle Firmware; ein Release-Manifest beschreibt sie je Plattform, Board
+  und Variante. Sie wird deshalb einmal in der Geräteverwaltung hinterlegt —
+  Manifest und Artefakte werden dabei gegen Größe, SHA-256 und Signaturpolitik
+  geprüft. Der Speicher hält je Release-Kanal einen Stand; ein Kanal gilt erst
+  als installierbar, wenn zu jedem deklarierten Artefakt auch die Datei
+  vorliegt. Ein Versionswechsel räumt die Artefakte des Vorgängers weg.
+- **Ein-Klick-Update und echter automatischer Rollout.** Die Geräteseite meldet,
+  ob der Kanal des Geräts einen neueren Stand bereithält, und installiert ihn auf
+  Knopfdruck. Bei Updatepolitik `automatic` erledigt das der Adapter selbst:
+  minütlich, nach jeder Rückkehr eines Geräts und nach jedem Hinterlegen eines
+  Releases, begrenzt durch Wartungsfenster und Wiederholungszahl. Ein während
+  einer Abwesenheit verpasstes Fenster wird einmalig nachgeholt. Bisher waren
+  Updatepolitik, Kanal, Wartungsfenster und Wiederholungsgrenze reine Anzeige
+  ohne jede Wirkung.
+- **Adapter-Datenverzeichnis in der Host-API.** `getDataDirectory()` liefert
+  einer Adapterinstanz ein eigenes Verzeichnis mit 0700 unter `data/adapters/`.
+  Nutzdaten dieser Größenordnung gehören nicht in die Instanz-Settings: Der
+  Settings-Blob wird bei jedem Persistieren vollständig neu geschrieben.
+- **HDP-Gerätetypprofil `boot-dispatch-v1`.** Der Adapter akzeptiert neben
+  `opaque-id-v1` auch Geräte, die mehrere Gerätetypen im Manifest anbieten, und
+  verhandelt dafür den Binary-I/O-Vertrag (`binary_pins`, Eingangstypen,
+  Debounce, Pinlimits) einschließlich validierter `binary.*`-Nachrichten und
+  eines Host-Aufrufs `state.write` zum Rückschreiben von Eingangsereignissen.
+  Ohne diese Erweiterung lehnte die Manifestprüfung Firmware 0.4.0 mit
+  `INVALID_REQUEST` ab, sodass solche Geräte nicht koppelbar waren.
+- **Hinweise statt Sperren bei Binary-I/O-GPIOs.** Firmware 0.4.1 gibt alle
+  GPIOs des ARGB-Ausgangs auch für Binary-I/O frei und beschreibt die
+  Eigenheiten einzelner Pins in den optionalen Manifestlisten
+  `binary_pullup_pins`, `binary_boot_sensitive_pins` und `binary_serial_pins`.
+  Die Geräteverwaltung übernimmt sie als Hinweis an der Pinauswahl („externer
+  Pull-up nötig", „Boot-Pin", „serielle Konsole") samt Legende, statt Pins
+  auszublenden. Fehlen die Listen — etwa bei Firmware 0.4.0 —, entfallen die
+  Hinweise, ohne die Kopplung zu beeinträchtigen.
 - **Portable Styles für Adapterverwaltungen.** Adapter können über
   `managementPage.stylesheet` eine eigene CSS-Datei aus ihrem Adapterverzeichnis
   deklarieren. homeESS liefert ausschließlich diese Datei über die geschützte
@@ -31,8 +89,8 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
   die universelle `percentage_indicator`-Anzeige einschließlich State-Auswahl,
   Skalierung, drei Farbmodi, dynamischer Helligkeit, WebSocket-Laufzeitstatus,
   Unpair und lokal verifiziertem, gestreamtem OTA.
-- Die Kopplungs- und Konfigurationsseite heißt eindeutig **HDP Kopplung &
-  Verwaltung**; **HDP Geräte** bleibt die kompakte Geräte-/State-Übersicht.
+- Die Kopplungs- und Konfigurationsseite heißt kurz **Geräteverwaltung**;
+  **HDP Geräte** bleibt die kompakte Geräte-/State-Übersicht.
 - **Erweiterte portable Adapter-Host-API.** Adapter können optional eine
   authentifizierte Management-Seite bereitstellen, begrenzte Binäruploads über
   temporäre Dateien verarbeiten, beliebige homeESS-States ereignisgesteuert
@@ -42,6 +100,53 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 
 ### Geändert
 
+- **HDP-Ausgaben respektieren das physische Frame-Limit.** Direkte Frames
+  werden pro Ausgang serialisiert; eine laufende Indicator-Timeline wird vor
+  dem Wechsel auf einen statischen Frame explizit gestoppt. Eine dennoch vom
+  Gerät gemeldete Rate-Limit-Ablehnung wird nach dem Mindestabstand einmal
+  wiederholt. Veraltete Output-Hinweise verschwinden nach der nächsten
+  nachweislich erfolgreichen Ausgabe.
+- **Dynamische HDP-Helligkeit relativ zum Hardwaremaximum.** Dynamische und
+  feste Plugin-Helligkeiten werden als Anteil der konfigurierten
+  Hardware-Maximalhelligkeit ausgewiesen. Die Geräteansicht zeigt den daraus
+  resultierenden Effektivwert, beispielsweise 50 % von maximal 20 % als 10 %,
+  statt die Hardwaregrenze irreführend als aktuellen Helligkeitswert anzugeben.
+- **Korrekte HDP-Wiederverbindung nach Neustarts.** Bereits gekoppelte Geräte
+  bauen beim ersten passenden Discovery-Treffer ihre Laufzeitverbindung wieder
+  auf. Offline-Geräte zeigen keine veraltete WLAN-Signalbewertung oder andere
+  scheinbar aktuelle Laufzeitmesswerte mehr.
+- **Prognose-Helligkeit für HDP-Anzeigen.** Dynamische Helligkeitsquellen dürfen
+  Prozentwerte mit Nachkommastellen liefern. Der HDP-Adapter begrenzt den Wert
+  weiterhin auf 0–100 und rundet ihn erst an der Protokollgrenze auf den von
+  der Geräteausgabe geforderten ganzzahligen Prozentwert.
+- **Kompakte HDP-Geräteverwaltung.** Gekoppelte Geräte stehen jetzt unabhängig
+  von ihrem Verbindungsstatus in einer gemeinsamen, nach Erreichbarkeit
+  sortierten Liste. Online-Status, WLAN-Signalqualität, Firmware und
+  Netzwerkbezug sind auf einen Blick sichtbar; technische Leerwerte und
+  Laufzeitdetails wurden aus der Übersicht entfernt. Eine Suche erleichtert die
+  Verwaltung größerer Gerätebestände, neu gefundene Geräte bleiben klar
+  abgesetzt. Übersicht und Geräteseiten nutzen die volle homeESS-Inhaltsbreite;
+  Signal und Firmware bleiben in festen Spalten ausgerichtet.
+- **Live aktualisierte HDP-Geräteliste.** Die Geräteverwaltung übernimmt
+  Status-, Signal- und Discovery-Änderungen ohne Seitenreload. Der Browser fragt
+  höchstens einmal pro Sekunde ab, pausiert im Hintergrund und ersetzt das
+  servergerenderte Fragment nur bei geänderter Revision. Bereits bestätigte
+  Geräte mit lokalem Binding-Key bleiben unmittelbar nach einem Neustart als
+  offline sichtbar. Offline wird grau, kritisch schwacher WLAN-Empfang gelb
+  markiert.
+- **Einheitliche grüne Aktionsbuttons.** Die gemeinsame Buttonklasse der
+  Adapterverwaltung verwendet nun die grünen homeESS-Corporate-Farben statt
+  fest kodiertem Blau. Das gilt auch für die HDP-Geräteverwaltung.
+- **HDP-Kopplung ohne parallelen Binding-Abgleich.** Während einer manuell
+  gestarteten Gerätekopplung löst eine gleichzeitige mDNS-Zustandsänderung
+  keinen zweiten Kopplungslauf mehr aus. Das verhindert konkurrierende
+  HTTP-Verbindungen zum ESP8266 und dadurch verursachte Verbindungs-Timeouts.
+- **Stabile HDP-Geräteverbindungen und Konfiguration.** Verspätete Close-Events
+  ersetzter WebSocket-Sitzungen können eine bereits aktive neue Sitzung nicht
+  mehr offline setzen oder deren Heartbeat stoppen. Unveränderte mDNS-Antworten
+  lösen weder wiederholte Binding-HTTP-Abfragen noch Persistenzläufe aus.
+  Gerätenamen werden beim generischen `pixel-timeline-v1` als lokale
+  homeESS-Bezeichnung zuverlässig gespeichert.
 - **Übersichtliche, portable HDP-Gerätekonfiguration.** Gerätestatus, Anzeigewert,
   Farbdarstellung, dynamische Helligkeit, Richtungsindikator und Update-Automatik
   sind als einheitliche Funktionsgruppen angeordnet. Die normalerweise nur bei
@@ -206,6 +311,67 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 
 ### Behoben
 
+- **OTA war über die Oberfläche gar nicht möglich.** Der Uploadpfad verlangte
+  hart eine Signatur, während die Releaseartefakte unsigniert erzeugt werden —
+  jeder Versuch endete mit „Das Releaseartefakt besitzt keine authentifizierbare
+  Signatur.“ Erzwungen wird eine Signatur jetzt genau dann, wenn ein
+  Ed25519-Prüfschlüssel konfiguriert ist. Eine vorhandene, aber ungültige
+  Signatur wird weiterhin immer abgelehnt.
+- **Binary-Ausgänge während eines OTA.** Der Adapter schaltete weiter Ausgänge,
+  während das Gerät in einer OTA-Transaktion steckt, und protokollierte dafür
+  reihenweise `DEVICE_OFFLINE` und `DEVICE_BUSY`. Die Wunschzustände werden
+  jetzt zurückgehalten und nach dem Update angewendet.
+- **Fehlgeschlagenes Update navigierte auf die JSON-Antwort.** Der Updateknopf
+  war ein Formular-POST; bei einer Ablehnung landete der Browser auf dem rohen
+  Fehlerobjekt, und der Knopf blieb im Zurück-Verlauf dauerhaft deaktiviert. Er
+  löst das Update jetzt per `fetch` aus, zeigt den Fehler an Ort und Stelle,
+  übersetzt die geläufigen OTA-Codes und ist danach sofort wieder bedienbar.
+- **Kein Update über eine Konfigurationsschemagrenze möglich.** Der Adapter
+  verlangte ein exakt gleiches `config_schema_version`, während die Firmware
+  selbst `canMigrateConfigSchema()` auswertet und eine Migration mitbringt.
+  Damit war zum Beispiel kein Sprung von Schema 2 (Firmware 0.3.1) auf Schema 3
+  (0.4.1) möglich — betroffen war jedes Gerät vor dem Schemawechsel. Der Adapter
+  verlangt jetzt nur noch, dass das Ziel nicht hinter dem aktuellen Schema
+  zurückfällt; die normative Entscheidung trifft weiterhin das Gerät beim
+  Empfang der Metadaten.
+- **Identische Version wurde als Update angeboten.** Die Kompatibilitätsprüfung
+  lässt denselben Stand bewusst durch, damit eine erneute Installation möglich
+  bleibt; als Updateangebot war das falsch. Ein Kandidat muss jetzt echt neuer
+  sein, eine bewusste Neuinstallation bleibt über die Downgrade-Freigabe möglich.
+- **Firmwarekarte der Binary-I/O-Seite war eine Kurzfassung.** Build, Zeitstempel,
+  OTA-Fähigkeit, freier Speicher, Signaturstatus und Fortschritt fehlten dort.
+  Beide Geräteseiten verwenden jetzt dieselbe Karte.
+- **Zwischengespeichertes HDP-Manifest nach einem Firmwareupdate.** Das Manifest
+  wird persistiert, aber nie erneuert: `activate()` zog den eigenen
+  Zwischenspeicher einer frischen Abfrage vor, und ein Versionswechsel löste gar
+  keine Aktualisierung aus. Nach einem OTA beschrieb die Verwaltung deshalb
+  dauerhaft die Fähigkeiten der Vorgängerversion — neue GPIOs, Limits und
+  Features blieben unsichtbar. Das Manifest stammt jetzt ausschließlich aus dem
+  Pairingergebnis oder einer frischen Abfrage, und eine geänderte
+  Firmwareversion in der mDNS-Ankündigung stößt einen Abgleich an.
+- **Gerätetyp in der HDP-Geräteverwaltung ist wieder ein Entweder-oder.** Der
+  Hardwaredialog zeigte LED-Ausgang, Schutzwerte und Binary-Pins gleichzeitig;
+  die Felder des abgewählten Typs wurden mitgesendet, sodass die Prozentanzeige
+  weiter einen GPIO belegte, obwohl das Gerät als Binary-I/O lief. Sichtbar ist
+  jetzt ausschließlich der Abschnitt des gewählten Typs, die übrigen Felder
+  werden deaktiviert und gar nicht erst übertragen. Der Dialog enthält auf
+  beiden Geräteseiten beide Abschnitte, sodass der Wechsel in jede Richtung
+  funktioniert. Geräte ohne `boot-dispatch-v1` bieten Binary-I/O nicht mehr an
+  und weisen einen entsprechenden Konfigurationsversuch mit 422 ab.
+- **Geräteseite folgt dem konfigurierten Gerätetyp statt dem Runtime-Profil.**
+  Das Profil wechselt erst mit dem Geräteneustart; bis dahin zeigte die
+  Verwaltung die Prozentanzeigenoberfläche für ein bereits als Binary-I/O
+  konfiguriertes Gerät und der Ausgabepfad versuchte weiter, Frames zu rendern.
+  Statuspublikationen, Topic-Abonnements, Bindungsformulare und die Seitenwahl
+  richten sich nun einheitlich nach `hardwareConfig.device_type`.
+- **Dauerhaftes `OUTPUT_BUSY` nach einem HDP-Sitzungsneuaufbau.** `sessionStarted()`
+  verwarf die Kenntnis laufender Timelines, während das Gerät seine geloopte
+  Wiedergabe unverändert fortsetzte; jedes `output.timeline.begin` wurde danach
+  abgelehnt und der Ausgang blieb bis zum nächsten reinen Frame blockiert. Der
+  Outputclient gleicht den tatsächlichen Ausgangszustand jetzt einmal je Sitzung
+  per `output.status.get` ab, übernimmt eine bereits laufende Wunschtimeline
+  ohne sichtbaren Neustart, stoppt andernfalls die fremde Timeline und räumt
+  einen dennoch auftretenden `OUTPUT_BUSY` beim Begin einmalig selbst frei.
 - **Leeres Dashboard beim Startaufruf.** Der direkte Aufruf über `/` zeigte
   angemeldeten Nutzern zuvor nur Titel und Kopf-Buttons. `/` leitet angemeldete
   Nutzer jetzt auf die passende Landeseite weiter; `/dashboard` rendert die

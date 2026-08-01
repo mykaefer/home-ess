@@ -42,6 +42,7 @@ const prognosisRoutes = require('./routes/prognosis');
 const { initModules, isEnabled } = require('./modules');
 const adapterHost = require('./adapters/host');
 const adapterSecrets = require('./adapters/secrets');
+const adapterData = require('./adapters/data-store');
 const gridControlAutomation = require('./grid-control/automation');
 const operatingState = require('./operating-state');
 const operatingLevelHandler = require('./operating-level/handler');
@@ -73,7 +74,11 @@ function createApp() {
   // Seiten-Sichtbarkeit ausgenommen (Header-Live-Daten und der Zugriffs-Endpunkt
   // für Adapter, die jede Seite benötigt).
   app.use(authorize({
-    openPaths: ['/', '/login', '/logout', '/energiefluss/export'],
+    // /adapter-public liefert ausschließlich Dateien aus, die ein Adapter in
+    // seinem Manifest ausdrücklich als öffentlich erklärt hat. Ohne diese
+    // Ausnahme käme das USB-Flashtool nicht an die Firmware, denn es kann
+    // keine Sitzung führen.
+    openPaths: ['/', '/login', '/logout', '/energiefluss/export', '/adapter-public'],
     sharedPaths: ['/live', '/me', '/states/catalog'],
   }));
 
@@ -100,6 +105,7 @@ function createApp() {
   // lokalen Betrieb (MQTT/Dashboard) nie blockieren.
   identityStore.init(config.IDENTITY_DIR);
   adapterSecrets.init(config.IDENTITY_DIR);
+  adapterData.init(config.DATA_DIR);
   connectionService.init({ wsUrl: config.RELAY_WS_URL, enabled: config.RELAY_CONNECTION_ENABLED });
   // Nach erfolgreichem `paired` automatisch die WebSocket-Verbindung starten.
   pairingState.setHooks({ onPaired: () => connectionService.onPaired() });

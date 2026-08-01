@@ -2426,7 +2426,7 @@ body.dash-editing .widget-group {
 
 .module-toggle-btn {
     padding: 9px 18px;
-    background-color: #007bff;
+    background-color: var(--color-action);
     color: #fff;
     border: none;
     border-radius: 8px;
@@ -2437,7 +2437,7 @@ body.dash-editing .widget-group {
 }
 
 .module-toggle-btn:hover {
-    background-color: #0056b3;
+    background-color: var(--color-action-hover);
 }
 
 .module-toggle-btn.button-danger {

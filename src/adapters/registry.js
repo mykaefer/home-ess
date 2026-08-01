@@ -86,6 +86,29 @@ function normalizeDevicePage(raw) {
   };
 }
 
+// Optionales, ausdrücklich als öffentlich erklärtes Unterverzeichnis des
+// Adapter-Datenverzeichnisses. Der Host liefert es ohne Anmeldung nur lesend
+// aus — gedacht für Artefakte, die Werkzeuge außerhalb des Browsers abholen
+// müssen. Ein Adapter ohne diese Erklärung gibt nichts preis.
+function normalizePublicFiles(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const subdirectory = (value) => {
+    const relative = String(value || '');
+    return /^[a-z0-9][a-z0-9_-]*$/i.test(relative) ? relative : null;
+  };
+  // `data` liegt im Datenverzeichnis der Instanz und wächst zur Laufzeit;
+  // `assets` wird mit dem Adapter ausgeliefert und ist unveränderlich.
+  const data = subdirectory(raw.data);
+  const assets = subdirectory(raw.assets);
+  if (!data && !assets) return null;
+  return {
+    data,
+    assets,
+    label: raw.label ? String(raw.label) : 'Öffentliche Adapterdateien',
+    hint: raw.hint ? String(raw.hint) : '',
+  };
+}
+
 // Optionale, adapterspezifische Verwaltungsseite. Die Seite selbst bleibt im
 // isolierten Adapterprozess; der Host übernimmt Authentifizierung, Rechte,
 // Layout und begrenzte, auf Platte gestreamte Uploads.
@@ -169,6 +192,7 @@ function readManifest(dir, folderName) {
     stateEditor: normalizeStateEditor(parsed.stateEditor),
     devicePage: normalizeDevicePage(parsed.devicePage),
     managementPage: normalizeManagementPage(parsed.managementPage, path.join(dir, folderName)),
+    publicFiles: normalizePublicFiles(parsed.publicFiles),
     presetsDir: path.join(dir, folderName, 'presets'),
   };
 }

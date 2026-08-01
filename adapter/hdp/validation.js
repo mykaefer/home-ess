@@ -4,7 +4,14 @@ const DEVICE_ID_RE = /^[a-z0-9-]{12,64}$/;
 const INSTANCE_ID_RE = /^[A-Za-z0-9._-]{1,64}$/;
 const SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 const PROTOCOL_VERSION = '1.0-draft';
-const RUNTIME_PROFILE = 'pixel-timeline-v1';
+const PIXEL_RUNTIME_PROFILE = 'pixel-timeline-v1';
+const BINARY_RUNTIME_PROFILE = 'binary-io-v1';
+const RUNTIME_PROFILE = PIXEL_RUNTIME_PROFILE;
+const RUNTIME_PROFILES = Object.freeze([PIXEL_RUNTIME_PROFILE, BINARY_RUNTIME_PROFILE]);
+
+function supportedRuntimeProfile(value) {
+  return RUNTIME_PROFILES.includes(value);
+}
 
 function finite(value, label = 'Wert') {
   const n = typeof value === 'number' ? value : Number(value);
@@ -164,6 +171,9 @@ function strictInteger(value, min, max, label) {
 
 function validateHardwareConfig(input, capabilities = {}) {
   const config = input && typeof input === 'object' ? input : {};
+  if (config.device_type === 'binary_io' || Array.isArray(config.pins)) {
+    return validateBinaryConfig(config, capabilities);
+  }
   if (Array.isArray(config.outputs)) return validateOutputConfig(config, capabilities);
   if (config.device_type !== 'percentage_indicator') throw new Error('Nur percentage_indicator wird unterstützt.');
   const hardware = config.hardware || {};
@@ -215,6 +225,57 @@ function validateHardwareConfig(input, capabilities = {}) {
       current_per_led_milliamps: strictInteger(power.current_per_led_milliamps, 1, 100, 'Strom pro LED'),
     },
     offline: { mode },
+  };
+  if (Object.prototype.hasOwnProperty.call(config, 'revision')) {
+    result.revision = strictInteger(config.revision, 0, 0xffffffff, 'Revision');
+  }
+  return result;
+}
+
+function validateBinaryConfig(input, capabilities = {}) {
+  const config = input && typeof input === 'object' ? input : {};
+  const manifest = capabilities.manifest || capabilities;
+  const limits = manifest.limits || capabilities;
+  const hardware = manifest.hardware_capabilities || capabilities;
+  const maximumPins = strictInteger(
+    limits.maximum_binary_pins == null ? 5 : limits.maximum_binary_pins,
+    1, 32, 'Maximale Binary-Pinzahl',
+  );
+  if (config.device_type !== 'binary_io') {
+    throw new Error('Binary-I/O-Konfiguration benötigt device_type binary_io.');
+  }
+  if (!Array.isArray(config.pins) || config.pins.length < 1 || config.pins.length > maximumPins) {
+    throw new Error(`pins muss 1 bis ${maximumPins} Einträge enthalten.`);
+  }
+  const allowedPins = Array.isArray(hardware.binary_pins) ? hardware.binary_pins : [];
+  const allowedInputTypes = Array.isArray(hardware.binary_input_types)
+    ? hardware.binary_input_types : ['switch', 'button'];
+  const used = new Set();
+  const result = {
+    device_type: 'binary_io',
+    pins: config.pins.map((source) => {
+      if (!source || typeof source !== 'object' || Array.isArray(source)) {
+        throw new Error('Binary-Pinkonfiguration ist ungültig.');
+      }
+      const pin = strictInteger(source.pin, 0, 255, 'GPIO');
+      if (!allowedPins.includes(pin)) throw new Error('GPIO wird für Binary-I/O nicht unterstützt.');
+      if (used.has(pin)) throw new Error('Binary-I/O-GPIOs müssen eindeutig sein.');
+      used.add(pin);
+      if (!['input', 'output'].includes(source.direction)) {
+        throw new Error('Binary-I/O-Richtung muss input oder output sein.');
+      }
+      if (source.direction === 'input') {
+        if (!allowedInputTypes.includes(source.input_type)
+            || !['switch', 'button'].includes(source.input_type)) {
+          throw new Error('Binary-Eingangstyp muss switch oder button sein.');
+        }
+        return { pin, direction: 'input', input_type: source.input_type };
+      }
+      if (Object.prototype.hasOwnProperty.call(source, 'input_type')) {
+        throw new Error('Binary-Ausgänge dürfen keinen input_type definieren.');
+      }
+      return { pin, direction: 'output' };
+    }),
   };
   if (Object.prototype.hasOwnProperty.call(config, 'revision')) {
     result.revision = strictInteger(config.revision, 0, 0xffffffff, 'Revision');
@@ -274,8 +335,11 @@ function validateOutputConfig(input, capabilities = {}) {
 }
 
 module.exports = {
-  PROTOCOL_VERSION, RUNTIME_PROFILE, clamp, finite, strictFinite, bounded, integer, strictInteger,
+  PROTOCOL_VERSION, RUNTIME_PROFILE, PIXEL_RUNTIME_PROFILE, BINARY_RUNTIME_PROFILE,
+  RUNTIME_PROFILES, supportedRuntimeProfile,
+  clamp, finite, strictFinite, bounded, integer, strictInteger,
   validateDeviceId, validateInstanceId, validatePort, validateProtocol,
   compatibleProtocol, parseSemVer, compareSemVer, color, colorStops, scale,
-  interpolateColor, validateHardwareConfig, validateOutputConfig, validateOpaqueId,
+  interpolateColor, validateHardwareConfig, validateOutputConfig, validateBinaryConfig,
+  validateOpaqueId,
 };

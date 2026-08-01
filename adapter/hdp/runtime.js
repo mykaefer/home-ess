@@ -3,9 +3,7 @@
 const { EventEmitter } = require('events');
 const WebSocket = require('ws');
 const { basicAuthorization } = require('./auth');
-const {
-  PROTOCOL_VERSION, RUNTIME_PROFILE,
-} = require('./validation');
+const { PROTOCOL_VERSION } = require('./validation');
 
 const MAX_MESSAGE_BYTES = 1024;
 const HELLO_TIMEOUT_MS = 5000;
@@ -29,6 +27,43 @@ function validEnvelope(message) {
     && typeof message.message_id === 'string' && /^[A-Za-z0-9._-]{1,64}$/.test(message.message_id)
     && Number.isInteger(message.sequence) && message.sequence >= 1 && message.sequence <= 0xffffffff
     && message.payload && typeof message.payload === 'object' && !Array.isArray(message.payload);
+}
+
+function uint32(value) {
+  return Number.isInteger(value) && value >= 0 && value <= 0xffffffff;
+}
+
+function validBinaryEntries(entries, input) {
+  return Array.isArray(entries) && entries.every((entry) => entry
+    && Number.isInteger(entry.pin) && entry.pin >= 0 && entry.pin <= 255
+    && typeof entry.state === 'boolean'
+    && (!input || ['switch', 'button'].includes(entry.input_type)));
+}
+
+function validBinaryMessage(message) {
+  const payload = message && message.payload;
+  if (!payload || !uint32(payload.config_revision)) return false;
+  if (message.type === 'binary.input.event') {
+    return Number.isInteger(payload.pin) && payload.pin >= 0 && payload.pin <= 255
+      && ['switch', 'button'].includes(payload.input_type)
+      && ((payload.input_type === 'switch' && payload.event === 'changed')
+        || (payload.input_type === 'button' && payload.event === 'pressed' && payload.state === true))
+      && typeof payload.state === 'boolean' && uint32(payload.event_sequence)
+      && payload.event_sequence > 0 && uint32(payload.occurred_at_uptime_milliseconds);
+  }
+  if (message.type === 'binary.input.snapshot' || message.type === 'binary.status') {
+    return uint32(payload.captured_at_uptime_milliseconds)
+      && validBinaryEntries(payload.inputs, true)
+      && validBinaryEntries(payload.outputs, false)
+      && (message.type !== 'binary.status' || typeof payload.reply_to === 'string');
+  }
+  if (message.type === 'binary.output.applied') {
+    return typeof payload.reply_to === 'string'
+      && Number.isInteger(payload.pin) && payload.pin >= 0 && payload.pin <= 255
+      && typeof payload.state === 'boolean'
+      && uint32(payload.applied_at_uptime_milliseconds);
+  }
+  return false;
 }
 
 class RuntimeConnection extends EventEmitter {
@@ -95,6 +130,7 @@ class RuntimeConnection extends EventEmitter {
       return;
     }
     this.socket = socket;
+    const isCurrentSocket = () => this.socket === socket;
     this.ready = false;
     this.outSequence = 0;
     this.inSequence = 0;
@@ -103,20 +139,25 @@ class RuntimeConnection extends EventEmitter {
     this.rejectPending(Object.assign(new Error('WebSocket-Sitzung wurde neu aufgebaut.'), { uncertain: true }));
     this.lastConnectionError = null;
     socket.on('open', () => {
+      if (!isCurrentSocket()) return;
       this.emit('connectionState', { state: 'handshaking', attempt });
       this.lastValidAt = Date.now();
       this.helloTimer = setTimeout(() => {
         this.protocolFailure('SESSION_HELLO_TIMEOUT', 'device.hello/session.ready ist ausgeblieben.');
       }, HELLO_TIMEOUT_MS);
     });
-    socket.on('message', (raw, isBinary) => this.onMessage(raw, isBinary));
+    socket.on('message', (raw, isBinary) => {
+      if (isCurrentSocket()) this.onMessage(raw, isBinary);
+    });
     socket.on('unexpected-response', (_request, response) => {
+      if (!isCurrentSocket()) return;
       if (response && response.statusCode === 401) {
         this.reconnectForbidden = true;
         this.emit('deviceError', { code: 'AUTH_REQUIRED', message: 'WebSocket-Authentifizierung abgelehnt.', details: {} });
       }
     });
     socket.on('error', (error) => {
+      if (!isCurrentSocket()) return;
       const diagnostic = Object.assign(new Error(connectionErrorMessage(error)), {
         code: error && error.code,
         cause: error,
@@ -125,7 +166,8 @@ class RuntimeConnection extends EventEmitter {
       this.emit('warning', diagnostic);
     });
     socket.on('close', () => {
-      if (this.socket === socket) this.socket = null;
+      if (!isCurrentSocket()) return;
+      this.socket = null;
       const wasReady = this.ready;
       this.ready = false;
       this.clearSessionTimers();
@@ -216,6 +258,10 @@ class RuntimeConnection extends EventEmitter {
     }
     this.inSequence = message.sequence;
     this.lastValidAt = Date.now();
+    if (message.type.startsWith('binary.') && !validBinaryMessage(message)) {
+      this.protocolFailure('INVALID_REQUEST', 'Ungültige Binary-I/O-Nachricht.');
+      return;
+    }
     const replyTo = message.payload && message.payload.reply_to;
     if (typeof replyTo === 'string' && message.type !== 'error') {
       const pending = this.pendingRequests.get(replyTo);
@@ -236,14 +282,15 @@ class RuntimeConnection extends EventEmitter {
     }
     if (message.type === 'device.hello') {
       const payload = message.payload;
+      const expectedRuntimeProfile = this.device.runtimeProfile;
       if (message.sequence !== 1 || payload.device_id !== this.device.deviceId
           || payload.protocol_version !== PROTOCOL_VERSION
-          || (!this.legacyRuntime && payload.runtime_profile !== RUNTIME_PROFILE)
+          || (!this.legacyRuntime && payload.runtime_profile !== expectedRuntimeProfile)
           || payload.heartbeat_interval_ms !== HEARTBEAT_MS
           || payload.heartbeat_timeout_ms !== HEARTBEAT_TIMEOUT_MS) {
         this.protocolFailure(payload.protocol_version !== PROTOCOL_VERSION
           ? 'UNSUPPORTED_PROTOCOL_VERSION'
-          : (!this.legacyRuntime && payload.runtime_profile !== RUNTIME_PROFILE)
+          : (!this.legacyRuntime && payload.runtime_profile !== expectedRuntimeProfile)
             ? 'UNSUPPORTED_RUNTIME_PROFILE' : 'INVALID_REQUEST',
         'WebSocket-Geräteidentität oder Runtime-Profil stimmt nicht.');
         return;
@@ -251,7 +298,7 @@ class RuntimeConnection extends EventEmitter {
       this.send('homeess.hello', {
         instance_id: this.credentials.instanceId,
         protocol_version: PROTOCOL_VERSION,
-        ...(this.legacyRuntime ? {} : { runtime_profile: RUNTIME_PROFILE }),
+        ...(this.legacyRuntime ? {} : { runtime_profile: expectedRuntimeProfile }),
       });
       this.configSync = this.synchronizeIfNeeded(payload.config_revision)
         .then(() => true)
@@ -262,17 +309,22 @@ class RuntimeConnection extends EventEmitter {
       return;
     }
     if (message.type === 'session.ready') {
+      const expectedRuntimeProfile = this.device.runtimeProfile;
       if (message.sequence !== 2
-          || (!this.legacyRuntime && message.payload.runtime_profile !== RUNTIME_PROFILE)) {
+          || (!this.legacyRuntime && message.payload.runtime_profile !== expectedRuntimeProfile)) {
         this.protocolFailure(message.sequence !== 2 ? 'SEQUENCE_ERROR' : 'UNSUPPORTED_RUNTIME_PROFILE',
           'session.ready besitzt eine ungültige Sequenz oder ein inkompatibles Runtime-Profil.');
         return;
       }
+      const readySocket = this.socket;
       this.configSync.then((synchronized) => {
-        if (!synchronized || !this.socket) throw new Error('Konfigurationsabgleich im Handshake fehlgeschlagen.');
+        if (!synchronized || this.socket !== readySocket) {
+          throw new Error('Konfigurationsabgleich im Handshake fehlgeschlagen.');
+        }
         return this.synchronizeIfNeeded(message.payload.config_revision);
       })
         .then(() => {
+          if (this.socket !== readySocket) return;
           this.ready = true;
           this.reconnectAttempt = 0;
           this.replaced = false;
@@ -284,7 +336,9 @@ class RuntimeConnection extends EventEmitter {
           this.emit('online');
         })
         .catch((error) => {
-          if (this.socket) this.protocolFailure(error.code || 'INVALID_REQUEST', error.message);
+          if (this.socket === readySocket) {
+            this.protocolFailure(error.code || 'INVALID_REQUEST', error.message);
+          }
         });
     } else if (message.type === 'ping') {
       this.send('pong', { reply_to: message.message_id });
@@ -319,6 +373,8 @@ class RuntimeConnection extends EventEmitter {
       this.emit('firmware', message);
     } else if (message.type.startsWith('output.')) {
       this.emit('output', message);
+    } else if (message.type.startsWith('binary.')) {
+      this.emit('binary', message);
     } else {
       this.emit('warning', Object.assign(new Error(`Nicht unterstützter Nachrichtentyp ${message.type}.`), {
         code: 'UNSUPPORTED_MESSAGE_TYPE',
@@ -381,11 +437,11 @@ class RuntimeConnection extends EventEmitter {
   reconnectNow() {
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
-    this.stopSocket();
+    this.stopSocket(false);
     if (!this.stopped && !this.reconnectForbidden) this.connect();
   }
 
-  stopSocket() {
+  stopSocket(reconnect = true) {
     const socket = this.socket;
     const wasReady = this.ready;
     this.socket = null;
@@ -398,18 +454,22 @@ class RuntimeConnection extends EventEmitter {
     if (socket) {
       try { socket.close(); } catch (_) { /* bereits geschlossen */ }
     }
+    if (reconnect && !this.stopped && !this.reconnectForbidden) {
+      this.scheduleReconnect(this.lastConnectionError);
+    }
   }
 
   stop() {
     this.stopped = true;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
-    this.stopSocket();
+    this.stopSocket(false);
     this.emit('connectionState', { state: 'stopped', attempt: this.reconnectAttempt });
   }
 }
 
 module.exports = {
   MAX_MESSAGE_BYTES, HELLO_TIMEOUT_MS, HEARTBEAT_MS, HEARTBEAT_TIMEOUT_MS,
-  RECONNECT_DELAYS, connectionErrorMessage, validEnvelope, RuntimeConnection,
+  RECONNECT_DELAYS, connectionErrorMessage, validEnvelope, validBinaryMessage,
+  RuntimeConnection,
 };

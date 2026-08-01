@@ -46,8 +46,18 @@ function checkCompatibility(manifest, artifact, firmwareInfo, options = {}) {
       || !compatibleProtocol(firmwareInfo.protocol_version, release.protocol_max)) {
     throw new Error('Firmware und HDP-Protokoll sind nicht kompatibel.');
   }
-  if (Number(release.config_schema_version) !== Number(firmwareInfo.config_schema_version)) {
-    throw new Error('Konfigurationsschema kann nicht sicher migriert werden.');
+  // Das Gerät ist die normative Instanz für Schemamigrationen und prüft die
+  // Metadaten beim Empfang erneut. Der Adapter verlangt deshalb nur, dass das
+  // Ziel nicht hinter dem aktuellen Schema zurückfällt — eine Gleichheitsprüfung
+  // würde jedes Update über eine Schemagrenze dauerhaft verhindern, obwohl die
+  // Firmware genau dafür eine Migration mitbringt.
+  const targetSchema = Number(release.config_schema_version);
+  const deviceSchema = Number(firmwareInfo.config_schema_version);
+  if (!Number.isInteger(targetSchema) || !Number.isInteger(deviceSchema)) {
+    throw new Error('Konfigurationsschema ist nicht bestimmbar.');
+  }
+  if (targetSchema < deviceSchema && !options.allowDowngrade) {
+    throw new Error(`Konfigurationsschema ${deviceSchema} lässt sich nicht auf ${targetSchema} zurücksetzen.`);
   }
   if (compareSemVer(release.version, firmwareInfo.version) < 0 && !options.allowDowngrade) {
     throw new Error('Firmware-Downgrade ist nicht freigegeben.');
@@ -94,12 +104,22 @@ async function validateArtifactFile(file, artifact, options = {}) {
   if (digest.size !== artifact.size_bytes) throw new Error('Firmwaredateigröße stimmt nicht mit dem Manifest überein.');
   if (digest.sha256 !== artifact.sha256) throw new Error('SHA-256-Prüfsumme der Firmwaredatei stimmt nicht.');
   const signature = verifySignature(file, artifact.signature, options.publicKey);
-  if (options.requireSignature && !signature.verified) {
+  // Eine Signatur wird erzwungen, sobald ein Prüfschlüssel hinterlegt ist: Dann
+  // hat der Betreiber eine Vertrauensankerentscheidung getroffen und ein
+  // unsigniertes Artefakt wäre ein Rückschritt. Ohne Schlüssel bleibt der lokale
+  // Upload eines selbst gebauten Images zulässig — eine vorhandene, aber nicht
+  // verifizierbare Signatur ist dagegen immer ein Fehler.
+  const required = options.requireSignature === true
+    || (options.requireSignature !== false && !!options.publicKey);
+  if (required && !signature.verified) {
     throw new Error(signature.status === 'not_configured'
       ? 'Signaturprüfung ist nicht konfiguriert.'
       : signature.status === 'not_present'
         ? 'Das Releaseartefakt besitzt keine authentifizierbare Signatur.'
       : 'Firmware-Signatur ist ungültig.');
+  }
+  if (!required && signature.status === 'invalid') {
+    throw new Error('Firmware-Signatur ist ungültig.');
   }
   return { ...digest, signature };
 }

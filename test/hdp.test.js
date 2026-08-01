@@ -23,6 +23,7 @@ const {
 } = require('../adapter/hdp/renderer');
 const { OutputClient } = require('../adapter/hdp/output-client');
 const firmware = require('../adapter/hdp/firmware');
+const { ReleaseStore } = require('../adapter/hdp/release-store');
 const createHdpAdapter = require('../adapter/hdp');
 
 const DEVICE_ID = 'hdp-esp8266-a1b2c3d4e5f60718';
@@ -85,6 +86,43 @@ function outputConfig(revision = 4, pixelCount = 4) {
       maximum_current_milliamps: 500, current_per_pixel_milliamps: 60,
       offline_mode: 'retain_last_frame',
     }],
+  };
+}
+
+function binaryManifest(runtimeProfile = 'binary-io-v1') {
+  return {
+    ...pixelManifest(), runtime_profile: runtimeProfile,
+    device_type_profile: 'boot-dispatch-v1',
+    device_types: ['percentage_indicator', 'binary_io'],
+    features: {
+      ...pixelManifest().features, binary_input: true, binary_output: true,
+    },
+    hardware_capabilities: {
+      ...pixelManifest().hardware_capabilities,
+      // Wie die Referenzfirmware: Binary-I/O und ARGB teilen sich dieselben GPIOs.
+      argb_pins: [0, 1, 2, 3, 4, 5, 12, 13, 14, 15, 16],
+      binary_pins: [0, 1, 2, 3, 4, 5, 12, 13, 14, 15, 16],
+      binary_pullup_pins: [0, 1, 2, 3, 4, 5, 12, 13, 14],
+      binary_boot_sensitive_pins: [0, 2, 15],
+      binary_serial_pins: [1, 3],
+      binary_input_types: ['switch', 'button'],
+    },
+    limits: {
+      ...pixelManifest().limits,
+      maximum_binary_pins: 11,
+      binary_input_debounce_milliseconds: 30,
+    },
+  };
+}
+
+function binaryConfig(revision = 7) {
+  return {
+    revision, device_type: 'binary_io',
+    pins: [
+      { pin: 4, direction: 'input', input_type: 'switch' },
+      { pin: 5, direction: 'input', input_type: 'button' },
+      { pin: 12, direction: 'output' },
+    ],
   };
 }
 
@@ -234,6 +272,25 @@ test('HDP normalisiert Skalierungsartefakte im Prozentwert', () => {
   assert.equal(state.percentage, 57);
   assert.equal(device.calculatedPercentage, 57);
   assert.equal(createHdpAdapter._test.normalizedPercentage(12.34567), 12.346);
+
+  device.bindings.brightness.mode = 'separate_numeric_source';
+  device.rawBrightness = 42.6;
+  const brightnessState = createHdpAdapter._test.calculateState(device);
+  assert.equal(brightnessState.brightness, 43);
+  assert.equal(device.requestedBrightness, 43);
+  assert.equal(createHdpAdapter._test.hardwareBrightnessLimit(device), 35);
+  assert.equal(createHdpAdapter._test.effectiveDynamicBrightness(device), 15);
+  device.reportedBrightnessLimit = 35;
+  device.rawBrightness = 50;
+  createHdpAdapter._test.calculateState(device);
+  assert.equal(device.effectiveBrightness, 18);
+  assert.doesNotThrow(() => renderPercentageFrame({
+    pixelCount: 4,
+    percentage: brightnessState.percentage,
+    color: brightnessState.color,
+    brightness: brightnessState.brightness,
+    fractional: true,
+  }));
 });
 
 test('pixel-timeline-v1 rendert den normativen Vier-Pixel-Frame und Prozentgrenzen', () => {
@@ -292,6 +349,52 @@ test('pixel-timeline-v1 Manifest und generische Outputkonfiguration werden strik
   }, manifest), /Pixelanzahl/);
 });
 
+test('binary-io-v1 Manifest, Pinkonfiguration und Adapteraktionen sind strikt getrennt', () => {
+  const manifest = binaryManifest();
+  assert.equal(validateManifestInfo(manifest), manifest);
+  assert.deepEqual(validation.validateHardwareConfig(binaryConfig(), manifest), binaryConfig());
+  assert.throws(() => validation.validateHardwareConfig({
+    ...binaryConfig(), pins: [...binaryConfig().pins, { pin: 4, direction: 'output' }],
+  }, manifest), /eindeutig/);
+  // Binary-I/O nutzt dieselben GPIOs wie der ARGB-Ausgang; GPIO 2 trägt sonst
+  // die LED-Leiste und muss deshalb auch hier wählbar sein.
+  assert.deepEqual(
+    manifest.hardware_capabilities.binary_pins,
+    manifest.hardware_capabilities.argb_pins,
+  );
+  for (const pin of manifest.hardware_capabilities.binary_pins) {
+    assert.deepEqual(validation.validateHardwareConfig({
+      ...binaryConfig(), pins: [{ pin, direction: 'output' }],
+    }, manifest).pins, [{ pin, direction: 'output' }]);
+  }
+  assert.throws(() => validation.validateHardwareConfig({
+    ...binaryConfig(), pins: [{ pin: 6, direction: 'input', input_type: 'switch' }],
+  }, manifest), /nicht unterstützt/);
+  assert.throws(() => validation.validateHardwareConfig({
+    ...binaryConfig(), pins: [{ pin: 4, direction: 'output', input_type: 'button' }],
+  }, manifest), /keinen input_type/);
+  // Die Pineigenschaften sind optional (Firmware 0.4.0), müssen aber eine
+  // eindeutige Teilmenge von binary_pins sein, wenn sie vorhanden sind.
+  const withoutTraits = { ...manifest, hardware_capabilities: { ...manifest.hardware_capabilities } };
+  for (const key of require('../adapter/hdp/client').BINARY_PIN_TRAIT_KEYS) {
+    delete withoutTraits.hardware_capabilities[key];
+  }
+  assert.equal(validateManifestInfo(withoutTraits), withoutTraits);
+  assert.throws(() => validateManifestInfo({
+    ...manifest,
+    hardware_capabilities: { ...manifest.hardware_capabilities, binary_pullup_pins: [4, 4] },
+  }), /binary_pullup_pins/);
+  assert.throws(() => validateManifestInfo({
+    ...manifest,
+    hardware_capabilities: { ...manifest.hardware_capabilities, binary_serial_pins: [99] },
+  }), /binary_serial_pins/);
+  const helpers = createHdpAdapter._test;
+  assert.equal(helpers.binaryEventTarget({ action: 'state' }, null, true), true);
+  assert.equal(helpers.binaryEventTarget({ action: 'toggle' }, 'on', true), false);
+  assert.equal(helpers.binaryEventTarget({ action: 'set', set_value: 'scene-a' }, null, true), 'scene-a');
+  assert.equal(helpers.binaryEventTarget({ action: 'counter', counter_step: 2 }, 7, true), 9);
+});
+
 test('OutputClient beginnt mit Replace und verwendet danach einen bestätigten Patch', async () => {
   const calls = [];
   const transport = {
@@ -332,6 +435,15 @@ test('Ein statischer Frame beendet eine gemerkte Indicator-Timeline mit absolute
     ready: true,
     async request(type, payload) {
       calls.push({ type, payload });
+      if (type === 'output.timeline.stop') {
+        return {
+          type: 'output.timeline.stopped',
+          payload: {
+            reply_to: 'adapter-1', output_id: payload.output_id,
+            timeline_id: payload.timeline_id, behavior: payload.behavior,
+          },
+        };
+      }
       return {
         type: 'output.frame.applied',
         payload: {
@@ -358,10 +470,58 @@ test('Ein statischer Frame beendet eine gemerkte Indicator-Timeline mit absolute
     brightness: 100, fractional: true,
   });
   await client.setFrame('main', frame);
-  assert.equal(calls[0].type, 'output.frame.set');
-  assert.equal(calls[0].payload.mode, 'replace');
+  assert.equal(calls[0].type, 'output.timeline.stop');
+  assert.equal(calls[0].payload.behavior, 'hold');
+  assert.equal(calls[1].type, 'output.frame.set');
+  assert.equal(calls[1].payload.mode, 'replace');
   assert.equal(client.activeTimelines.has('main'), false);
   assert.equal(client.desired.get('main').kind, 'frame');
+});
+
+test('OutputClient serialisiert parallele Frames und wiederholt eine Rate-Limit-Ablehnung einmal', async () => {
+  let activeRequests = 0;
+  let maximumActiveRequests = 0;
+  let rateLimited = true;
+  const calls = [];
+  const transport = {
+    ready: true,
+    async request(type, payload) {
+      assert.equal(type, 'output.frame.set');
+      calls.push(payload.frame_id);
+      activeRequests += 1;
+      maximumActiveRequests = Math.max(maximumActiveRequests, activeRequests);
+      await new Promise((resolve) => setTimeout(resolve, 2));
+      activeRequests -= 1;
+      if (rateLimited) {
+        rateLimited = false;
+        throw Object.assign(new Error('zu schnell'), { code: 'OUTPUT_RATE_LIMITED' });
+      }
+      return {
+        type: 'output.frame.applied',
+        payload: {
+          reply_to: 'adapter-1', output_id: payload.output_id,
+          frame_id: payload.frame_id, config_revision: payload.config_revision,
+          applied_at_uptime_milliseconds: 10,
+        },
+      };
+    },
+  };
+  const client = new OutputClient({
+    transport, manifest: pixelManifest(), getConfig: () => outputConfig(),
+  });
+  const first = renderPercentageFrame({
+    pixelCount: 4, percentage: 25, color: { r: 255, g: 0, b: 0 },
+    brightness: 100, fractional: true,
+  });
+  const second = renderPercentageFrame({
+    pixelCount: 4, percentage: 75, color: { r: 0, g: 255, b: 0 },
+    brightness: 100, fractional: true,
+  });
+  await Promise.all([client.setFrame('main', first), client.setFrame('main', second)]);
+  assert.equal(maximumActiveRequests, 1);
+  assert.equal(calls.length, 3);
+  assert.equal(calls[0], calls[1], 'die Rate-Limit-Wiederholung behält dieselbe Frame-ID');
+  assert.notEqual(calls[1], calls[2]);
 });
 
 test('OutputClient chunkt geordnet, wiederholt unsichere Chunks und gleicht Play/Stop per Status ab', async () => {
@@ -467,6 +627,194 @@ test('OutputClient stoppt laufende Timelines vor dem Ersatz und unterstützt nor
   assert.deepEqual(calls.at(-1), {
     type: 'output.timeline.abort', payload: { timeline_id: 'staging-loop' },
   });
+});
+
+test('OutputClient räumt eine nach Sitzungsneuaufbau weiterlaufende Timeline vor dem Upload frei', async () => {
+  const calls = [];
+  let playing = true;
+  let busy = true;
+  const timeline = encodeTimeline([
+    { delta_milliseconds: 0, operations: [{ op: 'FILL', r: 0, g: 0, b: 0 }] },
+  ], {
+    pixelCount: 4, durationMilliseconds: 100,
+    minimumFrameIntervalMilliseconds: 20, maximumEvents: 4096, maximumBytes: 65536,
+  });
+  const transport = {
+    ready: true,
+    async request(type, payload) {
+      calls.push({ type, payload: structuredClone(payload) });
+      if (type === 'output.status.get') {
+        return { type: 'output.status', payload: {
+          reply_to: 'x', output_id: 'main', config_revision: 4,
+          mode: playing ? 'timeline_playing' : 'idle',
+          frame_id: null, timeline_id: playing ? 'fremde-loop' : null,
+          loop: playing ? true : null, position_milliseconds: playing ? 40 : null,
+        } };
+      }
+      if (type === 'output.timeline.stop') {
+        playing = false;
+        busy = false;
+        return { type: 'output.timeline.stopped', payload: {
+          reply_to: 'x', output_id: 'main', timeline_id: payload.timeline_id,
+          behavior: payload.behavior,
+        } };
+      }
+      if (type === 'output.timeline.begin') {
+        if (busy) {
+          throw Object.assign(new Error('Stop or replace the running timeline first.'), {
+            code: 'OUTPUT_BUSY',
+          });
+        }
+        return { type: 'output.timeline.ready', payload: {
+          reply_to: 'x', output_id: 'main', timeline_id: payload.timeline_id,
+          next_offset: 0, maximum_chunk_bytes: 512,
+        } };
+      }
+      if (type === 'output.timeline.chunk') {
+        return { type: 'output.timeline.chunk.accepted', payload: {
+          reply_to: 'x', timeline_id: payload.timeline_id,
+          next_offset: payload.offset + Buffer.from(payload.data, 'base64').length,
+        } };
+      }
+      if (type === 'output.timeline.commit') {
+        return { type: 'output.timeline.committed', payload: {
+          reply_to: 'x', output_id: 'main', timeline_id: payload.timeline_id,
+          program_sha256: timeline.sha256,
+        } };
+      }
+      if (type === 'output.timeline.play') {
+        return { type: 'output.timeline.playing', payload: {
+          reply_to: 'x', output_id: 'main', timeline_id: payload.timeline_id,
+          loop: payload.loop, scheduled_start_uptime_milliseconds: 0,
+        } };
+      }
+      throw new Error(`Unerwarteter Request ${type}`);
+    },
+  };
+  const client = new OutputClient({
+    transport, manifest: pixelManifest(), getConfig: () => outputConfig(),
+  });
+  // Sitzungsverlust: Der Adapter kennt die laufende Timeline nicht mehr, das
+  // Gerät spielt sie aber weiter.
+  client.desired.set('main', { kind: 'timeline', timelineId: 'eigene-loop', timeline });
+  client.sessionStarted();
+
+  await client.setTimeline('main', 'eigene-loop', timeline);
+  const types = calls.map((call) => call.type);
+  assert.deepEqual(types.slice(0, 2), ['output.status.get', 'output.timeline.stop']);
+  assert.equal(calls[1].payload.timeline_id, 'fremde-loop');
+  assert.equal(calls[1].payload.behavior, 'hold');
+  assert.equal(types.filter((type) => type === 'output.timeline.begin').length, 1);
+  assert.deepEqual(client.activeTimelines.get('main'), {
+    timelineId: 'eigene-loop', sha256: timeline.sha256,
+  });
+  // Die Wunschlage überlebt das Freiräumen, sonst ginge sie beim nächsten
+  // Sitzungsneuaufbau verloren.
+  assert.equal(client.desired.get('main').timelineId, 'eigene-loop');
+
+  // Der Abgleich läuft genau einmal je Sitzung.
+  const before = calls.filter((call) => call.type === 'output.status.get').length;
+  await client.setTimeline('main', 'andere-loop', timeline);
+  assert.equal(calls.filter((call) => call.type === 'output.status.get').length, before);
+});
+
+test('OutputClient übernimmt eine bereits laufende Wunschtimeline ohne Neustart', async () => {
+  const calls = [];
+  const timeline = encodeTimeline([
+    { delta_milliseconds: 0, operations: [{ op: 'FILL', r: 0, g: 0, b: 0 }] },
+  ], {
+    pixelCount: 4, durationMilliseconds: 100,
+    minimumFrameIntervalMilliseconds: 20, maximumEvents: 4096, maximumBytes: 65536,
+  });
+  const transport = {
+    ready: true,
+    async request(type, payload) {
+      calls.push({ type, payload: structuredClone(payload) });
+      if (type === 'output.status.get') {
+        return { type: 'output.status', payload: {
+          reply_to: 'x', output_id: 'main', config_revision: 4, mode: 'timeline_playing',
+          frame_id: null, timeline_id: 'eigene-loop', loop: true, position_milliseconds: 30,
+        } };
+      }
+      throw new Error(`Unerwarteter Request ${type}`);
+    },
+  };
+  const client = new OutputClient({
+    transport, manifest: pixelManifest(), getConfig: () => outputConfig(),
+  });
+  client.desired.set('main', { kind: 'timeline', timelineId: 'eigene-loop', timeline });
+  client.sessionStarted();
+
+  assert.equal((await client.setTimeline('main', 'eigene-loop', timeline)).unchanged, true);
+  assert.deepEqual(calls.map((call) => call.type), ['output.status.get']);
+  assert.deepEqual(client.activeTimelines.get('main'), {
+    timelineId: 'eigene-loop', sha256: timeline.sha256,
+  });
+});
+
+test('OutputClient räumt einen unerwarteten OUTPUT_BUSY beim Begin einmalig frei', async () => {
+  const calls = [];
+  let busy = true;
+  const timeline = encodeTimeline([
+    { delta_milliseconds: 0, operations: [{ op: 'FILL', r: 0, g: 0, b: 0 }] },
+  ], {
+    pixelCount: 4, durationMilliseconds: 100,
+    minimumFrameIntervalMilliseconds: 20, maximumEvents: 4096, maximumBytes: 65536,
+  });
+  const transport = {
+    ready: true,
+    async request(type, payload) {
+      calls.push({ type, payload: structuredClone(payload) });
+      if (type === 'output.timeline.begin') {
+        if (busy) {
+          throw Object.assign(new Error('Stop or replace the running timeline first.'), {
+            code: 'OUTPUT_BUSY',
+          });
+        }
+        return { type: 'output.timeline.ready', payload: {
+          reply_to: 'x', output_id: 'main', timeline_id: payload.timeline_id,
+          next_offset: 0, maximum_chunk_bytes: 512,
+        } };
+      }
+      if (type === 'output.status.get') {
+        return { type: 'output.status', payload: {
+          reply_to: 'x', output_id: 'main', config_revision: 4,
+          mode: busy ? 'timeline_playing' : 'idle', frame_id: null,
+          timeline_id: busy ? 'fremde-loop' : null, loop: busy ? true : null,
+          position_milliseconds: busy ? 10 : null,
+        } };
+      }
+      if (type === 'output.timeline.stop') {
+        busy = false;
+        return { type: 'output.timeline.stopped', payload: {
+          reply_to: 'x', output_id: 'main', timeline_id: payload.timeline_id,
+          behavior: payload.behavior,
+        } };
+      }
+      if (type === 'output.timeline.chunk') {
+        return { type: 'output.timeline.chunk.accepted', payload: {
+          reply_to: 'x', timeline_id: payload.timeline_id,
+          next_offset: payload.offset + Buffer.from(payload.data, 'base64').length,
+        } };
+      }
+      if (type === 'output.timeline.commit') {
+        return { type: 'output.timeline.committed', payload: {
+          reply_to: 'x', output_id: 'main', timeline_id: payload.timeline_id,
+          program_sha256: timeline.sha256,
+        } };
+      }
+      throw new Error(`Unerwarteter Request ${type}`);
+    },
+  };
+  const client = new OutputClient({
+    transport, manifest: pixelManifest(), getConfig: () => outputConfig(),
+  });
+  // Der Ausgang gilt als abgeglichen; der Konflikt tritt erst beim Begin auf.
+  client.reconciled.add('main');
+  await client.uploadTimeline('main', 'eigene-loop', timeline);
+  assert.deepEqual(calls.slice(0, 4).map((call) => call.type), [
+    'output.timeline.begin', 'output.status.get', 'output.timeline.stop', 'output.timeline.begin',
+  ]);
 });
 
 test('OutputClient wiederholt verlorene Frames byteidentisch und reicht Gerätefehler durch', async () => {
@@ -608,6 +956,16 @@ test('OutputClient startet einen nach Sitzungsverlust unterbrochenen Upload wied
           },
         };
       }
+      if (type === 'output.status.get') {
+        // Der abgebrochene Upload wurde nie committet; der Ausgang ist frei.
+        return {
+          type: 'output.status',
+          payload: {
+            reply_to: 'x', output_id: 'main', config_revision: 4, mode: 'idle',
+            frame_id: null, timeline_id: null, loop: null, position_milliseconds: null,
+          },
+        };
+      }
       throw new Error(type);
     },
   };
@@ -684,6 +1042,25 @@ test('HDP Discovery akzeptiert nur den vollständigen normativen TXT-Vertrag', (
   const incomplete = records.map((record) => record.type === 16
     ? { ...record, value: { ...txt, binding_id: undefined } } : record);
   assert.deepEqual(discovery.devicesFromRecords(incomplete), []);
+});
+
+test('HDP Discovery meldet unveränderte mDNS-Antworten nicht wiederholt', () => {
+  const found = [];
+  const updated = [];
+  const instance = new discovery.Discovery({ intervalMs: 30000 });
+  instance.on('found', (device) => found.push(device));
+  instance.on('updated', (device) => updated.push(device));
+  const device = {
+    deviceId: DEVICE_ID, address: '192.168.1.20', hostname: 'hdp.local',
+    apiPort: 80, wsPort: 81, pairingState: 'paired', bindingId: BINDING_ID,
+  };
+  instance.ingest([device], 1000);
+  instance.ingest([device], 2000);
+  assert.equal(found.length, 1);
+  assert.equal(updated.length, 0);
+  assert.equal(instance.devices.get(DEVICE_ID).lastSeenAt, 2000);
+  instance.ingest([{ ...device, address: '192.168.1.21' }], 3000);
+  assert.equal(updated.length, 1);
 });
 
 test('HDP Pairing sendet das exakte Binding-Profil und aktiviert erst nach match', async (t) => {
@@ -920,6 +1297,84 @@ test('HDP WebSocket macht Firmware-Headerfehler und den nächsten Retry sichtbar
   assert.equal(states.at(-1).state, 'stopped');
 });
 
+test('HDP WebSocket ignoriert das verspätete Close einer ersetzten Sitzung', () => {
+  class FakeSocket extends EventEmitter {
+    close() { this.readyState = 3; }
+  }
+  const sockets = [];
+  const connection = new RuntimeConnection({
+    device: {
+      deviceId: DEVICE_ID, address: '192.168.1.20', apiPort: 80, wsPort: 81,
+    },
+    credentials: { instanceId: INSTANCE_ID, bindingKey: BINDING_KEY },
+    random: () => 0,
+    wsFactory() {
+      const socket = new FakeSocket();
+      sockets.push(socket);
+      return socket;
+    },
+  });
+  let offline = 0;
+  connection.on('offline', () => { offline += 1; });
+  connection.start();
+  const oldSocket = sockets[0];
+  connection.ready = true;
+  connection.updateDevice({
+    deviceId: DEVICE_ID, address: '192.168.1.21', apiPort: 80, wsPort: 81,
+  });
+  assert.equal(sockets.length, 2);
+  assert.equal(offline, 1);
+  const newSocket = sockets[1];
+  connection.ready = true;
+  connection.heartbeatTimer = setInterval(() => {}, 60000);
+  const heartbeat = connection.heartbeatTimer;
+  oldSocket.emit('close');
+  assert.equal(connection.socket, newSocket);
+  assert.equal(connection.ready, true);
+  assert.equal(connection.heartbeatTimer, heartbeat);
+  assert.equal(offline, 1);
+  connection.stop();
+});
+
+test('HDP gleicht aktive passende Bindings nicht bei jedem mDNS-Paket ab', () => {
+  const { bindingNeedsReconcile } = createHdpAdapter._test;
+  const active = {
+    bindingState: 'active', paired: true, bindingId: BINDING_ID,
+  };
+  assert.equal(bindingNeedsReconcile(active, {
+    pairingState: 'paired', bindingId: BINDING_ID,
+  }), false);
+  assert.equal(bindingNeedsReconcile(active, {
+    pairingState: 'pairable', bindingId: null,
+  }), true);
+  assert.equal(bindingNeedsReconcile({
+    bindingState: 'pending', paired: false, bindingId: null, pairingInProgress: true,
+  }, {
+    pairingState: 'pairing', bindingId: null,
+  }), false);
+  assert.equal(bindingNeedsReconcile({ ...active, bindingId: null }, {
+    pairingState: 'paired', bindingId: BINDING_ID,
+  }), true);
+});
+
+test('Eine erfolgreiche Ausgabe löscht nur einen vorherigen Outputfehler', () => {
+  const { clearAppliedOutputError } = createHdpAdapter._test;
+  const recovered = { lastError: '[OUTPUT_RATE_LIMITED] zu schnell' };
+  assert.equal(clearAppliedOutputError(recovered), true);
+  assert.equal(recovered.lastError, '');
+  const unrelated = { lastError: '[WEBSOCKET] Verbindung verloren' };
+  assert.equal(clearAppliedOutputError(unrelated), false);
+  assert.equal(unrelated.lastError, '[WEBSOCKET] Verbindung verloren');
+});
+
+test('pixel-timeline-v1 übernimmt den Gerätenamen getrennt vom Wire-Configobjekt', () => {
+  const { requestedDeviceName } = createHdpAdapter._test;
+  assert.equal(requestedDeviceName({ device_name: '  Kelleranzeige  ' }, 'Alt'),
+    'Kelleranzeige');
+  assert.equal(requestedDeviceName({}, 'Alt'), 'Alt');
+  assert.equal(requestedDeviceName({ device_name: 'x'.repeat(120) }, '').length, 100);
+});
+
 test('pixel-timeline-v1 wird in beiden Hello-Nachrichten exakt abgeglichen', async () => {
   class FakeSocket extends EventEmitter {
     constructor() { super(); this.readyState = 1; this.sent = []; }
@@ -982,6 +1437,65 @@ test('pixel-timeline-v1 wird in beiden Hello-Nachrichten exakt abgeglichen', asy
   mismatch.stop();
 });
 
+test('binary-io-v1 wird ausgehandelt und aktive Eingangsereignisse werden validiert', async () => {
+  class FakeSocket extends EventEmitter {
+    constructor() { super(); this.readyState = 1; this.sent = []; }
+    send(value) { this.sent.push(JSON.parse(value)); }
+    close() { this.readyState = 3; }
+  }
+  let socket;
+  const events = [];
+  const errors = [];
+  const connection = new RuntimeConnection({
+    device: {
+      deviceId: DEVICE_ID, address: '127.0.0.1', apiPort: 80, wsPort: 81,
+      configRevision: 7, runtimeProfile: 'binary-io-v1',
+    },
+    credentials: { instanceId: INSTANCE_ID, bindingKey: BINDING_KEY },
+    maximumMessageBytes: 2048,
+    getConfigRevision: () => 7,
+    wsFactory() { socket = new FakeSocket(); return socket; },
+  });
+  connection.on('binary', (message) => events.push(message));
+  connection.on('deviceError', (error) => errors.push(error));
+  connection.start();
+  socket.emit('open');
+  socket.emit('message', Buffer.from(JSON.stringify({
+    type: 'device.hello', message_id: 'device-1', sequence: 1,
+    payload: {
+      device_id: DEVICE_ID, protocol_version: '1.0-draft',
+      runtime_profile: 'binary-io-v1', config_revision: 7,
+      heartbeat_interval_ms: 15000, heartbeat_timeout_ms: 45000,
+    },
+  })), false);
+  assert.equal(socket.sent[0].payload.runtime_profile, 'binary-io-v1');
+  socket.emit('message', Buffer.from(JSON.stringify({
+    type: 'session.ready', message_id: 'device-2', sequence: 2,
+    payload: { config_revision: 7, runtime_profile: 'binary-io-v1' },
+  })), false);
+  await new Promise((resolve) => setImmediate(resolve));
+  socket.emit('message', Buffer.from(JSON.stringify({
+    type: 'binary.input.event', message_id: 'device-3', sequence: 3,
+    payload: {
+      pin: 5, input_type: 'button', event: 'pressed', state: true,
+      event_sequence: 1, occurred_at_uptime_milliseconds: 1234,
+      config_revision: 7,
+    },
+  })), false);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].payload.pin, 5);
+  socket.emit('message', Buffer.from(JSON.stringify({
+    type: 'binary.input.event', message_id: 'device-4', sequence: 4,
+    payload: {
+      pin: 5, input_type: 'button', event: 'pressed', state: false,
+      event_sequence: 2, occurred_at_uptime_milliseconds: 1300,
+      config_revision: 7,
+    },
+  })), false);
+  assert.equal(errors.at(-1).code, 'INVALID_REQUEST');
+  connection.stop();
+});
+
 test('HDP OTA signiert/verifiziert die rohen SHA-256-Bytes und nutzt Binding-Header', async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hdp-fw-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -1012,6 +1526,707 @@ test('HDP OTA signiert/verifiziert die rohen SHA-256-Bytes und nutzt Binding-Hea
   assert.equal(headers['X-HDP-Firmware-Signature'], signature);
 });
 
+test('Signatur wird nur mit hinterlegtem Prüfschlüssel erzwungen', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'hdp-signature-'));
+  const file = path.join(directory, 'image.bin');
+  const payload = Buffer.from('firmware-image');
+  fs.writeFileSync(file, payload);
+  const digest = crypto.createHash('sha256').update(payload).digest();
+  const artifact = {
+    platform: 'esp8266', board: 'd1_mini', variant: 'generic', filename: 'image.bin',
+    size_bytes: payload.length, sha256: digest.toString('hex'), signature: null,
+  };
+  const keys = crypto.generateKeyPairSync('ed25519');
+
+  // Ohne Prüfschlüssel bleibt ein selbst gebautes, unsigniertes Image zulässig.
+  const open = await firmware.validateArtifactFile(file, artifact, {});
+  assert.equal(open.signature.status, 'not_present');
+
+  // Sobald ein Vertrauensanker konfiguriert ist, ist die Signatur Pflicht.
+  await assert.rejects(
+    firmware.validateArtifactFile(file, artifact, { publicKey: keys.publicKey }),
+    /keine authentifizierbare Signatur/,
+  );
+
+  const signed = {
+    ...artifact,
+    signature: crypto.sign(null, digest, keys.privateKey).toString('base64'),
+  };
+  const verified = await firmware.validateArtifactFile(file, signed, { publicKey: keys.publicKey });
+  assert.equal(verified.signature.verified, true);
+
+  // Eine kaputte Signatur ist auch ohne Prüfschlüssel niemals akzeptabel.
+  const foreign = crypto.generateKeyPairSync('ed25519');
+  const wrong = { ...artifact, signature: crypto.sign(null, digest, foreign.privateKey).toString('base64') };
+  await assert.rejects(
+    firmware.validateArtifactFile(file, wrong, { publicKey: keys.publicKey }),
+    /Signatur ist ungültig/,
+  );
+  fs.rmSync(directory, { recursive: true, force: true });
+});
+
+test('Firmwarespeicher hält je Kanal ein vollständiges Release und wählt exakt passende Artefakte', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'hdp-store-'));
+  const store = new ReleaseStore({ directory });
+  const image = Buffer.alloc(2048, 7);
+  const source = path.join(directory, 'upload.bin');
+  fs.writeFileSync(source, image);
+  const sha256 = crypto.createHash('sha256').update(image).digest('hex');
+  const manifest = (version, channel = 'development') => ({
+    schema_version: 1,
+    release: {
+      firmware_name: 'hdp-firmware', version, channel,
+      published_at: '2026-07-31T19:42:08Z', build_id: '20260731-194208',
+      protocol_min: '1.0-draft', protocol_max: '1.0-draft', config_schema_version: 3,
+    },
+    artifacts: [
+      { platform: 'esp8266', board: 'd1_mini', variant: 'generic', filename: 'hdp-0.4.1-esp8266.bin', size_bytes: image.length, sha256, signature: null },
+      { platform: 'esp32', board: 'esp32dev', variant: 'generic', filename: 'hdp-0.4.1-esp32.bin', size_bytes: image.length, sha256, signature: null },
+    ],
+  });
+
+  const saved = store.saveManifest(manifest('0.4.1'));
+  assert.equal(saved.channel, 'development');
+  assert.equal(saved.missing.length, 2, 'ohne Dateien ist der Kanal unvollständig');
+  assert.equal(store.complete('development'), false);
+
+  const info = {
+    name: 'hdp-firmware', version: '0.4.0', platform: 'esp8266', board: 'd1_mini',
+    variant: 'generic', protocol_version: '1.0-draft', config_schema_version: 3,
+    ota_supported: true, maximum_image_size_bytes: 1044464, free_update_space_bytes: 2670592,
+  };
+  const incomplete = store.candidateFor(info, 'development');
+  assert.equal(incomplete.available, false);
+  assert.match(incomplete.reason, /fehlt im Firmwarespeicher/);
+
+  await store.saveArtifact({ path: source, filename: 'hdp-0.4.1-esp8266.bin' });
+  await store.saveArtifact({ path: source, filename: 'hdp-0.4.1-esp32.bin' });
+  assert.equal(store.complete('development'), true);
+
+  const candidate = store.candidateFor(info, 'development');
+  assert.equal(candidate.available, true);
+  // Eine Firmware, viele Varianten: Es zählt die exakte Plattform/Board/Variante.
+  assert.equal(candidate.artifact.filename, 'hdp-0.4.1-esp8266.bin');
+  assert.equal(candidate.release.version, '0.4.1');
+  assert.equal(fs.readFileSync(candidate.file).length, image.length);
+  assert.equal(store.candidateFor({ ...info, platform: 'esp32', board: 'esp32dev' }, 'development')
+    .artifact.filename, 'hdp-0.4.1-esp32.bin');
+
+  // Ein Schemasprung darf ein Update nicht verhindern — die Firmware bringt
+  // dafür eine Migration mit und prüft die Metadaten beim Empfang erneut.
+  const older = store.candidateFor({ ...info, version: '0.3.1', config_schema_version: 2 }, 'development');
+  assert.equal(older.available, true);
+  assert.equal(older.release.version, '0.4.1');
+  // Ein Rückschritt des Schemas bleibt gesperrt.
+  const backwards = store.candidateFor({ ...info, version: '0.4.0', config_schema_version: 4 }, 'development');
+  assert.equal(backwards.available, false);
+  assert.match(backwards.reason, /lässt sich nicht auf 3 zurücksetzen/);
+
+  // Derselbe Stand ist kein Update, eine bewusste Neuinstallation aber möglich.
+  const current = store.candidateFor({ ...info, version: '0.4.1' }, 'development');
+  assert.equal(current.available, false);
+  assert.match(current.reason, /läuft bereits auf 0\.4\.1/);
+  assert.equal(store.candidateFor({ ...info, version: '0.4.1' }, 'development',
+    { allowDowngrade: true }).available, true);
+  const newer = store.candidateFor({ ...info, version: '0.5.0' }, 'development');
+  assert.equal(newer.available, false);
+  assert.match(newer.reason, /Downgrade/);
+
+  // Andere Kanäle bleiben unberührt.
+  assert.equal(store.candidateFor(info, 'stable').available, false);
+  assert.equal(store.release('stable'), null);
+  assert.throws(() => store.candidateFor(info, 'nightly'), /Unbekannter Release-Kanal/);
+
+  // Ein Versionswechsel räumt die Artefakte des Vorgängers weg, damit im Kanal
+  // keine zwei Stände nebeneinander liegen.
+  const previousFile = candidate.file;
+  store.saveManifest(manifest('0.4.2'));
+  assert.equal(fs.existsSync(previousFile), false);
+  assert.equal(store.complete('development'), false);
+
+  // Ein Artefakt ohne passendes Manifest wird nicht angenommen.
+  await assert.rejects(
+    store.saveArtifact({ path: source, filename: 'fremde-firmware.bin' }),
+    /kein Release-Manifest hinterlegt/,
+  );
+  await assert.rejects(store.saveArtifact({ path: source, filename: '../escape.bin' }), /ungültig/);
+
+  // Ein neu erzeugter Speicher liest den Bestand von der Platte.
+  const reopened = new ReleaseStore({ directory });
+  reopened.load();
+  assert.equal(reopened.release('development').release.version, '0.4.2');
+  reopened.removeChannel('development');
+  assert.equal(reopened.release('development'), null);
+  fs.rmSync(directory, { recursive: true, force: true });
+});
+
+// Gemeinsames Prüfgerüst für die Updatepfade: ein HTTP-Gerätestub, das den
+// normativen OTA-Ablauf spielt, plus ein Adapter mit eigenem Datenverzeichnis.
+async function createOtaHarness(t, adapterConfig = {}) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'hdp-ota-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const image = Buffer.alloc(4096, 3);
+  const upload = path.join(directory, 'upload.bin');
+  fs.writeFileSync(upload, image);
+  const sha256 = crypto.createHash('sha256').update(image).digest('hex');
+
+  const state = {
+    installedVersion: '0.4.0', otaState: 'idle', restarts: 0,
+    received: [], logs: [], rejectUpdate: null,
+  };
+  let pendingVersion = null;
+  const firmwareInfo = () => ({
+    name: 'hdp-firmware', version: state.installedVersion, channel: 'development',
+    platform: 'esp8266', board: 'd1_mini', variant: 'generic',
+    build_id: '20260730-190338', build_timestamp: '2026-07-30T19:03:38Z',
+    protocol_version: '1.0-draft', config_schema_version: 3, ota_supported: true,
+    ota_port: 0, maximum_image_size_bytes: 1044464, free_update_space_bytes: 2678784,
+    signature_verification: 'not_configured',
+  });
+  const applyRestart = () => {
+    state.restarts += 1;
+    if (pendingVersion) state.installedVersion = pendingVersion;
+    pendingVersion = null;
+    state.otaState = 'completed';
+  };
+  const server = http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => {
+      if (req.url === '/api/v1/firmware') return sendJson(res, firmwareInfo());
+      if (req.url === '/api/v1/firmware/status') {
+        return sendJson(res, {
+          state: state.otaState, progress_percent: state.otaState === 'ready_to_restart' ? 100 : 0,
+          restart_required: state.otaState === 'ready_to_restart',
+        });
+      }
+      if (req.url === '/api/v1/firmware/update') {
+        if (state.rejectUpdate) {
+          res.statusCode = state.rejectUpdate.status;
+          res.setHeader('Content-Type', 'application/json');
+          res.setHeader('Cache-Control', 'no-store');
+          return res.end(JSON.stringify({
+            ok: false,
+            error: { code: state.rejectUpdate.code, message: state.rejectUpdate.message, details: {} },
+          }));
+        }
+        pendingVersion = req.headers['x-hdp-firmware-version'];
+        state.received.push({
+          bytes: Buffer.concat(chunks).length,
+          version: pendingVersion,
+          sha256: req.headers['x-hdp-firmware-sha256'],
+          binding: req.headers['x-hdp-binding-key'],
+        });
+        state.otaState = 'ready_to_restart';
+        return sendJson(res, { state: 'ready_to_restart', restart_required: true }, 202);
+      }
+      if (req.url === '/api/v1/firmware/restart') {
+        applyRestart();
+        return sendJson(res, { state: 'restarting' }, 202);
+      }
+      res.statusCode = 404;
+      return res.end();
+    });
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const port = server.address().port;
+
+  class FakeDiscovery extends EventEmitter {
+    constructor() { super(); FakeDiscovery.last = this; }
+    start() {} stop() {} refresh() {}
+  }
+  class FakeConnection extends EventEmitter {
+    start() { FakeConnection.last = this; }
+    stop() {} sendState() { return false; } updateDevice() {}
+  }
+  class FakeClient {
+    constructor(device, credentials) { this.credentials = credentials; }
+    update(device, credentials) { this.credentials = credentials; }
+    async pairingStatus() {
+      return {
+        pairing_state: 'paired', paired: true,
+        binding_id: auth.bindingId(this.credentials.bindingKey),
+        binding_status: 'match', paired_to_requester: true,
+      };
+    }
+    async pair(pending) {
+      return {
+        device: deviceInfo(true), manifest: pixelManifest(),
+        status: { ...status(), state: 'paired', paired: true },
+        existingConfig: outputConfig(), bindingId: auth.bindingId(pending.bindingKey),
+      };
+    }
+    async manifest() { return pixelManifest(); }
+    async config() { return outputConfig(); }
+    async status() { return status(); }
+    async firmware() { return firmwareInfo(); }
+    async firmwareStatus() {
+      return {
+        state: state.otaState, progress_percent: 0,
+        restart_required: state.otaState === 'ready_to_restart',
+      };
+    }
+    async restartFirmware() { applyRestart(); return { state: 'restarting' }; }
+  }
+  const secrets = new Map();
+  const host = {
+    async getInstanceIdentity() { return { instanceId: INSTANCE_ID, fingerprint: 'a'.repeat(64) }; },
+    async getDataDirectory() { return directory; },
+    async getSecret(key) { return secrets.get(key) || null; },
+    async setSecret(key, value) { secrets.set(key, value); },
+    async deleteSecret(key) { secrets.delete(key); },
+    async persistStorage() {}, setStorage() {}, subscribeState() { return () => {}; },
+    setStates() {}, publishStates() {}, setConnected() {},
+    log(message) { state.logs.push(String(message)); }, warn() {}, error() {},
+  };
+  const adapter = createHdpAdapter(host, {
+    Discovery: FakeDiscovery, HdpClient: FakeClient, RuntimeConnection: FakeConnection,
+  });
+  await adapter.start({ updateChannel: 'development', ...adapterConfig });
+  FakeDiscovery.last.emit('found', {
+    deviceId: DEVICE_ID, address: '127.0.0.1', hostname: 'badge.local',
+    apiPort: port, wsPort: 81, otaPort: port, protocolVersion: '1.0-draft',
+    runtimeProfile: 'pixel-timeline-v1', runtimeCompatible: true,
+    firmwareVersion: '0.4.0', platform: 'esp8266', pairingState: 'pairable',
+    bindingId: null, pairable: true, hardwareConfigPresent: true, configRevision: 4, online: true,
+  });
+  const call = (method, requestPath, body = {}, uploadInfo) => adapter.handleManagementRequest({
+    method, path: requestPath, basePath: '/adapter/instance/1/manage',
+    body, upload: uploadInfo, access: { canWrite: true },
+  });
+  await call('POST', `/api/devices/${DEVICE_ID}/pair`);
+  t.after(() => adapter.stop());
+  const releaseManifest = (version) => ({
+    schema_version: 1,
+    release: {
+      firmware_name: 'hdp-firmware', version, channel: 'development',
+      published_at: '2026-07-31T19:42:08Z', build_id: '20260731-194208',
+      protocol_min: '1.0-draft', protocol_max: '1.0-draft', config_schema_version: 3,
+    },
+    artifacts: [{
+      platform: 'esp8266', board: 'd1_mini', variant: 'generic',
+      filename: `hdp-firmware-${version}-esp8266-d1-mini-generic.bin`,
+      size_bytes: image.length, sha256, signature: null,
+    }],
+  });
+  const publish = async (version) => {
+    const filename = `hdp-firmware-${version}-esp8266-d1-mini-generic.bin`;
+    const stored = await call('POST', '/api/firmware/manifest', { manifest: releaseManifest(version) });
+    if (stored.status !== 200) throw new Error(stored.json.error);
+    const artifact = await call('POST', '/api/firmware/artifact', {}, { path: upload, filename });
+    if (artifact.status !== 200) throw new Error(artifact.json.error);
+    return { stored, artifact, filename };
+  };
+  // Der Rollout nach einer Rückkehr wird bewusst nicht abgewartet, damit die
+  // Sitzung nicht am Update hängt. Der Test muss deshalb auf die Wirkung warten
+  // statt auf eine feste Anzahl Ticks: Dazwischen liegen Dateihashing und eine
+  // echte HTTP-Übertragung, deren Dauer von der Systemlast abhängt.
+  const waitFor = async (predicate, label, timeoutMs = 20000) => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (predicate()) return;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    throw new Error(`Zeitüberschreitung beim Warten auf ${label}`);
+  };
+  // Nach einem OTA gilt das Gerät bis zur Rückkehr der WebSocket-Sitzung als
+  // offline. Erst danach darf ein weiterer Rollout greifen.
+  const reconnect = () => FakeConnection.last.emit('online');
+  return { adapter, call, state, publish, reconnect, waitFor, releaseManifest, image, sha256, upload };
+}
+
+test('Ein-Klick-Update installiert aus dem zentralen Speicher', async (t) => {
+  const { call, state, publish, image, sha256 } = await createOtaHarness(t);
+
+  // Ohne hinterlegtes Release wird kein Update angeboten.
+  const empty = await call('GET', '/api/firmware');
+  assert.deepEqual(empty.json.channels.map((entry) => entry.present), [false, false, false]);
+  const before = (await call('GET', `/device/${DEVICE_ID}`)).view.body;
+  assert.match(before, /Kein Update verfügbar/);
+  await assert.rejects(async () => {
+    const response = await call('POST', `/api/devices/${DEVICE_ID}/firmware/update`, { json: true });
+    if (response.status >= 400) throw new Error(response.json.error);
+  }, /keine Firmware hinterlegt/);
+
+  // Die Übersicht erklärt den USB-Weg, weil Web Serial im Browser einen
+  // sicheren Kontext voraussetzt und hier deshalb ausscheidet.
+  const overview = (await call('GET', '/')).view.body;
+  assert.match(overview, /Über USB flashen/);
+  assert.match(overview, /hdp-flash\.exe --list/);
+  assert.match(overview, /nicht<\/strong> gelöscht/);
+  assert.match(overview, /adapter-public/);
+  // Das Werkzeug wird mit dem Adapter ausgeliefert und ist von hier aus ladbar.
+  assert.match(overview, /href="\/adapter-public\/1\/assets\/hdp-flash\.exe" download/);
+  // Keine fest eingebaute Serveradresse in den Beispielaufrufen.
+  assert.doesNotMatch(overview, /--server https?:\/\//);
+
+  // Release zentral hinterlegen: erst das Manifest, dann das Artefakt.
+  const { stored, artifact, filename } = await publish('0.4.1');
+  assert.deepEqual(stored.json.missing, [filename]);
+  assert.deepEqual(artifact.json.missing, []);
+
+  // Jetzt meldet die Geräteseite das Update und der Klick installiert es.
+  const offered = (await call('GET', `/device/${DEVICE_ID}`)).view.body;
+  assert.match(offered, /Version 0\.4\.1 steht bereit/);
+  assert.match(offered, /Jetzt aktualisieren/);
+  const updated = await call('POST', `/api/devices/${DEVICE_ID}/firmware/update`, { json: true });
+  assert.equal(updated.status, 200);
+  assert.equal(updated.json.installed.version, '0.4.1');
+  assert.equal(state.restarts, 1);
+  assert.equal(state.received.length, 1);
+  assert.equal(state.received[0].bytes, image.length);
+  assert.equal(state.received[0].version, '0.4.1');
+  assert.equal(state.received[0].sha256, sha256);
+  assert.match(state.received[0].binding, /^[0-9a-f]{64}$/);
+
+  // Danach ist derselbe Stand kein Angebot mehr.
+  const after = (await call('GET', `/device/${DEVICE_ID}`)).view.body;
+  assert.match(after, /läuft bereits auf 0\.4\.1/);
+});
+
+test('Ein abgelehntes Update meldet den Gerätefehler und lässt den Button bedienbar', async (t) => {
+  const { call, state, publish } = await createOtaHarness(t);
+  state.rejectUpdate = { status: 422, code: 'OTA_CONFIG_SCHEMA_INCOMPATIBLE', message: 'Config schema is not migratable.' };
+  await publish('0.4.1');
+
+  const failed = await call('POST', `/api/devices/${DEVICE_ID}/firmware/update`, { json: true });
+  assert.ok(failed.status >= 400, 'ein abgelehntes Update darf nicht als Erfolg gelten');
+  assert.equal(failed.json.code, 'OTA_CONFIG_SCHEMA_INCOMPATIBLE');
+  assert.equal(state.restarts, 0);
+  assert.equal(state.installedVersion, '0.4.0');
+
+  const page = await call('GET', `/device/${DEVICE_ID}`);
+  const body = page.view.body;
+  // Der Button bleibt bedienbar: Ein zweiter Versuch muss ohne Neuladen gehen.
+  assert.match(body, /id="hdp-update-button"[^>]*onclick="hdpRunUpdate\(this\)"/);
+  assert.doesNotMatch(body.slice(body.indexOf('hdp-update-button'), body.indexOf('hdp-update-button') + 200), / disabled/);
+  // Das Update läuft per fetch, damit ein Fehler nicht auf die JSON-Antwort
+  // navigiert und den Button im Zurück-Verlauf gesperrt zurücklässt.
+  assert.doesNotMatch(body, /firmware\/update"[^>]*>\s*<button/);
+  assert.match(page.view.script, /function hdpRunUpdate/);
+  assert.match(page.view.script, /button\.disabled = false/);
+  // Kein confirm(): Ein unterdrückter Browserdialog liefert still false und der
+  // Knopf wäre danach ohne jede Rückmeldung wirkungslos.
+  const scriptCode = page.view.script.replace(/^\s*\/\/.*$/gm, '');
+  assert.doesNotMatch(scriptCode, /confirm\(/);
+  assert.match(page.view.script, /data-armed/);
+  assert.match(page.view.script, /Wirklich übertragen\?/);
+  assert.match(page.view.script, /addEventListener\('pageshow'/);
+  assert.match(body, /data-armed="0"/);
+  assert.match(page.view.script, /OTA_CONFIG_SCHEMA_INCOMPATIBLE: 'Die installierte Firmware lehnt/);
+  assert.doesNotThrow(() => new Function(page.view.script));
+
+  // Nach dem Wegfall der Ablehnung greift derselbe Klick.
+  state.rejectUpdate = null;
+  const retried = await call('POST', `/api/devices/${DEVICE_ID}/firmware/update`, { json: true });
+  assert.equal(retried.status, 200);
+  assert.equal(state.installedVersion, '0.4.1');
+});
+
+test('Binary-Ausgänge werden während einer OTA-Transaktion nicht geschaltet', () => {
+  const { otaInProgress } = createHdpAdapter._test;
+  for (const otaState of ['uploading', 'ready_to_restart', 'restarting']) {
+    assert.equal(otaInProgress({ otaProgress: { state: otaState } }), true, otaState);
+  }
+  for (const otaState of ['idle', 'completed', 'failed']) {
+    assert.equal(otaInProgress({ otaProgress: { state: otaState } }), false, otaState);
+  }
+  assert.equal(otaInProgress({}), false);
+});
+
+test('Automatischer Rollout installiert selbst, „nur benachrichtigen“ nicht', async (t) => {
+  const notified = await createOtaHarness(t, { updateMode: 'notify_only' });
+  await notified.publish('0.4.1');
+  // Der Rollout erkennt den Kandidaten, installiert aber bewusst nicht.
+  assert.equal(notified.state.received.length, 0);
+  assert.equal(notified.state.installedVersion, '0.4.0');
+  assert.match((await notified.call('GET', `/device/${DEVICE_ID}`)).view.body,
+    /Version 0\.4\.1 steht bereit/);
+
+  const automatic = await createOtaHarness(t, { updateMode: 'automatic' });
+  await automatic.publish('0.4.1');
+  // Das Hinterlegen eines Releases stößt den Rollout an; es genügt also, die
+  // Firmware bereitzustellen.
+  assert.equal(automatic.state.installedVersion, '0.4.1');
+  assert.equal(automatic.state.restarts, 1);
+  assert.equal(automatic.state.received[0].version, '0.4.1');
+  assert.ok(automatic.state.logs.some((line) => /automatisches Update auf 0\.4\.1/.test(line)),
+    'der Rollout protokolliert die Installation');
+
+  // Solange die Sitzung nach dem Neustart nicht zurück ist, gilt das Gerät als
+  // nicht erreichbar und der Rollout wartet.
+  await automatic.publish('0.4.2');
+  assert.equal(automatic.state.installedVersion, '0.4.1');
+  assert.match((await automatic.call('GET', `/device/${DEVICE_ID}`)).view.body,
+    /Automatik wartet: Gerät ist nicht erreichbar/);
+
+  // Nach der Rückkehr wird das zweite Release nachgezogen.
+  automatic.reconnect();
+  await automatic.waitFor(() => automatic.state.installedVersion === '0.4.2',
+    'das nachgeholte Update nach der Rückkehr');
+  assert.equal(automatic.state.restarts, 2);
+});
+
+test('Wartungsfenster gilt auch über Mitternacht', () => {
+  const { insideMaintenanceWindow } = createHdpAdapter._test;
+  const at = (hour, minute = 0) => new Date(2026, 6, 31, hour, minute, 0);
+  assert.equal(insideMaintenanceWindow({ enabled: false, start: '02:00', end: '04:00' }, at(12)), true);
+  const night = { enabled: true, start: '02:00', end: '04:00' };
+  assert.equal(insideMaintenanceWindow(night, at(2)), true);
+  assert.equal(insideMaintenanceWindow(night, at(3, 59)), true);
+  assert.equal(insideMaintenanceWindow(night, at(4)), false);
+  assert.equal(insideMaintenanceWindow(night, at(1, 59)), false);
+  const overMidnight = { enabled: true, start: '23:00', end: '01:00' };
+  assert.equal(insideMaintenanceWindow(overMidnight, at(23, 30)), true);
+  assert.equal(insideMaintenanceWindow(overMidnight, at(0, 30)), true);
+  assert.equal(insideMaintenanceWindow(overMidnight, at(1)), false);
+  assert.equal(insideMaintenanceWindow(overMidnight, at(12)), false);
+  // Ein unbrauchbares Fenster darf Updates nicht dauerhaft blockieren.
+  assert.equal(insideMaintenanceWindow({ enabled: true, start: 'x', end: 'y' }, at(12)), true);
+});
+
+test('Geräteverwaltung schaltet Seite und Hardwaredialog exklusiv auf den Gerätetyp um', async () => {
+  const { deviceTypeOf, supportedDeviceTypes, binaryPinSlots } = createHdpAdapter._test;
+  // Reine Ableitung: Maßgeblich ist die Hardwarekonfiguration, nicht das Profil.
+  assert.equal(deviceTypeOf({ hardwareConfig: outputConfig(), runtimeProfile: 'binary-io-v1' }), 'percentage_indicator');
+  assert.equal(deviceTypeOf({
+    hardwareConfig: { revision: 5, device_type: 'binary_io', pins: [] },
+    runtimeProfile: 'pixel-timeline-v1',
+  }), 'binary_io');
+  assert.equal(deviceTypeOf({ runtimeProfile: 'binary-io-v1' }), 'binary_io');
+  assert.equal(deviceTypeOf({}), 'percentage_indicator');
+  assert.deepEqual(supportedDeviceTypes(pixelManifest()), ['percentage_indicator']);
+  assert.deepEqual(supportedDeviceTypes(binaryManifest()), ['percentage_indicator', 'binary_io']);
+  assert.equal(binaryPinSlots(binaryManifest()), 11);
+  assert.equal(binaryPinSlots(pixelManifest()), 5);
+
+  class FakeDiscovery extends EventEmitter {
+    constructor() { super(); FakeDiscovery.last = this; }
+    start() {} stop() {} refresh() {}
+  }
+  class FakeConnection extends EventEmitter {
+    start() { FakeConnection.last = this; }
+    stop() {} sendState() { return false; } updateDevice() {}
+  }
+  // Firmware 0.4.0: boot-dispatch-v1, Profil folgt erst nach dem Neustart.
+  let deviceManifest = binaryManifest('pixel-timeline-v1');
+  let remoteConfig = outputConfig();
+  let devicePaired = false;
+  class FakeClient {
+    constructor(device, credentials) { this.credentials = credentials; }
+    update(device, credentials) { this.credentials = credentials; }
+    async pairingStatus() {
+      // Nach dem Pairing meldet das Gerät dauerhaft ein passendes Binding.
+      if (devicePaired) {
+        return {
+          pairing_state: 'paired', paired: true,
+          binding_id: auth.bindingId(this.credentials.bindingKey),
+          binding_status: 'match', paired_to_requester: true,
+        };
+      }
+      return {
+        pairing_state: 'pairable', paired: false, binding_id: null,
+        binding_status: 'unpaired', paired_to_requester: null,
+      };
+    }
+    async pair(pending) {
+      devicePaired = true;
+      return {
+        device: { ...deviceInfo(true), firmware_version: '0.4.0' },
+        manifest: deviceManifest,
+        status: { ...status(), state: 'paired', paired: true },
+        existingConfig: remoteConfig, bindingId: auth.bindingId(pending.bindingKey),
+      };
+    }
+    async manifest() { return deviceManifest; }
+    async config() { return remoteConfig; }
+    async putConfig(expectedRevision, config) {
+      // Das Gerät übernimmt exakt die gesendete Konfiguration und zählt hoch.
+      remoteConfig = { ...config, revision: expectedRevision + 1 };
+      return remoteConfig;
+    }
+    async status() { return status(); }
+    async firmware() { return { ota_supported: false }; }
+    async firmwareStatus() { return { state: 'idle' }; }
+  }
+  const storage = {};
+  const secrets = new Map();
+  const host = {
+    async getInstanceIdentity() { return { instanceId: INSTANCE_ID, fingerprint: 'a'.repeat(64) }; },
+    async getSecret(key) { return secrets.get(key) || null; },
+    async setSecret(key, value) { secrets.set(key, value); },
+    async deleteSecret(key) { secrets.delete(key); },
+    async persistStorage(key, value) { storage[key] = value; },
+    setStorage(key, value) { storage[key] = value; },
+    subscribeState() { return () => {}; },
+    setStates() {}, publishStates() {}, setConnected() {}, log() {}, warn() {}, error() {},
+  };
+  const adapter = createHdpAdapter(host, {
+    Discovery: FakeDiscovery, HdpClient: FakeClient, RuntimeConnection: FakeConnection,
+  });
+  await adapter.start({});
+  FakeDiscovery.last.emit('found', {
+    deviceId: DEVICE_ID, address: '127.0.0.1', hostname: 'badge.local',
+    apiPort: 80, wsPort: 81, otaPort: 8080, protocolVersion: '1.0-draft',
+    runtimeProfile: 'pixel-timeline-v1', runtimeCompatible: true,
+    firmwareVersion: '0.4.0', platform: 'esp8266', pairingState: 'pairable',
+    bindingId: null, pairable: true, hardwareConfigPresent: true, configRevision: 4, online: true,
+  });
+  await adapter.handleManagementRequest({
+    method: 'POST', path: `/api/devices/${DEVICE_ID}/pair`,
+    basePath: '/adapter/instance/1/manage', body: {}, access: { canWrite: true },
+  });
+  const pageFor = async () => (await adapter.handleManagementRequest({
+    method: 'GET', path: `/device/${DEVICE_ID}`,
+    basePath: '/adapter/instance/1/manage', body: {}, access: { canWrite: true },
+  })).view;
+  // Der Prozentanzeigenabschnitt enthält eine eigene GPIO-Auswahl; die
+  // Binary-Zusicherungen müssen deshalb auf ihr Panel begrenzt werden.
+  const binaryPanel = (body) => {
+    const start = body.indexOf('data-hdp-type-panel="binary_io"');
+    assert.ok(start >= 0, 'Binary-Panel fehlt in der Seite');
+    return body.slice(start);
+  };
+  // Ein mDNS-Update kann eine mehrstufige Reaktivierung anstoßen. Erst wenn die
+  // vollständig durchgelaufen ist, beschreibt der Gerätezustand das Gerät.
+  const settle = async () => {
+    for (let round = 0; round < 20; round += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  };
+
+  const percentage = await pageFor();
+  // Als Prozentanzeige: Prozentseite, beide Typen wählbar, beide Dialogabschnitte
+  // vorhanden, aber jeweils dem Typ zugeordnet.
+  assert.match(percentage.body, /Anzeigewert und Skalierung/);
+  assert.match(percentage.body, /<select id="hdp-device-type" name="device_type"><option value="percentage_indicator" selected>/);
+  assert.match(percentage.body, /<option value="binary_io">Binary-I\/O<\/option>/);
+  assert.match(percentage.body, /data-hdp-type-panel="percentage_indicator"[^>]*><div class="dialog-section-head"><h4>LED-Ausgang/);
+  assert.match(percentage.body, /data-hdp-type-panel="binary_io"[^>]*><div class="dialog-section-head"><h4>Binary-Pins/);
+  // Kein Abschnitt darf ohne Typzuordnung im Dialog stehen.
+  const dialog = percentage.body.slice(percentage.body.indexOf('id="hdp-hardware-dialog"'));
+  const sections = dialog.match(/<section class="dialog-section"[^>]*>/g);
+  assert.equal(sections.filter((tag) => !tag.includes('data-hdp-type-panel')).length, 1,
+    'nur der gemeinsame Geräteabschnitt bleibt typunabhängig');
+  assert.match(percentage.script, /function hdpBindHardwareType/);
+  assert.match(percentage.script, /field\.disabled = !active/);
+  assert.doesNotMatch(percentage.body, /Nur relevant, wenn als Gerätetyp/);
+  // Jeder GPIO des ARGB-Ausgangs steht auch für Binary-I/O zur Verfügung; die
+  // Eigenheiten einzelner Pins stehen als Hinweis daneben, statt sie zu sperren.
+  for (const pin of binaryManifest().hardware_capabilities.binary_pins) {
+    assert.match(percentage.body, new RegExp(`<option value="${pin}"[^>]*>GPIO ${pin}[ ·<]`));
+  }
+  assert.match(percentage.body, /GPIO 2 · Boot-Pin</);
+  assert.match(percentage.body, /GPIO 16 · externer Pull-up nötig</);
+  assert.match(percentage.body, /GPIO 15 · externer Pull-up nötig, Boot-Pin</);
+  assert.match(percentage.body, /GPIO 1 · serielle Konsole</);
+  assert.match(percentage.body, /GPIO 4<\/option>/);
+  assert.match(percentage.body, /hdp-pin-legend/);
+  assert.equal((percentage.body.match(/hdp-binary-pin-row/g) || []).length, 11);
+
+  // Gerätetyp auf Binary-I/O umgestellt: Das Gerät startet neu, das Profil folgt
+  // erst danach — die Verwaltung muss sofort umschalten.
+  await adapter.handleManagementRequest({
+    method: 'POST', path: `/api/devices/${DEVICE_ID}/config`,
+    basePath: '/adapter/instance/1/manage', access: { canWrite: true },
+    body: {
+      revision: 4, device_type: 'binary_io',
+      binary_pin_0: '4', binary_direction_0: 'input', binary_input_type_0: 'switch',
+      binary_pin_1: '5', binary_direction_1: 'output',
+    },
+  });
+  const binary = await pageFor();
+  assert.match(binary.body, /GPIO 4 · Schalter/);
+  assert.match(binary.body, /GPIO 5 · Ausgang/);
+  assert.match(binary.body, /<select id="hdp-device-type" name="device_type"><option value="percentage_indicator">/);
+  assert.match(binary.body, /<option value="binary_io" selected>/);
+  // Der Dialog behält beide Abschnitte, damit auch der Rückweg möglich bleibt.
+  assert.match(binary.body, /data-hdp-type-panel="percentage_indicator"/);
+  assert.doesNotMatch(binary.body, /Anzeigewert und Skalierung|Richtungsindikator/);
+
+  // Nach einem OTA meldet dieselbe Hardware ein erweitertes Manifest. Das
+  // zwischengespeicherte Manifest der Vorgängerversion darf nicht bestehen
+  // bleiben, sonst zeigt die Verwaltung dauerhaft zu wenige GPIOs.
+  assert.deepEqual(
+    binaryManifest().hardware_capabilities.binary_pins.filter((pin) =>
+      binary.body.includes(`<option value="${pin}"`)).length,
+    binaryManifest().hardware_capabilities.binary_pins.length,
+  );
+  const narrowed = binaryManifest('binary-io-v1');
+  narrowed.hardware_capabilities = {
+    ...narrowed.hardware_capabilities, binary_pins: [4, 5, 12, 13, 14],
+  };
+  delete narrowed.hardware_capabilities.binary_pullup_pins;
+  delete narrowed.hardware_capabilities.binary_boot_sensitive_pins;
+  delete narrowed.hardware_capabilities.binary_serial_pins;
+  narrowed.limits = { ...narrowed.limits, maximum_binary_pins: 5 };
+  deviceManifest = narrowed;
+  FakeDiscovery.last.emit('updated', {
+    deviceId: DEVICE_ID, address: '127.0.0.1', hostname: 'badge.local',
+    apiPort: 80, wsPort: 81, otaPort: 8080, protocolVersion: '1.0-draft',
+    runtimeProfile: 'binary-io-v1', runtimeCompatible: true,
+    firmwareVersion: '0.4.0', platform: 'esp8266', pairingState: 'paired',
+    bindingId: null, pairable: false, hardwareConfigPresent: true,
+    configRevision: 5, online: true,
+  });
+  await settle();
+  const downgraded = await pageFor();
+  assert.doesNotMatch(binaryPanel(downgraded.body), /<option value="2"/);
+  assert.equal((downgraded.body.match(/hdp-binary-pin-row/g) || []).length, 5);
+  assert.doesNotMatch(downgraded.body, /hdp-pin-legend/);
+
+  deviceManifest = binaryManifest('binary-io-v1');
+  FakeDiscovery.last.emit('updated', {
+    deviceId: DEVICE_ID, address: '127.0.0.1', hostname: 'badge.local',
+    apiPort: 80, wsPort: 81, otaPort: 8080, protocolVersion: '1.0-draft',
+    runtimeProfile: 'binary-io-v1', runtimeCompatible: true,
+    firmwareVersion: '0.4.1', platform: 'esp8266', pairingState: 'paired',
+    bindingId: null, pairable: false, hardwareConfigPresent: true,
+    configRevision: 5, online: true,
+  });
+  await settle();
+  const upgraded = await pageFor();
+  assert.match(binaryPanel(upgraded.body), /<option value="2">GPIO 2 · Boot-Pin</);
+  assert.equal((upgraded.body.match(/hdp-binary-pin-row/g) || []).length, 11);
+  assert.match(upgraded.body, /hdp-pin-legend/);
+  adapter.stop();
+
+  // Ein opaque-id-v1-Gerät bietet Binary-I/O gar nicht erst an.
+  deviceManifest = pixelManifest();
+  remoteConfig = outputConfig();
+  devicePaired = false;
+  const legacyAdapter = createHdpAdapter(host, {
+    Discovery: FakeDiscovery, HdpClient: FakeClient, RuntimeConnection: FakeConnection,
+  });
+  await legacyAdapter.start({});
+  FakeDiscovery.last.emit('found', {
+    deviceId: DEVICE_ID, address: '127.0.0.1', hostname: 'badge.local',
+    apiPort: 80, wsPort: 81, otaPort: 8080, protocolVersion: '1.0-draft',
+    runtimeProfile: 'pixel-timeline-v1', runtimeCompatible: true,
+    firmwareVersion: '0.3.1', platform: 'esp8266', pairingState: 'pairable',
+    bindingId: null, pairable: true, hardwareConfigPresent: true, configRevision: 4, online: true,
+  });
+  await legacyAdapter.handleManagementRequest({
+    method: 'POST', path: `/api/devices/${DEVICE_ID}/pair`,
+    basePath: '/adapter/instance/1/manage', body: {}, access: { canWrite: true },
+  });
+  const legacy = (await legacyAdapter.handleManagementRequest({
+    method: 'GET', path: `/device/${DEVICE_ID}`,
+    basePath: '/adapter/instance/1/manage', body: {}, access: { canWrite: true },
+  })).view;
+  assert.doesNotMatch(legacy.body, /data-hdp-type-panel="binary_io"/);
+  assert.doesNotMatch(legacy.body, /<option value="binary_io"/);
+  assert.match(legacy.body, /Dieses Gerät bietet laut Manifest nur diesen Gerätetyp an/);
+  const rejected = await legacyAdapter.handleManagementRequest({
+    method: 'POST', path: `/api/devices/${DEVICE_ID}/config`,
+    basePath: '/adapter/instance/1/manage', access: { canWrite: true },
+    body: { revision: 4, device_type: 'binary_io', binary_pin_0: '4', binary_direction_0: 'input' },
+  });
+  assert.equal(rejected.status, 422);
+  legacyAdapter.stop();
+});
+
 test('HDP Adapter persistiert Pairing-Secrets und gruppiert die Gerätekonfiguration', async () => {
   class FakeDiscovery extends EventEmitter {
     constructor() { super(); FakeDiscovery.last = this; }
@@ -1020,25 +2235,54 @@ test('HDP Adapter persistiert Pairing-Secrets und gruppiert die Gerätekonfigura
     refresh() {}
   }
   const events = [];
+  let pairCalls = 0;
+  let restoring = false;
   class FakeClient {
     constructor(device, credentials) { this.device = device; this.credentials = credentials; }
     update(device, credentials) { this.device = device; this.credentials = credentials; }
+    async pairingStatus() {
+      if (restoring) {
+        return {
+          pairing_state: 'paired', paired: true,
+          binding_id: auth.bindingId(this.credentials.bindingKey),
+          binding_status: 'match', paired_to_requester: true,
+        };
+      }
+      return {
+        pairing_state: 'pairable', paired: false, binding_id: null,
+        binding_status: 'unpaired', paired_to_requester: null,
+      };
+    }
     async pair(pending) {
+      pairCalls += 1;
       events.push('pair');
       assert.match(pending.bindingKey, /^[0-9a-f]{64}$/);
       assert.match(pending.adapterNonce, /^[0-9a-f]{32}$/);
       assert.ok(events.indexOf('secret') < events.indexOf('pair'));
       assert.ok(events.indexOf('storage') < events.indexOf('pair'));
+      if (pairCalls === 1) {
+        FakeDiscovery.last.emit('updated', {
+          deviceId: DEVICE_ID, address: '127.0.0.1', hostname: 'badge.local',
+          apiPort: 80, wsPort: 81, otaPort: 8080, protocolVersion: '1.0-draft',
+          firmwareVersion: '0.2.0', platform: 'esp8266', pairingState: 'pairing',
+          bindingId: null, pairable: false, hardwareConfigPresent: true,
+          configRevision: 4, online: true,
+        });
+        await new Promise((resolve) => setImmediate(resolve));
+      }
       return {
         device: deviceInfo(true), manifest: manifest(), status: { ...status(), state: 'paired', paired: true },
         existingConfig: hardwareConfig(), bindingId: auth.bindingId(pending.bindingKey),
       };
     }
+    async manifest() { return manifest(); }
+    async config() { return hardwareConfig(); }
+    async status() { return status(); }
     async firmware() { return { ota_supported: false }; }
     async firmwareStatus() { return { state: 'idle' }; }
   }
   class FakeConnection extends EventEmitter {
-    start() {}
+    start() { FakeConnection.last = this; }
     stop() {}
     sendState() { return false; }
     updateDevice() {}
@@ -1070,9 +2314,47 @@ test('HDP Adapter persistiert Pairing-Secrets und gruppiert die Gerätekonfigura
     basePath: '/adapter/instance/1/manage', body: {}, access: { canWrite: true },
   });
   assert.equal(response.status, 303);
+  assert.equal(pairCalls, 1, 'mDNS-Updates starten während der manuellen Kopplung keinen zweiten Pairing-Lauf');
   assert.equal(storage.hdpDevices[0].bindingState, 'active');
   assert.equal(storage.hdpDevices[0].bindingKey, undefined);
+  assert.equal(storage.hdpDevices[0].pairingInProgress, undefined);
   assert.match(secrets.get(`device-${DEVICE_ID}`), /^[0-9a-f]{64}$/);
+
+  FakeConnection.last.emit('status', {
+    wifi_rssi: -58,
+    effective_brightness: 42,
+    estimated_current_milliamps: 120,
+    power_limit_active: false,
+  });
+  const overviewPage = await adapter.handleManagementRequest({
+    method: 'GET', path: '/',
+    basePath: '/adapter/instance/1/manage', body: {}, access: { canWrite: true },
+  });
+  assert.equal(overviewPage.view.title, 'Geräteverwaltung');
+  assert.match(overviewPage.view.body, /<h1>Geräteverwaltung<\/h1>/);
+  assert.match(overviewPage.view.body, /WLAN-Signal/);
+  assert.match(overviewPage.view.body, /Gut <small>-58 dBm<\/small>/);
+  assert.match(overviewPage.view.body, />Verwalten <span/);
+  assert.doesNotMatch(overviewPage.view.body, /Runtime Legacy|nächster Versuch|nicht konfiguriert/);
+  assert.match(overviewPage.view.script, /api\/overview/);
+  assert.match(overviewPage.view.script, /setTimeout\(tick, 1000\)/);
+  assert.doesNotThrow(() => new Function(overviewPage.view.script));
+
+  const initialRevision = /data-hdp-revision="([^"]+)"/.exec(overviewPage.view.body)[1];
+  FakeConnection.last.emit('status', {
+    wifi_rssi: -78,
+    effective_brightness: 42,
+    estimated_current_milliamps: 120,
+    power_limit_active: false,
+  });
+  const liveOverview = await adapter.handleManagementRequest({
+    method: 'GET', path: '/api/overview',
+    basePath: '/adapter/instance/1/manage', body: {}, access: { canWrite: true },
+  });
+  assert.equal(liveOverview.status, 200);
+  assert.notEqual(liveOverview.json.revision, initialRevision);
+  assert.match(liveOverview.json.html, /has-critical-signal/);
+  assert.match(liveOverview.json.html, /Schwach <small>-78 dBm<\/small>/);
 
   const devicePage = await adapter.handleManagementRequest({
     method: 'GET', path: `/device/${DEVICE_ID}`,
@@ -1086,7 +2368,7 @@ test('HDP Adapter persistiert Pairing-Secrets und gruppiert die Gerätekonfigura
     'Dynamische Helligkeit',
     'Richtungsindikator',
     'Update-Automatik',
-    'Firmware manuell aktualisieren',
+    '<h2>Firmware</h2>',
   ];
   for (let index = 1; index < sections.length; index += 1) {
     assert.ok(body.indexOf(sections[index - 1]) < body.indexOf(sections[index]),
@@ -1098,4 +2380,45 @@ test('HDP Adapter persistiert Pairing-Secrets und gruppiert die Gerätekonfigura
     'Hardwarefelder liegen außerhalb des regulären Seitenflusses im Unterdialog');
   assert.match(devicePage.view.script, /function hdpOpenHardware/);
   adapter.stop();
+
+  const restoredAdapter = createHdpAdapter(host, {
+    Discovery: FakeDiscovery, HdpClient: FakeClient, RuntimeConnection: FakeConnection,
+  });
+  await restoredAdapter.start({
+    hdpDevices: storage.hdpDevices.map((record) => ({
+      ...record, paired: false, rssi: -42, connectionState: 'connected',
+    })),
+  });
+  const restoredOverview = await restoredAdapter.handleManagementRequest({
+    method: 'GET', path: '/',
+    basePath: '/adapter/instance/1/manage', body: {}, access: { canWrite: true },
+  });
+  assert.match(restoredOverview.view.body, /badge\.local/);
+  assert.match(restoredOverview.view.body, /status-badge status-off">Offline/);
+  assert.doesNotMatch(restoredOverview.view.body, /Sehr gut|Letztes WLAN-Signal|-42 dBm/);
+  assert.match(restoredOverview.view.body, />Verwalten <span/);
+
+  restoring = true;
+  FakeDiscovery.last.emit('found', {
+    deviceId: DEVICE_ID, address: '127.0.0.1', hostname: 'badge.local',
+    apiPort: 80, wsPort: 81, otaPort: 8080, protocolVersion: '1.0-draft',
+    firmwareVersion: '0.2.0', platform: 'esp8266', pairingState: 'paired',
+    bindingId: auth.bindingId(secrets.get(`device-${DEVICE_ID}`)), pairable: false,
+    hardwareConfigPresent: true, configRevision: 4, online: true,
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(FakeConnection.last, 'wiedergefundenes Gerät erhält erneut eine Laufzeitverbindung');
+  FakeConnection.last.emit('online');
+  FakeConnection.last.emit('status', {
+    wifi_rssi: -42, effective_brightness: 42,
+    estimated_current_milliamps: 120, power_limit_active: false,
+  });
+  const reconnectedOverview = await restoredAdapter.handleManagementRequest({
+    method: 'GET', path: '/api/overview',
+    basePath: '/adapter/instance/1/manage', body: {}, access: { canWrite: true },
+  });
+  assert.match(reconnectedOverview.json.html, /status-badge status-ok">Online/);
+  assert.match(reconnectedOverview.json.html, /Sehr gut <small>-42 dBm<\/small>/);
+  restoredAdapter.stop();
 });
