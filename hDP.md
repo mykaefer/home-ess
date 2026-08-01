@@ -1,9 +1,9 @@
-# homeESS Device Protocol (HDP) 1.0-draft
+# homeESS Device Protocol (hDP) 1.0-draft
 
 ## 1. Zweck und Geltungsbereich
 
 Dieses Dokument ist der vollständige normative Kommunikationsvertrag zwischen einem
-homeESS-Adapter (im Folgenden **Adapter**) und einer HDP-Firmware auf einem lokalen
+homeESS-Adapter (im Folgenden **Adapter**) und einer hDP-Firmware auf einem lokalen
 Endgerät (im Folgenden **Gerät**).
 
 Es definiert ausschließlich:
@@ -21,7 +21,7 @@ gehören ausdrücklich nicht in diesen Vertrag.
 
 Die Schlüsselwörter **MUSS**, **DARF NICHT**, **SOLL**, **SOLL NICHT** und **DARF**
 sind im Sinn von RFC 2119 zu verstehen. Ein Teilnehmer ist nur dann
-HDP-1.0-draft-konform, wenn er alle MUSS-Anforderungen dieses Dokuments erfüllt.
+hDP-1.0-draft-konform, wenn er alle MUSS-Anforderungen dieses Dokuments erfüllt.
 
 ### 1.1 Verbindliche Zuständigkeitsgrenze
 
@@ -66,7 +66,7 @@ pixel-timeline-v1
 ```
 
 Es wird in mDNS, `/device`, `/manifest` und im WebSocket-Hello ausgetauscht.
-Dadurch bleibt das bereits persistierte HDP-1.0-Pairing unverändert, während
+Dadurch bleibt das bereits persistierte hDP-1.0-Pairing unverändert, während
 experimentelle Firmware- und Adapterstände mit unterschiedlicher
 Ausgabeschicht keine scheinbar kompatible Steuersitzung aufbauen.
 
@@ -98,7 +98,7 @@ einen neuen Protokollbezeichner.
 
 ### 3.1 Netzwerkprofil
 
-HDP 1.0-draft verwendet ein lokales IPv4-Netzwerk.
+hDP 1.0-draft verwendet ein lokales IPv4-Netzwerk.
 
 | Kanal | Transport |
 |---|---|
@@ -111,16 +111,16 @@ TLS ist in diesem Profil nicht vorgeschrieben. Der `binding_key` wird deshalb nu
 in einem vertrauenswürdigen lokalen Netz übertragen. Ein Gerät DARF dieses Profil
 nicht über das öffentliche Internet exponieren.
 
-WLAN-Provisionierung und Captive-Portal-HTML sind nicht Bestandteil von HDP
+WLAN-Provisionierung und Captive-Portal-HTML sind nicht Bestandteil von hDP
 1.0-draft. Sie erfolgen vor der Discovery über einen gerätespezifischen,
 außerhalb dieses Vertrags liegenden Kanal. Ein Adapter DARF keine
-Portal-Route als HDP-API behandeln.
+Portal-Route als hDP-API behandeln.
 
 ### 3.2 HTTP
 
 - Basis-URI: `/api/v1`
 - Pfade sind case-sensitive und werden ohne abschließenden Slash verwendet.
-- HDP 1.0-draft definiert keine Query-Parameter.
+- hDP 1.0-draft definiert keine Query-Parameter.
 - JSON-Encoding: UTF-8 ohne BOM
 - JSON-Request-Content-Type: `application/json`; optional ist ausschließlich der
   Parameter `charset=utf-8`, Groß-/Kleinschreibung ist nicht relevant
@@ -402,7 +402,7 @@ IP-Adressänderungen als dasselbe Gerät behandeln.
 
 ### 8.1 Profile
 
-HDP 1.0-draft definiert genau ein Owner-Authentifizierungsprofil:
+hDP 1.0-draft definiert genau ein Owner-Authentifizierungsprofil:
 
 ```text
 local-binding-key-v1
@@ -411,8 +411,8 @@ local-binding-key-v1
 HTTP-Requests mit Authentifizierungsklasse **A** MÜSSEN enthalten:
 
 ```text
-X-HDP-Instance: <instance_id>
-X-HDP-Binding-Key: <binding_key>
+X-hDP-Instance: <instance_id>
+X-hDP-Binding-Key: <binding_key>
 ```
 
 Beide Werte MÜSSEN vorhanden sein. Teilweise vorhandene Credentials ergeben
@@ -479,7 +479,7 @@ Response:
   "ok": true,
   "data": {
     "device_id": "hdp-esp8266-a1b2c3",
-    "model": "HDP Universal ESP8266",
+    "model": "hDP Universal ESP8266",
     "platform": "esp8266",
     "firmware_version": "0.2.0",
     "protocol_version": "1.0-draft",
@@ -645,7 +645,7 @@ vorhandene persistente Dateien nicht mit Defaults überschreiben. Der Adapter MU
 den Zustand als Recovery-/Servicefall anzeigen und DARF keine automatische
 Konfigurationsschreiboperation auslösen. `PUT /config`, `POST /pairing/start` und
 `POST /pairing/confirm` ergeben in diesem Zustand
-`CONFIG_RECOVERY_REQUIRED`, bis die Daten außerhalb des normalen HDP-Ablaufs
+`CONFIG_RECOVERY_REQUIRED`, bis die Daten außerhalb des normalen hDP-Ablaufs
 wiederhergestellt oder per bestätigtem Factory Reset gelöscht wurden.
 
 ## 11. Pairing und Binding
@@ -760,7 +760,7 @@ Regeln:
 
 Request-Body: keiner.
 
-Die Header `X-HDP-Instance` und `X-HDP-Binding-Key` sind entweder beide vorhanden
+Die Header `X-hDP-Instance` und `X-hDP-Binding-Key` sind entweder beide vorhanden
 oder beide abwesend. Nur einer der Header ergibt
 `INCOMPLETE_BINDING_CREDENTIALS`.
 
@@ -853,7 +853,7 @@ Kein Konfliktfall DARF durch Überschreiben des Geräte-Bindings behoben werden.
 Gerät MUSS ihn speichern und unverändert zurückgeben, darf daraus aber weder
 Ausgabewerte noch Verhalten ableiten.
 
-HDP 1.0-draft definiert für `output_type=argb_strip` ausschließlich
+hDP 1.0-draft definiert für `output_type=argb_strip` ausschließlich
 `driver=WS2812`. Pixelindizes auf dem Wire sind immer logische Indizes
 `0…pixel_count-1`. Bei `reverse=false` entspricht der logische Index dem
 physischen Index; bei `reverse=true` gilt:
@@ -1036,7 +1036,7 @@ Request:
 }
 ```
 
-Nur `true` ist in HDP 1.0-draft zulässig.
+Nur `true` ist in hDP 1.0-draft zulässig.
 
 Response HTTP 202:
 
@@ -1130,14 +1130,14 @@ Authorization: Basic <base64-token>
 `<base64-token>` verwendet das Standardalphabet aus RFC 4648 einschließlich
 erforderlicher `=`-Paddingzeichen. Innerhalb des Tokens sind CR, LF,
 Leerzeichen und Zeilenfaltung unzulässig. Insbesondere darf ein Encoder lange
-HDP-Credentials nicht nach 72 Zeichen umbrechen.
+hDP-Credentials nicht nach 72 Zeichen umbrechen.
 
 Eine neue gültig authentifizierte Steuersitzung ersetzt eine bestehende Sitzung.
 Die alte Sitzung erhält `SESSION_REPLACED` und wird danach geschlossen.
 
 Ungültige Credentials MÜSSEN den HTTP-Upgrade mit 401 ablehnen.
 Die 401-Antwort MUSS syntaktisch gültiges HTTP/1.1 sein, den Header
-`WWW-Authenticate: Basic realm="homeESS HDP"` enthalten und ihre Headersektion
+`WWW-Authenticate: Basic realm="homeESS hDP"` enthalten und ihre Headersektion
 mit `\r\n\r\n` abschließen. Falls ein Body gesendet wird, MUSS
 `Content-Length` dessen exakter Bytezahl entsprechen. Eine bodylose Antwort
 verwendet `Content-Length: 0`.
@@ -1158,7 +1158,7 @@ Jede Textnachricht MUSS dieses Envelope besitzen:
 - Binärframes sind nicht erlaubt.
 - Die maximale Textgröße ist
   `manifest.limits.maximum_websocket_message_bytes` UTF-8-Bytes.
-- Jede HDP-Nachricht MUSS als einzelner, nicht fragmentierter RFC-6455-Textframe
+- Jede hDP-Nachricht MUSS als einzelner, nicht fragmentierter RFC-6455-Textframe
   übertragen werden. Fragmentierte Datenframes sind in diesem Profil nicht
   zulässig und ergeben `INVALID_REQUEST`; danach wird die Verbindung geschlossen.
 - Binäre Frame- und Timeline-Nutzdaten werden innerhalb des JSON-Envelopes mit
@@ -1707,8 +1707,8 @@ Verbindungsaufbau die Synchronisation. Der Adapter MUSS nach dem Ereignis
 
 RFC-6455-Ping/Pong-Control-Frames DÜRFEN jederzeit zusätzlich verwendet werden,
 auch zwischen Upgrade und `homeess.hello`. Ein Ping MUSS nach RFC 6455 mit einem
-Pong beantwortet werden; ein Pong MUSS ohne HDP-Fehler akzeptiert werden.
-Control-Frames besitzen kein HDP-Envelope, verbrauchen keine HDP-Sequenz und
+Pong beantwortet werden; ein Pong MUSS ohne hDP-Fehler akzeptiert werden.
+Control-Frames besitzen kein hDP-Envelope, verbrauchen keine hDP-Sequenz und
 setzen weder den 5000-ms-Hello-Timeout noch den in Abschnitt 14.4 definierten
 Anwendungs-Heartbeat zurück.
 
@@ -1900,18 +1900,18 @@ Pflichtheader:
 ```text
 Content-Type: application/octet-stream
 Content-Length: <exact image bytes>
-X-HDP-Instance: <instance_id>
-X-HDP-Binding-Key: <binding_key>
-X-HDP-Firmware-Name: <name>
-X-HDP-Firmware-Version: <semver>
-X-HDP-Firmware-Channel: stable|beta|development
-X-HDP-Platform: <platform>
-X-HDP-Board: <board>
-X-HDP-Variant: <variant>
-X-HDP-Protocol-Version: 1.0-draft
-X-HDP-Config-Schema-Version: <uint16>
-X-HDP-Firmware-Size: <exact image bytes>
-X-HDP-Firmware-SHA256: <64 lowercase hex>
+X-hDP-Instance: <instance_id>
+X-hDP-Binding-Key: <binding_key>
+X-hDP-Firmware-Name: <name>
+X-hDP-Firmware-Version: <semver>
+X-hDP-Firmware-Channel: stable|beta|development
+X-hDP-Platform: <platform>
+X-hDP-Board: <board>
+X-hDP-Variant: <variant>
+X-hDP-Protocol-Version: 1.0-draft
+X-hDP-Config-Schema-Version: <uint16>
+X-hDP-Firmware-Size: <exact image bytes>
+X-hDP-Firmware-SHA256: <64 lowercase hex>
 ```
 
 `Content-Type` MUSS exakt `application/octet-stream` sein; andernfalls gilt
@@ -1920,18 +1920,18 @@ X-HDP-Firmware-SHA256: <64 lowercase hex>
 Optionale Header:
 
 ```text
-X-HDP-Firmware-Signature: <detached signature>
-X-HDP-Allow-Downgrade: true|false
-X-HDP-Restart-After-Success: true|false
+X-hDP-Firmware-Signature: <detached signature>
+X-hDP-Allow-Downgrade: true|false
+X-hDP-Restart-After-Success: true|false
 ```
 
 Fehlende Boolean-Header bedeuten `false`.
 
 Ist `signature_verification == "enabled"`, ist
-`X-HDP-Firmware-Signature` Pflicht. Der Wert ist die kanonische, gepaddete
+`X-hDP-Firmware-Signature` Pflicht. Der Wert ist die kanonische, gepaddete
 Base64-Kodierung nach RFC 4648 einer 64-Byte-Ed25519-Signatur. Signiert werden
 exakt die 32 rohen Bytes, die durch Dekodieren von
-`X-HDP-Firmware-SHA256` entstehen. Fehlende, syntaktisch falsche oder nicht zum
+`X-hDP-Firmware-SHA256` entstehen. Fehlende, syntaktisch falsche oder nicht zum
 in `/firmware` genannten Schlüssel passende Signaturen ergeben
 `OTA_SIGNATURE_INVALID`.
 
@@ -1978,7 +1978,7 @@ Response HTTP 202:
 }
 ```
 
-Bei `X-HDP-Restart-After-Success: false` bleibt das Gerät in
+Bei `X-hDP-Restart-After-Success: false` bleibt das Gerät in
 `ready_to_restart`, bis der Adapter den Restart-Endpoint aufruft. Bei `true`
 wechselt es unmittelbar nach der Response zu `restarting` und startet nach
 500…2000 ms neu; der Adapter DARF dann keinen zusätzlichen Restart senden.
@@ -2083,7 +2083,7 @@ der Status `completed` meldet.
 | `OTA_RESTART_NOT_READY` | 409 | kein verifiziertes Image restartbereit |
 | `OTA_BOOT_VALIDATION_FAILED` | 500 | Validierung nach Neustart fehlgeschlagen |
 
-Nicht registrierte Fehlercodes sind in HDP 1.0-draft unzulässig.
+Nicht registrierte Fehlercodes sind in hDP 1.0-draft unzulässig.
 
 ## 17. Verbindliche Timeouts und Retryregeln
 

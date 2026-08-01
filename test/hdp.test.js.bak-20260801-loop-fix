@@ -429,33 +429,6 @@ test('OutputClient beginnt mit Replace und verwendet danach einen bestätigten P
   assert.equal(calls[2].payload.mode, 'replace');
 });
 
-test('OutputClient ändert Laufzeithelligkeit ohne Frame oder Timeline neu zu starten', async () => {
-  const calls = [];
-  const manifest = pixelManifest();
-  manifest.features.runtime_brightness = true;
-  const transport = {
-    ready: true,
-    async request(type, payload) {
-      calls.push({ type, payload: structuredClone(payload) });
-      if (type !== 'output.brightness.set') throw new Error(`Unerwarteter Request ${type}`);
-      return { type: 'output.brightness.applied', payload: {
-        reply_to: 'x', output_id: payload.output_id,
-        config_revision: payload.config_revision,
-        brightness_percent: payload.brightness_percent,
-        applied_at_uptime_milliseconds: 123,
-      } };
-    },
-  };
-  const client = new OutputClient({
-    transport, manifest, getConfig: () => outputConfig(),
-  });
-
-  assert.equal((await client.setRuntimeBrightness('main', 72)).unchanged, false);
-  assert.equal((await client.setRuntimeBrightness('main', 72)).unchanged, true);
-  assert.deepEqual(calls.map((call) => call.type), ['output.brightness.set']);
-  assert.equal(client.activeTimelines.size, 0);
-});
-
 test('Ein statischer Frame beendet eine gemerkte Indicator-Timeline mit absolutem Replace', async () => {
   const calls = [];
   const transport = {
@@ -614,31 +587,6 @@ test('OutputClient chunkt geordnet, wiederholt unsichere Chunks und gleicht Play
   assert.ok(calls.filter((call) => call.type === 'output.status.get').length >= 2);
 });
 
-test('OutputClient startet eine bereits laufende identische Timeline nicht neu', async () => {
-  const calls = [];
-  const transport = {
-    ready: true,
-    async request(type, payload) {
-      calls.push({ type, payload: structuredClone(payload) });
-      if (type === 'output.status.get') {
-        return { type: 'output.status', payload: {
-          reply_to: 'x', output_id: 'main', config_revision: 4,
-          mode: 'timeline_playing', frame_id: null,
-          timeline_id: 'indicator-loop', loop: true,
-          position_milliseconds: 137,
-        } };
-      }
-      throw new Error(`Unerwarteter Request ${type}`);
-    },
-  };
-  const client = new OutputClient({
-    transport, manifest: pixelManifest(), getConfig: () => outputConfig(),
-  });
-
-  assert.equal((await client.play('main', 'indicator-loop', true, 0)).unchanged, true);
-  assert.deepEqual(calls.map((call) => call.type), ['output.status.get']);
-});
-
 test('OutputClient stoppt laufende Timelines vor dem Ersatz und unterstützt normativen Abort', async () => {
   const calls = [];
   const transport = {
@@ -764,11 +712,10 @@ test('OutputClient räumt eine nach Sitzungsneuaufbau weiterlaufende Timeline vo
   // Sitzungsneuaufbau verloren.
   assert.equal(client.desired.get('main').timelineId, 'eigene-loop');
 
-  // Der Sitzungsabgleich läuft genau einmal; der zusätzliche Statusabruf ist
-  // ausschließlich die Play-Sicherung gegen einen doppelten Neustart.
+  // Der Abgleich läuft genau einmal je Sitzung.
   const before = calls.filter((call) => call.type === 'output.status.get').length;
   await client.setTimeline('main', 'andere-loop', timeline);
-  assert.equal(calls.filter((call) => call.type === 'output.status.get').length, before + 1);
+  assert.equal(calls.filter((call) => call.type === 'output.status.get').length, before);
 });
 
 test('OutputClient übernimmt eine bereits laufende Wunschtimeline ohne Neustart', async () => {
@@ -1938,33 +1885,6 @@ test('Ein-Klick-Update installiert aus dem zentralen Speicher', async (t) => {
   assert.match(after, /läuft bereits auf 0\.4\.1/);
 });
 
-test('Geräteverwaltung bietet ein Sammelupdate nur für veraltete Firmware an', async (t) => {
-  const { call, state, publish } = await createOtaHarness(t);
-
-  const before = await call('GET', '/');
-  assert.doesNotMatch(before.view.body, /id="hdp-update-all-button"/);
-
-  await publish('0.4.1');
-  const offered = await call('GET', '/');
-  assert.match(offered.view.body,
-    /id="hdp-update-all-button"[\s\S]*data-count="1"[\s\S]*Alle aktualisieren \(1\)/);
-  assert.match(offered.view.script, /function hdpRunUpdateAll/);
-  assert.match(offered.view.script, /api\/firmware\/update-all/);
-
-  const updated = await call('POST', '/api/firmware/update-all', { json: true });
-  assert.equal(updated.status, 200);
-  assert.equal(updated.json.total, 1);
-  assert.equal(updated.json.updated, 1);
-  assert.equal(updated.json.failed, 0);
-  assert.equal(updated.json.results[0].status, 'updated');
-  assert.equal(updated.json.results[0].fromVersion, '0.4.0');
-  assert.equal(updated.json.results[0].version, '0.4.1');
-  assert.equal(state.installedVersion, '0.4.1');
-
-  const after = await call('GET', '/');
-  assert.doesNotMatch(after.view.body, /id="hdp-update-all-button"/);
-});
-
 test('Ein abgelehntes Update meldet den Gerätefehler und lässt den Button bedienbar', async (t) => {
   const { call, state, publish } = await createOtaHarness(t);
   state.rejectUpdate = { status: 422, code: 'OTA_CONFIG_SCHEMA_INCOMPATIBLE', message: 'Config schema is not migratable.' };
@@ -1986,8 +1906,6 @@ test('Ein abgelehntes Update meldet den Gerätefehler und lässt den Button bedi
   assert.doesNotMatch(body, /firmware\/update"[^>]*>\s*<button/);
   assert.match(page.view.script, /function hdpRunUpdate/);
   assert.match(page.view.script, /button\.disabled = false/);
-  assert.match(page.view.script,
-    /installiert\. Seite wird neu geladen[\s\S]*button\.disabled = false;[\s\S]*button\.textContent = label/);
   // Kein confirm(): Ein unterdrückter Browserdialog liefert still false und der
   // Knopf wäre danach ohne jede Rückmeldung wirkungslos.
   const scriptCode = page.view.script.replace(/^\s*\/\/.*$/gm, '');
@@ -2015,19 +1933,6 @@ test('Binary-Ausgänge werden während einer OTA-Transaktion nicht geschaltet', 
     assert.equal(otaInProgress({ otaProgress: { state: otaState } }), false, otaState);
   }
   assert.equal(otaInProgress({}), false);
-});
-
-test('Persistierte OTA-Zwischenzustände sperren nach Adapterneustart kein Update', () => {
-  const { releaseInterruptedOta } = createHdpAdapter._test;
-  for (const otaState of ['uploading', 'ready_to_restart', 'restarting']) {
-    const device = { otaProgress: { state: otaState, progress_percent: 100 } };
-    assert.equal(releaseInterruptedOta(device), true, otaState);
-    assert.equal(device.otaProgress.state, 'failed');
-    assert.match(device.otaProgress.message, /neuer Versuch ist möglich/);
-  }
-  const completed = { otaProgress: { state: 'completed', progress_percent: 100 } };
-  assert.equal(releaseInterruptedOta(completed), false);
-  assert.equal(completed.otaProgress.state, 'completed');
 });
 
 test('Automatischer Rollout installiert selbst, „nur benachrichtigen“ nicht', async (t) => {

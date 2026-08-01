@@ -10,6 +10,8 @@ readonly INSTALL_DIR="/opt/home-ess"
 readonly DATA_DIR="/var/lib/home-ess"
 readonly DB_PATH="${DATA_DIR}/app.db"
 readonly SERVICE_FILE="/etc/systemd/system/${APP_NAME}.service"
+readonly LEGACY_SERVICE_FILE="/etc/systemd/system/server.service"
+readonly LEGACY_DATA_DIR="${INSTALL_DIR}/data"
 readonly MIN_NODE_MAJOR=20
 readonly MIN_NODE_MINOR=17
 INSTALL_MODE="install"
@@ -130,6 +132,29 @@ create_service_account() {
   install -d -m 0750 -o "${APP_USER}" -g "${APP_GROUP}" "${DATA_DIR}"
 }
 
+is_legacy_homeess_service_file() {
+  local service_file="${1:-${LEGACY_SERVICE_FILE}}"
+  [[ -f ${service_file} && ! -L ${service_file} ]] || return 1
+  grep -Fqx "ExecStart=/usr/bin/node ${INSTALL_DIR}/server.js" "${service_file}"
+}
+
+# Sehr frühe Installationen verwendeten die generische server.service. Nur eine
+# Unit, deren ExecStart eindeutig auf diese homeESS-Installation zeigt, darf
+# automatisch entfernt werden; eine fremde gleichnamige Unit bleibt unberührt.
+remove_legacy_homeess_service() {
+  [[ -e ${LEGACY_SERVICE_FILE} || -L ${LEGACY_SERVICE_FILE} ]] || return
+  if ! is_legacy_homeess_service_file "${LEGACY_SERVICE_FILE}"; then
+    info "Vorhandene server.service gehört nicht eindeutig zu homeESS – bleibt unverändert"
+    return
+  fi
+
+  info "Entferne veraltete homeESS-Unit server.service"
+  systemctl stop server.service || true
+  systemctl disable server.service || true
+  rm -f -- "${LEGACY_SERVICE_FILE}"
+  systemctl daemon-reload
+}
+
 stop_service_for_update() {
   if [[ ${INSTALL_MODE} != "update" ]]; then
     return
@@ -145,8 +170,15 @@ clone_application() {
   info "Lade homeESS von GitHub"
   GIT_TERMINAL_PROMPT=0 git clone --depth 1 --branch main "${REPOSITORY_URL}" "${INSTALL_DIR}"
   rm -rf "${INSTALL_DIR}/test"
-  chown -R root:root "${INSTALL_DIR}"
-  chmod -R u=rwX,go=rX "${INSTALL_DIR}"
+  set_application_permissions
+}
+
+# Anwendungscode gehört root und ist nur lesbar. Ein vorhandener alter
+# data/-Bestand wird bewusst ausgespart: insbesondere private Instanzschlüssel
+# dürfen durch ein Update niemals auf 0644 aufgeweitet werden.
+set_application_permissions() {
+  find "${INSTALL_DIR}" -path "${LEGACY_DATA_DIR}" -prune -o -exec chown root:root {} +
+  find "${INSTALL_DIR}" -path "${LEGACY_DATA_DIR}" -prune -o -exec chmod u=rwX,go=rX {} +
 }
 
 update_application() {
@@ -166,8 +198,7 @@ update_application() {
   git checkout -B main FETCH_HEAD
   git reset --hard FETCH_HEAD
   rm -rf "${INSTALL_DIR}/test"
-  chown -R root:root "${INSTALL_DIR}"
-  chmod -R u=rwX,go=rX "${INSTALL_DIR}"
+  set_application_permissions
 }
 
 install_or_update_application() {
@@ -185,6 +216,8 @@ install_dependencies() {
 }
 
 create_database() {
+  migrate_legacy_data
+
   if [[ -e ${DB_PATH} ]]; then
     info "Bestehende Datenbank bleibt erhalten"
     chown "${APP_USER}:${APP_GROUP}" "${DB_PATH}"
@@ -194,6 +227,31 @@ create_database() {
 
   info "Initialisiere eine neue, leere Datenbank"
   install -m 0640 -o "${APP_USER}" -g "${APP_GROUP}" /dev/null "${DB_PATH}"
+}
+
+# Der alte Standardpfad lag im Git-Checkout. Neben SQLite gehören auch die
+# dauerhafte Instanzidentität, Adapterdaten und Laufzeitprotokolle zum Bestand.
+# Migriert wird deshalb der komplette data/-Inhalt, aber ausschließlich wenn am
+# neuen Ort noch keine Datenbank und auch sonst keine Daten liegen. So wird nie
+# ein bestehender Zielbestand vermischt oder überschrieben.
+migrate_legacy_data() {
+  [[ ! -e ${DB_PATH} ]] || return
+  [[ -f ${LEGACY_DATA_DIR}/app.db && ! -L ${LEGACY_DATA_DIR}/app.db ]] || return
+
+  if find "${DATA_DIR}" -mindepth 1 -print -quit | grep -q .; then
+    fail "${DATA_DIR} enthält bereits Daten, aber keine app.db. Altbestand aus ${LEGACY_DATA_DIR} wurde nicht automatisch eingemischt."
+  fi
+
+  info "Migriere bestehenden Datenbestand nach ${DATA_DIR}"
+  cp -a -- "${LEGACY_DATA_DIR}/." "${DATA_DIR}/"
+  chown -R "${APP_USER}:${APP_GROUP}" "${DATA_DIR}"
+  chmod 0750 "${DATA_DIR}"
+  chmod 0640 "${DB_PATH}"
+  if [[ -d ${DATA_DIR}/identity ]]; then
+    find "${DATA_DIR}/identity" -type d -exec chmod 0700 {} +
+    find "${DATA_DIR}/identity" -type f -exec chmod 0600 {} +
+  fi
+  info "Der alte Datenbestand bleibt als Sicherung unter ${LEGACY_DATA_DIR} erhalten"
 }
 
 install_systemd_service() {
@@ -211,6 +269,7 @@ Group=${APP_GROUP}
 WorkingDirectory=${INSTALL_DIR}
 Environment=NODE_ENV=production
 Environment=PORT=3000
+Environment=HOME_ESS_DATA_DIR=${DATA_DIR}
 Environment=HOME_ESS_DB=${DB_PATH}
 ExecStart=/usr/bin/node ${INSTALL_DIR}/server.js
 Restart=on-failure
@@ -266,6 +325,7 @@ main() {
   install_base_packages
   install_nodejs
   create_service_account
+  remove_legacy_homeess_service
   stop_service_for_update
   install_or_update_application
   install_dependencies
@@ -274,4 +334,6 @@ main() {
   verify_installation
 }
 
-main "$@"
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+  main "$@"
+fi

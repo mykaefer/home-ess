@@ -75,7 +75,7 @@ function buildHost() {
       send({ type: 'storage', key: String(key), value });
     },
     // Wie setStorage(), bestätigt aber erst nach erfolgreichem SQLite-Commit.
-    // Protokolle mit vorab dauerhaft zu sichernden Transaktionen (z. B. HDP-
+    // Protokolle mit vorab dauerhaft zu sichernden Transaktionen (z. B. hDP-
     // Pairing) dürfen erst nach Auflösung dieses Promises fortfahren.
     persistStorage(key, value) {
       if (key == null) return Promise.reject(new Error('Persistenzschlüssel fehlt.'));

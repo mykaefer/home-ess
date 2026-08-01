@@ -1,5 +1,5 @@
-/* HDP-Gerätekonfiguration. Alle Regeln bleiben unter der adapterspezifischen
-   Wurzelklasse gekapselt und werden nur auf HDP-Managementseiten geladen. */
+/* hDP-Gerätekonfiguration. Alle Regeln bleiben unter der adapterspezifischen
+   Wurzelklasse gekapselt und werden nur auf hDP-Managementseiten geladen. */
 .hdp-overview {
     width: 100%;
     margin: 0;
@@ -810,6 +810,30 @@
     margin-top: 4px;
 }
 
+.hdp-firmware-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 20px;
+}
+
+.hdp-firmware-head > div:first-child {
+    min-width: 0;
+}
+
+.hdp-firmware-head-actions {
+    flex: 0 0 auto;
+}
+
+#hdp-update-all-result:empty {
+    display: none;
+}
+
+#hdp-update-all-result {
+    margin: 0 22px 12px;
+    white-space: pre-wrap;
+}
+
 .hdp-table-scroll {
     overflow-x: auto;
     margin-top: 14px;
@@ -868,6 +892,15 @@
 }
 
 @media (max-width: 900px) {
+    .hdp-firmware-head {
+        flex-direction: column;
+    }
+
+    .hdp-firmware-head-actions,
+    .hdp-firmware-head-actions button {
+        width: 100%;
+    }
+
     .hdp-device-row {
         grid-template-columns: minmax(220px, 1fr) auto;
     }

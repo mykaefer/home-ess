@@ -44,13 +44,13 @@ function clamp(value, min, max) {
 
 function validateDeviceId(value) {
   const id = String(value || '');
-  if (!DEVICE_ID_RE.test(id)) throw new Error('Ungültige HDP-Geräte-ID.');
+  if (!DEVICE_ID_RE.test(id)) throw new Error('Ungültige hDP-Geräte-ID.');
   return id;
 }
 
 function validateInstanceId(value) {
   const id = String(value || '');
-  if (!INSTANCE_ID_RE.test(id)) throw new Error('Ungültige homeESS-Instanz-ID für HDP.');
+  if (!INSTANCE_ID_RE.test(id)) throw new Error('Ungültige homeESS-Instanz-ID für hDP.');
   return id;
 }
 
@@ -60,7 +60,7 @@ function validatePort(value, label = 'Port') {
 
 function validateProtocol(value) {
   if (value !== PROTOCOL_VERSION) {
-    const error = new Error(`HDP-Protokollversion muss exakt ${PROTOCOL_VERSION} sein.`);
+    const error = new Error(`hDP-Protokollversion muss exakt ${PROTOCOL_VERSION} sein.`);
     error.code = 'UNSUPPORTED_PROTOCOL_VERSION';
     error.status = 426;
     throw error;
@@ -191,16 +191,16 @@ function validateHardwareConfig(input, capabilities = {}) {
   const allowedColorOrders = Array.isArray(capabilities.color_orders) ? capabilities.color_orders : ['RGB', 'GRB'];
   const ledType = hardware.led_type == null ? 'WS2812' : hardware.led_type;
   if (typeof ledType !== 'string' || !allowedLedTypes.includes(ledType) || ledType !== 'WS2812') {
-    throw new Error('LED-Typ wird von HDP 1.0-draft oder dem Gerät nicht unterstützt.');
+    throw new Error('LED-Typ wird von hDP 1.0-draft oder dem Gerät nicht unterstützt.');
   }
   if (typeof hardware.color_order !== 'string' || !allowedColorOrders.includes(hardware.color_order)
       || !['RGB', 'GRB'].includes(hardware.color_order)) {
-    throw new Error('Farbreihenfolge wird von HDP 1.0-draft oder dem Gerät nicht unterstützt.');
+    throw new Error('Farbreihenfolge wird von hDP 1.0-draft oder dem Gerät nicht unterstützt.');
   }
   if (typeof hardware.reverse !== 'boolean' || typeof display.fractional_led !== 'boolean') {
     throw new Error('Hardware-Booleanfelder müssen echte JSON-Booleanwerte sein.');
   }
-  if (display.inactive_led_mode !== 'off') throw new Error('inactive_led_mode muss in HDP 1.0-draft exakt off sein.');
+  if (display.inactive_led_mode !== 'off') throw new Error('inactive_led_mode muss in hDP 1.0-draft exakt off sein.');
   const mode = String(offline.mode || '');
   if (!['retain_last_state', 'turn_off', 'show_offline_pattern'].includes(mode)) {
     throw new Error('Ungültiges Offline-Verhalten.');

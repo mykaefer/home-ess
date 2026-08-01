@@ -8,6 +8,7 @@ const {
   displayValue,
 } = require('../adapters/states');
 const { buildSchemeTopic, parseSchemeTopic } = require('../mqtt/topics');
+const { parseSystemTopic } = require('./system-topics');
 const {
   listCalculatedInternalValues,
 } = require('./system-values');
@@ -429,11 +430,30 @@ async function resolveInternalValues(db, cache, sourceIds) {
   return found;
 }
 
+// State-Verbraucher adressieren auch berechnete homeESS-Werte über ihr
+// kanonisches system://-Topic. Der alte Wertekatalog verwendete dafür die
+// fachliche Kurz-ID; diese Funktion hält beide Welten an der gemeinsamen
+// Auflösungsgrenze auseinander, ohne Adapter-Topics umzuschreiben.
+async function resolveStates(db, cache, stateTopics) {
+  const requested = (stateTopics || []).map((topic) => String(topic || '').trim()).filter(Boolean);
+  const lookupIds = requested.map((topic) => {
+    const parsed = parseSystemTopic(topic);
+    return parsed ? parsed.id : topic;
+  });
+  const values = await resolveInternalValues(db, cache, lookupIds);
+  const byId = new Map(values.map((entry) => [entry.id, entry]));
+  return requested.flatMap((topic) => {
+    const parsed = parseSystemTopic(topic);
+    const entry = byId.get(parsed ? parsed.id : topic);
+    return entry ? [{ ...entry, id: topic, topic }] : [];
+  });
+}
+
 module.exports = {
   PAGE_SIZE,
   listStatesLevel: listCatalogLevel,
   searchStates: searchCatalog,
-  resolveStates: resolveInternalValues,
+  resolveStates,
   // Alte Namen bleiben als öffentliche Kompatibilitätsschicht erhalten.
   listCatalogLevel,
   searchCatalog,

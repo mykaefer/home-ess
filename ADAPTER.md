@@ -141,7 +141,7 @@ eigene, weiterhin vom Host geschützte Verwaltungsseite deklarieren:
 
 ```json
 "managementPage": {
-  "label": "HDP Geräte",
+  "label": "hDP Geräte",
   "maxUploadBytes": 8388608,
   "stylesheet": "management.css"
 }

@@ -98,7 +98,6 @@ class OutputClient extends EventEmitter {
     this.lastFrameAt = new Map();
     this.frameQueues = new Map();
     this.reconciled = new Set();
-    this.runtimeBrightness = new Map();
   }
 
   sessionStarted() {
@@ -107,7 +106,6 @@ class OutputClient extends EventEmitter {
     this.activeTimelines.clear();
     this.lastFrameAt.clear();
     this.reconciled.clear();
-    this.runtimeBrightness.clear();
   }
 
   output(outputId) {
@@ -125,37 +123,6 @@ class OutputClient extends EventEmitter {
       }));
     }
     return this.transport.request(type, payload, timeout);
-  }
-
-  async setRuntimeBrightness(outputId, percent) {
-    if (this.manifest.features.runtime_brightness !== true) {
-      throw Object.assign(new Error('Manifest unterstützt keine Laufzeithelligkeit.'), {
-        code: 'UNSUPPORTED_MESSAGE_TYPE',
-      });
-    }
-    if (!Number.isInteger(percent) || percent < 0 || percent > 100) {
-      throw Object.assign(new Error('Laufzeithelligkeit muss zwischen 0 und 100 liegen.'), {
-        code: 'INVALID_REQUEST',
-      });
-    }
-    if (this.runtimeBrightness.get(outputId) === percent) return { unchanged: true };
-    const { config } = this.output(outputId);
-    const response = await this.requestRecovered('output.brightness.set', {
-      output_id: outputId,
-      config_revision: config.revision,
-      brightness_percent: percent,
-    }, 5000);
-    if (!response || response.type !== 'output.brightness.applied' || !response.payload
-        || response.payload.output_id !== outputId
-        || response.payload.config_revision !== config.revision
-        || response.payload.brightness_percent !== percent
-        || !Number.isInteger(response.payload.applied_at_uptime_milliseconds)) {
-      throw Object.assign(new Error('Ungültige Helligkeitsbestätigung.'), {
-        code: 'INVALID_OUTPUT_STATE',
-      });
-    }
-    this.runtimeBrightness.set(outputId, percent);
-    return { unchanged: false };
   }
 
   async requestRecovered(type, payload, timeout = 5000) {

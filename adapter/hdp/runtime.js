@@ -196,7 +196,7 @@ class RuntimeConnection extends EventEmitter {
     if (!message) return false;
     const encoded = JSON.stringify(message);
     if (Buffer.byteLength(encoded, 'utf8') > this.maximumMessageBytes) {
-      this.protocolFailure('INVALID_REQUEST', 'Ausgehende HDP-WebSocket-Nachricht überschreitet das Manifestlimit.');
+      this.protocolFailure('INVALID_REQUEST', 'Ausgehende hDP-WebSocket-Nachricht überschreitet das Manifestlimit.');
       return false;
     }
     this.socket.send(encoded);
@@ -391,7 +391,7 @@ class RuntimeConnection extends EventEmitter {
     this.stopHeartbeat();
     this.heartbeatTimer = setInterval(() => {
       if (Date.now() - this.lastValidAt >= HEARTBEAT_TIMEOUT_MS) {
-        this.protocolFailure('HEARTBEAT_TIMEOUT', 'HDP-Heartbeat ist 45 Sekunden ausgeblieben.');
+        this.protocolFailure('HEARTBEAT_TIMEOUT', 'hDP-Heartbeat ist 45 Sekunden ausgeblieben.');
         return;
       }
       this.send('ping', {});

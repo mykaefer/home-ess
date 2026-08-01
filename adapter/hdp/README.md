@@ -1,7 +1,7 @@
-# HDP Adapter
+# hDP Adapter
 
-Der HDP-Adapter bindet Geräte gemäß der normativen Spezifikation
-[`../../HDP.md`](../../HDP.md) direkt in homeESS ein. Es gilt ausschließlich
+Der hDP-Adapter bindet Geräte gemäß der normativen Spezifikation
+[`../../hDP.md`](../../hDP.md) direkt in homeESS ein. Es gilt ausschließlich
 `1.0-draft`; ältere HMAC-, Shared-Secret- oder
 `draft-physical-network`-Profile werden nicht parallel unterstützt.
 
@@ -10,7 +10,7 @@ Der HDP-Adapter bindet Geräte gemäß der normativen Spezifikation
 Der Adapter browsed `_homeess-hdp._tcp.local`, validiert alle verpflichtenden
 TXT-Felder und führt Geräte anhand ihrer dauerhaften `device_id` über
 Adressänderungen hinweg zusammen. Die **Geräteverwaltung** ist der übersichtliche
-Einstiegspunkt für Kopplung und Konfiguration; **HDP Geräte** bleibt die
+Einstiegspunkt für Kopplung und Konfiguration; **hDP Geräte** bleibt die
 allgemeine Geräte-/State-Übersicht.
 
 Vor `POST /pairing/start` werden ein 16-Byte-`adapter_nonce` und ein
@@ -18,7 +18,7 @@ Vor `POST /pairing/start` werden ein 16-Byte-`adapter_nonce` und ein
 restriktiven Adapter-Secret-Store. Aktiv wird ein Binding erst, nachdem die aus
 den rohen Key-Bytes berechnete `binding_id` übereinstimmt und
 `GET /pairing/status` mit beiden Binding-Headern `match` meldet. Pending- und
-aktive Bindings werden nach Neustart anhand der Recovery-Matrix aus `HDP.md`
+aktive Bindings werden nach Neustart anhand der Recovery-Matrix aus `hDP.md`
 abgeglichen; Konflikte überschreiben niemals das Binding des Geräts.
 
 ## Hardware, Renderer und Laufzeit

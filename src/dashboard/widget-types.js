@@ -7,7 +7,7 @@
 //
 // Fähigkeiten je Typ:
 //   label          – Anzeigename im Typ-Umschalter des Widget-Dialogs
-//   needsSource    – braucht einen Wert aus dem internen Wertekatalog (sourceId)
+//   needsSource    – braucht einen State aus dem zentralen States-Modell
 //   supportsSize   – Größenvarianten S/M/L (Anzeige-Layout der Kachel)
 //   supportsColor  – konfigurierbare Farbe für den angezeigten Wert
 //   mobileMinWidth – erzwungene Mindest-Gruppenbreite auf Smartphones

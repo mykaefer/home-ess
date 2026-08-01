@@ -429,33 +429,6 @@ test('OutputClient beginnt mit Replace und verwendet danach einen bestätigten P
   assert.equal(calls[2].payload.mode, 'replace');
 });
 
-test('OutputClient ändert Laufzeithelligkeit ohne Frame oder Timeline neu zu starten', async () => {
-  const calls = [];
-  const manifest = pixelManifest();
-  manifest.features.runtime_brightness = true;
-  const transport = {
-    ready: true,
-    async request(type, payload) {
-      calls.push({ type, payload: structuredClone(payload) });
-      if (type !== 'output.brightness.set') throw new Error(`Unerwarteter Request ${type}`);
-      return { type: 'output.brightness.applied', payload: {
-        reply_to: 'x', output_id: payload.output_id,
-        config_revision: payload.config_revision,
-        brightness_percent: payload.brightness_percent,
-        applied_at_uptime_milliseconds: 123,
-      } };
-    },
-  };
-  const client = new OutputClient({
-    transport, manifest, getConfig: () => outputConfig(),
-  });
-
-  assert.equal((await client.setRuntimeBrightness('main', 72)).unchanged, false);
-  assert.equal((await client.setRuntimeBrightness('main', 72)).unchanged, true);
-  assert.deepEqual(calls.map((call) => call.type), ['output.brightness.set']);
-  assert.equal(client.activeTimelines.size, 0);
-});
-
 test('Ein statischer Frame beendet eine gemerkte Indicator-Timeline mit absolutem Replace', async () => {
   const calls = [];
   const transport = {
@@ -1936,33 +1909,6 @@ test('Ein-Klick-Update installiert aus dem zentralen Speicher', async (t) => {
   // Danach ist derselbe Stand kein Angebot mehr.
   const after = (await call('GET', `/device/${DEVICE_ID}`)).view.body;
   assert.match(after, /läuft bereits auf 0\.4\.1/);
-});
-
-test('Geräteverwaltung bietet ein Sammelupdate nur für veraltete Firmware an', async (t) => {
-  const { call, state, publish } = await createOtaHarness(t);
-
-  const before = await call('GET', '/');
-  assert.doesNotMatch(before.view.body, /id="hdp-update-all-button"/);
-
-  await publish('0.4.1');
-  const offered = await call('GET', '/');
-  assert.match(offered.view.body,
-    /id="hdp-update-all-button"[\s\S]*data-count="1"[\s\S]*Alle aktualisieren \(1\)/);
-  assert.match(offered.view.script, /function hdpRunUpdateAll/);
-  assert.match(offered.view.script, /api\/firmware\/update-all/);
-
-  const updated = await call('POST', '/api/firmware/update-all', { json: true });
-  assert.equal(updated.status, 200);
-  assert.equal(updated.json.total, 1);
-  assert.equal(updated.json.updated, 1);
-  assert.equal(updated.json.failed, 0);
-  assert.equal(updated.json.results[0].status, 'updated');
-  assert.equal(updated.json.results[0].fromVersion, '0.4.0');
-  assert.equal(updated.json.results[0].version, '0.4.1');
-  assert.equal(state.installedVersion, '0.4.1');
-
-  const after = await call('GET', '/');
-  assert.doesNotMatch(after.view.body, /id="hdp-update-all-button"/);
 });
 
 test('Ein abgelehntes Update meldet den Gerätefehler und lässt den Button bedienbar', async (t) => {

@@ -661,34 +661,23 @@ function createHdpAdapter(host, dependencies = {}) {
         const output = device.hardwareConfig && device.hardwareConfig.outputs
           && device.hardwareConfig.outputs[0];
         if (!output) throw new Error('Kein generischer hDP-Ausgang konfiguriert.');
-        const nativeRuntimeBrightness = device.manifest.features.runtime_brightness === true;
         const pixels = renderPercentageFrame({
           pixelCount: output.pixel_count,
           percentage: state.percentage,
           color: state.color,
-          brightness: nativeRuntimeBrightness ? 100 : state.brightness,
+          brightness: state.brightness,
           fractional: device.bindings.display.fractional_pixel,
         });
         const direction = device.rawRising && !device.rawFalling ? 'rising'
           : device.rawFalling && !device.rawRising ? 'falling' : null;
         device.indicatorDirection = direction;
-        device.pendingRender = {
-          outputId: output.output_id,
-          pixels,
-          direction,
-          runtimeBrightness: nativeRuntimeBrightness ? state.brightness : null,
-        };
+        device.pendingRender = { outputId: output.output_id, pixels, direction };
         if (!device.renderQueue) {
           device.renderQueue = (async () => {
             while (device.pendingRender) {
               const pending = device.pendingRender;
               device.pendingRender = null;
               if (!device.connection || !device.connection.ready || !device.outputClient) continue;
-              if (pending.runtimeBrightness != null) {
-                await device.outputClient.setRuntimeBrightness(
-                  pending.outputId, pending.runtimeBrightness,
-                );
-              }
               if (pending.direction) {
                 const timeline = compileIndicatorTimeline(pending.pixels, {
                   direction: pending.direction,
@@ -847,17 +836,13 @@ function createHdpAdapter(host, dependencies = {}) {
     });
     connection.on('status', (status) => {
       device.rssi = status.wifi_rssi == null ? status.rssi : status.wifi_rssi;
-      const nativeRuntimeBrightness = device.manifest && device.manifest.features
-        && device.manifest.features.runtime_brightness === true;
-      if (!nativeRuntimeBrightness && status.effective_brightness != null) {
+      if (status.effective_brightness != null) {
         device.reportedBrightnessLimit = status.effective_brightness;
       }
-      device.effectiveBrightness = nativeRuntimeBrightness
-        ? status.effective_brightness
-        : effectiveDynamicBrightness(
-          device, device.reportedBrightnessLimit == null
-            ? hardwareBrightnessLimit(device) : device.reportedBrightnessLimit,
-        );
+      device.effectiveBrightness = effectiveDynamicBrightness(
+        device, device.reportedBrightnessLimit == null
+          ? hardwareBrightnessLimit(device) : device.reportedBrightnessLimit,
+      );
       device.estimatedCurrent = status.estimated_current_milliamps;
       device.powerLimited = status.power_limit_active;
       publishDevice(device);
@@ -1379,16 +1364,6 @@ function createHdpAdapter(host, dependencies = {}) {
     }
   }
 
-  function availableFirmwareUpdates() {
-    const updates = [];
-    for (const device of devices.values()) {
-      if (device.bindingState !== 'active' || !device.paired) continue;
-      const candidate = firmwareCandidate(device);
-      if (candidate.available) updates.push({ device, candidate });
-    }
-    return updates;
-  }
-
   // Überträgt das zentral hinterlegte Release. Der Ablauf bleibt der normative:
   // lokal prüfen, übertragen, vom Gerät verifizieren lassen — der Neustart
   // folgt erst danach als eigener Schritt.
@@ -1478,42 +1453,6 @@ function createHdpAdapter(host, dependencies = {}) {
     } finally {
       activeFirmwareUpdates.delete(deviceId);
     }
-  }
-
-  // Sammelupdates laufen bewusst nacheinander. So konkurrieren die Geräte
-  // weder um Uploadbandbreite noch um Adapterzustand; ein einzelner Fehler
-  // verhindert trotzdem nicht, dass die übrigen Geräte aktualisiert werden.
-  async function updateAllFirmware() {
-    const planned = availableFirmwareUpdates();
-    const results = [];
-    for (const { device, candidate } of planned) {
-      const fromVersion = device.firmwareInfo && device.firmwareInfo.version;
-      try {
-        const result = await updateFirmware(device.deviceId);
-        results.push({
-          deviceId: device.deviceId,
-          name: device.name || device.hostname || device.deviceId,
-          status: 'updated',
-          fromVersion: fromVersion || null,
-          version: result.installed.version,
-        });
-      } catch (error) {
-        results.push({
-          deviceId: device.deviceId,
-          name: device.name || device.hostname || device.deviceId,
-          status: 'failed',
-          version: candidate.release.version,
-          code: error.code || null,
-          error: error.message,
-        });
-      }
-    }
-    return {
-      total: results.length,
-      updated: results.filter((entry) => entry.status === 'updated').length,
-      failed: results.filter((entry) => entry.status === 'failed').length,
-      results,
-    };
   }
 
   async function restartFirmware(deviceId) {
@@ -1886,12 +1825,6 @@ function createHdpAdapter(host, dependencies = {}) {
   // für alle Plattformen und Boards; hochgeladen wird deshalb einmal hier und
   // nicht mehr je Gerät.
   function renderFirmwareSection(store = releaseStore.summary()) {
-    const updates = availableFirmwareUpdates();
-    const updateAll = updates.length
-      ? `<div class="hdp-firmware-head-actions"><button type="button" id="hdp-update-all-button"
-          data-armed="0" data-label="Alle aktualisieren (${updates.length})" data-count="${updates.length}"
-          onclick="hdpRunUpdateAll(this)">Alle aktualisieren (${updates.length})</button></div>`
-      : '';
     const rows = store.map((entry) => {
       if (!entry.present) {
         return `<tr><td>${esc(entry.channel)}</td><td colspan="4" class="muted">Kein Release hinterlegt</td><td></td></tr>`;
@@ -1908,8 +1841,7 @@ function createHdpAdapter(host, dependencies = {}) {
       </tr>`;
     }).join('');
     return `<section class="settings-card hdp-device-section hdp-firmware-store">
-      <div class="settings-card-head hdp-list-head hdp-firmware-head"><div><h2>Firmware</h2><p class="settings-card-hint">Eine universelle Firmware für alle hDP-Geräte. Release-Manifest und die zugehörigen Artefakte werden hier einmal hinterlegt; die Geräte ziehen daraus den Kanal, der in ihren Updateeinstellungen steht.</p></div>${updateAll}</div>
-      <pre id="hdp-update-all-result"></pre>
+      <div class="settings-card-head hdp-list-head"><div><h2>Firmware</h2><p class="settings-card-hint">Eine universelle Firmware für alle hDP-Geräte. Release-Manifest und die zugehörigen Artefakte werden hier einmal hinterlegt; die Geräte ziehen daraus den Kanal, der in ihren Updateeinstellungen steht.</p></div></div>
       <div class="hdp-form-grid">
         <div class="field"><label>Release-Manifest (.json)</label><input type="file" id="hdp-release-manifest" accept=".json,application/json"></div>
         <div class="field"><label>Firmwareartefakt (.bin)</label><input type="file" id="hdp-release-artifact" accept=".bin,application/octet-stream" multiple></div>
@@ -2529,50 +2461,6 @@ hdp-flash.exe --channel development</code></pre>
             button.textContent = label;
           }
         }
-        async function hdpRunUpdateAll(button) {
-          var out = document.getElementById('hdp-update-all-result');
-          var count = Number(button.getAttribute('data-count')) || 0;
-          var label = button.getAttribute('data-label') || 'Alle aktualisieren';
-          if (button.getAttribute('data-armed') !== '1') {
-            button.setAttribute('data-armed', '1');
-            button.textContent = 'Wirklich alle ' + count + ' aktualisieren?';
-            if (out) out.textContent = 'Die Updates werden nacheinander übertragen. Zum Bestätigen erneut klicken.';
-            window.clearTimeout(button.hdpArmTimer);
-            button.hdpArmTimer = window.setTimeout(function () {
-              button.setAttribute('data-armed', '0');
-              button.textContent = label;
-              if (out && out.textContent.indexOf('erneut klicken') >= 0) out.textContent = '';
-            }, 8000);
-            return;
-          }
-          window.clearTimeout(button.hdpArmTimer);
-          button.setAttribute('data-armed', '0');
-          button.disabled = true;
-          button.textContent = 'Updates laufen …';
-          if (out) out.textContent = '0 von ' + count + ' Geräten abgeschlossen …';
-          try {
-            var response = await fetch(location.pathname.replace(/\\/+$/, '') + '/api/firmware/update-all', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-              body: JSON.stringify({ json: true })
-            });
-            var result = await response.json();
-            if (!response.ok) throw new Error(result.error || 'Sammelupdate fehlgeschlagen');
-            var lines = [result.updated + ' aktualisiert, ' + result.failed + ' fehlgeschlagen.'];
-            (result.results || []).forEach(function (entry) {
-              lines.push((entry.status === 'updated' ? '✓ ' : '✗ ') + entry.name + ': '
-                + (entry.status === 'updated' ? 'Version ' + entry.version : entry.error));
-            });
-            if (out) out.textContent = lines.join('\\n') + '\\nSeite wird neu geladen …';
-            button.disabled = false;
-            button.textContent = label;
-            setTimeout(function () { location.reload(); }, 2500);
-          } catch (err) {
-            if (out) out.textContent = 'Fehler: ' + err.message;
-            button.disabled = false;
-            button.textContent = label;
-          }
-        }
         // Legt Manifest und Artefakte zentral ab. Das Manifest zuerst, weil der
         // Speicher jedes Artefakt gegen die dort deklarierte Größe und Prüfsumme
         // verifiziert, bevor er es übernimmt.
@@ -2688,9 +2576,6 @@ hdp-flash.exe --channel development</code></pre>
       // genau eine Datei liefert.
       if (method === 'GET' && path === '/api/firmware') {
         return { status: 200, json: { channels: releaseStore.summary() } };
-      }
-      if (method === 'POST' && path === '/api/firmware/update-all') {
-        return { status: 200, json: await updateAllFirmware() };
       }
       if (method === 'POST' && path === '/api/firmware/manifest') {
         const result = releaseStore.saveManifest(request.body.manifest || request.body);

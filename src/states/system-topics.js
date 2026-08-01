@@ -1,8 +1,9 @@
 'use strict';
 
 // Adressierbare Topics für berechnete homeESS-Systemwerte. Die fachliche ID
-// (z. B. `pv.current`) bleibt der stabile Schlüssel für Outputs und Widgets;
-// Topic-Felder verwenden die eindeutige Form `system://homeess/pv.current`.
+// (z. B. `pv.current`) bleibt der stabile interne Schlüssel. State-Bezüge (wie
+// bei Wert-Widgets) verwenden die eindeutige Form
+// `system://homeess/pv.current`; alte Output-Bezüge bleiben kompatibel lesbar.
 
 const SCHEME = 'system';
 const INSTANCE = 'homeess';
