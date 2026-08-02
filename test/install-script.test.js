@@ -81,6 +81,14 @@ test('Installer richtet den ausgelagerten systemd-Self-Updater ein', () => {
   assert.match(script, /systemctl enable --now "\$\{APP_NAME\}-update\.path"/);
 });
 
+test('Optionale Installer-Guards behandeln „nichts zu tun“ als Erfolg', () => {
+  const script = fs.readFileSync(path.join(ROOT, 'install.sh'), 'utf8');
+  assert.match(script, /LEGACY_SERVICE_FILE} \|\| -L \$\{LEGACY_SERVICE_FILE} \]\] \|\| return 0/);
+  assert.match(script, /\[\[ ! -e \$\{DB_PATH} \]\] \|\| return 0/);
+  assert.match(script, /LEGACY_DATA_DIR}\/app\.db && ! -L \$\{LEGACY_DATA_DIR}\/app\.db \]\] \|\| return 0/);
+  assert.match(script, /Fehlgeschlagener Befehl:/);
+});
+
 test.after(() => {
   fs.rmSync(TMP, { recursive: true, force: true });
 });
