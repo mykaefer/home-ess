@@ -313,6 +313,12 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 
 ### Behoben
 
+- **Neuinstallation ohne veraltete Service-Unit brach ab.** Der optionale
+  Cleanup für frühe `server.service`-Installationen gab im normalen
+  „nicht vorhanden“-Fall Status 1 zurück, den `set -e` als Fehler behandelte.
+  Alle optionalen Cleanup-/Migrations-Guards kehren jetzt ausdrücklich
+  erfolgreich zurück. Der Fehler-Trap nennt künftig zusätzlich den konkret
+  fehlgeschlagenen Befehl statt nur die Zeilennummer.
 - **Installation über `curl | bash` brach unter `set -u` ab.** Bei einem über
   stdin ausgeführten Bash-Skript ist `BASH_SOURCE[0]` nicht zwingend gesetzt.
   Der Installer verwendet für seine Einstiegspunktprüfung jetzt `$0` als

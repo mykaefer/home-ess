@@ -32,12 +32,14 @@ fail() {
 on_error() {
   local exit_code=$?
   local line_number=$1
+  local failed_command=${2:-unbekannt}
   printf '\n\033[1;31m[homeESS] Installation in Zeile %s fehlgeschlagen (Code %s).\033[0m\n' \
     "${line_number}" "${exit_code}" >&2
+  printf '[homeESS] Fehlgeschlagener Befehl: %s\n' "${failed_command}" >&2
   exit "${exit_code}"
 }
 
-trap 'on_error ${LINENO}' ERR
+trap 'on_error "${LINENO}" "${BASH_COMMAND}"' ERR
 
 require_root() {
   if [[ ${EUID} -ne 0 ]]; then
@@ -146,7 +148,7 @@ is_legacy_homeess_service_file() {
 # Unit, deren ExecStart eindeutig auf diese homeESS-Installation zeigt, darf
 # automatisch entfernt werden; eine fremde gleichnamige Unit bleibt unberührt.
 remove_legacy_homeess_service() {
-  [[ -e ${LEGACY_SERVICE_FILE} || -L ${LEGACY_SERVICE_FILE} ]] || return
+  [[ -e ${LEGACY_SERVICE_FILE} || -L ${LEGACY_SERVICE_FILE} ]] || return 0
   if ! is_legacy_homeess_service_file "${LEGACY_SERVICE_FILE}"; then
     info "Vorhandene server.service gehört nicht eindeutig zu homeESS – bleibt unverändert"
     return
@@ -250,8 +252,8 @@ install_self_updater() {
 # neuen Ort noch keine Datenbank und auch sonst keine Daten liegen. So wird nie
 # ein bestehender Zielbestand vermischt oder überschrieben.
 migrate_legacy_data() {
-  [[ ! -e ${DB_PATH} ]] || return
-  [[ -f ${LEGACY_DATA_DIR}/app.db && ! -L ${LEGACY_DATA_DIR}/app.db ]] || return
+  [[ ! -e ${DB_PATH} ]] || return 0
+  [[ -f ${LEGACY_DATA_DIR}/app.db && ! -L ${LEGACY_DATA_DIR}/app.db ]] || return 0
 
   if find "${DATA_DIR}" -mindepth 1 -print -quit | grep -q .; then
     fail "${DATA_DIR} enthält bereits Daten, aber keine app.db. Altbestand aus ${LEGACY_DATA_DIR} wurde nicht automatisch eingemischt."
