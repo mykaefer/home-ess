@@ -121,3 +121,37 @@ test('Host liefert abonnierte Adapter-States ereignisgesteuert und meldet sie sa
   assert.equal(entry.subscriptions.size, 0);
   adapterRouter.removeInstanceScheme('source-one');
 });
+
+test('Host-API schreibt Adapterwerte zentral über die MQTT-/Router-Schreibgrenze', async () => {
+  const mqttClient = require('../src/mqtt/client');
+  const originalPublish = mqttClient.publish;
+  const writes = [];
+  mqttClient.publish = (topic, value) => {
+    writes.push([topic, value]);
+    return topic !== 'system://protected/value';
+  };
+  try {
+    const sent = [];
+    const entry = {
+      instance: { id: 100, name: 'managed-one', settings: {} },
+      manifest: { prefix: 'managed' },
+      child: { send(message) { sent.push(message); } },
+      subscriptions: new Map(), status: {},
+    };
+    host._handleMessage(entry, {
+      type: 'host-call', requestId: 'write-1', method: 'state.write',
+      topic: 'source://source-one/switch', value: true,
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(writes[0], ['source://source-one/switch', true]);
+    assert.equal(sent.find((message) => message.requestId === 'write-1').result, true);
+    host._handleMessage(entry, {
+      type: 'host-call', requestId: 'write-2', method: 'state.write',
+      topic: 'system://protected/value', value: 1,
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.match(sent.find((message) => message.requestId === 'write-2').error, /nicht verfügbar|schreibgeschützt/);
+  } finally {
+    mqttClient.publish = originalPublish;
+  }
+});

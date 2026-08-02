@@ -2426,7 +2426,7 @@ body.dash-editing .widget-group {
 
 .module-toggle-btn {
     padding: 9px 18px;
-    background-color: #007bff;
+    background-color: var(--color-action);
     color: #fff;
     border: none;
     border-radius: 8px;
@@ -2437,7 +2437,7 @@ body.dash-editing .widget-group {
 }
 
 .module-toggle-btn:hover {
-    background-color: #0056b3;
+    background-color: var(--color-action-hover);
 }
 
 .module-toggle-btn.button-danger {
@@ -2579,6 +2579,91 @@ body.dash-editing .widget-group {
     border-color: rgba(255, 255, 255, 0.45);
     gap: 12px;
 }
+
+/* Verfügbares homeESS-Release: bewusst als eigene hellgrüne Olive direkt vor
+   den Leistungswerten. Sie ist ein Button, bleibt optisch aber Teil der
+   Statusleiste. */
+.header-update-pill {
+    min-height: 32px;
+    padding: 5px 13px;
+    border: 1px solid #86d8a1;
+    border-radius: 999px;
+    background: #bdf2cc;
+    color: #123c20;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 700;
+    white-space: nowrap;
+    cursor: pointer;
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.08), 0 2px 8px rgba(0,0,0,0.14);
+}
+.header-update-pill:hover { background: #d2f8dd; }
+.header-update-pill:focus-visible { outline: 3px solid rgba(189,242,204,0.45); outline-offset: 2px; }
+.header-update-pill[hidden] { display: none; }
+
+.update-confirm-dialog {
+    width: min(440px, calc(100vw - 32px));
+    padding: 0;
+    border: 1px solid var(--color-border-strong);
+    border-radius: 14px;
+    color: var(--color-text);
+    box-shadow: 0 24px 70px rgba(0,0,0,0.28);
+}
+.update-confirm-dialog::backdrop { background: rgba(13,24,20,0.58); backdrop-filter: blur(2px); }
+.update-confirm-dialog form { padding: 24px; }
+.update-confirm-dialog h2 { margin: 0 0 10px; font-size: 20px; }
+.update-confirm-dialog p { margin: 0; color: var(--color-text-soft); line-height: 1.5; }
+.update-confirm-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; }
+.update-confirm-actions button { min-height: 42px; padding: 9px 14px; border-radius: 8px; cursor: pointer; font-weight: 700; }
+.update-confirm-actions .secondary-button { border: 1px solid var(--color-border-strong); background: #fff; color: var(--color-text); }
+.update-confirm-actions .primary-button { border: 1px solid var(--color-action); background: var(--color-action); color: #fff; }
+
+/* Vollbildansicht während des Updates. Sie benötigt absichtlich weder Sidebar
+   noch Live-Dashboard und bleibt als bereits geladene Seite über den kurzen
+   Serverneustart hinweg sichtbar. */
+.page-update { background: var(--color-canvas); }
+.page-update .app-shell { min-height: 100vh; padding: 0; }
+.update-progress { display: grid; place-items: center; min-height: 100vh; padding: 24px; }
+.update-progress-card {
+    width: min(620px, 100%);
+    padding: 32px;
+    border: 1px solid var(--color-border);
+    border-radius: 16px;
+    background: var(--color-surface);
+    box-shadow: 0 14px 40px rgba(22,38,32,0.12);
+    text-align: center;
+}
+.update-progress-logo { width: auto; height: 42px; margin-bottom: 22px; filter: brightness(0.42); }
+.update-progress-card h1 { margin: 12px 0 6px; font-size: 24px; }
+.update-progress-target { margin: 0 0 22px; color: var(--color-text-soft); }
+.update-progress-spinner {
+    width: 34px;
+    height: 34px;
+    margin: 0 auto;
+    border: 4px solid #dce8e3;
+    border-top-color: var(--color-action);
+    border-radius: 50%;
+    animation: homeess-update-spin 0.9s linear infinite;
+}
+.update-progress-spinner.is-complete { border-color: #43a866; animation: none; background: #bdf2cc; }
+.update-progress-spinner.is-failed { border-color: #d66a65; animation: none; background: #f8d8d6; }
+@keyframes homeess-update-spin { to { transform: rotate(360deg); } }
+.update-progress-messages {
+    max-height: 260px;
+    margin: 0;
+    padding: 14px 18px 14px 40px;
+    overflow-y: auto;
+    border: 1px solid var(--color-border);
+    border-radius: 10px;
+    background: var(--color-surface-subtle);
+    text-align: left;
+    line-height: 1.45;
+}
+.update-progress-message { margin: 6px 0; color: var(--color-text); }
+.update-progress-message--waiting { color: #856404; }
+.update-progress-message--error { color: var(--color-danger); font-weight: 700; }
+.update-progress-hint { margin: 18px 0 0; color: var(--color-text-soft); font-size: 13px; line-height: 1.45; }
+.update-progress-back { margin-top: 18px; padding: 10px 15px; border: 0; border-radius: 8px; background: var(--color-action); color: #fff; font-weight: 700; cursor: pointer; }
 
 .header-power-item {
     display: inline-flex;
@@ -4157,6 +4242,11 @@ body,
         justify-content: flex-end;
         gap: 6px;
     }
+
+    .header-update-pill { min-height: 30px; padding: 4px 10px; font-size: 11px; }
+    .update-confirm-actions { flex-direction: column-reverse; }
+    .update-confirm-actions button { width: 100%; }
+    .update-progress-card { padding: 24px 18px; }
 
     /* Zeit/Datum zeigt das Smartphone selbst — Pills entfallen. Das
        Temperatur-Label entfällt ebenfalls, der °C-Wert spricht für sich. */

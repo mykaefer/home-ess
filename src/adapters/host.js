@@ -15,6 +15,7 @@ const metrics = require('../runtime-metrics');
 const bus = require('../state-bus');
 const identityStore = require('../remote-access/identity-store');
 const secretStore = require('./secrets');
+const dataStore = require('./data-store');
 const crypto = require('crypto');
 
 const RUNTIME_PATH = path.join(__dirname, 'runtime.js');
@@ -63,9 +64,17 @@ async function handleHostCall(entry, msg) {
       reply.result = true;
     } else if (msg.method === 'secret.delete') {
       reply.result = secretStore.remove(entry.instance.id, msg.key);
+    } else if (msg.method === 'storage.dir') {
+      reply.result = dataStore.directoryFor(entry.instance.adapterId, entry.instance.id);
     } else if (msg.method === 'storage.set') {
       await instancesRepo.updateSettingKey(db, entry.instance.id, String(msg.key), msg.value);
       entry.instance.settings = { ...(entry.instance.settings || {}), [String(msg.key)]: msg.value };
+      reply.result = true;
+    } else if (msg.method === 'state.write') {
+      const topic = String(msg.topic || '').trim();
+      if (!topic) throw new Error('Schreibziel fehlt.');
+      const accepted = require('../mqtt/client').publish(topic, msg.value);
+      if (!accepted) throw new Error('Schreibziel ist nicht verfügbar oder schreibgeschützt.');
       reply.result = true;
     } else {
       throw new Error('Unbekannter Host-Aufruf.');

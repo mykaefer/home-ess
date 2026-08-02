@@ -29,7 +29,7 @@ function listen(app) {
 test.before(async () => {
   db = openDatabase();
   await new Promise((resolve) => setTimeout(resolve, 300));
-  await widgetsRepo.createWidget(db, { sourceId: 'pv.current' });
+  await widgetsRepo.createWidget(db, { stateTopic: 'system://homeess/pv.current' });
 
   const app = express();
   app.use(express.urlencoded({ extended: true }));
@@ -59,7 +59,7 @@ test('GET / leitet klein auf /dashboard; GET /dashboard liefert das vollständig
   assert.match(dashboard, /class="dash-tabbar"/);
   assert.match(dashboard, /widget-card widget-card--value/);
   assert.match(dashboard, /id="widgetDialog"/);
-  assert.match(dashboard, /value-catalog--lazy/);
+  assert.match(dashboard, /name="stateTopic" data-state-picker/);
   assert.ok(Buffer.byteLength(dashboard) < 300000, 'Dashboard bettet den vollständigen Wertekatalog nicht mehr ein');
 });
 

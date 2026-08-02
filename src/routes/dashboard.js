@@ -32,7 +32,7 @@ const { listSwitchTargets, readSwitchStates, commandSwitch } = require('../dashb
 const {
   listCatalogLevel,
   searchCatalog,
-  resolveInternalValues,
+  resolveStates,
 } = require('../states/catalog');
 const { INFO_FIELDS, readSystemInfo } = require('../dashboard/system-info');
 const renderDashboard = require('../views/dashboard');
@@ -48,10 +48,10 @@ function enrichWidget(widget, valuesById, switchStates) {
       on: state.on,
     };
   }
-  const entry = valuesById.get(widget.sourceId);
+  const entry = valuesById.get(widget.stateTopic);
   return {
     ...widget,
-    label: entry ? entry.label : widget.sourceId,
+    label: entry ? entry.label : widget.stateTopic,
     currentDisplay: entry ? entry.display : '—',
   };
 }
@@ -65,10 +65,10 @@ async function renderPage(db, res, options = {}) {
     listWidgets(db),
     listSwitchTargets(db),
   ]);
-  const internalValues = await resolveInternalValues(
+  const internalValues = await resolveStates(
     db,
     mqttClient.getCache(),
-    widgets.filter((widget) => widget.type === 'value').map((widget) => widget.sourceId)
+    widgets.filter((widget) => widget.type === 'value').map((widget) => widget.stateTopic)
   );
   const switchStates = await readSwitchStates(db, mqttClient.getCache(), widgets);
   const valuesById = new Map(internalValues.map((entry) => [entry.id, entry]));
@@ -134,10 +134,10 @@ function dashboardRoutes(db) {
   router.get('/dashboard/data', requireAuth, async (req, res, next) => {
     try {
       const widgets = await listWidgets(db);
-      const internalValues = await resolveInternalValues(
+      const internalValues = await resolveStates(
         db,
         mqttClient.getCache(),
-        widgets.filter((widget) => widget.type === 'value').map((widget) => widget.sourceId)
+        widgets.filter((widget) => widget.type === 'value').map((widget) => widget.stateTopic)
       );
       const switchStates = await readSwitchStates(db, mqttClient.getCache(), widgets);
       const valuesById = new Map(internalValues.map((entry) => [entry.id, entry]));
@@ -145,7 +145,7 @@ function dashboardRoutes(db) {
         widgets: widgets
           .filter((widget) => widget.type === 'value')
           .map((widget) => {
-            const entry = valuesById.get(widget.sourceId);
+            const entry = valuesById.get(widget.stateTopic);
             return { id: widget.id, currentDisplay: entry ? entry.display : '—' };
           }),
         switches: widgets

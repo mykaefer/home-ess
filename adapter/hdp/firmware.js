@@ -44,10 +44,20 @@ function checkCompatibility(manifest, artifact, firmwareInfo, options = {}) {
   if (artifact.variant !== firmwareInfo.variant) throw new Error('Firmware-Variante stimmt nicht überein.');
   if (!compatibleProtocol(firmwareInfo.protocol_version, release.protocol_min)
       || !compatibleProtocol(firmwareInfo.protocol_version, release.protocol_max)) {
-    throw new Error('Firmware und HDP-Protokoll sind nicht kompatibel.');
+    throw new Error('Firmware und hDP-Protokoll sind nicht kompatibel.');
   }
-  if (Number(release.config_schema_version) !== Number(firmwareInfo.config_schema_version)) {
-    throw new Error('Konfigurationsschema kann nicht sicher migriert werden.');
+  // Das Gerät ist die normative Instanz für Schemamigrationen und prüft die
+  // Metadaten beim Empfang erneut. Der Adapter verlangt deshalb nur, dass das
+  // Ziel nicht hinter dem aktuellen Schema zurückfällt — eine Gleichheitsprüfung
+  // würde jedes Update über eine Schemagrenze dauerhaft verhindern, obwohl die
+  // Firmware genau dafür eine Migration mitbringt.
+  const targetSchema = Number(release.config_schema_version);
+  const deviceSchema = Number(firmwareInfo.config_schema_version);
+  if (!Number.isInteger(targetSchema) || !Number.isInteger(deviceSchema)) {
+    throw new Error('Konfigurationsschema ist nicht bestimmbar.');
+  }
+  if (targetSchema < deviceSchema && !options.allowDowngrade) {
+    throw new Error(`Konfigurationsschema ${deviceSchema} lässt sich nicht auf ${targetSchema} zurücksetzen.`);
   }
   if (compareSemVer(release.version, firmwareInfo.version) < 0 && !options.allowDowngrade) {
     throw new Error('Firmware-Downgrade ist nicht freigegeben.');
@@ -94,12 +104,22 @@ async function validateArtifactFile(file, artifact, options = {}) {
   if (digest.size !== artifact.size_bytes) throw new Error('Firmwaredateigröße stimmt nicht mit dem Manifest überein.');
   if (digest.sha256 !== artifact.sha256) throw new Error('SHA-256-Prüfsumme der Firmwaredatei stimmt nicht.');
   const signature = verifySignature(file, artifact.signature, options.publicKey);
-  if (options.requireSignature && !signature.verified) {
+  // Eine Signatur wird erzwungen, sobald ein Prüfschlüssel hinterlegt ist: Dann
+  // hat der Betreiber eine Vertrauensankerentscheidung getroffen und ein
+  // unsigniertes Artefakt wäre ein Rückschritt. Ohne Schlüssel bleibt der lokale
+  // Upload eines selbst gebauten Images zulässig — eine vorhandene, aber nicht
+  // verifizierbare Signatur ist dagegen immer ein Fehler.
+  const required = options.requireSignature === true
+    || (options.requireSignature !== false && !!options.publicKey);
+  if (required && !signature.verified) {
     throw new Error(signature.status === 'not_configured'
       ? 'Signaturprüfung ist nicht konfiguriert.'
       : signature.status === 'not_present'
         ? 'Das Releaseartefakt besitzt keine authentifizierbare Signatur.'
       : 'Firmware-Signatur ist ungültig.');
+  }
+  if (!required && signature.status === 'invalid') {
+    throw new Error('Firmware-Signatur ist ungültig.');
   }
   return { ...digest, signature };
 }
@@ -109,21 +129,21 @@ function otaHeaders(manifest, artifact, firmwareInfo, credentials, allowDowngrad
   const headers = {
     'Content-Type': 'application/octet-stream',
     'Content-Length': String(artifact.size_bytes),
-    'X-HDP-Firmware-Name': release.firmware_name,
-    'X-HDP-Firmware-Version': release.version,
-    'X-HDP-Firmware-Channel': release.channel,
-    'X-HDP-Platform': artifact.platform,
-    'X-HDP-Board': artifact.board,
-    'X-HDP-Variant': artifact.variant,
-    'X-HDP-Protocol-Version': firmwareInfo.protocol_version,
-    'X-HDP-Config-Schema-Version': String(release.config_schema_version),
-    'X-HDP-Firmware-Size': String(artifact.size_bytes),
-    'X-HDP-Firmware-SHA256': artifact.sha256,
-    'X-HDP-Restart-After-Success': 'false',
+    'X-hDP-Firmware-Name': release.firmware_name,
+    'X-hDP-Firmware-Version': release.version,
+    'X-hDP-Firmware-Channel': release.channel,
+    'X-hDP-Platform': artifact.platform,
+    'X-hDP-Board': artifact.board,
+    'X-hDP-Variant': artifact.variant,
+    'X-hDP-Protocol-Version': firmwareInfo.protocol_version,
+    'X-hDP-Config-Schema-Version': String(release.config_schema_version),
+    'X-hDP-Firmware-Size': String(artifact.size_bytes),
+    'X-hDP-Firmware-SHA256': artifact.sha256,
+    'X-hDP-Restart-After-Success': 'false',
     ...bindingHeaders(credentials),
   };
-  if (artifact.signature) headers['X-HDP-Firmware-Signature'] = artifact.signature;
-  if (allowDowngrade) headers['X-HDP-Allow-Downgrade'] = 'true';
+  if (artifact.signature) headers['X-hDP-Firmware-Signature'] = artifact.signature;
+  if (allowDowngrade) headers['X-hDP-Allow-Downgrade'] = 'true';
   return headers;
 }
 
@@ -147,7 +167,7 @@ function uploadFirmware({ file, device, firmwareInfo, manifest, artifact, creden
         const contentType = String(res.headers['content-type'] || '').toLowerCase().trim();
         const noStore = String(res.headers['cache-control'] || '').toLowerCase().split(',').map((v) => v.trim()).includes('no-store');
         if (contentType !== 'application/json' || !noStore) {
-          reject(new Error('OTA-Antwort verletzt HDP Content-Type oder Cache-Control.'));
+          reject(new Error('OTA-Antwort verletzt hDP Content-Type oder Cache-Control.'));
           return;
         }
         if (res.statusCode < 200 || res.statusCode >= 300) {
@@ -155,7 +175,7 @@ function uploadFirmware({ file, device, firmwareInfo, manifest, artifact, creden
           reject(Object.assign(new Error(remote.message || `OTA HTTP ${res.statusCode}`), { code: remote.code }));
         } else if (res.statusCode !== 202 || payload.ok !== true || !payload.data
             || payload.data.state !== 'ready_to_restart' || payload.data.restart_required !== true) {
-          reject(new Error('OTA-Erfolgsantwort entspricht nicht HDP 1.0-draft.'));
+          reject(new Error('OTA-Erfolgsantwort entspricht nicht hDP 1.0-draft.'));
         } else resolve(payload.data);
       });
     });

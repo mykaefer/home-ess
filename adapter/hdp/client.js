@@ -5,11 +5,17 @@ const {
   bindingHeaders, bindingId, validateBindingId, validateNonce, validateBindingKey,
 } = require('./auth');
 const {
-  PROTOCOL_VERSION, RUNTIME_PROFILE, validateDeviceId, validateInstanceId, validateProtocol, validateHardwareConfig,
+  PROTOCOL_VERSION, RUNTIME_PROFILE, supportedRuntimeProfile,
+  validateDeviceId, validateInstanceId, validateProtocol, validateHardwareConfig,
   parseSemVer,
 } = require('./validation');
 
 const JSON_REQUEST_LIMIT = 3072;
+// Optionale Pineigenschaften aus dem Manifest. Sie sperren keinen GPIO, sondern
+// beschreiben, worauf beim Verdrahten zu achten ist.
+const BINARY_PIN_TRAIT_KEYS = Object.freeze([
+  'binary_pullup_pins', 'binary_boot_sensitive_pins', 'binary_serial_pins',
+]);
 const JSON_RESPONSE_LIMIT = 128 * 1024;
 const GET_RETRY_DELAYS = [250, 500, 1000];
 const ERROR_CODES = new Set([
@@ -23,6 +29,8 @@ const ERROR_CODES = new Set([
   'TIMELINE_OFFSET_MISMATCH', 'TIMELINE_SIZE_MISMATCH', 'TIMELINE_CHECKSUM_MISMATCH',
   'TIMELINE_INVALID_PROGRAM', 'TIMELINE_CAPACITY_EXCEEDED', 'UNSUPPORTED_MESSAGE_TYPE',
   'SEQUENCE_ERROR', 'SESSION_HELLO_TIMEOUT', 'HEARTBEAT_TIMEOUT', 'SESSION_REPLACED', 'DEVICE_BUSY',
+  'BINARY_PIN_NOT_FOUND', 'BINARY_PIN_DIRECTION_MISMATCH',
+  'BINARY_CONFIG_REVISION_MISMATCH',
   'FACTORY_RESET_NOT_ALLOWED', 'INTERNAL_ERROR', 'OTA_AUTH_REQUIRED', 'OTA_ALREADY_RUNNING',
   'OTA_INVALID_METADATA', 'OTA_FIRMWARE_NAME_MISMATCH', 'OTA_PLATFORM_MISMATCH',
   'OTA_BOARD_MISMATCH', 'OTA_VARIANT_MISMATCH', 'OTA_PROTOCOL_INCOMPATIBLE',
@@ -54,20 +62,20 @@ function object(value) {
 
 function unwrap(payload) {
   if (!object(payload) || typeof payload.ok !== 'boolean') {
-    throw new HdpError('Ungültiges HDP-Antwort-Envelope.', { code: 'INVALID_REQUEST', status: 502 });
+    throw new HdpError('Ungültiges hDP-Antwort-Envelope.', { code: 'INVALID_REQUEST', status: 502 });
   }
   if (payload.ok === true) {
     if (!object(payload.data)) {
-      throw new HdpError('HDP-Erfolgsantwort enthält kein Datenobjekt.', { code: 'INVALID_REQUEST', status: 502 });
+      throw new HdpError('hDP-Erfolgsantwort enthält kein Datenobjekt.', { code: 'INVALID_REQUEST', status: 502 });
     }
     return payload.data;
   }
   if (!object(payload.error) || typeof payload.error.code !== 'string'
       || typeof payload.error.message !== 'string' || !object(payload.error.details)) {
-    throw new HdpError('Ungültiges HDP-Fehler-Envelope.', { code: 'INVALID_REQUEST', status: 502 });
+    throw new HdpError('Ungültiges hDP-Fehler-Envelope.', { code: 'INVALID_REQUEST', status: 502 });
   }
   if (!ERROR_CODES.has(payload.error.code)) {
-    throw new HdpError('HDP-Gerät meldet einen unbekannten Fehlercode.', {
+    throw new HdpError('hDP-Gerät meldet einen unbekannten Fehlercode.', {
       code: 'INVALID_REQUEST', status: 502,
     });
   }
@@ -78,15 +86,15 @@ function unwrap(payload) {
 
 function requestJson(base, path, options = {}) {
   const url = new URL(path, base);
-  if (url.search) return Promise.reject(new HdpError('HDP erlaubt keine Query-Parameter.', { code: 'INVALID_REQUEST' }));
+  if (url.search) return Promise.reject(new HdpError('hDP erlaubt keine Query-Parameter.', { code: 'INVALID_REQUEST' }));
   if (options.body != null && !object(options.body)) {
-    return Promise.reject(new HdpError('HDP-JSON-Request benötigt ein Objekt als Wurzel.', {
+    return Promise.reject(new HdpError('hDP-JSON-Request benötigt ein Objekt als Wurzel.', {
       code: 'INVALID_REQUEST', status: 400,
     }));
   }
   const body = options.body == null ? null : Buffer.from(JSON.stringify(options.body), 'utf8');
   if (body && body.length > JSON_REQUEST_LIMIT) {
-    return Promise.reject(new HdpError('HDP-JSON-Request ist größer als 3072 Bytes.', {
+    return Promise.reject(new HdpError('hDP-JSON-Request ist größer als 3072 Bytes.', {
       code: 'PAYLOAD_TOO_LARGE', status: 413,
     }));
   }
@@ -109,7 +117,7 @@ function requestJson(base, path, options = {}) {
       res.on('data', (chunk) => {
         length += chunk.length;
         if (length > JSON_RESPONSE_LIMIT) {
-          req.destroy(new HdpError('HDP-Antwort ist zu groß.', { code: 'INVALID_REQUEST', status: 502 }));
+          req.destroy(new HdpError('hDP-Antwort ist zu groß.', { code: 'INVALID_REQUEST', status: 502 }));
         } else chunks.push(chunk);
       });
       res.on('end', () => {
@@ -118,7 +126,7 @@ function requestJson(base, path, options = {}) {
         const cacheControl = String(res.headers['cache-control'] || '').toLowerCase()
           .split(',').map((part) => part.trim());
         if (contentType !== 'application/json' || !cacheControl.includes('no-store')) {
-          reject(new HdpError('HDP-JSON-Antwort verletzt Content-Type oder Cache-Control.', {
+          reject(new HdpError('hDP-JSON-Antwort verletzt Content-Type oder Cache-Control.', {
             code: 'INVALID_REQUEST', status: 502,
           }));
           return;
@@ -144,18 +152,18 @@ function requestJson(base, path, options = {}) {
         }
       });
     });
-    req.on('timeout', () => req.destroy(new HdpError('HDP-Gerät antwortet nicht.', {
+    req.on('timeout', () => req.destroy(new HdpError('hDP-Gerät antwortet nicht.', {
       code: 'DEVICE_OFFLINE', status: 504, uncertain: body !== null,
     })));
     req.on('error', (cause) => {
       if (cause instanceof HdpError) reject(cause);
-      else reject(new HdpError('HDP-Gerät antwortet nicht.', {
+      else reject(new HdpError('hDP-Gerät antwortet nicht.', {
         code: 'DEVICE_OFFLINE', status: 502, uncertain: body !== null && !completed, cause,
       }));
     });
     req.on('socket', (socket) => {
       if (!socket.connecting) return;
-      const timer = setTimeout(() => req.destroy(new HdpError('HDP-Verbindungsaufbau überschreitet 2000 ms.', {
+      const timer = setTimeout(() => req.destroy(new HdpError('hDP-Verbindungsaufbau überschreitet 2000 ms.', {
         code: 'DEVICE_OFFLINE', status: 504, uncertain: body !== null,
       })), options.connectTimeoutMs || 2000);
       socket.once('connect', () => clearTimeout(timer));
@@ -189,7 +197,7 @@ function validatePairingStatus(data) {
       || (data.binding_status === 'match' && data.paired_to_requester !== true)
       || (['conflict', 'unpaired'].includes(data.binding_status) && data.paired_to_requester === true)
       || (data.binding_status === 'not_checked' && data.paired_to_requester !== null)) {
-    throw new HdpError('Pairing-Status verletzt HDP-Invarianten.', { code: 'INVALID_REQUEST', status: 502 });
+    throw new HdpError('Pairing-Status verletzt hDP-Invarianten.', { code: 'INVALID_REQUEST', status: 502 });
   }
   return data;
 }
@@ -198,7 +206,7 @@ function validateDeviceInfo(data) {
   if (!object(data)) throw new HdpError('Ungültige Geräteinformationen.', { code: 'INVALID_REQUEST', status: 502 });
   validateDeviceId(data.device_id);
   validateProtocol(data.protocol_version);
-  if (data.runtime_profile != null && data.runtime_profile !== RUNTIME_PROFILE) {
+  if (data.runtime_profile != null && !supportedRuntimeProfile(data.runtime_profile)) {
     throw new HdpError('Gerät verwendet ein inkompatibles Runtime-Profil.', {
       code: 'UNSUPPORTED_RUNTIME_PROFILE', status: 426,
     });
@@ -212,7 +220,7 @@ function validateDeviceInfo(data) {
       || typeof data.hardware_config_present !== 'boolean'
       || !Number.isInteger(data.hardware_config_revision)
       || data.hardware_config_revision < 0 || data.hardware_config_revision > 0xffffffff) {
-    throw new HdpError('Geräteinformationen verletzen HDP-Invarianten.', { code: 'INVALID_REQUEST', status: 502 });
+    throw new HdpError('Geräteinformationen verletzen hDP-Invarianten.', { code: 'INVALID_REQUEST', status: 502 });
   }
   if (data.paired) validateBindingId(data.binding_id);
   else if (data.binding_id !== null) throw new HdpError('Ungekoppeltes Gerät meldet eine Binding-ID.', { code: 'INVALID_REQUEST', status: 502 });
@@ -238,7 +246,8 @@ function validateManifestInfo(data) {
     ];
     if (data.protocol_version !== PROTOCOL_VERSION || data.api_version !== 'v1'
         || data.auth_profile !== 'local-binding-key-v1'
-        || data.runtime_profile !== RUNTIME_PROFILE || data.device_type_profile !== 'opaque-id-v1'
+        || !supportedRuntimeProfile(data.runtime_profile)
+        || !['opaque-id-v1', 'boot-dispatch-v1'].includes(data.device_type_profile)
         || !Array.isArray(data.output_types) || !data.output_types.includes('argb_strip')
         || !Array.isArray(data.frame_encodings)
         || !data.frame_encodings.includes('rgb8-base64')
@@ -263,7 +272,7 @@ function validateManifestInfo(data) {
         || data.limits.maximum_timeline_chunk_bytes > data.limits.maximum_timeline_bytes
         || data.limits.maximum_timeline_duration_milliseconds > 86400000) {
       throw new HdpError('Gerätemanifest entspricht nicht pixel-timeline-v1.', {
-        code: data.runtime_profile !== RUNTIME_PROFILE
+        code: !supportedRuntimeProfile(data.runtime_profile)
           ? 'UNSUPPORTED_RUNTIME_PROFILE' : 'INVALID_REQUEST', status: 426,
       });
     }
@@ -273,6 +282,50 @@ function validateManifestInfo(data) {
     if (data.hardware_capabilities.led_types.some((value) => value !== 'WS2812')
         || data.hardware_capabilities.color_orders.some((value) => !['RGB', 'GRB'].includes(value))) {
       throw new HdpError('Manifest enthält nicht unterstützte Hardwarefähigkeiten.', { code: 'INVALID_REQUEST', status: 502 });
+    }
+    if (data.device_type_profile === 'boot-dispatch-v1') {
+      if (!Array.isArray(data.device_types)
+          || !data.device_types.includes('percentage_indicator')
+          || !data.device_types.includes('binary_io')
+          || typeof data.features.binary_input !== 'boolean'
+          || typeof data.features.binary_output !== 'boolean'
+          || !Array.isArray(data.hardware_capabilities.binary_pins)
+          || !Array.isArray(data.hardware_capabilities.binary_input_types)
+          || !data.hardware_capabilities.binary_input_types.includes('switch')
+          || !data.hardware_capabilities.binary_input_types.includes('button')
+          || !Number.isInteger(data.limits.maximum_binary_pins)
+          || data.limits.maximum_binary_pins < 1 || data.limits.maximum_binary_pins > 32
+          || !Number.isInteger(data.limits.binary_input_debounce_milliseconds)
+          || data.limits.binary_input_debounce_milliseconds < 1
+          || data.limits.binary_input_debounce_milliseconds > 1000) {
+        throw new HdpError('Gerätemanifest enthält keinen vollständigen Binary-I/O-Vertrag.', {
+          code: 'INVALID_REQUEST', status: 502,
+        });
+      }
+      const binaryPins = data.hardware_capabilities.binary_pins;
+      if (!binaryPins.length || binaryPins.length > data.limits.maximum_binary_pins
+          || new Set(binaryPins).size !== binaryPins.length
+          || binaryPins.some((pin) => !Number.isInteger(pin) || pin < 0 || pin > 255)) {
+        throw new HdpError('Manifest enthält ungültige Binary-I/O-GPIOs.', {
+          code: 'INVALID_REQUEST', status: 502,
+        });
+      }
+      // Optionale Pineigenschaften. Firmware 0.4.0 meldet sie noch nicht; wo sie
+      // vorhanden sind, müssen es eindeutige Teilmengen von binary_pins sein.
+      for (const key of BINARY_PIN_TRAIT_KEYS) {
+        const trait = data.hardware_capabilities[key];
+        if (trait === undefined) continue;
+        if (!Array.isArray(trait) || new Set(trait).size !== trait.length
+            || trait.some((pin) => !binaryPins.includes(pin))) {
+          throw new HdpError(`Manifest enthält ungültige ${key}.`, {
+            code: 'INVALID_REQUEST', status: 502,
+          });
+        }
+      }
+    } else if (data.runtime_profile !== RUNTIME_PROFILE) {
+      throw new HdpError('Altes Gerätemanifest ist nur mit pixel-timeline-v1 zulässig.', {
+        code: 'UNSUPPORTED_RUNTIME_PROFILE', status: 426,
+      });
     }
     return data;
   }
@@ -290,7 +343,7 @@ function validateManifestInfo(data) {
       || data.limits.maximum_websocket_message_bytes !== 1024
       || !Number.isInteger(data.limits.maximum_led_count)
       || data.limits.maximum_led_count < 1 || data.limits.maximum_led_count > 300) {
-    throw new HdpError('Gerätemanifest entspricht nicht HDP 1.0-draft.', {
+    throw new HdpError('Gerätemanifest entspricht nicht hDP 1.0-draft.', {
       code: 'UNSUPPORTED_PROTOCOL_VERSION', status: 426,
     });
   }
@@ -320,7 +373,7 @@ function validateStatusInfo(data) {
       || !Number.isInteger(data.free_heap_bytes) || data.free_heap_bytes < 0 || data.free_heap_bytes > 0xffffffff
       || typeof data.wifi_connected !== 'boolean' || typeof data.paired !== 'boolean'
       || !object(data.last_boot) || !loadStates.includes(data.last_boot.config_load_status)) {
-    throw new HdpError('Ungültiger HDP-Gerätestatus.', { code: 'INVALID_REQUEST', status: 502 });
+    throw new HdpError('Ungültiger hDP-Gerätestatus.', { code: 'INVALID_REQUEST', status: 502 });
   }
   if ((data.wifi_connected && (typeof data.ip_address !== 'string' || !Number.isInteger(data.wifi_rssi_dbm)))
       || (!data.wifi_connected && (data.ip_address !== null || data.wifi_rssi_dbm !== null))
@@ -329,7 +382,7 @@ function validateStatusInfo(data) {
       || !['primary', 'temporary', 'backup', 'defaults', null].includes(data.last_boot.config_load_source)
       || !['power_on', 'external_reset', 'software_restart', 'watchdog', 'exception', 'brownout', 'deep_sleep', 'unknown']
         .includes(data.last_boot.reset_reason)) {
-    throw new HdpError('Gerätestatus verletzt HDP-Invarianten.', { code: 'INVALID_REQUEST', status: 502 });
+    throw new HdpError('Gerätestatus verletzt hDP-Invarianten.', { code: 'INVALID_REQUEST', status: 502 });
   }
   if ((data.wifi_rssi_dbm !== null && (data.wifi_rssi_dbm < -0x80000000 || data.wifi_rssi_dbm > 0x7fffffff))
       || ![null, 'string'].includes(data.last_boot.reset_detail === null ? null : typeof data.last_boot.reset_detail)
@@ -360,7 +413,7 @@ function validateFirmwareInfo(data) {
       || !Number.isInteger(data.free_update_space_bytes) || data.free_update_space_bytes < 0
       || data.free_update_space_bytes > 0xffffffff
       || !['enabled', 'not_configured', 'unsupported'].includes(data.signature_verification)) {
-    throw new HdpError('Firmwaremetadaten entsprechen nicht HDP 1.0-draft.', { code: 'INVALID_REQUEST', status: 502 });
+    throw new HdpError('Firmwaremetadaten entsprechen nicht hDP 1.0-draft.', { code: 'INVALID_REQUEST', status: 502 });
   }
   if (data.signature_verification === 'enabled') {
     if (data.signature_algorithm !== 'ed25519-sha256'
@@ -475,7 +528,7 @@ class HdpClient {
       });
     }
     if (manifest.api_version !== 'v1' || manifest.auth_profile !== 'local-binding-key-v1') {
-      throw new HdpError('Gerätemanifest verwendet kein HDP-1.0-Authentifizierungsprofil.', {
+      throw new HdpError('Gerätemanifest verwendet kein hDP-1.0-Authentifizierungsprofil.', {
         code: 'UNSUPPORTED_PROTOCOL_VERSION', status: 426,
       });
     }
@@ -664,7 +717,7 @@ class HdpClient {
 }
 
 module.exports = {
-  JSON_REQUEST_LIMIT, HdpError, unwrap, requestJson, sameConfig,
+  JSON_REQUEST_LIMIT, BINARY_PIN_TRAIT_KEYS, HdpError, unwrap, requestJson, sameConfig,
   validatePairingStatus, validateDeviceInfo, validateManifestInfo, validateStatusInfo,
   validateFirmwareInfo, validateFirmwareStatus, HdpClient,
 };

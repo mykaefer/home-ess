@@ -6,13 +6,11 @@ const { RuntimeConnection, connectionErrorMessage } = require('./runtime');
 const { LegacyRuntimeAdapter, runtimePayload } = require('./legacy-runtime');
 const { OutputClient } = require('./output-client');
 const {
-  renderPercentageFrame, compileIndicatorTimeline, scaleColor,
+  renderPercentageFrame, compileIndicatorTimeline,
 } = require('./renderer');
 const {
   finite, bounded, scale, interpolateColor, colorStops, validateHardwareConfig,
   validateDeviceId, RUNTIME_PROFILE, BINARY_RUNTIME_PROFILE,
-  ARGB_OPERATORS, ARGB_OPERATOR_LABELS, validateArgbCondition, argbConditionActive,
-  argbOutputPinRoles, argbOutputPins,
 } = require('./validation');
 const {
   createAdapterNonce, createBindingKey, validateBindingKey, bindingId,
@@ -25,11 +23,6 @@ const crypto = require('crypto');
 
 const PROTOCOL_VERSION = '1.0-draft';
 const SECRET_PREFIX = 'device-';
-// Wie lange nach dem OTA-Neustart auf die Bestätigung des Geräts gewartet wird.
-// Gemessen an einem D1 mini, der Image kopieren, Konfiguration vervollständigen,
-// Pins einrichten und WLAN aufbauen muss: rund 70 Sekunden. Ein endgültiger
-// Fehlschlag des Geräts bricht die Wartezeit ohnehin sofort ab.
-const kRestartVerificationMilliseconds = 180000;
 
 function esc(value) {
   return String(value == null ? '' : value)
@@ -45,13 +38,8 @@ function bool(value) {
   return value === true || value === 1 || value === '1' || value === 'true' || value === 'on';
 }
 
-// Ein leeres Formularfeld ist keine Null, sondern eine fehlende Angabe.
-// `Number('')` liefert 0 — ohne diese Abfrage würde ein geleertes Feld also
-// still als 0 gespeichert statt auf seinen Standardwert zurückzufallen.
 function number(value, fallback) {
-  const text = String(value == null ? '' : value).trim().replace(',', '.');
-  if (!text) return fallback;
-  const n = Number(text);
+  const n = Number(String(value == null ? '' : value).replace(',', '.'));
   return Number.isFinite(n) ? n : fallback;
 }
 
@@ -76,20 +64,6 @@ function defaultBindings() {
     },
     display: { fractional_pixel: true },
     binary: {},
-    argb: {},
-  };
-}
-
-// Ein LED-Platz der Statusanzeige: ein State, ein Einschaltkriterium und die
-// beiden Farben. Grün/aus ist die Erwartung an eine Statusanzeige.
-function defaultArgbBinding() {
-  return {
-    topic: '',
-    operator: 'equals',
-    value: '1',
-    value_max: '',
-    color_on: { r: 0, g: 255, b: 0 },
-    color_off: { r: 0, g: 0, b: 0 },
   };
 }
 
@@ -114,9 +88,6 @@ function mergeBindings(value) {
     display: { ...base.display, ...(input.display || {}) },
     binary: input.binary && typeof input.binary === 'object'
       ? Object.fromEntries(Object.entries(input.binary).map(([pin, binding]) => [pin, { ...(binding || {}) }]))
-      : {},
-    argb: input.argb && typeof input.argb === 'object'
-      ? Object.fromEntries(Object.entries(input.argb).map(([index, binding]) => [index, { ...(binding || {}) }]))
       : {},
   };
 }
@@ -163,91 +134,6 @@ function binaryEventTarget(binding, currentValue, eventState) {
   throw new Error('Unbekannte Binary-Eingangsaktion.');
 }
 
-// <input type="color"> liefert und erwartet #rrggbb; intern rechnet hDP mit
-// RGB-Kanälen.
-function hexColor(value, fallback) {
-  const match = /^#?([0-9a-f]{6})$/i.exec(String(value == null ? '' : value).trim());
-  if (!match) return { ...fallback };
-  const number = parseInt(match[1], 16);
-  return { r: (number >> 16) & 0xff, g: (number >> 8) & 0xff, b: number & 0xff };
-}
-
-function colorHex(color) {
-  const channel = (value) => Math.max(0, Math.min(255, Math.round(Number(value) || 0)))
-    .toString(16).padStart(2, '0');
-  const source = color && typeof color === 'object' ? color : {};
-  return `#${channel(source.r)}${channel(source.g)}${channel(source.b)}`;
-}
-
-function argbColor(value, fallback) {
-  const source = value && typeof value === 'object' ? value : {};
-  const channel = (raw, standard) => {
-    const number = Math.round(Number(raw));
-    return Number.isFinite(number) ? Math.max(0, Math.min(255, number)) : standard;
-  };
-  return {
-    r: channel(source.r, fallback.r),
-    g: channel(source.g, fallback.g),
-    b: channel(source.b, fallback.b),
-  };
-}
-
-// Verknüpfungen ohne State sind keine Zuordnung, sondern ein leerer Platz. Sie
-// werden nicht persistiert; erst dadurch bleibt ein 300-LED-Strang mit drei
-// belegten LEDs auch als gespeicherter Datensatz klein und übersichtlich.
-function normalizeArgbBindings(bindings, pixelCount) {
-  const source = bindings && bindings.argb && typeof bindings.argb === 'object'
-    ? bindings.argb : {};
-  const result = {};
-  for (const [key, entry] of Object.entries(source)) {
-    const index = Number(key);
-    if (!Number.isInteger(index) || index < 0 || index >= pixelCount) continue;
-    const current = entry && typeof entry === 'object' ? entry : {};
-    const topic = String(current.topic || '').trim();
-    if (!topic) continue;
-    const standard = defaultArgbBinding();
-    result[String(index)] = {
-      topic,
-      operator: ARGB_OPERATORS.includes(current.operator) ? current.operator : standard.operator,
-      value: current.value == null ? standard.value : String(current.value).trim(),
-      value_max: current.value_max == null ? '' : String(current.value_max).trim(),
-      color_on: argbColor(current.color_on, standard.color_on),
-      color_off: argbColor(current.color_off, standard.color_off),
-    };
-  }
-  return result;
-}
-
-// Aus den Verknüpfungen wird ein vollständiges Bild: Jede LED ohne Zuordnung
-// bleibt dunkel, jede zugeordnete zeigt An- oder Aus-Farbe ihres Kriteriums.
-function renderArgbFrame(device) {
-  const pixelCount = argbPixelCount(device);
-  const pixels = Array.from({ length: pixelCount }, () => ({ r: 0, g: 0, b: 0 }));
-  const states = {};
-  for (const [key, binding] of Object.entries(device.bindings.argb || {})) {
-    const index = Number(key);
-    if (!Number.isInteger(index) || index < 0 || index >= pixelCount) continue;
-    const active = argbConditionActive(
-      binding, device.argbValues ? device.argbValues[key] : undefined,
-    );
-    states[key] = active;
-    pixels[index] = { ...(active ? binding.color_on : binding.color_off) };
-  }
-  return { pixels, states };
-}
-
-// Beide Verknüpfungslisten hängen an der Hardwarekonfiguration: Pins beim
-// Binary-I/O, LED-Plätze beim ARGB-Ausgang. Nach jedem Konfigurationsabgleich
-// müssen sie gemeinsam nachgezogen werden. Weil beide Pixeltypen dieselbe
-// Pixelzahl melden, überlebt eine LED-Zuordnung den Wechsel zwischen
-// Prozentanzeige und ARGB-Ausgang unverändert.
-function normalizeDeviceBindings(device, hardwareConfig) {
-  device.bindings.binary = normalizeBinaryBindings(device.bindings, hardwareConfig);
-  device.bindings.argb = normalizeArgbBindings(
-    device.bindings, argbPixelCount({ hardwareConfig }),
-  );
-}
-
 function sourceParts(topic) {
   const text = String(topic || '').trim();
   const match = /^([a-z][a-z0-9_-]*):\/\/([^/]+)\/(.+)$/.exec(text);
@@ -275,8 +161,6 @@ function sanitizeDevice(device) {
   delete copy.binaryStates;
   delete copy.binaryOutputDesired;
   delete copy.binaryOutputRunning;
-  delete copy.argbValues;
-  delete copy.argbStates;
   return copy;
 }
 
@@ -392,36 +276,23 @@ function requestedDeviceName(input, fallback = '') {
     .trim().slice(0, 100);
 }
 
-const DEVICE_TYPES = Object.freeze(['percentage_indicator', 'argb_output', 'binary_io']);
+const DEVICE_TYPES = Object.freeze(['percentage_indicator', 'binary_io']);
 const DEVICE_TYPE_LABELS = Object.freeze({
   percentage_indicator: 'Prozentanzeige',
-  argb_output: 'ARGB-Ausgang',
   binary_io: 'Binary-I/O',
-});
-// Prozentanzeige und ARGB-Ausgang teilen sich Hardwareprofil und Laufzeit-
-// profil; sie unterscheiden sich ausschließlich darin, wie homeESS die Pixel
-// berechnet. Nur Binary-I/O ist eine eigene Laufzeitschicht.
-const PIXEL_DEVICE_TYPES = Object.freeze(['percentage_indicator', 'argb_output']);
-const CHANNEL_LABELS = Object.freeze({
-  stable: 'Stabil', beta: 'Beta', development: 'Entwicklung',
 });
 const DEFAULT_BINARY_PIN_SLOTS = 5;
 
-// Der Gerätetyp ist exklusiv — ein Gerät ist Prozentanzeige, ARGB-Ausgang oder
-// Binary-I/O, niemals mehreres. Maßgeblich ist die persistierte Hardware-
+// Der Gerätetyp ist exklusiv — ein Gerät ist entweder Prozentanzeige oder
+// Binary-I/O, niemals beides. Maßgeblich ist die persistierte Hardware-
 // konfiguration: Das Runtime-Profil folgt ihr erst, nachdem das Gerät den
-// Typwechsel übernommen hat. Bis dahin würde eine Auswertung des Profils den
-// bereits abgewählten Typ weiterlaufen lassen — und zwischen den beiden
-// Pixeltypen unterscheidet das Profil ohnehin nicht.
+// Typwechsel per Neustart übernommen hat. Bis dahin würde eine Auswertung des
+// Profils den bereits abgewählten Typ weiterlaufen lassen.
 function deviceTypeOf(device) {
   const config = device && device.hardwareConfig;
   if (config && typeof config === 'object') {
-    // Der ausgewiesene Typ hat Vorrang. `pins` allein taugt nicht mehr als
-    // Erkennungsmerkmal, seit auch der ARGB-Ausgang Binary-Rollen führt.
-    if (config.device_type === 'binary_io') return 'binary_io';
-    if (config.device_type === 'argb_output') return 'argb_output';
+    if (config.device_type === 'binary_io' || Array.isArray(config.pins)) return 'binary_io';
     if (typeof config.device_type === 'string' && config.device_type) return 'percentage_indicator';
-    if (Array.isArray(config.pins)) return 'binary_io';
   }
   return device && device.runtimeProfile === BINARY_RUNTIME_PROFILE
     ? 'binary_io' : 'percentage_indicator';
@@ -429,28 +300,6 @@ function deviceTypeOf(device) {
 
 function isBinaryDevice(device) {
   return deviceTypeOf(device) === 'binary_io';
-}
-
-function isArgbDevice(device) {
-  return deviceTypeOf(device) === 'argb_output';
-}
-
-// Beide Typen belegen GPIOs als Binary-Ein- und -Ausgänge und teilen sich
-// deshalb die gesamte Binary-Verarbeitung: Bindungen, Abonnements, Ereignisse,
-// Ausgangswünsche und States. Für die Seitenauswahl bleibt `isBinaryDevice`
-// maßgeblich — nur `binary_io` ist ein reines Binary-Gerät.
-function hasBinaryIo(device) {
-  return isBinaryDevice(device) || isArgbDevice(device);
-}
-
-// Die Zahl der ansteuerbaren LEDs steht ausschließlich in der Hardware-
-// konfiguration des Geräts; sie ist damit frei wählbar und begrenzt zugleich,
-// wie viele States überhaupt verknüpft werden können.
-function argbPixelCount(device) {
-  const config = device && device.hardwareConfig;
-  const output = config && Array.isArray(config.outputs) ? config.outputs[0] : null;
-  const count = output && Number(output.pixel_count);
-  return Number.isInteger(count) && count > 0 ? count : 0;
 }
 
 // Ein Gerät bietet nur die Typen an, die sein Manifest ausweist. Ältere
@@ -484,21 +333,6 @@ function releaseInterruptedOta(device) {
     progress_percent: 0,
     message: 'Vorheriger Updatevorgang wurde unterbrochen; ein neuer Versuch ist möglich.',
   };
-  return true;
-}
-
-// Ein gescheitertes Update wird im Adapter gemerkt, damit der Fehlschlag
-// sichtbar bleibt und nicht spurlos verschwindet. Maßgeblich ist aber immer das
-// Gerät: Meldet es selbst keinen gescheiterten OTA-Vorgang mehr, ist der
-// gemerkte Fehlschlag überholt. Ohne diesen Abgleich klebte er dauerhaft an
-// einem längst aktualisierten Gerät — etwa wenn der Fehlschlag nur in der
-// Nachverifikation lag und das Gerät danach doch sauber hochkam. Ein laufendes
-// Update bleibt unangetastet; dessen Zustand gehört updateFirmware.
-function reconcileOtaProgress(device, status, updateRunning = false) {
-  if (!device || !device.otaProgress || device.otaProgress.state !== 'failed') return false;
-  if (updateRunning) return false;
-  if (!status || status.state === 'failed') return false;
-  device.otaProgress = null;
   return true;
 }
 
@@ -544,7 +378,7 @@ function deviceStateCatalog(device) {
     { address: `${root}/config-revision`, name: 'Konfigurationsrevision', category },
     { address: `${root}/last-error`, name: 'Letzter Fehler', category },
   ];
-  if (hasBinaryIo(device)) {
+  if (isBinaryDevice(device)) {
     const pinCategory = `${device.name || device.deviceId} / Binary-I/O`;
     for (const pin of (device.hardwareConfig && Array.isArray(device.hardwareConfig.pins)
       ? device.hardwareConfig.pins : [])) {
@@ -552,17 +386,6 @@ function deviceStateCatalog(device) {
         address: `${root}/binary/pin-${pin.pin}`,
         name: `GPIO ${pin.pin} (${pin.direction === 'input' ? pin.input_type : 'output'})`,
         category: pinCategory,
-      });
-    }
-  }
-  if (isArgbDevice(device)) {
-    const ledCategory = `${device.name || device.deviceId} / ARGB-Ausgang`;
-    for (const key of Object.keys(device.bindings && device.bindings.argb ? device.bindings.argb : {})
-      .map(Number).filter(Number.isInteger).sort((left, right) => left - right)) {
-      states.push({
-        address: `${root}/argb/led-${key}`,
-        name: `LED ${key + 1}`,
-        category: ledCategory,
       });
     }
   }
@@ -659,21 +482,12 @@ function createHdpAdapter(host, dependencies = {}) {
       { address: `${root}/config-revision`, value: device.configRevision == null ? '' : device.configRevision },
       { address: `${root}/last-error`, value: device.lastError || '' },
     ];
-    if (hasBinaryIo(device)) {
+    if (isBinaryDevice(device)) {
       for (const pin of (device.hardwareConfig && Array.isArray(device.hardwareConfig.pins)
         ? device.hardwareConfig.pins : [])) {
         const state = device.binaryStates && device.binaryStates[String(pin.pin)];
         values.push({
           address: `${root}/binary/pin-${pin.pin}`,
-          value: state == null ? '' : !!state,
-        });
-      }
-    }
-    if (isArgbDevice(device)) {
-      for (const key of Object.keys(device.bindings && device.bindings.argb ? device.bindings.argb : {})) {
-        const state = device.argbStates && device.argbStates[key];
-        values.push({
-          address: `${root}/argb/led-${key}`,
           value: state == null ? '' : !!state,
         });
       }
@@ -833,109 +647,9 @@ function createHdpAdapter(host, dependencies = {}) {
     }
   }
 
-  // Beide Pixel-Gerätetypen schreiben ihren Wunschzustand nach pendingRender
-  // und lassen ihn von genau einer Schleife zustellen. Ein während der
-  // Übertragung nachrückender Zustand ersetzt den wartenden, statt sich
-  // aufzustauen — die Anzeige folgt so immer dem jüngsten Stand.
-  function drainRenderQueue(device) {
-    if (device.renderQueue) return;
-    device.renderQueue = (async () => {
-      while (device.pendingRender) {
-        const pending = device.pendingRender;
-        device.pendingRender = null;
-        if (!device.connection || !device.connection.ready || !device.outputClient) continue;
-        if (pending.runtimeBrightness != null) {
-          await device.outputClient.setRuntimeBrightness(
-            pending.outputId, pending.runtimeBrightness,
-          );
-        }
-        if (pending.direction) {
-          const timeline = compileIndicatorTimeline(pending.pixels, {
-            direction: pending.direction,
-            ...device.bindings.indicator,
-          }, device.manifest.limits);
-          const timelineId = `indicator-${timeline.sha256.slice(0, 16)}`;
-          await device.outputClient.setTimeline(pending.outputId, timelineId, timeline);
-        } else {
-          await device.outputClient.setFrame(pending.outputId, pending.pixels);
-        }
-        if (clearAppliedOutputError(device)) publishDevice(device);
-      }
-    })().catch((error) => {
-      device.lastError = `[${error.code || 'OUTPUT'}] ${error.message}`;
-      host.error(`hDP-Output ${device.deviceId}: ${device.lastError}`);
-      publishDevice(device);
-    }).finally(() => {
-      device.renderQueue = null;
-      if (device.pendingRender) drainRenderQueue(device);
-    });
-  }
-
-  // Die Statusanzeige rechnet ausschließlich hier: Aus den verknüpften States
-  // und ihren Einschaltkriterien entsteht ein vollständiger Frame. Das Gerät
-  // kennt weder States noch Kriterien, es zeigt nur das fertige Bild.
-  function applyArgbRuntime(device) {
-    const output = device.hardwareConfig && device.hardwareConfig.outputs
-      && device.hardwareConfig.outputs[0];
-    if (!output) throw new Error('Kein generischer hDP-Ausgang konfiguriert.');
-    const { pixels, states } = renderArgbFrame(device);
-    device.argbStates = states;
-    const nativeRuntimeBrightness = device.manifest.features.runtime_brightness === true;
-    const brightness = dynamicBrightness(device);
-    device.requestedBrightness = brightness;
-    device.effectiveBrightness = effectiveDynamicBrightness(
-      device, device.reportedBrightnessLimit == null
-        ? hardwareBrightnessLimit(device) : device.reportedBrightnessLimit,
-    );
-    device.pendingRender = {
-      outputId: output.output_id,
-      pixels: nativeRuntimeBrightness
-        ? pixels : pixels.map((pixel) => scaleColor(pixel, brightness / 100)),
-      direction: null,
-      runtimeBrightness: nativeRuntimeBrightness ? brightness : null,
-    };
-    drainRenderQueue(device);
-  }
-
-  // Jede LED hängt an genau einem State; derselbe State darf mehrere LEDs
-  // versorgen. Der Rohwert wird gemerkt, damit ein Kriteriumswechsel ohne
-  // erneutes Eintreffen des Wertes sofort wirkt.
-  function subscribeArgbSources(device) {
-    device.argbValues = device.argbValues || {};
-    for (const [key, binding] of Object.entries(device.bindings.argb || {})) {
-      if (!binding || !binding.topic) continue;
-      const unsubscribe = host.subscribeState(binding.topic, (value) => {
-        device.argbValues[key] = value;
-        applyRuntime(device);
-      });
-      device.unsubscribers.push(unsubscribe);
-    }
-    if (device.bindings.brightness.mode === 'separate_numeric_source'
-        && device.bindings.brightness.topic) {
-      const unsubscribe = host.subscribeState(device.bindings.brightness.topic, (value) => {
-        try {
-          device.rawBrightness = finite(value, 'Helligkeitsquelle');
-          applyRuntime(device);
-        } catch (err) {
-          device.lastError = `Helligkeitsquelle: ${err.message}`;
-          publishDevice(device);
-        }
-      });
-      device.unsubscribers.push(unsubscribe);
-    }
-  }
-
   function applyRuntime(device) {
     try {
       if (isBinaryDevice(device)) {
-        publishDevice(device);
-        return;
-      }
-      if (isArgbDevice(device)) {
-        if (/^(Datenquelle:|Helligkeitsquelle:|Statusquelle)/.test(device.lastError || '')) {
-          device.lastError = '';
-        }
-        applyArgbRuntime(device);
         publishDevice(device);
         return;
       }
@@ -947,24 +661,44 @@ function createHdpAdapter(host, dependencies = {}) {
         const output = device.hardwareConfig && device.hardwareConfig.outputs
           && device.hardwareConfig.outputs[0];
         if (!output) throw new Error('Kein generischer hDP-Ausgang konfiguriert.');
-        const nativeRuntimeBrightness = device.manifest.features.runtime_brightness === true;
         const pixels = renderPercentageFrame({
           pixelCount: output.pixel_count,
           percentage: state.percentage,
           color: state.color,
-          brightness: nativeRuntimeBrightness ? 100 : state.brightness,
+          brightness: state.brightness,
           fractional: device.bindings.display.fractional_pixel,
         });
         const direction = device.rawRising && !device.rawFalling ? 'rising'
           : device.rawFalling && !device.rawRising ? 'falling' : null;
         device.indicatorDirection = direction;
-        device.pendingRender = {
-          outputId: output.output_id,
-          pixels,
-          direction,
-          runtimeBrightness: nativeRuntimeBrightness ? state.brightness : null,
-        };
-        drainRenderQueue(device);
+        device.pendingRender = { outputId: output.output_id, pixels, direction };
+        if (!device.renderQueue) {
+          device.renderQueue = (async () => {
+            while (device.pendingRender) {
+              const pending = device.pendingRender;
+              device.pendingRender = null;
+              if (!device.connection || !device.connection.ready || !device.outputClient) continue;
+              if (pending.direction) {
+                const timeline = compileIndicatorTimeline(pending.pixels, {
+                  direction: pending.direction,
+                  ...device.bindings.indicator,
+                }, device.manifest.limits);
+                const timelineId = `indicator-${timeline.sha256.slice(0, 16)}`;
+                await device.outputClient.setTimeline(pending.outputId, timelineId, timeline);
+              } else {
+                await device.outputClient.setFrame(pending.outputId, pending.pixels);
+              }
+              if (clearAppliedOutputError(device)) publishDevice(device);
+            }
+          })().catch((error) => {
+            device.lastError = `[${error.code || 'OUTPUT'}] ${error.message}`;
+            host.error(`hDP-Output ${device.deviceId}: ${device.lastError}`);
+            publishDevice(device);
+          }).finally(() => {
+            device.renderQueue = null;
+            if (device.pendingRender) applyRuntime(device);
+          });
+        }
       } else if (device.legacyOutput) {
         device.legacyOutput.sendState(state);
       }
@@ -980,16 +714,6 @@ function createHdpAdapter(host, dependencies = {}) {
     device.unsubscribers = [];
     if (isBinaryDevice(device)) {
       subscribeBinarySources(device);
-      return;
-    }
-    if (isArgbDevice(device)) {
-      subscribeArgbSources(device);
-      // Derselbe Gerätetyp führt zusätzlich die Binary-Rollen der übrigen
-      // GPIOs; deren Abonnements laufen unverändert über den Binary-Pfad.
-      subscribeBinarySources(device);
-      if (!Object.keys(device.bindings.argb || {}).length) {
-        device.lastError = 'Noch keine LED mit einem State verknüpft.';
-      }
       return;
     }
     if (!device.bindings.indicator.rising_topic) device.rawRising = false;
@@ -1042,7 +766,7 @@ function createHdpAdapter(host, dependencies = {}) {
         const remote = await clientFor(device).config();
         device.hardwareConfig = remote;
         device.configRevision = remote.revision;
-        normalizeDeviceBindings(device, remote);
+        device.bindings.binary = normalizeBinaryBindings(device.bindings, remote);
         subscribeSources(device);
         publishCatalog();
         persist();
@@ -1076,7 +800,7 @@ function createHdpAdapter(host, dependencies = {}) {
       publishDevice(device);
       persist();
       if (device.outputClient) device.outputClient.sessionStarted();
-      if (hasBinaryIo(device)) applyBinaryOutputs(device);
+      if (isBinaryDevice(device)) applyBinaryOutputs(device);
       applyRuntime(device);
       // Ein zurückgekehrtes Gerät sofort prüfen, statt bis zum nächsten Takt zu
       // warten — sonst wäre „Update nach Wiederkehr nachholen“ eine Minute
@@ -1090,7 +814,7 @@ function createHdpAdapter(host, dependencies = {}) {
       device.effectiveBrightness = null;
       device.estimatedCurrent = null;
       device.powerLimited = null;
-      if (hasBinaryIo(device)) {
+      if (isBinaryDevice(device)) {
         device.binaryStates = device.binaryStates || {};
         for (const pin of (device.hardwareConfig && Array.isArray(device.hardwareConfig.pins)
           ? device.hardwareConfig.pins : [])) {
@@ -1112,17 +836,13 @@ function createHdpAdapter(host, dependencies = {}) {
     });
     connection.on('status', (status) => {
       device.rssi = status.wifi_rssi == null ? status.rssi : status.wifi_rssi;
-      const nativeRuntimeBrightness = device.manifest && device.manifest.features
-        && device.manifest.features.runtime_brightness === true;
-      if (!nativeRuntimeBrightness && status.effective_brightness != null) {
+      if (status.effective_brightness != null) {
         device.reportedBrightnessLimit = status.effective_brightness;
       }
-      device.effectiveBrightness = nativeRuntimeBrightness
-        ? status.effective_brightness
-        : effectiveDynamicBrightness(
-          device, device.reportedBrightnessLimit == null
-            ? hardwareBrightnessLimit(device) : device.reportedBrightnessLimit,
-        );
+      device.effectiveBrightness = effectiveDynamicBrightness(
+        device, device.reportedBrightnessLimit == null
+          ? hardwareBrightnessLimit(device) : device.reportedBrightnessLimit,
+      );
       device.estimatedCurrent = status.estimated_current_milliamps;
       device.powerLimited = status.power_limit_active;
       publishDevice(device);
@@ -1198,7 +918,7 @@ function createHdpAdapter(host, dependencies = {}) {
       unsubscribers: [],
     };
     releaseInterruptedOta(device);
-    normalizeDeviceBindings(device, device.hardwareConfig);
+    device.bindings.binary = normalizeBinaryBindings(device.bindings, device.hardwareConfig);
     devices.set(device.deviceId, device);
   }
 
@@ -1303,7 +1023,7 @@ function createHdpAdapter(host, dependencies = {}) {
       && ['invalid', 'storage_unavailable'].includes(device.lastBoot.config_load_status));
     device.lastError = '';
     device.bindings = mergeBindings(device.bindings);
-    normalizeDeviceBindings(device, device.hardwareConfig);
+    device.bindings.binary = normalizeBinaryBindings(device.bindings, device.hardwareConfig);
     device.updateSettings = { ...defaultUpdateSettings(), ...(device.updateSettings || config.globalUpdateSettings || {}) };
     await persistRequired();
     publishCatalog();
@@ -1441,7 +1161,7 @@ function createHdpAdapter(host, dependencies = {}) {
       const result = await clientFor(device).putConfig(expected, validated, capabilities);
       device.hardwareConfig = result;
       device.configRevision = result.revision == null ? expected + 1 : result.revision;
-      normalizeDeviceBindings(device, result);
+      device.bindings.binary = normalizeBinaryBindings(device.bindings, result);
       device.name = requestedName || device.name;
       device.configOrigin = 'homeess';
       if (device.outputClient) device.outputClient.sessionStarted();
@@ -1535,55 +1255,13 @@ function createHdpAdapter(host, dependencies = {}) {
     return bindings;
   }
 
-  function validateArgbBindings(device, input) {
-    const bindings = mergeBindings(input);
-    const pixelCount = argbPixelCount(device);
-    const source = input && input.argb && typeof input.argb === 'object' ? input.argb : {};
-    const assigned = {};
-    for (const [key, entry] of Object.entries(source)) {
-      const index = Number(key);
-      if (!Number.isInteger(index) || index < 0 || index >= pixelCount) {
-        throw new Error(`LED ${key}: Es gibt nur ${pixelCount} LEDs auf diesem Strang.`);
-      }
-      const current = entry && typeof entry === 'object' && !Array.isArray(entry) ? entry : {};
-      const topic = String(current.topic || '').trim();
-      if (!topic) continue;
-      const label = `LED ${index + 1}`;
-      const standard = defaultArgbBinding();
-      assigned[String(index)] = {
-        topic,
-        ...validateArgbCondition(current, label),
-        color_on: argbColor(current.color_on, standard.color_on),
-        color_off: argbColor(current.color_off, standard.color_off),
-      };
-    }
-    // Die Helligkeit teilt sich der ARGB-Ausgang mit der Prozentanzeige; sie
-    // begrenzt nur, wie hell das fertige Bild ausgegeben wird.
-    if (!['fixed', 'separate_numeric_source'].includes(bindings.brightness.mode)) {
-      throw new Error('Ungültiger Helligkeitsmodus.');
-    }
-    if (bindings.brightness.mode === 'fixed') {
-      bounded(bindings.brightness.fixed, 0, 100, 'Dynamische Helligkeit');
-    } else {
-      if (!bindings.brightness.topic) throw new Error('Helligkeitsquelle fehlt.');
-      Object.assign(bindings.brightness, sourceParts(bindings.brightness.topic));
-    }
-    bindings.argb = assigned;
-    // Der ARGB-Ausgang führt zusätzlich Binary-Ein- und -Ausgänge. Sie werden
-    // exakt nach denselben Regeln geprüft wie beim reinen Binary-I/O-Gerät.
-    bindings.binary = validateBinaryBindings(device, input).binary;
-    return bindings;
-  }
-
   function saveBindings(deviceId, input) {
     const device = requirePaired(deviceId);
     const previousBindings = device.bindings;
     const nextBindings = isBinaryDevice(device)
       ? validateBinaryBindings(device, input.bindings || input)
-      : isArgbDevice(device)
-        ? validateArgbBindings(device, input.bindings || input)
-        : validateBindings(input.bindings || input);
-    if (!isBinaryDevice(device) && !isArgbDevice(device)) {
+      : validateBindings(input.bindings || input);
+    if (!isBinaryDevice(device)) {
       resetChangedIndicatorState(device, previousBindings, nextBindings);
     }
     device.bindings = nextBindings;
@@ -1666,9 +1344,6 @@ function createHdpAdapter(host, dependencies = {}) {
     device.firmwareInfo = info;
     device.firmwareStatus = status;
     if (info.ota_port) device.otaPort = info.ota_port;
-    if (reconcileOtaProgress(device, status, activeFirmwareUpdates.has(device.deviceId))) {
-      publishDevice(device);
-    }
     persist();
     return { info, status };
   }
@@ -1687,16 +1362,6 @@ function createHdpAdapter(host, dependencies = {}) {
     } catch (error) {
       return { available: false, reason: error.message };
     }
-  }
-
-  function availableFirmwareUpdates() {
-    const updates = [];
-    for (const device of devices.values()) {
-      if (device.bindingState !== 'active' || !device.paired) continue;
-      const candidate = firmwareCandidate(device);
-      if (candidate.available) updates.push({ device, candidate });
-    }
-    return updates;
   }
 
   // Überträgt das zentral hinterlegte Release. Der Ablauf bleibt der normative:
@@ -1790,42 +1455,6 @@ function createHdpAdapter(host, dependencies = {}) {
     }
   }
 
-  // Sammelupdates laufen bewusst nacheinander. So konkurrieren die Geräte
-  // weder um Uploadbandbreite noch um Adapterzustand; ein einzelner Fehler
-  // verhindert trotzdem nicht, dass die übrigen Geräte aktualisiert werden.
-  async function updateAllFirmware() {
-    const planned = availableFirmwareUpdates();
-    const results = [];
-    for (const { device, candidate } of planned) {
-      const fromVersion = device.firmwareInfo && device.firmwareInfo.version;
-      try {
-        const result = await updateFirmware(device.deviceId);
-        results.push({
-          deviceId: device.deviceId,
-          name: device.name || device.hostname || device.deviceId,
-          status: 'updated',
-          fromVersion: fromVersion || null,
-          version: result.installed.version,
-        });
-      } catch (error) {
-        results.push({
-          deviceId: device.deviceId,
-          name: device.name || device.hostname || device.deviceId,
-          status: 'failed',
-          version: candidate.release.version,
-          code: error.code || null,
-          error: error.message,
-        });
-      }
-    }
-    return {
-      total: results.length,
-      updated: results.filter((entry) => entry.status === 'updated').length,
-      failed: results.filter((entry) => entry.status === 'failed').length,
-      results,
-    };
-  }
-
   async function restartFirmware(deviceId) {
     const device = requirePaired(deviceId);
     if (!device.firmwareStatus || device.firmwareStatus.state !== 'ready_to_restart') {
@@ -1842,49 +1471,22 @@ function createHdpAdapter(host, dependencies = {}) {
     device.online = false;
     device.otaProgress = { state: 'restarting', progress_percent: 100 };
     publishDevice(device);
-    // Post-Boot-Prüfung erfolgt begrenzt und ausschließlich lokal. Ein Gerät
-    // braucht nach dem Neustart mehr als eine Minute, wenn es das Image erst
-    // kopiert, die Konfiguration vervollständigt, seine Pins einrichtet und
-    // danach WLAN, mDNS und WebSocket aufbaut. Jede erfolglose Runde kostet
-    // zudem die Wiederholungen des HTTP-Clients. Ein zu enges Fenster meldete
-    // deshalb einen Fehlschlag, obwohl das Update sauber durchgelaufen war.
-    const deadline = Date.now() + kRestartVerificationMilliseconds;
-    let reported = null;
+    // Post-Boot-Prüfung erfolgt begrenzt und ausschließlich lokal.
+    const deadline = Date.now() + 60000;
     while (Date.now() < deadline && !stopped) {
       await new Promise((resolve) => setTimeout(resolve, 3000));
       try {
         const current = await refreshFirmware(device);
-        // Die Sollversion kennt der Adapter aus dem laufenden Update. Fehlt
-        // sie — etwa weil ein Neustart nur bestätigt wird, dessen Upload ein
-        // früherer Adapterlauf gemacht hat —, gilt die Zielversion, die das
-        // Gerät selbst meldet. Ohne diesen Rückfall könnte der eigenständige
-        // Neustartknopf nie einen Erfolg melden.
-        const expected = target
-          ? target.manifest.release.version : current.status.target_version;
-        if (current.status.state === 'completed'
-            && (expected == null || current.info.version === expected)) {
+        if (target && current.info.version === target.manifest.release.version
+            && current.status.state === 'completed') {
           device.otaProgress = { state: 'completed', progress_percent: 100 };
           pendingFirmware.delete(deviceId);
           persist();
           return current;
         }
-        reported = current;
-        // Das Gerät antwortet wieder und meldet einen endgültigen Fehlschlag.
-        // Weiter zu warten brächte nichts und würde den Fehler nur verzögern.
-        if (current.status.state === 'failed') break;
       } catch (_) { /* Gerät startet noch */ }
     }
-    // Was das Gerät zuletzt gemeldet hat, gehört in die Meldung: Sonst ist
-    // nicht unterscheidbar, ob es unerreichbar blieb oder mit einer anderen
-    // Version zurückkam.
-    const detail = reported
-      ? `Gerät meldet Version ${reported.info.version} im Zustand ${reported.status.state}`
-        + (reported.status.last_error ? ` (${reported.status.last_error.code})` : '')
-      : 'Gerät war innerhalb der Prüfzeit nicht erreichbar';
-    throw Object.assign(
-      new Error(`Gerät wurde nach dem Firmwareupdate nicht erfolgreich verifiziert. ${detail}.`),
-      { code: reported && reported.status.state === 'failed' ? 'OTA_BOOT_VALIDATION_FAILED' : 'DEVICE_OFFLINE' },
-    );
+    throw new Error('Gerät wurde nach dem Firmwareupdate nicht erfolgreich verifiziert.');
   }
 
   function updateBlockedReason(device, now = new Date()) {
@@ -1968,14 +1570,6 @@ function createHdpAdapter(host, dependencies = {}) {
         { code: 'UNSUPPORTED_DEVICE_TYPE', status: 422 },
       );
     }
-    // Der ARGB-Ausgang setzt den generischen Ausgangsvertrag voraus; die
-    // Legacy-Ausgabeschicht kennt nur die fertig berechnete Prozentanzeige.
-    if (requestedType === 'argb_output' && !existing.runtimeProfile) {
-      throw Object.assign(
-        new Error('Der ARGB-Ausgang benötigt eine Firmware mit generischem Pixel-Ausgang.'),
-        { code: 'UNSUPPORTED_DEVICE_TYPE', status: 422 },
-      );
-    }
     if (requestedType === 'binary_io') {
       const pins = [];
       const slots = binaryPinSlots(existing.manifest);
@@ -1999,23 +1593,9 @@ function createHdpAdapter(host, dependencies = {}) {
     if (existing.runtimeProfile) {
       const outputs = existing.hardwareConfig && Array.isArray(existing.hardwareConfig.outputs)
         ? existing.hardwareConfig.outputs : [];
-      // Beim ARGB-Ausgang fragt das Formular nur den Eingangstyp je GPIO ab.
-      // Die vollständige Liste — Richtungen inklusive — wird hier aus dem
-      // Manifest abgeleitet, damit das Gerät sie nie selbst raten muss.
-      const pins = requestedType === 'argb_output'
-        ? argbOutputPins(
-          (existing.manifest && existing.manifest.hardware_capabilities) || {},
-          number(body.argb_pin, 2),
-          Object.fromEntries(Object.keys(body)
-            .map((name) => /^binary_input_type_(\d+)$/.exec(name))
-            .filter(Boolean)
-            .map((match) => [match[1], body[match[0]]])),
-        )
-        : undefined;
       return validateHardwareConfig({
         revision: number(body.revision, existing.configRevision || 0),
-        device_type: requestedType,
-        ...(pins ? { pins } : {}),
+        device_type: 'percentage_indicator',
         outputs: [{
           output_id: (outputs[0] && outputs[0].output_id) || 'main',
           output_type: 'argb_strip',
@@ -2056,65 +1636,31 @@ function createHdpAdapter(host, dependencies = {}) {
     });
   }
 
-  // Die Binary-Felder sehen bei beiden Gerätetypen gleich aus; sie werden
-  // deshalb auch nur einmal aus dem Formular gelesen.
-  function binaryFromForm(body, device) {
-    const binary = {};
-    for (const pin of (device.hardwareConfig && Array.isArray(device.hardwareConfig.pins)
-      ? device.hardwareConfig.pins : [])) {
-      const key = String(pin.pin);
-      if (pin.direction === 'output') {
-        binary[key] = {
-          topic: String(body[`binary_topic_${key}`] || '').trim(),
-          invert: bool(body[`binary_invert_${key}`]),
-        };
-      } else {
-        let setValue = true;
-        const raw = String(body[`binary_set_value_${key}`] == null
-          ? 'true' : body[`binary_set_value_${key}`]);
-        try { setValue = JSON.parse(raw); } catch (_) { setValue = raw; }
-        binary[key] = {
-          topic: String(body[`binary_topic_${key}`] || '').trim(),
-          action: String(body[`binary_action_${key}`] || (pin.input_type === 'button' ? 'toggle' : 'state')),
-          set_value: setValue,
-          counter_step: number(body[`binary_counter_step_${key}`], 1),
-        };
-      }
-    }
-    return binary;
-  }
-
   function bindingsFromForm(body, device) {
     if (device && isBinaryDevice(device)) {
-      return validateBinaryBindings(device, { binary: binaryFromForm(body, device) });
-    }
-    if (device && isArgbDevice(device)) {
-      const argb = {};
-      for (let index = 0; index < argbPixelCount(device); index += 1) {
-        const key = String(index);
-        argb[key] = {
-          topic: String(body[`argb_topic_${key}`] || '').trim(),
-          operator: String(body[`argb_operator_${key}`] || 'equals'),
-          value: body[`argb_value_${key}`],
-          value_max: body[`argb_value_max_${key}`],
-          color_on: hexColor(body[`argb_color_on_${key}`], { r: 0, g: 255, b: 0 }),
-          color_off: hexColor(body[`argb_color_off_${key}`], { r: 0, g: 0, b: 0 }),
-        };
+      const binary = {};
+      for (const pin of (device.hardwareConfig && Array.isArray(device.hardwareConfig.pins)
+        ? device.hardwareConfig.pins : [])) {
+        const key = String(pin.pin);
+        if (pin.direction === 'output') {
+          binary[key] = {
+            topic: String(body[`binary_topic_${key}`] || '').trim(),
+            invert: bool(body[`binary_invert_${key}`]),
+          };
+        } else {
+          let setValue = true;
+          const raw = String(body[`binary_set_value_${key}`] == null
+            ? 'true' : body[`binary_set_value_${key}`]);
+          try { setValue = JSON.parse(raw); } catch (_) { setValue = raw; }
+          binary[key] = {
+            topic: String(body[`binary_topic_${key}`] || '').trim(),
+            action: String(body[`binary_action_${key}`] || (pin.input_type === 'button' ? 'toggle' : 'state')),
+            set_value: setValue,
+            counter_step: number(body[`binary_counter_step_${key}`], 1),
+          };
+        }
       }
-      return validateArgbBindings(device, {
-        argb,
-        binary: binaryFromForm(body, device),
-        brightness: {
-          mode: body.brightness_mode || 'fixed',
-          fixed: number(body.brightness_fixed, 100),
-          topic: String(body.brightness_topic || '').trim(),
-          input_min: number(body.brightness_input_min, 0),
-          input_max: number(body.brightness_input_max, 100),
-          output_min: number(body.brightness_output_min, 0),
-          output_max: number(body.brightness_output_max, 100),
-          clamp: bool(body.brightness_clamp), invert: bool(body.brightness_invert),
-        },
-      });
+      return validateBinaryBindings(device, { binary });
     }
     return validateBindings({
       percentage: {
@@ -2147,16 +1693,11 @@ function createHdpAdapter(host, dependencies = {}) {
     });
   }
 
-  // `allowed` grenzt die Auswahl weiter ein: Beim ARGB-Ausgang kommen nur
-  // GPIOs mit internem Pull-up als Datenpin infrage, weil die übrigen dort
-  // fest als Ausgänge geführt werden.
-  function gpioOptions(device, selected, allowed = null) {
+  function gpioOptions(device, selected) {
     const pins = device.manifest && device.manifest.hardware_capabilities
       && device.manifest.hardware_capabilities.argb_pins;
-    return (Array.isArray(pins) ? pins : [])
-      .filter((pin) => !Array.isArray(allowed) || allowed.includes(pin))
-      .map((pin) =>
-        `<option value="${pin}"${Number(selected) === Number(pin) ? ' selected' : ''}>GPIO ${pin}</option>`).join('');
+    return (Array.isArray(pins) ? pins : []).map((pin) =>
+      `<option value="${pin}"${Number(selected) === Number(pin) ? ' selected' : ''}>GPIO ${pin}</option>`).join('');
   }
 
   // Kein GPIO wird gesperrt; die Eigenheiten einzelner Pins stehen als Hinweis
@@ -2219,36 +1760,6 @@ function createHdpAdapter(host, dependencies = {}) {
     }).join('');
   }
 
-  // Beim ARGB-Ausgang gibt es keine Pinauswahl: Die Belegung folgt zwingend der
-  // Hardware. Zu entscheiden bleibt je Eingang nur Taster oder Schalter.
-  // Gerendert werden alle Kandidaten; welcher davon als Datenpin wegfällt,
-  // blendet das Skript live aus — und der Server verwirft ihn ohnehin.
-  function argbPinRoleSection(device, argbPin) {
-    const capabilities = (device.manifest && device.manifest.hardware_capabilities) || {};
-    const roles = argbOutputPinRoles(capabilities, argbPin);
-    if (!roles.all.length || !roles.fixedOutputs.length) return '';
-    const configured = device.hardwareConfig && Array.isArray(device.hardwareConfig.pins)
-      ? device.hardwareConfig.pins : [];
-    const currentType = (pin) => {
-      const entry = configured.find((item) => item.pin === pin);
-      return entry && entry.input_type === 'button' ? 'button' : 'switch';
-    };
-    const inputRows = roles.dataCandidates.map((pin) => {
-      const note = binaryPinNote(device, pin).replace(/^ · /, '');
-      return `<label class="field-block" data-hdp-argb-input="${pin}">GPIO ${pin}<select name="binary_input_type_${pin}">
-        <option value="switch"${currentType(pin) === 'switch' ? ' selected' : ''}>Schalter</option>
-        <option value="button"${currentType(pin) === 'button' ? ' selected' : ''}>Taster</option>
-      </select>${note ? `<span class="form-hint muted">${esc(note)}</span>` : ''}</label>`;
-    }).join('');
-    return `<section class="dialog-section" data-hdp-type-panel="argb_output">
-      <div class="dialog-section-head"><h4>GPIO-Belegung</h4>
-        <p class="muted">Die Belegung folgt der Hardware und ist nicht frei wählbar. GPIO ${roles.fixedOutputs.join(' und ')} besitzen keinen nutzbaren internen Pull-up und sind deshalb fest Ausgänge — dort lassen sich Relais oder Schütze schalten. Der oben gewählte Datenpin trägt den LED-Strang. Alle übrigen GPIOs werden Eingänge für Taster oder Schalter: aktiv-low gelesen und 30 ms entprellt.</p>
-        ${binaryPinLegend(device)}
-      </div>
-      <div class="dialog-grid dialog-grid--three" data-hdp-argb-inputs>${inputRows}</div>
-    </section>`;
-  }
-
   function binaryBindingRows(device) {
     const bindings = device.bindings.binary || {};
     return (device.hardwareConfig && Array.isArray(device.hardwareConfig.pins)
@@ -2276,57 +1787,6 @@ function createHdpAdapter(host, dependencies = {}) {
           <label class="field">Counter-Schritt<input type="number" step="any" name="binary_counter_step_${key}" value="${esc(binding.counter_step == null ? 1 : binding.counter_step)}"></label>
         </div>
       </section>`;
-    }).join('');
-  }
-
-  // Eine Zeile je LED des Strangs, in physischer Reihenfolge. Nicht belegte
-  // Zeilen bleiben leer und werden beim Speichern verworfen — so ist auch ein
-  // langer Strang ohne Zusatzknöpfe vollständig bedienbar.
-  function argbBindingRows(device) {
-    const bindings = device.bindings.argb || {};
-    const pixelCount = argbPixelCount(device);
-    const rows = Array.from({ length: pixelCount }, (_, index) => {
-      const key = String(index);
-      const binding = { ...defaultArgbBinding(), ...(bindings[key] || {}) };
-      const operators = ARGB_OPERATORS.map((operator) =>
-        `<option value="${operator}"${binding.operator === operator ? ' selected' : ''}>${esc(ARGB_OPERATOR_LABELS[operator])}</option>`).join('');
-      // Beschriftet wird per aria-label statt per <label>: Der State-Picker
-      // hängt seinen Knopf neben das Topic-Feld, und ein umschließendes <label>
-      // würde jeden Klick darauf zusätzlich als Klick aufs Feld auswerten.
-      const led = `LED ${index + 1}`;
-      // Jede Zelle trägt ihre Spaltenüberschrift mit. Wird die Zeile auf
-      // schmalen Anzeigen zur Karte gestapelt, blendet das Stylesheet sie ein —
-      // ohne sie hätte man dort sieben unbeschriftete Felder.
-      const cell = (label, field) =>
-        `<span class="hdp-argb-cell" data-label="${esc(label)}">${field}</span>`;
-      return `<div class="hdp-argb-row"${binding.topic ? '' : ' data-hdp-argb-empty'}>
-        <span class="hdp-argb-index">${index + 1}</span>
-        ${cell('State', `<input data-state-picker name="argb_topic_${key}" value="${esc(binding.topic)}" placeholder="State auswählen" aria-label="${esc(`State für ${led}`)}">`)}
-        ${cell('Einschaltkriterium', `<select name="argb_operator_${key}" aria-label="${esc(`Einschaltkriterium für ${led}`)}">${operators}</select>`)}
-        ${cell('Wert x', `<input name="argb_value_${key}" inputmode="decimal" value="${esc(binding.value)}" placeholder="x" aria-label="${esc(`Vergleichswert für ${led}`)}">`)}
-        ${cell('bis y', `<input name="argb_value_max_${key}" inputmode="decimal" value="${esc(binding.value_max)}" placeholder="y" aria-label="${esc(`Obergrenze für ${led}`)}">`)}
-        ${cell('Farbe an', `<input type="color" name="argb_color_on_${key}" value="${esc(colorHex(binding.color_on))}" aria-label="${esc(`Farbe bei erfülltem Kriterium für ${led}`)}">`)}
-        ${cell('Farbe aus', `<input type="color" name="argb_color_off_${key}" value="${esc(colorHex(binding.color_off))}" aria-label="${esc(`Farbe bei nicht erfülltem Kriterium für ${led}`)}">`)}
-      </div>`;
-    }).join('');
-    return `<div class="hdp-argb-table">
-      <div class="hdp-argb-row hdp-argb-head">
-        <span>LED</span><span>State</span><span>Einschaltkriterium</span><span>Wert x</span><span>bis y</span><span>An</span><span>Aus</span>
-      </div>
-      ${rows}
-    </div>`;
-  }
-
-  function argbStatusStrip(device) {
-    const pixelCount = argbPixelCount(device);
-    const bindings = device.bindings.argb || {};
-    return Array.from({ length: pixelCount }, (_, index) => {
-      const key = String(index);
-      const binding = bindings[key];
-      if (!binding) return '<i class="hdp-argb-dot" title="Nicht belegt"></i>';
-      const active = device.argbStates ? device.argbStates[key] : null;
-      const color = colorHex(active ? binding.color_on : binding.color_off);
-      return `<i class="hdp-argb-dot is-bound" style="background:${esc(color)}" title="${esc(`LED ${index + 1}: ${binding.topic} — ${active == null ? 'unbekannt' : active ? 'erfüllt' : 'nicht erfüllt'}`)}"></i>`;
     }).join('');
   }
 
@@ -2365,58 +1825,34 @@ function createHdpAdapter(host, dependencies = {}) {
   // für alle Plattformen und Boards; hochgeladen wird deshalb einmal hier und
   // nicht mehr je Gerät.
   function renderFirmwareSection(store = releaseStore.summary()) {
-    const updates = availableFirmwareUpdates();
-    const updateAll = updates.length
-      ? `<div class="hdp-firmware-head-actions"><button type="button" id="hdp-update-all-button"
-          data-armed="0" data-label="Alle aktualisieren (${updates.length})" data-count="${updates.length}"
-          onclick="hdpRunUpdateAll(this)">Alle aktualisieren (${updates.length})</button></div>`
-      : '';
-    // Eine Karte je Kanal statt einer sechsspaltigen Tabelle: Die Tabelle war
-    // schon auf dem Notebook nur mit Querscrollen lesbar und auf dem Telefon
-    // gar nicht. Karten stapeln sich von selbst.
-    const cards = store.map((entry) => {
-      const title = `<div class="hdp-channel-head">
-        <h3>${esc(CHANNEL_LABELS[entry.channel] || entry.channel)}</h3>
-        <span class="status-badge ${!entry.present ? 'status-off' : entry.complete ? 'status-ok' : 'status-warn'}">${!entry.present ? 'Leer' : entry.complete ? 'Vollständig' : 'Artefakt fehlt'}</span>
-      </div>`;
+    const rows = store.map((entry) => {
       if (!entry.present) {
-        return `<article class="hdp-channel-card is-empty">${title}
-          <p class="muted">Kein Release hinterlegt.</p>
-        </article>`;
+        return `<tr><td>${esc(entry.channel)}</td><td colspan="4" class="muted">Kein Release hinterlegt</td><td></td></tr>`;
       }
-      const artifacts = entry.artifacts.map((artifact) => `<li${artifact.stored ? '' : ' class="is-missing"'}>
-        <span class="hdp-artifact-name">${esc(artifact.filename)}</span>
-        <span class="hdp-artifact-meta">${esc(artifact.platform)}/${esc(artifact.board)}/${esc(artifact.variant)} · ${Math.round(artifact.size_bytes / 1024)} KiB${artifact.signed ? ' · signiert' : ''}${artifact.stored ? '' : ' · <strong>Datei fehlt</strong>'}</span>
-      </li>`).join('');
-      return `<article class="hdp-channel-card">${title}
-        <p class="hdp-channel-version">${esc(entry.release.version)}</p>
-        <dl class="hdp-channel-facts">
-          <div><dt>Veröffentlicht</dt><dd>${esc(entry.release.published_at || '—')}</dd></div>
-          <div><dt>Build</dt><dd>${esc(entry.release.build_id || '—')}</dd></div>
-        </dl>
-        <ul class="hdp-artifact-list">${artifacts}</ul>
-        <form method="post" action="/adapter/instance/INSTANCE/manage/api/firmware/channel/${encodeURIComponent(entry.channel)}" onsubmit="return confirm('Release im Kanal ${esc(entry.channel)} wirklich entfernen?');"><button class="button-danger">Entfernen</button></form>
-      </article>`;
+      const artifacts = entry.artifacts.map((artifact) =>
+        `<li${artifact.stored ? '' : ' class="is-missing"'}>${esc(artifact.platform)}/${esc(artifact.board)}/${esc(artifact.variant)} · ${esc(artifact.filename)} · ${Math.round(artifact.size_bytes / 1024)} KiB${artifact.signed ? ' · signiert' : ''}${artifact.stored ? '' : ' · <strong>Datei fehlt</strong>'}</li>`).join('');
+      return `<tr>
+        <td>${esc(entry.channel)}</td>
+        <td>${esc(entry.release.version)}</td>
+        <td>${esc(entry.release.published_at || '—')}<br><small class="muted">Build ${esc(entry.release.build_id || '—')}</small></td>
+        <td><ul class="hdp-artifact-list">${artifacts}</ul></td>
+        <td><span class="status-badge ${entry.complete ? 'status-ok' : 'status-warn'}">${entry.complete ? 'Vollständig' : 'Artefakt fehlt'}</span></td>
+        <td><form method="post" action="/adapter/instance/INSTANCE/manage/api/firmware/channel/${encodeURIComponent(entry.channel)}" onsubmit="return confirm('Release im Kanal ${esc(entry.channel)} wirklich entfernen?');"><button class="button-danger">Entfernen</button></form></td>
+      </tr>`;
     }).join('');
-    const channelOptions = ['<option value="">Nach Vorgabe im Manifest</option>'].concat(
-      releaseChannels.map((channel) =>
-        `<option value="${channel}">${esc(CHANNEL_LABELS[channel] || channel)}</option>`),
-    ).join('');
     return `<section class="settings-card hdp-device-section hdp-firmware-store">
-      <div class="settings-card-head hdp-list-head hdp-firmware-head"><div><h2>Firmware</h2><p class="settings-card-hint">Eine universelle Firmware für alle hDP-Geräte. Release-Manifest und die zugehörigen Artefakte werden hier einmal hinterlegt; die Geräte ziehen daraus den Kanal, der in ihren Updateeinstellungen steht.</p></div>${updateAll}</div>
-      <pre id="hdp-update-all-result"></pre>
-      <div class="hdp-firmware-body">
-        <div class="hdp-upload-grid">
-          <label class="field">Release-Manifest (.json)<input type="file" id="hdp-release-manifest" accept=".json,application/json"></label>
-          <label class="field">Firmwareartefakt (.bin)<input type="file" id="hdp-release-artifact" accept=".bin,application/octet-stream" multiple></label>
-          <label class="field">Kanal<select id="hdp-release-channel">${channelOptions}</select>
-            <span class="form-hint muted">Weicht die Auswahl vom Manifest ab, wird es beim Hochladen auf diesen Kanal umgeschrieben und dort abgelegt.</span></label>
-        </div>
-        <div class="button-row"><button type="button" onclick="hdpStoreFirmware()">In den Firmwarespeicher legen</button></div>
-        <pre id="hdp-release-result"></pre>
-        <div class="hdp-channel-grid">${cards}</div>
-        ${renderUsbFlashHelp()}
+      <div class="settings-card-head hdp-list-head"><div><h2>Firmware</h2><p class="settings-card-hint">Eine universelle Firmware für alle hDP-Geräte. Release-Manifest und die zugehörigen Artefakte werden hier einmal hinterlegt; die Geräte ziehen daraus den Kanal, der in ihren Updateeinstellungen steht.</p></div></div>
+      <div class="hdp-form-grid">
+        <div class="field"><label>Release-Manifest (.json)</label><input type="file" id="hdp-release-manifest" accept=".json,application/json"></div>
+        <div class="field"><label>Firmwareartefakt (.bin)</label><input type="file" id="hdp-release-artifact" accept=".bin,application/octet-stream" multiple></div>
       </div>
+      <div class="button-row"><button type="button" onclick="hdpStoreFirmware()">In den Firmwarespeicher legen</button></div>
+      <pre id="hdp-release-result"></pre>
+      <div class="hdp-table-scroll"><table class="hdp-release-table">
+        <thead><tr><th>Kanal</th><th>Version</th><th>Veröffentlicht</th><th>Artefakte</th><th>Status</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+      ${renderUsbFlashHelp()}
     </section>`;
   }
 
@@ -2585,19 +2021,14 @@ hdp-flash.exe --channel development</code></pre>
       && Array.isArray(device.manifest.hardware_capabilities.color_orders)
       ? device.manifest.hardware_capabilities.color_orders.filter((value) => ['RGB', 'GRB'].includes(value))
       : ['RGB', 'GRB'];
-    const currentArgbPin = hardware.argb_pin == null ? 2 : hardware.argb_pin;
-    const argbRoles = argbOutputPinRoles(
-      (device.manifest && device.manifest.hardware_capabilities) || {}, currentArgbPin,
-    );
     const typeOptions = available.map((type) =>
       `<option value="${type}"${type === currentType ? ' selected' : ''}>${esc(DEVICE_TYPE_LABELS[type])}</option>`).join('');
     const typeHint = available.length > 1
-      ? 'Ein Gerät erfüllt genau eine Aufgabe. Prozentanzeige und ARGB-Ausgang teilen sich denselben LED-Strang; ein Wechsel nach Binary-I/O startet das Gerät neu.'
+      ? 'Ein Gerät ist entweder Prozentanzeige oder Binary-I/O. Beim Wechsel startet das Gerät neu.'
       : 'Dieses Gerät bietet laut Manifest nur diesen Gerätetyp an.';
     const percentageSections = `
-      <section class="dialog-section" data-hdp-type-panel="percentage_indicator argb_output"><div class="dialog-section-head"><h4>LED-Ausgang</h4></div><div class="dialog-grid dialog-grid--three">
-        <label class="field-block" data-hdp-type-panel="percentage_indicator">GPIO<select name="argb_pin">${gpioOptions(device, currentArgbPin, null)}</select><span class="form-hint muted">Aus dem Gerätemanifest</span></label>
-        <label class="field-block" data-hdp-type-panel="argb_output">GPIO<select id="hdp-argb-data-pin" name="argb_pin">${gpioOptions(device, currentArgbPin, argbRoles.dataCandidates)}</select><span class="form-hint muted">Nur GPIOs mit internem Pull-up; die übrigen sind fest Ausgänge.</span></label>
+      <section class="dialog-section" data-hdp-type-panel="percentage_indicator"><div class="dialog-section-head"><h4>LED-Ausgang</h4></div><div class="dialog-grid dialog-grid--three">
+        <label class="field-block">GPIO<select name="argb_pin">${gpioOptions(device, hardware.argb_pin == null ? 2 : hardware.argb_pin)}</select><span class="form-hint muted">Aus dem Gerätemanifest</span></label>
         <label class="field-block">LED-Anzahl<input type="number" name="led_count" min="1" max="${esc(maximumLedCount)}" value="${esc(hardware.led_count || 10)}"></label>
         <label class="field-block">LED-Typ<select name="led_type"><option>WS2812</option></select></label>
         <label class="field-block">Farbreihenfolge<select name="color_order">${colorOrders.map((v) => `<option${hardware.color_order === v ? ' selected' : ''}>${v}</option>`).join('')}</select></label>
@@ -2607,7 +2038,7 @@ hdp-flash.exe --channel development</code></pre>
         <label><input type="checkbox" name="reverse"${hardware.reverse ? ' checked' : ''}> Laufrichtung umkehren</label>
         ${legacy ? `<label><input type="checkbox" name="fractional_led"${display.fractional_led !== false ? ' checked' : ''}> Anteilige letzte LED</label>` : ''}
       </div></section>
-      <section class="dialog-section" data-hdp-type-panel="percentage_indicator argb_output"><div class="dialog-section-head"><h4>Schutz und Offline-Verhalten</h4></div><div class="dialog-grid dialog-grid--two">
+      <section class="dialog-section" data-hdp-type-panel="percentage_indicator"><div class="dialog-section-head"><h4>Schutz und Offline-Verhalten</h4></div><div class="dialog-grid dialog-grid--two">
         <label class="field-block">Hardware-Maximalhelligkeit (%)<input type="number" min="0" max="100" name="maximum_brightness_percent" value="${esc(power.maximum_brightness_percent == null ? 35 : power.maximum_brightness_percent)}"></label>
         <label class="field-block">Maximalstrom (mA)<input type="number" min="1" name="maximum_current_milliamps" value="${esc(power.maximum_current_milliamps || 500)}"></label>
         <label class="field-block">Strom je LED (mA)<input type="number" min="1" name="current_per_led_milliamps" value="${esc(power.current_per_led_milliamps || 60)}"></label>
@@ -2623,8 +2054,7 @@ hdp-flash.exe --channel development</code></pre>
           <label class="field-block">Gerätename<input name="device_name" value="${esc(hw.device_name || device.name || '')}"></label>
           <label class="field-block">Gerätetyp<select id="hdp-device-type" name="device_type">${typeOptions}</select><span class="form-hint muted">${esc(typeHint)}</span></label>
         </div></section>
-        ${available.some((type) => PIXEL_DEVICE_TYPES.includes(type)) ? percentageSections : ''}
-        ${available.includes('argb_output') ? argbPinRoleSection(device, currentArgbPin) : ''}
+        ${available.includes('percentage_indicator') ? percentageSections : ''}
         ${binarySection}
         <div class="button-row hdp-dialog-actions"><button type="button" class="button-secondary" onclick="this.closest('dialog').close()">Abbrechen</button><button>Hardware auf Gerät speichern</button></div>
       </form>
@@ -2705,107 +2135,10 @@ hdp-flash.exe --channel development</code></pre>
     </div>`;
   }
 
-  function renderArgbDevicePage(device) {
-    const binding = device.bindings;
-    const pixelCount = argbPixelCount(device);
-    const boundCount = Object.keys(binding.argb || {}).length;
-    const binaryPins = device.hardwareConfig && Array.isArray(device.hardwareConfig.pins)
-      ? device.hardwareConfig.pins : [];
-    const inputCount = binaryPins.filter((pin) => pin.direction === 'input').length;
-    const outputCount = binaryPins.length - inputCount;
-    return `<div class="hdp-device-page">
-      <div class="hdp-device-head"><div>
-        <a class="hdp-back-link" href="/adapter/instance/INSTANCE/manage">← Geräteverwaltung</a>
-        <h1>${esc(device.name || device.deviceId)}</h1>
-        <p class="hdp-device-meta"><code>${esc(device.deviceId)}</code><span>ARGB-Ausgang</span><span>Revision ${esc(device.configRevision)}</span></p>
-      </div><button type="button" class="button-secondary hdp-hardware-open" onclick="hdpOpenHardware()">Hardware einrichten</button></div>
-      ${device.lastError ? `<p class="error-text">${esc(device.lastError)}</p>` : ''}
-      ${device.recoveryRequired ? `<p class="error-text">Recovery erforderlich: ${esc(device.lastBoot.config_load_status)} · ${esc(device.lastBoot.config_load_diagnostic || '')}. Automatische Konfigurationsschreibvorgänge sind gesperrt.</p>` : ''}
-      <section class="settings-card hdp-status-card">
-        <div class="settings-card-head hdp-card-head"><div><h2>Gerätestatus</h2><p class="settings-card-hint">${esc(device.address || 'Keine Netzwerkadresse')} · zuletzt verbunden ${esc(device.lastConnectedAt || '—')}</p></div><span class="status-badge ${device.online ? 'status-ok' : 'status-off'}">${device.online ? 'Online' : 'Offline'}</span></div>
-        <dl class="hdp-status-grid">
-          <div><dt>Verbindung</dt><dd>${esc(device.connectionState || (device.online ? 'Verbunden' : 'Offline'))}</dd><small>Versuch ${esc(device.reconnectAttempt || 0)} · nächster ${esc(device.nextReconnectAt || '—')}</small></div>
-          <div><dt>WLAN</dt><dd>${esc(device.rssi == null ? '—' : `${device.rssi} dBm`)}</dd><small>hDP ${esc(device.protocolVersion || '—')}</small></div>
-          <div><dt>Belegte LEDs</dt><dd>${boundCount} von ${pixelCount}</dd><small>Ausgabe ${esc(device.outputMode || '—')}</small></div>
-          <div><dt>GPIOs</dt><dd>${inputCount} Ein / ${outputCount} Aus</dd><small>${binaryPins.length ? esc(binaryPins.map((pin) => `${pin.pin}${pin.direction === 'input' ? (pin.input_type === 'button' ? 'T' : 'S') : 'A'}`).join(' · ')) : 'nicht eingerichtet'}</small></div>
-          <div><dt>Helligkeit</dt><dd>${esc(device.effectiveBrightness == null ? '—' : `${device.effectiveBrightness} %`)}</dd><small>${esc(device.requestedBrightness == null ? '—' : `${device.requestedBrightness} % von maximal ${hardwareBrightnessLimit(device)} %`)}</small></div>
-          <div><dt>Strom</dt><dd>${esc(device.estimatedCurrent == null ? '—' : `${device.estimatedCurrent} mA`)}</dd><small>Begrenzung ${device.powerLimited == null ? 'unbekannt' : device.powerLimited ? 'aktiv' : 'inaktiv'}</small></div>
-        </dl>
-        ${pixelCount ? `<div class="hdp-argb-strip" aria-label="Aktuelle Anzeige">${argbStatusStrip(device)}</div>` : ''}
-      </section>
-
-      <form class="hdp-settings-form" method="post" action="/adapter/instance/INSTANCE/manage/api/devices/${encodeURIComponent(device.deviceId)}/bindings">
-        ${pixelCount ? `<section class="settings-card hdp-config-card">
-          <div class="settings-card-head"><span class="hdp-section-kicker">01 · Zuordnung</span><h2>States auf LEDs</h2><p class="settings-card-hint">Jede LED zeigt genau einen homeESS-State. Sie leuchtet in der An-Farbe, solange der Wert das Einschaltkriterium erfüllt, sonst in der Aus-Farbe. Zeilen ohne State bleiben dunkel. „bis y“ gilt nur beim Bereichskriterium.</p></div>
-          ${argbBindingRows(device)}
-        </section>` : `<section class="settings-card hdp-config-card">
-          <div class="settings-card-head"><h2>Noch keine LEDs eingerichtet</h2><p class="settings-card-hint">Lege zuerst über „Hardware einrichten“ GPIO und LED-Anzahl des Strangs fest. Danach erscheint hier für jede LED eine Zeile.</p></div>
-        </section>`}
-
-        ${binaryPins.length ? `<section class="settings-card hdp-config-card">
-          <div class="settings-card-head"><span class="hdp-section-kicker">02 · GPIOs</span><h2>Taster, Schalter und Ausgänge</h2><p class="settings-card-hint">Neben dem LED-Strang führt dieses Gerät die übrigen GPIOs als Binary-I/O. Eingänge sind aktiv-low und werden 30 ms entprellt; Ausgänge starten und enden offline immer inaktiv. Welcher GPIO welche Rolle hat, ergibt sich aus der Hardware und steht im Hardwaredialog.</p></div>
-        </section>
-        ${binaryBindingRows(device)}` : ''}
-
-        <section class="settings-card hdp-config-card">
-          <div class="settings-card-head"><span class="hdp-section-kicker">03 · Helligkeit</span><h2>Dynamische Helligkeit</h2><p class="settings-card-hint">Begrenzt die Ausgabe der gesamten Anzeige. Die Hardwaregrenze bleibt davon unberührt und wird ausschließlich im Hardwaredialog festgelegt.</p></div>
-          <div class="hdp-form-grid">
-            <div class="field"><label>Helligkeitsmodus</label><select id="hdp-brightness-mode" name="brightness_mode">
-              <option value="fixed"${binding.brightness.mode === 'fixed' ? ' selected' : ''}>Fester Wert</option>
-              <option value="separate_numeric_source"${binding.brightness.mode !== 'fixed' ? ' selected' : ''}>Separate Zahlenquelle</option>
-            </select></div>
-            <div class="field" data-hdp-brightness-panel="fixed"><label>Feste Helligkeit (% der Hardware-Maximalhelligkeit)</label><input type="number" min="0" max="100" name="brightness_fixed" value="${esc(binding.brightness.fixed)}"></div>
-            <div class="field hdp-span-full" data-hdp-brightness-panel="separate_numeric_source"><label>Helligkeitsquelle</label><input data-state-picker name="brightness_topic" value="${esc(binding.brightness.topic)}" placeholder="State auswählen"></div>
-            <fieldset class="hdp-range-field" data-hdp-brightness-panel="separate_numeric_source"><legend>Eingangsbereich</legend><label>Minimum<input type="number" step="any" name="brightness_input_min" value="${esc(binding.brightness.input_min)}"></label><label>Maximum<input type="number" step="any" name="brightness_input_max" value="${esc(binding.brightness.input_max)}"></label></fieldset>
-            <fieldset class="hdp-range-field" data-hdp-brightness-panel="separate_numeric_source"><legend>Ausgabebereich (% der Hardware-Maximalhelligkeit)</legend><label>Minimum<input type="number" step="any" name="brightness_output_min" value="${esc(binding.brightness.output_min)}"></label><label>Maximum<input type="number" step="any" name="brightness_output_max" value="${esc(binding.brightness.output_max)}"></label></fieldset>
-          </div>
-          <div class="hdp-toggle-row" data-hdp-brightness-panel="separate_numeric_source">
-            <label><input type="checkbox" name="brightness_clamp"${binding.brightness.clamp !== false ? ' checked' : ''}> Auf den Wertebereich begrenzen</label>
-            <label><input type="checkbox" name="brightness_invert"${binding.brightness.invert ? ' checked' : ''}> Helligkeit invertieren</label>
-          </div>
-        </section>
-
-        <section class="settings-card hdp-config-card">
-          <div class="settings-card-head"><span class="hdp-section-kicker">04 · Updates</span><h2>Update-Automatik</h2></div>
-          <div class="hdp-form-grid">
-            <div class="field"><label>Updatepolitik</label><select name="update_mode">
-              <option value="manual"${device.updateSettings.mode === 'manual' ? ' selected' : ''}>Manuell</option>
-              <option value="notify_only"${device.updateSettings.mode === 'notify_only' ? ' selected' : ''}>Nur benachrichtigen</option>
-              <option value="automatic"${device.updateSettings.mode === 'automatic' ? ' selected' : ''}>Automatisch installieren</option>
-            </select></div>
-            <div class="field"><label>Release-Kanal</label><select name="update_channel">
-              <option value="stable"${device.updateSettings.channel === 'stable' ? ' selected' : ''}>Stabil</option>
-              <option value="beta"${device.updateSettings.channel === 'beta' ? ' selected' : ''}>Beta</option>
-              <option value="development"${device.updateSettings.channel === 'development' ? ' selected' : ''}>Entwicklung</option>
-            </select></div>
-            <div class="field"><label>Wiederholungsversuche</label><input type="number" min="0" max="10" name="update_retry_count" value="${esc(device.updateSettings.retry_count)}"></div>
-            <fieldset class="hdp-time-field"><legend>Wartungsfenster</legend><label>Von<input type="time" name="maintenance_start" value="${esc(device.updateSettings.maintenance_window.start)}"></label><label>Bis<input type="time" name="maintenance_end" value="${esc(device.updateSettings.maintenance_window.end)}"></label></fieldset>
-          </div>
-          <div class="hdp-toggle-row">
-            <label><input type="checkbox" name="update_when_online"${device.updateSettings.update_when_device_returns_online ? ' checked' : ''}> Update nach späterer Wiederkehr nachholen</label>
-            <label><input type="checkbox" name="maintenance_enabled"${device.updateSettings.maintenance_window.enabled ? ' checked' : ''}> Wartungsfenster verwenden</label>
-          </div>
-        </section>
-
-        <div class="hdp-save-bar"><p>Zuordnung, Kriterien und Farben werden ausschließlich in homeESS ausgewertet; das Gerät empfängt nur das fertige Bild.</p><button>ARGB-Einstellungen speichern</button></div>
-      </form>
-
-      ${firmwareCard(device)}
-      <section class="settings-card hdp-danger-card"><div class="settings-card-head"><h2>Gerät entkoppeln</h2></div>
-        <p class="error-text">Das Gerät löscht seine WLAN-Zugangsdaten und startet anschließend im Accesspoint-Modus. Hardwarekonfiguration und Gerätetyp bleiben erhalten.</p>
-        <form method="post" action="/adapter/instance/INSTANCE/manage/api/devices/${encodeURIComponent(device.deviceId)}/unpair" onsubmit="return confirm('Gerät wirklich entkoppeln und WLAN-Zugang löschen?');">
-          <input type="hidden" name="confirmation" value="ENTKOPPELN"><button class="button-danger">Gerät entkoppeln</button>
-        </form>
-      </section>
-      ${hardwareDialog(device)}
-    </div>`;
-  }
-
   function renderDevicePage(device) {
     // Der konfigurierte Gerätetyp entscheidet, nicht das Runtime-Profil: Nach
     // einem Typwechsel folgt das Profil erst mit dem Geräteneustart.
     if (isBinaryDevice(device)) return renderBinaryDevicePage(device);
-    if (isArgbDevice(device)) return renderArgbDevicePage(device);
     const binding = device.bindings;
     const firmware = device.firmwareInfo || {};
     const firmwareStatus = device.firmwareStatus || {};
@@ -2971,10 +2304,7 @@ hdp-flash.exe --channel development</code></pre>
           var panels = Array.from(document.querySelectorAll('[data-hdp-type-panel]'));
           function sync() {
             panels.forEach(function(panel) {
-              // Ein Abschnitt darf für mehrere Gerätetypen gelten: Prozent-
-              // anzeige und ARGB-Ausgang beschreiben denselben LED-Strang.
-              var active = (panel.getAttribute('data-hdp-type-panel') || '')
-                .split(/\\s+/).indexOf(select.value) >= 0;
+              var active = panel.getAttribute('data-hdp-type-panel') === select.value;
               panel.hidden = !active;
               // Felder des abgewählten Gerätetyps werden zusätzlich deaktiviert:
               // Ein verstecktes Feld würde sonst weiter mitgesendet und der
@@ -2983,31 +2313,9 @@ hdp-flash.exe --channel development</code></pre>
                 field.disabled = !active;
               });
             });
-            hdpSyncArgbInputs();
           }
           select.addEventListener('change', sync);
           sync();
-        }
-        // Der gewählte ARGB-Datenpin ist kein Eingang; seine Zeile in der
-        // GPIO-Belegung verschwindet. Maßgeblich bleibt aber der Gerätetyp —
-        // ist der ARGB-Ausgang gar nicht gewählt, bleibt der ganze Abschnitt
-        // abgeschaltet. Deshalb läuft dieser Abgleich immer nach dem des Typs.
-        function hdpSyncArgbInputs() {
-          var pinSelect = document.getElementById('hdp-argb-data-pin');
-          if (!pinSelect) return;
-          var typeSelect = document.getElementById('hdp-device-type');
-          var active = !typeSelect || typeSelect.value === 'argb_output';
-          document.querySelectorAll('[data-hdp-argb-input]').forEach(function (row) {
-            var isData = row.getAttribute('data-hdp-argb-input') === pinSelect.value;
-            row.hidden = !active || isData;
-            row.querySelectorAll('select').forEach(function (field) {
-              field.disabled = !active || isData;
-            });
-          });
-        }
-        function hdpBindArgbDataPin() {
-          var pinSelect = document.getElementById('hdp-argb-data-pin');
-          if (pinSelect) pinSelect.addEventListener('change', hdpSyncArgbInputs);
         }
         function hdpUpdateColorPreview() {
           var preview = document.getElementById('hdp-color-preview');
@@ -3072,7 +2380,6 @@ hdp-flash.exe --channel development</code></pre>
         }());
         hdpBindMode('hdp-color-mode', 'data-hdp-color-panel');
         hdpBindMode('hdp-brightness-mode', 'data-hdp-brightness-panel');
-        hdpBindArgbDataPin();
         hdpBindHardwareType();
         // Eine aus dem Verlauf wiederhergestellte Seite behält den DOM-Zustand
         // von damals — inklusive eines noch deaktivierten Knopfes. Ohne dieses
@@ -3154,50 +2461,6 @@ hdp-flash.exe --channel development</code></pre>
             button.textContent = label;
           }
         }
-        async function hdpRunUpdateAll(button) {
-          var out = document.getElementById('hdp-update-all-result');
-          var count = Number(button.getAttribute('data-count')) || 0;
-          var label = button.getAttribute('data-label') || 'Alle aktualisieren';
-          if (button.getAttribute('data-armed') !== '1') {
-            button.setAttribute('data-armed', '1');
-            button.textContent = 'Wirklich alle ' + count + ' aktualisieren?';
-            if (out) out.textContent = 'Die Updates werden nacheinander übertragen. Zum Bestätigen erneut klicken.';
-            window.clearTimeout(button.hdpArmTimer);
-            button.hdpArmTimer = window.setTimeout(function () {
-              button.setAttribute('data-armed', '0');
-              button.textContent = label;
-              if (out && out.textContent.indexOf('erneut klicken') >= 0) out.textContent = '';
-            }, 8000);
-            return;
-          }
-          window.clearTimeout(button.hdpArmTimer);
-          button.setAttribute('data-armed', '0');
-          button.disabled = true;
-          button.textContent = 'Updates laufen …';
-          if (out) out.textContent = '0 von ' + count + ' Geräten abgeschlossen …';
-          try {
-            var response = await fetch(location.pathname.replace(/\\/+$/, '') + '/api/firmware/update-all', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-              body: JSON.stringify({ json: true })
-            });
-            var result = await response.json();
-            if (!response.ok) throw new Error(result.error || 'Sammelupdate fehlgeschlagen');
-            var lines = [result.updated + ' aktualisiert, ' + result.failed + ' fehlgeschlagen.'];
-            (result.results || []).forEach(function (entry) {
-              lines.push((entry.status === 'updated' ? '✓ ' : '✗ ') + entry.name + ': '
-                + (entry.status === 'updated' ? 'Version ' + entry.version : entry.error));
-            });
-            if (out) out.textContent = lines.join('\\n') + '\\nSeite wird neu geladen …';
-            button.disabled = false;
-            button.textContent = label;
-            setTimeout(function () { location.reload(); }, 2500);
-          } catch (err) {
-            if (out) out.textContent = 'Fehler: ' + err.message;
-            button.disabled = false;
-            button.textContent = label;
-          }
-        }
         // Legt Manifest und Artefakte zentral ab. Das Manifest zuerst, weil der
         // Speicher jedes Artefakt gegen die dort deklarierte Größe und Prüfsumme
         // verifiziert, bevor er es übernimmt.
@@ -3217,22 +2480,14 @@ hdp-flash.exe --channel development</code></pre>
           try {
             if (manifestFile) {
               out.textContent = 'Manifest wird geprüft …';
-              var channelSelect = document.getElementById('hdp-release-channel');
               var response = await fetch(base + '/api/firmware/manifest', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-                body: JSON.stringify({
-                  manifest: JSON.parse(await manifestFile.text()),
-                  channel: channelSelect ? channelSelect.value : ''
-                })
+                body: JSON.stringify({ manifest: JSON.parse(await manifestFile.text()) })
               });
               var stored = await response.json();
               if (!response.ok) throw new Error(stored.error || 'Manifest abgelehnt');
               lines.push('Kanal ' + stored.channel + ': Version ' + stored.release.version + ' hinterlegt.');
-              if (stored.retargetedFrom) {
-                lines.push('Manifest von Kanal ' + stored.retargetedFrom + ' auf '
-                  + stored.channel + ' umgeschrieben.');
-              }
               if (stored.missing && stored.missing.length) {
                 lines.push('Fehlende Artefakte: ' + stored.missing.join(', '));
               }
@@ -3322,22 +2577,13 @@ hdp-flash.exe --channel development</code></pre>
       if (method === 'GET' && path === '/api/firmware') {
         return { status: 200, json: { channels: releaseStore.summary() } };
       }
-      if (method === 'POST' && path === '/api/firmware/update-all') {
-        return { status: 200, json: await updateAllFirmware() };
-      }
       if (method === 'POST' && path === '/api/firmware/manifest') {
-        // Nur der Upload von Hand darf den Kanal vorgeben. Kommt kein Wunsch
-        // mit, gilt der Kanal aus dem Manifest — so bleibt es auch, wenn
-        // Releases später automatisch abgeholt werden.
-        const result = releaseStore.saveManifest(
-          request.body.manifest || request.body, { channel: request.body.channel },
-        );
+        const result = releaseStore.saveManifest(request.body.manifest || request.body);
         await runRollout().catch(() => {});
         return {
           status: 200,
           json: {
             channel: result.channel, release: result.manifest.release,
-            retargetedFrom: result.retargetedFrom,
             missing: result.missing.map((artifact) => artifact.filename),
           },
         };
@@ -3545,11 +2791,7 @@ module.exports._test = {
   calculateState, indicatorActive, deviceStateCatalog,
   resetChangedIndicatorState, bindingNeedsReconcile, requestedDeviceName,
   clearAppliedOutputError,
-  number,
   binaryBoolean, normalizeBinaryBindings, binaryEventTarget,
-  defaultArgbBinding, normalizeArgbBindings, renderArgbFrame, argbPixelCount,
-  hexColor, colorHex, argbColor,
-  deviceTypeOf, isBinaryDevice, isArgbDevice, supportedDeviceTypes, binaryPinSlots,
+  deviceTypeOf, isBinaryDevice, supportedDeviceTypes, binaryPinSlots,
   insideMaintenanceWindow, otaInProgress, releaseInterruptedOta,
-  reconcileOtaProgress,
 };

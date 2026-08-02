@@ -9,6 +9,7 @@ process.env.HOME_ESS_DB = path.join(TMP, 'app.db');
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const sqlite3 = require('sqlite3').verbose();
 
 const widgetsRepo = require('../src/dashboard/widgets');
 const systemInfo = require('../src/dashboard/system-info');
@@ -20,14 +21,75 @@ function freshDb() {
   return new Promise((resolve) => setTimeout(() => resolve(db), 300));
 }
 
-test('Wert-Widget: sourceId Pflicht, Typ default value', async () => {
+test('Wert-Widget: State-Topic Pflicht, Typ default value', async () => {
   const db = await freshDb();
-  const widget = await widgetsRepo.createWidget(db, { sourceId: 'pv_leistung' });
+  const widget = await widgetsRepo.createWidget(db, { stateTopic: 'system://homeess/pv_leistung' });
   assert.equal(widget.type, 'value');
-  assert.equal(widget.sourceId, 'pv_leistung');
+  assert.equal(widget.stateTopic, 'system://homeess/pv_leistung');
   assert.equal(widget.infoFields, undefined);
 
-  await assert.rejects(() => widgetsRepo.createWidget(db, { type: 'value', sourceId: '' }), /Wert/);
+  await assert.rejects(() => widgetsRepo.createWidget(db, { type: 'value', stateTopic: '' }), /State/);
+  db.close();
+});
+
+test('Alte Wertekatalog-Bezüge werden dauerhaft als State-Topic migriert', async () => {
+  const db = await freshDb();
+  await new Promise((resolve, reject) => db.run(
+    "INSERT INTO dashboard_widgets (source_id, state_topic, type) VALUES ('pv.current', '', 'value')",
+    (error) => (error ? reject(error) : resolve())
+  ));
+
+  const [widget] = await widgetsRepo.listWidgets(db);
+  assert.equal(widget.stateTopic, 'system://homeess/pv.current');
+  const stored = await new Promise((resolve, reject) => db.get(
+    'SELECT source_id, state_topic FROM dashboard_widgets WHERE id = ?',
+    [widget.id],
+    (error, row) => (error ? reject(error) : resolve(row))
+  ));
+  assert.deepEqual(stored, { source_id: '', state_topic: 'system://homeess/pv.current' });
+  db.close();
+});
+
+test('Alte Widget-Tabelle erhält das neue State-Feld vor der Datenmigration', async () => {
+  const db = new sqlite3.Database(':memory:');
+  await new Promise((resolve, reject) => db.run(
+    `CREATE TABLE dashboard_widgets (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      source_id TEXT NOT NULL DEFAULT '', type TEXT NOT NULL DEFAULT 'value',
+      config TEXT, group_id INTEGER, position INTEGER NOT NULL DEFAULT 0, tab_id INTEGER
+    )`,
+    (error) => (error ? reject(error) : resolve())
+  ));
+  await new Promise((resolve, reject) => db.run(
+    "INSERT INTO dashboard_widgets (source_id, type) VALUES ('pv.today', 'value')",
+    (error) => (error ? reject(error) : resolve())
+  ));
+
+  const [widget] = await widgetsRepo.listWidgets(db);
+  assert.equal(widget.stateTopic, 'system://homeess/pv.today');
+  const columns = await new Promise((resolve, reject) => db.all(
+    'PRAGMA table_info(dashboard_widgets)',
+    (error, rows) => (error ? reject(error) : resolve(rows))
+  ));
+  assert.ok(columns.some((column) => column.name === 'state_topic'));
+  db.close();
+});
+
+test('Topicförmige alte Adapter-Bezüge werden unverändert übernommen', async () => {
+  const db = await freshDb();
+  await new Promise((resolve, reject) => db.run(
+    "INSERT INTO dashboard_widgets (source_id, state_topic, type) VALUES ('modbus://wechselrichter/power', '', 'value')",
+    (error) => (error ? reject(error) : resolve())
+  ));
+
+  const [widget] = await widgetsRepo.listWidgets(db);
+  assert.equal(widget.stateTopic, 'modbus://wechselrichter/power');
+  const stored = await new Promise((resolve, reject) => db.get(
+    'SELECT source_id, state_topic FROM dashboard_widgets WHERE id = ?',
+    [widget.id],
+    (error, row) => (error ? reject(error) : resolve(row))
+  ));
+  assert.deepEqual(stored, { source_id: '', state_topic: 'modbus://wechselrichter/power' });
   db.close();
 });
 
@@ -63,13 +125,13 @@ test('Info-Widget: nur gewählte, gültige Felder in Katalog-Reihenfolge', async
 
 test('Wert-Widget: Größe/Farbe werden validiert und persistiert, Default L', async () => {
   const db = await freshDb();
-  const plain = await widgetsRepo.createWidget(db, { sourceId: 'pv.current' });
+  const plain = await widgetsRepo.createWidget(db, { stateTopic: 'system://homeess/pv.current' });
   // Bestandskompatibler Standard: ohne Angabe Größe L und Standardfarbe.
   assert.equal(plain.size, 'l');
   assert.equal(plain.color, '');
 
   const styled = await widgetsRepo.createWidget(db, {
-    sourceId: 'pv.today',
+    stateTopic: 'system://homeess/pv.today',
     size: 'm',
     color: '#E67E22',
   });
@@ -78,7 +140,7 @@ test('Wert-Widget: Größe/Farbe werden validiert und persistiert, Default L', a
 
   // Ungültige Werte fallen auf die Defaults zurück (serverseitige Validierung).
   const invalid = await widgetsRepo.updateWidget(db, styled.id, {
-    sourceId: 'pv.today',
+    stateTopic: 'system://homeess/pv.today',
     size: 'riesig',
     color: 'rot',
   });

@@ -75,7 +75,7 @@ function buildHost() {
       send({ type: 'storage', key: String(key), value });
     },
     // Wie setStorage(), bestätigt aber erst nach erfolgreichem SQLite-Commit.
-    // Protokolle mit vorab dauerhaft zu sichernden Transaktionen (z. B. HDP-
+    // Protokolle mit vorab dauerhaft zu sichernden Transaktionen (z. B. hDP-
     // Pairing) dürfen erst nach Auflösung dieses Promises fortfahren.
     persistStorage(key, value) {
       if (key == null) return Promise.reject(new Error('Persistenzschlüssel fehlt.'));
@@ -94,6 +94,19 @@ function buildHost() {
         if (!subscriptions.delete(subscriptionId)) return;
         send({ type: 'unsubscribe', subscriptionId });
       };
+    },
+    // Einen Wert gezielt in eine homeESS-Datenquelle schreiben. Die Parent-
+    // Laufzeit übernimmt MQTT-, Adapter- und Schreibschutzregeln zentral.
+    writeState(topic, value) {
+      const target = String(topic || '').trim();
+      if (!target) return Promise.reject(new Error('writeState benötigt ein Ziel-Topic.'));
+      return hostCall('state.write', { topic: target, value });
+    },
+    // Instanzeigenes Datenverzeichnis (0700). Für Nutzdaten, die zu groß für
+    // die Instanz-Settings sind — der Settings-Blob wird bei jedem Persistieren
+    // vollständig neu geschrieben. Das Verzeichnis wird bei Bedarf angelegt.
+    getDataDirectory() {
+      return hostCall('storage.dir');
     },
     getInstanceIdentity() {
       return hostCall('identity');

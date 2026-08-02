@@ -2,7 +2,6 @@
 
 const { renderLayout } = require('./layout');
 const { escapeHtml, statusText } = require('./components');
-const { renderLazyValueCatalog, lazyValueCatalogScript } = require('./value-catalog');
 const {
   WIDGET_TYPE_DEFS,
   widgetTypeDef,
@@ -10,7 +9,7 @@ const {
 } = require('../dashboard/widget-types');
 
 // Dashboard mit frei konfigurierbaren Widgets, Gruppen und Tabs. Widgets zeigen
-// einen internen Wert (gleicher Katalog wie die Outputs), schalten ein Gerät /
+// einen zentralen State, schalten ein Gerät /
 // eine Schaltgruppe oder listen System-Informationen. Anzeige- und
 // Bearbeitungsmodus sind strikt getrennt: Im Anzeigemodus gibt es keine
 // sichtbaren oder platzreservierenden Bearbeitungselemente; im
@@ -85,6 +84,7 @@ ${tabs.map((tab) => renderTabPanel(tab, ctx, tab.id === initialTabId)).join('\n'
     [...tab.ungrouped, ...tab.groups.flatMap((group) => group.widgets)].map((widget) => ({
       id: widget.id,
       type: widget.type || 'value',
+      stateTopic: widget.stateTopic || (widget.type === 'value' ? widget.sourceId : ''),
       sourceId: widget.sourceId,
       label: widget.label || '',
       infoFields: widget.infoFields || null,
@@ -112,9 +112,7 @@ ${tabs.map((tab) => renderTabPanel(tab, ctx, tab.id === initialTabId)).join('\n'
     mobileFull: def.mobileMinWidth === 'full',
   }));
 
-  const script = `${lazyValueCatalogScript()}
-
-    var dashboardWidgets = ${JSON.stringify(clientWidgets)};
+  const script = `    var dashboardWidgets = ${JSON.stringify(clientWidgets)};
     var dashboardGroups = ${JSON.stringify(clientGroups)};
     var dashboardTabs = ${JSON.stringify(clientTabs)};
     var widgetTypeDefs = ${JSON.stringify(clientTypeDefs)};
@@ -274,9 +272,8 @@ ${tabs.map((tab) => renderTabPanel(tab, ctx, tab.id === initialTabId)).join('\n'
       } else {
         form.action = '/dashboard/widgets';
         title.textContent = 'Widget hinzufügen';
-        setWidgetFormValues({ type: 'value', sourceId: '', groupId: '', tabId: activeTabId, infoFields: null, size: 'l', color: '' });
+        setWidgetFormValues({ type: 'value', stateTopic: '', groupId: '', tabId: activeTabId, infoFields: null, size: 'l', color: '' });
       }
-      lazyValueCatalogEnsure('widgetSourceId');
       if (typeof dialog.showModal === 'function') dialog.showModal();
     }
 
@@ -316,11 +313,8 @@ ${tabs.map((tab) => renderTabPanel(tab, ctx, tab.id === initialTabId)).join('\n'
 
     function setWidgetFormValues(values) {
       setWidgetType(values.type || 'value');
-      lazyValueCatalogSetSelected(
-        'widgetSourceId',
-        values.type === 'value' ? (values.sourceId || '') : '',
-        values.type === 'value' ? (values.label || values.sourceId || '') : ''
-      );
+      document.getElementById('widgetStateTopic').value = values.type === 'value'
+        ? (values.stateTopic || values.sourceId || '') : '';
       document.getElementById('widgetGroupId').value = values.groupId == null || values.groupId === '' ? '' : String(values.groupId);
       document.getElementById('widgetTabId').value = values.tabId == null ? String(activeTabId) : String(values.tabId);
       syncWidgetTabSelect();
@@ -959,7 +953,7 @@ function sizeClass(widget) {
 function renderWidgetCard(widget, ctx = {}) {
   if (widget.type === 'info') return renderInfoCard(widget, ctx);
   if (widget.type === 'switch') return renderSwitchCard(widget);
-  const label = widget.label || widget.sourceId;
+  const label = widget.label || widget.stateTopic || widget.sourceId;
   const currentDisplay = widget.currentDisplay == null ? '—' : widget.currentDisplay;
   const colorStyle = widget.color ? ` style="color:${escapeHtml(widget.color)}"` : '';
   return `            <div class="widget-card widget-card--value${sizeClass(widget)}" data-id="${widget.id}" data-type="value">
@@ -1108,7 +1102,10 @@ ${typeTabs}
               </div>
             </div>
             <div class="tab-panel" data-panel="value">
-              ${renderLazyValueCatalog({ inputId: 'widgetSourceId', name: 'sourceId', label: 'Wert' })}
+              <label class="field-block" for="widgetStateTopic">
+                <span>State</span>
+                <input type="text" id="widgetStateTopic" name="stateTopic" data-state-picker autocomplete="off" placeholder="State auswählen…">
+              </label>
               ${renderColorChoice({ fieldId: 'widgetColor', name: 'color', label: 'Farbe des Werts', defaultPicker: '#1a1a2e' })}
             </div>
             <div class="tab-panel" data-panel="switch" hidden>

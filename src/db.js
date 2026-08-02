@@ -158,6 +158,7 @@ function openDatabase() {
       `CREATE TABLE IF NOT EXISTS dashboard_widgets (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         source_id TEXT NOT NULL DEFAULT '',
+        state_topic TEXT NOT NULL DEFAULT '',
         type TEXT NOT NULL DEFAULT 'value',
         config TEXT,
         group_id INTEGER,
@@ -1059,6 +1060,14 @@ function migrateDashboardWidgets(db) {
     // (Widgets in Gruppen erben den Tab der Gruppe). NULL = Standard-Tab.
     if (!existing.has('tab_id')) {
       db.run('ALTER TABLE dashboard_widgets ADD COLUMN tab_id INTEGER');
+    }
+    // Wert-Widgets beziehen ihre Anzeige nun direkt aus dem zentralen
+    // States-Modell. source_id bleibt für Schalter und als lesbarer
+    // Migrationsanker alter Wert-Widgets erhalten; die eigentliche
+    // Datenmigration erfolgt beim Laden in dashboard/widgets.js, weil dort
+    // Katalog-IDs sicher in kanonische State-Topics übersetzt werden können.
+    if (!existing.has('state_topic')) {
+      db.run("ALTER TABLE dashboard_widgets ADD COLUMN state_topic TEXT NOT NULL DEFAULT ''");
     }
   });
 }

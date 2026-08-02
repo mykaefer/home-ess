@@ -45,7 +45,7 @@ function validateBindingId(value, { nullable = false } = {}) {
 
 function validateInstanceId(value) {
   const text = String(value || '');
-  if (!INSTANCE_ID_RE.test(text)) throw new Error('Ungültige HDP-Instanz-ID.');
+  if (!INSTANCE_ID_RE.test(text)) throw new Error('Ungültige hDP-Instanz-ID.');
   return text;
 }
 
@@ -55,17 +55,17 @@ function bindingId(bindingKey) {
 
 function bindingHeaders(credentials) {
   if (!credentials || !credentials.instanceId || !credentials.bindingKey) {
-    throw new Error('HDP-Binding-Credentials fehlen.');
+    throw new Error('hDP-Binding-Credentials fehlen.');
   }
   return {
-    'X-HDP-Instance': validateInstanceId(credentials.instanceId),
-    'X-HDP-Binding-Key': validateBindingKey(credentials.bindingKey),
+    'X-hDP-Instance': validateInstanceId(credentials.instanceId),
+    'X-hDP-Binding-Key': validateBindingKey(credentials.bindingKey),
   };
 }
 
 function basicAuthorization(credentials) {
   if (!credentials || !credentials.instanceId || !credentials.bindingKey) {
-    throw new Error('HDP-Binding-Credentials fehlen.');
+    throw new Error('hDP-Binding-Credentials fehlen.');
   }
   const value = `${validateInstanceId(credentials.instanceId)}:${validateBindingKey(credentials.bindingKey)}`;
   return `Basic ${Buffer.from(value, 'utf8').toString('base64')}`;

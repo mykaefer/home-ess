@@ -507,7 +507,8 @@ curl -fsSL https://raw.githubusercontent.com/mykaefer/home-ess/main/install.sh |
 
 Das Skript installiert die System- und Node.js-Abhängigkeiten, klont homeESS
 nach `/opt/home-ess`, legt eine neue Datenbank unter
-`/var/lib/home-ess/app.db` an und aktiviert den systemd-Dienst.
+`/var/lib/home-ess/app.db` an und aktiviert den systemd-Dienst. Zusätzlich
+richtet es den privilegierten Self-Update-Helper samt systemd-Dateiwächter ein.
 
 Ein erneuter Aufruf desselben Befehls aktualisiert eine bestehende Git-
 Installation unter `/opt/home-ess`: der Dienst wird gestoppt, der Code aus
@@ -517,6 +518,23 @@ erhalten, insbesondere Datenbank und Fernzugriff-Identity-Store.
 
 Existiert `/opt/home-ess`, ist aber kein Git-Checkout, bricht das Skript ab,
 damit eine manuell verwaltete Installation nicht überschrieben wird.
+
+### Self-Update
+
+homeESS fragt einmal täglich das neueste stabile Release im GitHub-Repository
+`mykaefer/home-ess` ab. Ist dessen Version neuer, erscheint für
+Administratoren oben links neben den aktuellen Leistungswerten eine hellgrüne
+Olive. Nach Klick und ausdrücklicher Bestätigung wird das Release vorbereitet
+und homeESS für den eigentlichen Wechsel kurz neu gestartet. Der Fortschritt
+bleibt im Browser sichtbar; nach erfolgreichem Start folgt automatisch das
+Dashboard.
+
+Die Webanwendung selbst erhält dabei keine root-Rechte. Sie legt nur eine eng
+validierte Updateanforderung im Datenverzeichnis ab. `home-ess-update.path`
+startet daraufhin den kurzlebigen `home-ess-update.service`, der ausschließlich
+das fest eingebaute öffentliche Repository verwendet, vor dem Umschalten die
+Releaseversion prüft und bei einem fehlgeschlagenen Start die bisherige
+Installation wiederherstellt. Ein zusätzlicher HTTP-Port wird nicht geöffnet.
 
 ### Manuelle Installation
 

@@ -1,7 +1,7 @@
 'use strict';
 
 // CRUD für Dashboard-Widgets. Ein Widget ist eine **Wert-Kachel** (type 'value',
-// zeigt einen internen Wert aus demselben Katalog wie die Outputs), ein
+// zeigt einen State aus dem zentralen States-Modell), ein
 // **Schalter** (type 'switch', schaltet ein Gerät oder eine Schaltgruppe aus
 // Messen + Schalten) oder eine **Info-Kachel** (type 'info', zeigt ausgewählte
 // System-Informationen). Widgets können einer Gruppe zugeordnet (group_id) und
@@ -17,6 +17,9 @@ const {
   normalizeColor,
 } = require('./widget-types');
 const { normalizeSwitchTarget } = require('./switches');
+const { topicForId } = require('../states/system-topics');
+
+const schemaReady = new WeakMap();
 
 function dbAll(db, sql, params = []) {
   return new Promise((resolve, reject) => {
@@ -49,13 +52,47 @@ function parseConfig(raw) {
   }
 }
 
+// Vor 1.3.35 lagen Wertbezüge in source_id. Adapter- und virtuelle Werte waren
+// dort bereits topicförmig; berechnete Systemwerte verwendeten dagegen ihre
+// fachliche Katalog-ID (z. B. pv.current). Beide Formen werden in das neue,
+// eindeutige State-Topic-Schema überführt.
+function stateTopicFromLegacySource(sourceId) {
+  const value = String(sourceId || '').trim();
+  if (!value) return '';
+  return value.includes('://') ? value : topicForId(value);
+}
+
+function ensureStateTopicSchema(db) {
+  if (schemaReady.has(db)) return schemaReady.get(db);
+  const promise = dbAll(db, 'PRAGMA table_info(dashboard_widgets)').then(async (rows) => {
+    if (!rows.some((row) => row.name === 'state_topic')) {
+      try {
+        await dbRun(db, "ALTER TABLE dashboard_widgets ADD COLUMN state_topic TEXT NOT NULL DEFAULT ''");
+      } catch (error) {
+        // Die zentrale DB-Migration kann dieselbe Spalte zwischen PRAGMA und
+        // ALTER bereits ergänzt haben. Nur genau dieser harmlose Wettlauf darf
+        // als erfolgreich gelten.
+        if (!/duplicate column name:\s*state_topic/i.test(String(error && error.message))) throw error;
+      }
+    }
+  });
+  schemaReady.set(db, promise);
+  return promise;
+}
+
 function normalizeWidgetRow(row = {}) {
   const type = WIDGET_TYPES.includes(row.type) ? row.type : 'value';
   const config = parseConfig(row.config);
+  const stateTopic = type === 'value'
+    ? (String(row.state_topic || '').trim() || stateTopicFromLegacySource(row.source_id))
+    : '';
   const widget = {
     id: row.id,
     type,
-    sourceId: row.source_id || '',
+    stateTopic,
+    // Öffentliche Übergangskompatibilität für bestehende Aufrufer. Neue
+    // Wert-Widget-Pfade verwenden stateTopic; Schalter weiterhin sourceId.
+    sourceId: type === 'value' ? stateTopic : (row.source_id || ''),
     groupId: row.group_id == null ? null : row.group_id,
     tabId: row.tab_id == null ? null : row.tab_id,
     position: row.position == null ? 0 : row.position,
@@ -75,20 +112,42 @@ function normalizeWidgetRow(row = {}) {
 }
 
 async function listWidgets(db) {
+  await ensureStateTopicSchema(db);
   const rows = await dbAll(
     db,
-    'SELECT id, source_id, type, config, group_id, position, tab_id FROM dashboard_widgets ORDER BY position ASC, id ASC'
+    'SELECT id, source_id, state_topic, type, config, group_id, position, tab_id FROM dashboard_widgets ORDER BY position ASC, id ASC'
   );
+  await migrateLegacyValueRows(db, rows);
   return rows.map(normalizeWidgetRow);
 }
 
 async function getWidget(db, id) {
+  await ensureStateTopicSchema(db);
   const row = await dbGet(
     db,
-    'SELECT id, source_id, type, config, group_id, position, tab_id FROM dashboard_widgets WHERE id = ?',
+    'SELECT id, source_id, state_topic, type, config, group_id, position, tab_id FROM dashboard_widgets WHERE id = ?',
     [id]
   );
+  if (row) await migrateLegacyValueRows(db, [row]);
   return row ? normalizeWidgetRow(row) : null;
+}
+
+async function migrateLegacyValueRows(db, rows) {
+  const legacy = (rows || []).filter((row) =>
+    (WIDGET_TYPES.includes(row.type) ? row.type : 'value') === 'value' &&
+    !String(row.state_topic || '').trim() && String(row.source_id || '').trim()
+  );
+  if (!legacy.length) return;
+  for (const row of legacy) {
+    const stateTopic = stateTopicFromLegacySource(row.source_id);
+    await dbRun(
+      db,
+      "UPDATE dashboard_widgets SET state_topic = ?, source_id = '' WHERE id = ? AND type = 'value' AND state_topic = ''",
+      [stateTopic, row.id]
+    );
+    row.state_topic = stateTopic;
+    row.source_id = '';
+  }
 }
 
 function parseGroupId(value) {
@@ -115,7 +174,10 @@ function normalizeWidgetInput(input = {}) {
   const def = widgetTypeDef(type);
   const normalized = {
     type,
-    sourceId: String(input.sourceId || '').trim(),
+    stateTopic: type === 'value'
+      ? stateTopicFromLegacySource(input.stateTopic != null ? input.stateTopic : input.sourceId)
+      : '',
+    sourceId: type === 'value' ? '' : String(input.sourceId || '').trim(),
     groupId: parseGroupId(input.groupId),
     tabId: parseTabId(input.tabId),
   };
@@ -124,7 +186,7 @@ function normalizeWidgetInput(input = {}) {
   if (type === 'info') normalized.infoFields = sanitizeFields(toArray(input.infoFields).map(String));
   if (type === 'switch') {
     // Schalter verwenden ein eigenes Zielfeld (switchTarget) statt des
-    // Wertekatalogs; das Ziel landet normalisiert in sourceId.
+    // State-Pickers; das Ziel landet normalisiert in sourceId.
     normalized.sourceId = normalizeSwitchTarget(input.switchTarget != null ? input.switchTarget : input.sourceId);
     normalized.switchLabel = String(input.switchLabel || '').trim().slice(0, 60);
     normalized.onColor = normalizeColor(input.onColor);
@@ -135,7 +197,7 @@ function normalizeWidgetInput(input = {}) {
 
 function validateWidgetInput(input) {
   const errors = [];
-  if (input.type === 'value' && !input.sourceId) errors.push('Bitte einen Wert auswählen.');
+  if (input.type === 'value' && !input.stateTopic) errors.push('Bitte einen State auswählen.');
   if (input.type === 'switch' && !input.sourceId) {
     errors.push('Bitte ein schaltbares Gerät oder eine Schaltgruppe auswählen.');
   }
@@ -172,26 +234,28 @@ function throwIfInvalid(widget) {
 }
 
 async function createWidget(db, input) {
+  await ensureStateTopicSchema(db);
   const widget = normalizeWidgetInput(input);
   throwIfInvalid(widget);
 
   const position = await nextPosition(db);
   const result = await dbRun(
     db,
-    'INSERT INTO dashboard_widgets (source_id, type, config, group_id, position, tab_id) VALUES (?, ?, ?, ?, ?, ?)',
-    [widget.sourceId, widget.type, configFor(widget), widget.groupId, position, widget.groupId == null ? widget.tabId : null]
+    'INSERT INTO dashboard_widgets (source_id, state_topic, type, config, group_id, position, tab_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    [widget.sourceId, widget.stateTopic, widget.type, configFor(widget), widget.groupId, position, widget.groupId == null ? widget.tabId : null]
   );
   return getWidget(db, result.lastID);
 }
 
 async function updateWidget(db, id, input) {
+  await ensureStateTopicSchema(db);
   const widget = normalizeWidgetInput(input);
   throwIfInvalid(widget);
 
   await dbRun(
     db,
-    'UPDATE dashboard_widgets SET source_id = ?, type = ?, config = ?, group_id = ?, tab_id = ? WHERE id = ?',
-    [widget.sourceId, widget.type, configFor(widget), widget.groupId, widget.groupId == null ? widget.tabId : null, id]
+    'UPDATE dashboard_widgets SET source_id = ?, state_topic = ?, type = ?, config = ?, group_id = ?, tab_id = ? WHERE id = ?',
+    [widget.sourceId, widget.stateTopic, widget.type, configFor(widget), widget.groupId, widget.groupId == null ? widget.tabId : null, id]
   );
   return getWidget(db, id);
 }
@@ -228,4 +292,5 @@ module.exports = {
   deleteWidget,
   reorderWidgets,
   normalizeWidgetInput,
+  stateTopicFromLegacySource,
 };

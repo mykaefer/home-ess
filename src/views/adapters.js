@@ -28,6 +28,20 @@ ${blocks}
         </div>`;
 
   const script = `
+    var ADAPTER_HIDE_INACTIVE_KEY = 'homeess.adapters.hideInactive.v1';
+
+    function restoreAdapterVisibilityPreference(toggle) {
+      if (!toggle) return;
+      try {
+        var stored = localStorage.getItem(ADAPTER_HIDE_INACTIVE_KEY);
+        if (stored !== null) toggle.checked = stored === '1';
+      } catch (_) {}
+    }
+    function saveAdapterVisibilityPreference(toggle) {
+      if (!toggle) return;
+      try { localStorage.setItem(ADAPTER_HIDE_INACTIVE_KEY, toggle.checked ? '1' : '0'); }
+      catch (_) {}
+    }
     function adapterBadge(el, cls, text) {
       if (!el) return;
       el.textContent = text;
@@ -74,7 +88,11 @@ ${blocks}
         }).catch(function () {});
     }
     var hideInactiveToggle = document.getElementById('hide-inactive-adapters');
-    if (hideInactiveToggle) hideInactiveToggle.addEventListener('change', syncAdapterVisibility);
+    restoreAdapterVisibilityPreference(hideInactiveToggle);
+    if (hideInactiveToggle) hideInactiveToggle.addEventListener('change', function () {
+      saveAdapterVisibilityPreference(hideInactiveToggle);
+      syncAdapterVisibility();
+    });
     document.querySelectorAll('.adapter-block').forEach(updateBlockState);
     syncAdapterVisibility();
     adapterStatusTick();

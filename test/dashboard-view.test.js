@@ -151,10 +151,5 @@ test('Dialoge enthalten Tab-Auswahl, Größenwahl und Schalter-Ziele', () => {
   assert.match(html, /option value="schaltgruppe:1"/);
   assert.match(html, /id="tabDialog"/);
   assert.match(html, /id="deleteTabDialog"/);
-  assert.match(html, /value-catalog--lazy/);
-  const lazyCatalog = html.slice(
-    html.indexOf('id="catalog-widgetSourceId"'),
-    html.indexOf('id="widgetColor"')
-  );
-  assert.ok(!lazyCatalog.includes('class="value-row"'));
+  assert.match(html, /name="stateTopic" data-state-picker/);
 });

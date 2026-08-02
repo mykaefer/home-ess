@@ -3,7 +3,7 @@
 // Kompatibilitätsschicht für bestehende Verbraucher. Der Wertekatalog ist keine
 // eigene Datenquelle mehr: System- und Adapterwerte kommen aus dem zentralen
 // States-Repository. Die bisherigen Funktionsnamen und stabilen IDs bleiben
-// erhalten, damit gespeicherte Outputs und Widgets unverändert funktionieren.
+// erhalten, damit gespeicherte Outputs und alte Verbraucher funktionieren.
 
 const repository = require('../states/repository');
 const systemValues = require('../states/system-values');

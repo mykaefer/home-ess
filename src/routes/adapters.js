@@ -19,6 +19,7 @@ const bus = require('../state-bus');
 const { buildSchemeTopic } = require('../mqtt/topics');
 const { renderLayout } = require('../views/layout');
 const adapterSecrets = require('../adapters/secrets');
+const adapterData = require('../adapters/data-store');
 
 function streamUpload(req, maxBytes) {
   return new Promise((resolve, reject) => {
@@ -93,6 +94,132 @@ function adapterRoutes(db) {
     }
     res.send(renderAdapters({ registry: reg, instancesByAdapter: byAdapter, statusById, message, error }));
   }
+
+  // ── Öffentliche Adapterdateien (ohne Anmeldung) ───────────────────────────
+  // Ein Adapter kann in seinem Manifest ein Unterverzeichnis seines
+  // Datenverzeichnisses als lesbar deklarieren. Gedacht für Artefakte, die
+  // Werkzeuge außerhalb des Browsers abholen müssen — etwa das USB-Flashtool,
+  // das die Firmware zieht und dabei keine Sitzung führen kann.
+  //
+  // Bewusst nur lesend, nur innerhalb des deklarierten Unterverzeichnisses und
+  // nur für Adapter, die das ausdrücklich erklären. Ein Adapter ohne
+  // publicFiles gibt nichts preis.
+  // Zwei Quellen mit unterschiedlicher Herkunft: `data` liegt im
+  // Datenverzeichnis der Instanz und wächst zur Laufzeit (Firmwareartefakte),
+  // `assets` wird mit dem Adapter ausgeliefert und ist unveränderlich
+  // (mitgeliefertes Flashwerkzeug).
+  function publicRoots(instance) {
+    const manifest = registry.getManifest(instance.adapterId);
+    const declared = manifest && manifest.publicFiles;
+    if (!declared) return {};
+    const roots = {};
+    if (declared.data) {
+      roots.data = path.join(
+        adapterData.directoryFor(instance.adapterId, instance.id), declared.data,
+      );
+    }
+    if (declared.assets) roots.assets = path.join(manifest.dir, declared.assets);
+    return roots;
+  }
+
+  const PUBLIC_CONTENT_TYPES = {
+    '.json': 'application/json; charset=utf-8',
+    '.bin': 'application/octet-stream',
+    '.txt': 'text/plain; charset=utf-8',
+    '.md': 'text/markdown; charset=utf-8',
+    '.py': 'text/x-python; charset=utf-8',
+  };
+
+  function listPublicFiles(root) {
+    const entries = [];
+    const walk = (directory, relative) => {
+      for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+        const next = path.join(directory, entry.name);
+        const rel = relative ? `${relative}/${entry.name}` : entry.name;
+        if (entry.isDirectory()) walk(next, rel);
+        else if (entry.isFile()) entries.push({ path: rel, size_bytes: fs.statSync(next).size });
+      }
+    };
+    if (fs.existsSync(root)) walk(root, '');
+    return entries;
+  }
+
+  // Kennzeichnet die Antwort eindeutig, damit ein Werkzeug beim Absuchen des
+  // Netzes eine homeESS-Instanz von beliebigen anderen Diensten auf demselben
+  // Port unterscheiden kann.
+  router.get('/adapter-public', async (req, res) => {
+    try {
+      const instances = await instancesRepo.listInstances(db);
+      const available = instances
+        .filter((instance) => {
+          const manifest = registry.getManifest(instance.adapterId);
+          return !!(manifest && manifest.publicFiles);
+        })
+        .map((instance) => {
+          const manifest = registry.getManifest(instance.adapterId);
+          return {
+            instanceId: instance.id,
+            adapterId: instance.adapterId,
+            name: instance.name,
+            enabled: !!instance.enabled,
+            path: `/adapter-public/${instance.id}`,
+            sources: Object.keys(publicRoots(instance)),
+            label: manifest.publicFiles.label,
+          };
+        });
+      res.set('Cache-Control', 'no-store')
+        .json({ service: 'homeess', instances: available });
+    } catch (_) {
+      res.status(500).json({ error: 'Adapterliste nicht verfügbar.' });
+    }
+  });
+
+  router.get('/adapter-public/:id', async (req, res) => {
+    try {
+      const instance = await instancesRepo.getInstance(db, Number(req.params.id));
+      const roots = instance ? publicRoots(instance) : {};
+      if (!Object.keys(roots).length) {
+        return res.status(404).json({ error: 'Keine öffentlichen Adapterdateien.' });
+      }
+      const files = [];
+      for (const [source, root] of Object.entries(roots)) {
+        for (const entry of listPublicFiles(root)) {
+          files.push({ source, path: `${source}/${entry.path}`, size_bytes: entry.size_bytes });
+        }
+      }
+      return res.set('Cache-Control', 'no-store').json({ files });
+    } catch (_) {
+      return res.status(500).json({ error: 'Öffentliche Adapterdateien nicht lesbar.' });
+    }
+  });
+
+  // Express 5 verlangt einen benannten Platzhalter; req.params.file ist dort ein
+  // Array der einzelnen Pfadsegmente. Das erste Segment wählt die Quelle.
+  router.get('/adapter-public/:id/*file', async (req, res) => {
+    try {
+      const instance = await instancesRepo.getInstance(db, Number(req.params.id));
+      const roots = instance ? publicRoots(instance) : {};
+      const segments = (Array.isArray(req.params.file) ? req.params.file : [req.params.file])
+        .filter(Boolean);
+      const root = roots[segments[0]];
+      if (!root) return res.status(404).send('Unbekannte Quelle für öffentliche Dateien.');
+      const requested = path.normalize(segments.slice(1).join('/'))
+        .replace(/^([.][.][/\\])+/, '');
+      const target = path.resolve(root, requested);
+      // Ohne diese Prüfung könnte ein präparierter Pfad das Verzeichnis verlassen.
+      if (target !== root && !target.startsWith(root + path.sep)) {
+        return res.status(400).send('Ungültiger Pfad.');
+      }
+      if (!fs.existsSync(target) || !fs.statSync(target).isFile()) {
+        return res.status(404).send('Datei nicht gefunden.');
+      }
+      const type = PUBLIC_CONTENT_TYPES[path.extname(target).toLowerCase()]
+        || 'application/octet-stream';
+      return res.type(type).set('Cache-Control', 'no-store').sendFile(target);
+    } catch (_) {
+      return res.status(500).send('Datei nicht lesbar.');
+    }
+  });
 
   router.get('/adapter', requireAuth, (req, res) => {
     sendOverview(res).catch(() => res.status(500).send('Fehler beim Laden der Adapter.'));

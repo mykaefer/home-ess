@@ -6,7 +6,9 @@ const { resolveRelayBaseUrl, resolveRelayWsUrl, resolveInstanceName } = require(
 // Zentrale Konstanten der Anwendung. Eigene Datei, damit Werte an einer
 // Stelle anpassbar sind und nicht über die Module verstreut liegen.
 const ROOT_DIR = path.join(__dirname, '..');
-const DATA_DIR = path.join(ROOT_DIR, 'data');
+// Produktive Installationen halten veränderliche Daten außerhalb des
+// Git-Checkouts. Ohne Vorgabe bleibt der bisherige lokale Entwicklungsstandard.
+const DATA_DIR = process.env.HOME_ESS_DATA_DIR || path.join(ROOT_DIR, 'data');
 
 // Relay-Basis-URL beim Start streng validieren (SSRF-Schutz durch feste,
 // serverseitig festgelegte URL). Ein ungültiger Wert soll früh scheitern.
@@ -31,7 +33,7 @@ module.exports = {
 
   DATA_DIR,
   // Pfad zur SQLite-DB; per HOME_ESS_DB überschreibbar (z. B. für Tests).
-  DB_PATH: process.env.HOME_ESS_DB || path.join(ROOT_DIR, 'data', 'app.db'),
+  DB_PATH: process.env.HOME_ESS_DB || path.join(DATA_DIR, 'app.db'),
   PUBLIC_DIR: path.join(ROOT_DIR, 'public'),
   // Verzeichnis mit den Adapter-Unterordnern (jeder Adapter ein Unterordner mit
   // adapter.json). Per HOME_ESS_ADAPTER_DIR überschreibbar (z. B. für Tests).
