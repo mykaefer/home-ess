@@ -350,6 +350,9 @@ main() {
   verify_installation
 }
 
-if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+# Bei `curl ... | bash` ist BASH_SOURCE leer bzw. nicht gesetzt. Der Fallback
+# auf $0 startet main() bei dieser Installationsart weiterhin, bleibt beim
+# Sourcen der Datei (Tests/Wiederverwendung) aber nebenwirkungsfrei.
+if [[ ${BASH_SOURCE[0]:-$0} == "$0" ]]; then
   main "$@"
 fi
