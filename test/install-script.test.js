@@ -30,6 +30,15 @@ test('Installer-Script ist syntaktisch gültig und beim Sourcen nebenwirkungsfre
   execFileSync('bash', ['-c', 'source ./install.sh'], { cwd: ROOT });
 });
 
+test('Installer-Einstieg funktioniert mit leerem BASH_SOURCE wie bei curl | bash', () => {
+  const result = spawnSync('bash', ['-uc', `
+    main() { printf 'main-called'; }
+    if [[ \${BASH_SOURCE[0]:-$0} == "$0" ]]; then main; fi
+  `], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, 'main-called');
+});
+
 test('Legacy-Cleanup erkennt nur server.service dieser homeESS-Installation', () => {
   const homeess = writeUnit('homeess.service', `[Service]\nWorkingDirectory=/opt/home-ess\nExecStart=/usr/bin/node /opt/home-ess/server.js\n`);
   const foreign = writeUnit('foreign.service', `[Service]\nExecStart=/usr/bin/node /srv/other/server.js\n`);

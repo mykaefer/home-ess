@@ -313,6 +313,10 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 
 ### Behoben
 
+- **Installation über `curl | bash` brach unter `set -u` ab.** Bei einem über
+  stdin ausgeführten Bash-Skript ist `BASH_SOURCE[0]` nicht zwingend gesetzt.
+  Der Installer verwendet für seine Einstiegspunktprüfung jetzt `$0` als
+  sicheren Fallback und bleibt beim Sourcen weiterhin nebenwirkungsfrei.
 - **Erfolgreiches Firmwareupdate wurde als fehlgeschlagen gemeldet.** Die
   Nachverifikation nach dem OTA-Neustart wartete nur 60 Sekunden. Ein Gerät,
   das nach dem Neustart erst das Image kopiert, seine Konfiguration
