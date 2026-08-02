@@ -63,6 +63,15 @@ test('HOME_ESS_DATA_DIR steuert alle standardmäßigen dauerhaften Pfade', () =>
   });
 });
 
+test('Installer richtet den ausgelagerten systemd-Self-Updater ein', () => {
+  const script = fs.readFileSync(path.join(ROOT, 'install.sh'), 'utf8');
+  assert.match(script, /install_self_updater/);
+  assert.match(script, /home-ess-update\.path/);
+  assert.match(script, /UPDATE_HELPER_DIR="\/usr\/local\/lib\/\$\{APP_NAME\}"/);
+  assert.match(script, /UPDATE_HELPER_FILE="\$\{UPDATE_HELPER_DIR\}\/self-update\.js"/);
+  assert.match(script, /systemctl enable --now "\$\{APP_NAME\}-update\.path"/);
+});
+
 test.after(() => {
   fs.rmSync(TMP, { recursive: true, force: true });
 });

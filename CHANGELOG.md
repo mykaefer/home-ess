@@ -7,6 +7,48 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 
 ### Hinzugefügt
 
+- **Sicheres Self-Update mit täglicher Releaseprüfung.** homeESS prüft
+  höchstens einmal täglich das neueste stabile GitHub-Release und zeigt
+  Administratoren eine hellgrüne Updateolive links neben den Leistungswerten.
+  Nach ausdrücklicher Bestätigung übernimmt ein eng begrenzter, root-geführter
+  systemd-One-shot-Helper: Er validiert das Release nochmals, lädt und bereitet
+  es vollständig vor, schaltet die Installation erst dann um und prüft den
+  Neustart. Bei einem Fehler wird automatisch auf die bisherige Version
+  zurückgerollt. Die Browseransicht zeigt den persistenten Fortschritt und
+  kehrt nach erfolgreichem Neustart zum Dashboard zurück; ein zweiter
+  Webserver oder ein zusätzlicher offener Port ist nicht nötig.
+- **Kanalauswahl beim Firmwareupload.** Beim Hochladen von Hand lässt sich
+  jetzt festlegen, in welchen Kanal ein Release soll: Stabil, Beta,
+  Entwicklung — oder „Nach Vorgabe im Manifest“ wie bisher. Weicht die Auswahl
+  vom Manifest ab, wird dessen `release.channel` beim Ablegen umgeschrieben und
+  das Release samt Artefakten im gewählten Kanal gespeichert; die abgelegte
+  Datei widerspricht ihrem Ablageort also nie. Die Rückmeldung nennt die
+  Umschreibung ausdrücklich. Das gilt nur für den manuellen Upload — beim
+  späteren automatischen Abholen von Releases bleibt die Kanalvorgabe des
+  Manifests maßgeblich.
+- **hDP-Gerätetyp „ARGB-Ausgang“.** Ein frei konfigurierbar langer ARGB-Strang
+  wird zur Statusanzeige: Jede LED bekommt genau einen homeESS-State und ein
+  Einschaltkriterium — `= x`, `< x`, `> x` oder `x bis y` —, dazu eine An- und
+  eine Aus-Farbe. Erfüllt der Wert das Kriterium, leuchtet die LED in der
+  An-Farbe, sonst in der Aus-Farbe; LEDs ohne Zuordnung bleiben dunkel. `= x`
+  vergleicht auch Text, die Ordnungskriterien zwingend numerisch; Booleans
+  zählen als 1 und 0. Ein noch nie gelieferter State erfüllt kein Kriterium,
+  damit die Anzeige keinen Zustand erfindet. Die gesamte Auswertung passiert im
+  Adapter — das Gerät empfängt wie bei der Prozentanzeige nur fertige Frames
+  und teilt sich mit ihr Hardwareprofil und Laufzeitprofil. Jede belegte LED
+  wird zusätzlich als eigener homeESS-State `devices/<id>/argb/led-<n>`
+  veröffentlicht. Setzt hDP-Firmware 0.5.0 voraus.
+- **Der ARGB-Ausgang führt zusätzlich Binary-I/O.** Alle GPIOs, die nicht der
+  LED-Strang belegt, sind auf einem solchen Gerät Ein- oder Ausgänge — ohne
+  eigene Pinkonfiguration. Die Belegung folgt der Hardware: GPIOs ohne
+  nutzbaren internen Pull-up (auf dem D1 mini GPIO 15 und 16) sind fest
+  Ausgänge für Relais oder Schütze, der gewählte Datenpin trägt den Strang,
+  alle übrigen werden Eingänge für Taster oder Schalter. Zu entscheiden bleibt
+  je Eingang nur Taster oder Schalter; Zieltopic, Aktion (Zustand übernehmen,
+  umschalten, Wert setzen, Counter erhöhen) und Setzwert werden wie beim
+  Binary-I/O-Gerät verknüpft und ebenso als eigene States veröffentlicht.
+  Setzt hDP-Firmware 0.5.1 voraus. **Achtung:** Damit werden auch GPIO 1 und 3
+  zu Eingängen — die serielle Konsole des Geräts ist dann belegt.
 - **Sammelupdate für hDP-Geräte.** Sobald mindestens ein gekoppeltes Gerät
   veraltete Firmware verwendet, bietet der Firmwarebereich der
   Geräteverwaltung „Alle aktualisieren“ an. Die betroffenen Geräte werden
@@ -105,6 +147,29 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 
 ### Geändert
 
+- **Firmwarebereich der Geräteverwaltung neu aufgebaut.** Statt einer
+  sechsspaltigen Tabelle, die schon auf dem Notebook nur mit Querscrollen
+  lesbar war, zeigt jeder Kanal jetzt eine eigene Karte mit Version, Status,
+  Veröffentlichung, Build und Artefakten. Die Karten stapeln sich, sobald die
+  Breite knapp wird.
+- **Geräteverwaltung auf schmalen Anzeigen benutzbar.** Mehrere Bereiche
+  konnten die Seite in die Breite schieben und damit waagerechtes Scrollen über
+  die gesamte Seite erzwingen: die Gerätefakten mit ihrer festen Mindestbreite,
+  die Firmwaretabelle sowie lange Zeichenketten ohne Trennstellen —
+  Geräte-IDs, SHA-256-Prüfsummen, Build-Kennungen und Artefaktdateinamen.
+  Die betroffenen Raster brechen jetzt um, die langen Zeichenketten dürfen
+  umbrechen, und Formularfelder bleiben in jedem Fall in ihrem Kasten.
+- **Hardwaredialog der hDP-Geräteverwaltung.** Breite und Inhalt passen wieder
+  zusammen: Bisher setzte der Dialog 760px und das Formular darin 800px, das
+  Formular ragte also stets über seinen eigenen Dialog hinaus. Jetzt gibt der
+  Dialog die Breite vor (880px, unterhalb von 768px weiterhin das
+  Bottom-Sheet über die volle Breite) und das Formular füllt sie exakt aus. Die
+  Binary-Pinzeilen stehen zudem wieder als eine Zeile aus Pin, Richtung und
+  Eingangstyp statt mit umgebrochenem Eingangstyp.
+- **Persistenter Adapterfilter.** Die Auswahl „Inaktive Adapter ausblenden“
+  bleibt im jeweiligen Browser über Seitenwechsel, Reloads und Serverneustarts
+  erhalten; ohne gespeicherte Auswahl gilt weiterhin der bisherige Standard
+  „ausblenden“.
 - **Installer bereinigt frühe Installationen sicher.** Eine alte
   `server.service` wird beim Installieren oder Aktualisieren nur dann gestoppt
   und entfernt, wenn ihr Startbefehl eindeutig auf homeESS zeigt. Der bisher im
@@ -245,6 +310,39 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
   eindeutig angestecktem Fahrzeug in die Verbrauchsprognose eingerechnet. Ohne
   dieses Topic bleibt die bisherige Planung anhand des bekannten Fahrzeug-SoC
   erhalten.
+
+### Behoben
+
+- **Erfolgreiches Firmwareupdate wurde als fehlgeschlagen gemeldet.** Die
+  Nachverifikation nach dem OTA-Neustart wartete nur 60 Sekunden. Ein Gerät,
+  das nach dem Neustart erst das Image kopiert, seine Konfiguration
+  vervollständigt, die Pins einrichtet und dann WLAN, mDNS und WebSocket
+  aufbaut, braucht länger — und jede erfolglose Runde kostete zusätzlich die
+  Wiederholungen des HTTP-Clients, sodass in der Minute nur wenige Versuche
+  Platz hatten. Das Fenster beträgt jetzt drei Minuten; meldet das Gerät
+  dagegen selbst einen endgültigen Fehlschlag, wird sofort abgebrochen statt
+  gewartet. Die Fehlermeldung nennt außerdem, welche Version das Gerät zuletzt
+  in welchem Zustand gemeldet hat.
+- **Eigenständiger Neustartknopf konnte nie einen Erfolg melden.** „Geprüfte
+  Firmware neu starten“ verglich gegen eine nur im Arbeitsspeicher gehaltene
+  Sollversion. Fehlte sie — etwa weil der Upload in einem früheren Adapterlauf
+  passierte —, lief die Prüfung zwangsläufig ins Leere. Fehlt sie, gilt jetzt
+  die Zielversion, die das Gerät selbst meldet.
+- **Geleertes Zahlenfeld wurde als Null gespeichert.** `Number('')` ist 0, und
+  die Formularauswertung der hDP-Geräteverwaltung gab deshalb bei einem
+  geleerten Feld nicht den Standardwert zurück, sondern eine Null — ein
+  geleerter Counter-Schritt zählte anschließend nicht mehr, eine geleerte
+  LED-Anzahl wurde als 0 abgewiesen statt auf 10 zurückzufallen. Ein leeres
+  Feld gilt jetzt als fehlende Angabe; eine ausdrückliche 0 bleibt eine 0.
+- **Gemerkter OTA-Fehlschlag klebte dauerhaft am Gerät.** Scheiterte ein
+  Firmwareupdate erst in der Nachverifikation — das Gerät war nach dem Neustart
+  vorübergehend nicht erreichbar —, blieb „failed" samt Fehlertext in der
+  Firmwarekarte stehen, auch nachdem das Gerät längst wieder lief und
+  aktualisiert war. Aufgeräumt wurde er erst beim nächsten Updateversuch. Beim
+  turnusmäßigen Firmwareabgleich wird der gemerkte Fehlschlag jetzt gegen das
+  abgeglichen, was das Gerät selbst meldet: Sagt es „completed" oder „idle",
+  war der gemerkte Fehlschlag überholt und verschwindet. Ein laufendes Update
+  bleibt unangetastet.
 
 ## [1.3.2] — 2026-07-19
 

@@ -1,0 +1,9 @@
+[Unit]
+Description=homeESS Updateanforderungen überwachen
+
+[Path]
+PathExists=/var/lib/home-ess/update/request.json
+Unit=home-ess-update.service
+
+[Install]
+WantedBy=multi-user.target

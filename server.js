@@ -6,11 +6,13 @@ const config = require('./src/config');
 const { createApp } = require('./src/app');
 const pairingState = require('./src/remote-access/pairing-state');
 const connectionService = require('./src/remote-access/connection-service');
+const updateService = require('./src/update/service');
 
 const { app } = createApp();
 
 const server = app.listen(config.PORT, () => {
   console.log(`homeESS läuft auf Port ${config.PORT}`);
+  updateService.start();
 });
 
 // Kontrollierter Shutdown: flüchtigen Pairing-Zustand (Token/QR) aus dem
@@ -23,6 +25,7 @@ function shutdown(signal) {
   pairingState.shutdown();
   // Origin-WebSocket kontrolliert schließen (Reconnect stoppen, Timer löschen).
   connectionService.shutdown();
+  updateService.shutdown();
   server.close(() => process.exit(0));
   // Notausstieg, falls Verbindungen nicht rechtzeitig schließen.
   setTimeout(() => process.exit(0), 5000).unref();

@@ -1,0 +1,18 @@
+[Unit]
+Description=homeESS Self-Update
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+Environment=HOME_ESS_DATA_DIR=/var/lib/home-ess
+ExecStart=/usr/bin/node /usr/local/lib/home-ess/self-update.js
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/opt /var/lib/home-ess /usr/local/lib/home-ess /etc/systemd/system
+

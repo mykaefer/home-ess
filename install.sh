@@ -10,6 +10,10 @@ readonly INSTALL_DIR="/opt/home-ess"
 readonly DATA_DIR="/var/lib/home-ess"
 readonly DB_PATH="${DATA_DIR}/app.db"
 readonly SERVICE_FILE="/etc/systemd/system/${APP_NAME}.service"
+readonly UPDATE_SERVICE_FILE="/etc/systemd/system/${APP_NAME}-update.service"
+readonly UPDATE_PATH_FILE="/etc/systemd/system/${APP_NAME}-update.path"
+readonly UPDATE_HELPER_DIR="/usr/local/lib/${APP_NAME}"
+readonly UPDATE_HELPER_FILE="${UPDATE_HELPER_DIR}/self-update.js"
 readonly LEGACY_SERVICE_FILE="/etc/systemd/system/server.service"
 readonly LEGACY_DATA_DIR="${INSTALL_DIR}/data"
 readonly MIN_NODE_MAJOR=20
@@ -229,6 +233,17 @@ create_database() {
   install -m 0640 -o "${APP_USER}" -g "${APP_GROUP}" /dev/null "${DB_PATH}"
 }
 
+install_self_updater() {
+  info "Richte sicheren Self-Updater ein"
+  install -d -m 0750 -o "${APP_USER}" -g "${APP_GROUP}" "${DATA_DIR}/update"
+  install -d -m 0755 -o root -g root "${UPDATE_HELPER_DIR}"
+  install -m 0755 -o root -g root "${INSTALL_DIR}/updater/self-update.js" "${UPDATE_HELPER_FILE}"
+  install -m 0644 -o root -g root "${INSTALL_DIR}/updater/home-ess-update.service" "${UPDATE_SERVICE_FILE}"
+  install -m 0644 -o root -g root "${INSTALL_DIR}/updater/home-ess-update.path" "${UPDATE_PATH_FILE}"
+  systemctl daemon-reload
+  systemctl enable --now "${APP_NAME}-update.path"
+}
+
 # Der alte Standardpfad lag im Git-Checkout. Neben SQLite gehören auch die
 # dauerhafte Instanzidentität, Adapterdaten und Laufzeitprotokolle zum Bestand.
 # Migriert wird deshalb der komplette data/-Inhalt, aber ausschließlich wenn am
@@ -330,6 +345,7 @@ main() {
   install_or_update_application
   install_dependencies
   create_database
+  install_self_updater
   install_systemd_service
   verify_installation
 }

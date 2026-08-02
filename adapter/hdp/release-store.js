@@ -122,10 +122,19 @@ class ReleaseStore {
     });
   }
 
-  // Das Manifest bestimmt den Kanal selbst; ein abweichender Wunsch wäre eine
-  // stille Umetikettierung des Releases.
-  saveManifest(input) {
-    const manifest = validateManifest(input);
+  // Standardmäßig bestimmt das Manifest seinen Kanal selbst — so kommt es von
+  // der Release-Quelle, und so muss es beim automatischen Abholen auch bleiben.
+  // Beim Hochladen von Hand darf der Kanal ausdrücklich überschrieben werden;
+  // dann wird das Manifest entsprechend umgeschrieben und mit dem geänderten
+  // Kanal abgelegt. Eine stille Umetikettierung ist das nicht: Sie passiert nur
+  // auf ausdrückliche Angabe, und das Gespeicherte sagt danach die Wahrheit.
+  saveManifest(input, options = {}) {
+    const requested = options.channel == null || options.channel === ''
+      ? null : validChannel(options.channel);
+    const source = validateManifest(input);
+    const manifest = requested && requested !== source.release.channel
+      ? { ...source, release: { ...source.release, channel: requested } }
+      : source;
     const channel = validChannel(manifest.release.channel);
     for (const artifact of manifest.artifacts) validFilename(artifact.filename);
     const directory = this.channelDirectory(channel);
@@ -143,7 +152,13 @@ class ReleaseStore {
     fs.writeFileSync(temporary, JSON.stringify(manifest, null, 2), { mode: 0o600 });
     fs.renameSync(temporary, target);
     this.releases.set(channel, { manifest, storedAt: new Date().toISOString() });
-    return { channel, manifest, missing: this.missingArtifacts(channel) };
+    return {
+      channel,
+      manifest,
+      missing: this.missingArtifacts(channel),
+      // Damit die Oberfläche sagen kann, dass sie den Kanal verlegt hat.
+      retargetedFrom: channel === source.release.channel ? null : source.release.channel,
+    };
   }
 
   async saveArtifact(uploadInfo) {

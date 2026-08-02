@@ -282,6 +282,151 @@ function renderLiveScript() {
   </script>`;
 }
 
+function renderUpdateScript() {
+  return `  <script>
+    (function () {
+      var pill = document.getElementById('header-update-pill');
+      var dialog = document.getElementById('update-confirm-dialog');
+      var versionNode = document.getElementById('update-confirm-version');
+      var confirmButton = document.getElementById('update-confirm-yes');
+      var cancelButton = document.getElementById('update-confirm-no');
+      var targetVersion = null;
+      var updateScreenActive = false;
+      var pollTimer = null;
+      var connectionMessageShown = false;
+
+      function activeOperation(operation) {
+        return operation && !['completed', 'failed', 'failed_rollback'].includes(operation.state);
+      }
+
+      function appendLocalMessage(text, kind) {
+        var list = document.getElementById('update-progress-messages');
+        if (!list) return;
+        var item = document.createElement('li');
+        item.className = kind ? 'update-progress-message update-progress-message--' + kind : 'update-progress-message';
+        item.textContent = text;
+        list.appendChild(item);
+        item.scrollIntoView({ block: 'nearest' });
+      }
+
+      function showUpdateScreen(version) {
+        if (updateScreenActive) return;
+        updateScreenActive = true;
+        document.body.classList.add('page-update');
+        var shell = document.querySelector('.app-shell');
+        if (!shell) return;
+        shell.innerHTML = '<main class="update-progress"><section class="update-progress-card">' +
+          '<img src="/homeESS.png" alt="homeESS" class="update-progress-logo">' +
+          '<div class="update-progress-spinner" aria-hidden="true"></div>' +
+          '<h1>homeESS wird aktualisiert</h1>' +
+          '<p class="update-progress-target">Zielversion: <strong></strong></p>' +
+          '<ol class="update-progress-messages" id="update-progress-messages" aria-live="polite"></ol>' +
+          '<p class="update-progress-hint">Dieses Fenster bitte geöffnet lassen. Der Server ist während des Neustarts kurz nicht erreichbar.</p>' +
+          '<button type="button" class="update-progress-back" id="update-progress-back" hidden>Zurück zum Dashboard</button>' +
+          '</section></main>';
+        shell.querySelector('.update-progress-target strong').textContent = version || '—';
+      }
+
+      function renderOperation(operation, currentVersion) {
+        if (!operation) return;
+        if (activeOperation(operation) || updateScreenActive) showUpdateScreen(operation.targetVersion);
+        if (!updateScreenActive) return;
+        var list = document.getElementById('update-progress-messages');
+        if (list) {
+          list.innerHTML = '';
+          (operation.messages || []).forEach(function (message) {
+            var item = document.createElement('li');
+            item.className = 'update-progress-message';
+            item.textContent = message.text || '';
+            list.appendChild(item);
+          });
+        }
+        connectionMessageShown = false;
+        var spinner = document.querySelector('.update-progress-spinner');
+        var back = document.getElementById('update-progress-back');
+        if (operation.state === 'completed' && currentVersion === operation.targetVersion) {
+          if (spinner) spinner.classList.add('is-complete');
+          window.setTimeout(function () { window.location.replace('/dashboard'); }, 1500);
+        } else if (operation.state === 'failed' || operation.state === 'failed_rollback') {
+          if (spinner) spinner.classList.add('is-failed');
+          if (back) {
+            back.hidden = false;
+            back.onclick = function () { window.location.assign('/dashboard'); };
+          }
+        }
+      }
+
+      function applyStatus(status) {
+        if (!status) return;
+        targetVersion = status.availableVersion;
+        if (pill) {
+          pill.hidden = !(status.supported && targetVersion);
+          if (targetVersion) pill.textContent = 'Version ' + targetVersion + ' verfügbar';
+        }
+        renderOperation(status.operation, status.currentVersion);
+      }
+
+      function fetchStatus() {
+        fetch('/update/status', { headers: { Accept: 'application/json' }, cache: 'no-store' })
+          .then(function (response) { return response.ok ? response.json() : Promise.reject(new Error('offline')); })
+          .then(function (status) {
+            applyStatus(status);
+            schedule(updateScreenActive ? 1000 : 300000);
+          })
+          .catch(function () {
+            if (updateScreenActive && !connectionMessageShown) {
+              appendLocalMessage('Verbindung zum Server unterbrochen – Neustart läuft …', 'waiting');
+              connectionMessageShown = true;
+            }
+            schedule(updateScreenActive ? 1000 : 60000);
+          });
+      }
+
+      function schedule(delay) {
+        if (pollTimer) window.clearTimeout(pollTimer);
+        pollTimer = window.setTimeout(fetchStatus, delay);
+      }
+
+      if (pill && dialog) {
+        pill.addEventListener('click', function () {
+          if (!targetVersion) return;
+          if (versionNode) versionNode.textContent = targetVersion;
+          if (typeof dialog.showModal === 'function') dialog.showModal();
+          else dialog.setAttribute('open', '');
+        });
+      }
+      if (cancelButton && dialog) cancelButton.addEventListener('click', function () { dialog.close(); });
+      if (confirmButton && dialog) {
+        confirmButton.addEventListener('click', function () {
+          var version = targetVersion;
+          dialog.close();
+          showUpdateScreen(version);
+          appendLocalMessage('Update wird vorbereitet …');
+          fetch('/update/start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-HomeESS-Update': 'confirm' },
+            body: JSON.stringify({ version: version })
+          }).then(function (response) {
+            return response.json().then(function (body) {
+              if (!response.ok) throw new Error(body.error || 'Update konnte nicht gestartet werden.');
+              applyStatus(body);
+              schedule(500);
+            });
+          }).catch(function (error) {
+            appendLocalMessage(error.message || 'Update konnte nicht gestartet werden.', 'error');
+            var spinner = document.querySelector('.update-progress-spinner');
+            if (spinner) spinner.classList.add('is-failed');
+            var back = document.getElementById('update-progress-back');
+            if (back) { back.hidden = false; back.onclick = function () { window.location.reload(); }; }
+          });
+        });
+      }
+      fetchStatus();
+      window.addEventListener('beforeunload', function () { if (pollTimer) window.clearTimeout(pollTimer); });
+    })();
+  </script>`;
+}
+
 // renderLayout({ title, activePath, body, script, stylesheets })
 function renderLayout({
   title, activePath = '', body = '', script = '', stylesheets = [],
@@ -313,13 +458,14 @@ function renderLayout({
   <link rel="stylesheet" href="/styles.css">
 ${extraStylesheets}
 </head>
-<body class="page-dashboard ${accessClass}" data-access="${access.canWrite ? 'write' : access.canOperate ? 'operate' : 'read'}">
+<body class="page-dashboard ${accessClass}" data-access="${access.canWrite ? 'write' : access.canOperate ? 'operate' : 'read'}" data-admin="${access.isAdmin ? 'true' : 'false'}">
   <div class="app-shell">
     <header class="dashboard-header">
       <button type="button" class="header-logo-button" id="mobile-menu-button" aria-controls="mobile-nav-sheet" aria-label="Menü öffnen">
         <img src="/homeESS.png" alt="homeESS" class="header-logo">
       </button>
       <div class="header-statusbar" aria-label="Umgebungswerte">
+        ${access.isAdmin ? '<button type="button" class="header-update-pill" id="header-update-pill" hidden></button>' : ''}
         <span class="header-status-pill header-status-pill--power only-desktop" aria-label="Aktuelle Leistungswerte">
           <span class="header-power-item" title="Aktuelle PV-Leistung"><span class="header-power-icon" aria-hidden="true">☀️</span><span id="header-power-pv" class="header-power-value header-power-value--pv">— W</span></span>
           <span class="header-power-item" title="Aktueller Netzbezug (negativ = Einspeisung)"><span class="header-power-icon" aria-hidden="true">⚡</span><span id="header-power-grid" class="header-power-value header-power-value--grid">— W</span></span>
@@ -355,6 +501,16 @@ ${extraStylesheets}
         <span class="header-sky" id="header-sky" title="Himmelszustand">🌙</span>
       </div>
     </header>
+    ${access.isAdmin ? `<dialog class="update-confirm-dialog" id="update-confirm-dialog">
+      <form method="dialog">
+        <h2>homeESS aktualisieren?</h2>
+        <p>Version <strong id="update-confirm-version">—</strong> wird geladen und ersetzt die aktuelle Installation. homeESS wird dabei kurz neu gestartet.</p>
+        <div class="update-confirm-actions">
+          <button type="button" class="secondary-button" id="update-confirm-no">Nein</button>
+          <button type="button" class="primary-button" id="update-confirm-yes">Ja, jetzt aktualisieren</button>
+        </div>
+      </form>
+    </dialog>` : ''}
 
     <div class="app-body">
       <aside class="sidebar">
@@ -379,6 +535,7 @@ ${renderMobileNav(activePath, access)}
 ${statePickerModal()}
   </div>
 ${renderLiveScript()}
+${renderUpdateScript()}
   <script>
 ${mobileNavScript()}
 ${statePickerScript()}

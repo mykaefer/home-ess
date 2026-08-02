@@ -720,14 +720,40 @@
     background: #fffafa;
 }
 
+/* Die Breite gehört dem Dialog, nicht dem Formular darin. Vorher setzten beide
+   eine eigene: Der Dialog 760px aus .value-dialog, das Formular 800px — das
+   Formular ragte also stets 40px über seinen eigenen Dialog hinaus. Jetzt gibt
+   der Dialog die Breite vor und das Formular füllt sie exakt aus. */
 .hdp-hardware-dialog {
     max-height: min(860px, calc(100vh - 32px));
     overflow-y: auto;
 }
 
 .hdp-hardware-dialog .dialog-form {
-    width: min(800px, calc(100vw - 76px));
+    width: 100%;
     box-sizing: border-box;
+}
+
+/* Unterhalb von 768px wird jeder .value-dialog zum Bottom-Sheet über die volle
+   Fensterbreite. Diese Breitenvorgabe gilt deshalb nur darüber — sonst stünde
+   das Sheet auf dem Telefon mit 32px Luft auf einer Seite. */
+@media (min-width: 769px) {
+    .hdp-hardware-dialog {
+        width: min(880px, calc(100vw - 32px));
+    }
+}
+
+/* Pin, Richtung und Eingangstyp gehören in eine Zeile. Im geerbten
+   zweispaltigen .hdp-form-grid brach der Eingangstyp in eine eigene Reihe und
+   die Zuordnung war nicht mehr auf einen Blick lesbar. */
+.hdp-binary-pin-row {
+    grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr);
+    gap: 12px;
+    align-items: end;
+}
+
+.hdp-binary-pin-row + .hdp-binary-pin-row {
+    margin-top: 12px;
 }
 
 .hdp-dialog-toggles {
@@ -806,10 +832,6 @@
     white-space: nowrap;
 }
 
-.hdp-firmware-store .hdp-form-grid {
-    margin-top: 4px;
-}
-
 .hdp-firmware-head {
     display: flex;
     align-items: flex-start;
@@ -834,42 +856,149 @@
     white-space: pre-wrap;
 }
 
-.hdp-table-scroll {
-    overflow-x: auto;
-    margin-top: 14px;
+/* Die Kopfzeile der Sektion sitzt bündig an der Kartenkante; alles darunter
+   braucht denselben Innenabstand wie die übrigen Karten. */
+.hdp-firmware-body {
+    padding: 16px 22px 20px;
 }
 
-.hdp-release-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 14px;
-}
-
-.hdp-release-table th,
-.hdp-release-table td {
-    padding: 9px 10px;
-    text-align: left;
-    vertical-align: top;
-    border-bottom: 1px solid currentColor;
-}
-
-.hdp-release-table th {
-    font-size: 12px;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    opacity: 0.7;
-}
-
-.hdp-artifact-list {
-    margin: 0;
-    padding-left: 16px;
+.hdp-upload-grid {
     display: grid;
-    gap: 3px;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+    gap: 16px;
+    align-items: start;
+}
+
+.hdp-upload-grid input[type="file"] {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 9px 10px;
+    border: 1px dashed #cbd5e1;
+    border-radius: 8px;
+    background: #f8fafc;
+    font: inherit;
     font-size: 13px;
 }
 
+/* Eine Karte je Kanal. Sie füllt die Breite, solange sie kann, und stapelt
+   sich, sobald drei nebeneinander zu schmal würden. */
+.hdp-channel-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+    gap: 14px;
+    margin-top: 18px;
+}
+
+.hdp-channel-card {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-width: 0;
+    padding: 14px 16px;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    background: #f8fafc;
+}
+
+.hdp-channel-card.is-empty {
+    border-style: dashed;
+    background: transparent;
+}
+
+.hdp-channel-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.hdp-channel-head h3 {
+    margin: 0;
+    font-size: 15px;
+}
+
+.hdp-channel-version {
+    margin: 0;
+    color: #0f172a;
+    font-size: 22px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.1;
+}
+
+.hdp-channel-facts {
+    display: grid;
+    gap: 6px;
+    margin: 0;
+}
+
+.hdp-channel-facts > div {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 8px;
+    justify-content: space-between;
+    min-width: 0;
+}
+
+.hdp-channel-facts dt {
+    color: #64748b;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.hdp-channel-facts dd {
+    margin: 0;
+    min-width: 0;
+    color: #334155;
+    font-size: 12px;
+    overflow-wrap: anywhere;
+}
+
+.hdp-channel-card form {
+    margin-top: auto;
+}
+
+.hdp-channel-card .button-danger {
+    width: 100%;
+}
+
+.hdp-artifact-list {
+    display: grid;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-size: 13px;
+}
+
+.hdp-artifact-list li {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: #fff;
+    box-shadow: inset 0 0 0 1px #e8edf2;
+}
+
+/* Dateinamen und Prüfsummen sind lange Zeichenketten ohne Trennstellen. Ohne
+   diesen Umbruch schieben sie die ganze Seite in die Breite. */
+.hdp-artifact-name {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    overflow-wrap: anywhere;
+}
+
+.hdp-artifact-meta {
+    color: #64748b;
+    font-size: 12px;
+    overflow-wrap: anywhere;
+}
+
 .hdp-artifact-list .is-missing {
-    opacity: 0.85;
+    box-shadow: inset 0 0 0 1px #fecaca;
+    background: #fffafa;
 }
 
 #hdp-release-result:empty {
@@ -879,6 +1008,103 @@
 #hdp-release-result {
     margin-top: 10px;
     white-space: pre-wrap;
+}
+
+/* Eine Zeile je LED. Die Spaltenbreiten sind fest gewählt, damit die
+   Kopfzeile über allen Zeilen steht und ein 60-LED-Strang trotzdem als
+   zusammenhängende Tabelle lesbar bleibt. */
+.hdp-argb-table {
+    display: grid;
+    gap: 8px;
+}
+
+.hdp-argb-row {
+    display: grid;
+    grid-template-columns: 2.5rem minmax(0, 2.2fr) minmax(0, 1.4fr) minmax(0, 0.8fr) minmax(0, 0.8fr) 3rem 3rem;
+    gap: 10px;
+    align-items: center;
+}
+
+.hdp-argb-cell {
+    display: block;
+    min-width: 0;
+}
+
+/* In der Tabellenansicht trägt die Kopfzeile die Beschriftung; die
+   mitgeführten Zellenlabels bleiben dort verborgen. */
+.hdp-argb-cell::before {
+    display: none;
+    content: attr(data-label);
+    margin-bottom: 4px;
+    color: #64748b;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.hdp-argb-row input:not([type="color"]),
+.hdp-argb-row select {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 8px 10px;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    background: #fff;
+    color: #0f172a;
+    font: inherit;
+}
+
+.hdp-argb-row input[type="color"] {
+    width: 100%;
+    height: 36px;
+    padding: 2px;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    background: #fff;
+    cursor: pointer;
+}
+
+.hdp-argb-head {
+    padding-bottom: 2px;
+    border-bottom: 1px solid #e2e8f0;
+    color: #64748b;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: .02em;
+}
+
+.hdp-argb-index {
+    color: #64748b;
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+}
+
+.hdp-argb-row[data-hdp-argb-empty] .hdp-argb-index {
+    opacity: .45;
+}
+
+/* Die aktuelle Anzeige als Punktreihe. Sie macht auf einen Blick sichtbar,
+   welche LED gerade welche Farbe zeigt, ohne auf den Strang zu schauen. */
+.hdp-argb-strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-top: 14px;
+    padding: 12px;
+    border-radius: 10px;
+    background: #0f172a;
+}
+
+.hdp-argb-dot {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #1e293b;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .12);
+}
+
+.hdp-argb-dot.is-bound {
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .35);
 }
 
 .hdp-pin-legend {
@@ -925,6 +1151,33 @@
     .hdp-status-grid > div:first-child {
         padding: 0;
         border-left: 0;
+    }
+
+    /* Sieben Spalten je LED brauchen Breite. Wird sie knapp, wird aus jeder
+       Zeile eine eigene kleine Karte — die Kopfzeile hat dann keinen Bezug
+       mehr und verschwindet. */
+    .hdp-argb-row {
+        grid-template-columns: 1fr;
+        padding: 12px;
+        border: 1px solid #e2e8f0;
+        border-radius: 10px;
+    }
+
+    .hdp-argb-head {
+        display: none;
+    }
+
+    .hdp-argb-cell::before {
+        display: block;
+    }
+
+    .hdp-argb-row input[type="color"] {
+        width: 4rem;
+    }
+
+    .hdp-argb-index {
+        text-align: left;
+        font-weight: 700;
     }
 }
 
@@ -1003,7 +1256,75 @@
         width: 100%;
     }
 
-    .hdp-hardware-dialog .dialog-form {
-        width: calc(100vw - 32px);
+    .hdp-binary-pin-row {
+        grid-template-columns: 1fr;
     }
+
+    /* minmax(180px, …) kann nicht unter 180px schrumpfen. Zusammen mit der
+       zweiten Spalte, dem Zwischenraum und dem Einzug reichte das auf einem
+       360px-Telefon nicht mehr — die Zeile schob die Seite in die Breite. */
+    .hdp-device-facts {
+        grid-template-columns: 1fr;
+        gap: 6px;
+        margin-left: 18px;
+    }
+
+    .hdp-firmware-body {
+        padding: 14px 16px 18px;
+    }
+
+    /* Steht als einziges Element außerhalb des gepolsterten Sektionskörpers und
+       braucht den Rand deshalb selbst. */
+    #hdp-update-all-result {
+        margin-left: 16px;
+        margin-right: 16px;
+    }
+
+    .hdp-update-banner {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .hdp-update-banner button {
+        width: 100%;
+    }
+
+    .hdp-channel-card .button-danger,
+    .hdp-firmware-store .button-row button {
+        width: 100%;
+    }
+
+    .hdp-range-field,
+    .hdp-time-field {
+        padding: 11px;
+    }
+}
+
+/* Gilt unabhängig vom Umbruchpunkt: Geräte-IDs, Prüfsummen, Build-Kennungen und
+   Dateinamen sind lange Zeichenketten ohne Trennstellen. Ohne diese Regel
+   bestimmt die längste von ihnen die Seitenbreite — auf dem Telefon führt das
+   zu waagerechtem Scrollen über die ganze Seite. */
+.hdp-device-page,
+.hdp-overview {
+    overflow-wrap: break-word;
+}
+
+.hdp-device-meta code,
+.hdp-firmware-summary,
+.hdp-device-alert,
+.hdp-tool-downloads a {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+/* Ein Formularfeld darf nie breiter als sein Kasten werden. Das galt bisher
+   nur für die Felder der Geräteseite, nicht für die im Dialog oder im
+   Firmwarebereich. */
+.hdp-device-page input,
+.hdp-device-page select,
+.hdp-device-page textarea,
+.hdp-overview input,
+.hdp-overview select {
+    max-width: 100%;
+    box-sizing: border-box;
 }

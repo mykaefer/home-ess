@@ -1,9 +1,9 @@
-# homeESS Device Protocol (hDP) 1.0-draft
+# homeESS Device Protocol (HDP) 1.0-draft
 
 ## 1. Zweck und Geltungsbereich
 
 Dieses Dokument ist der vollständige normative Kommunikationsvertrag zwischen einem
-homeESS-Adapter (im Folgenden **Adapter**) und einer hDP-Firmware auf einem lokalen
+homeESS-Adapter (im Folgenden **Adapter**) und einer HDP-Firmware auf einem lokalen
 Endgerät (im Folgenden **Gerät**).
 
 Es definiert ausschließlich:
@@ -12,7 +12,7 @@ Es definiert ausschließlich:
 - HTTP-Endpunkte und JSON-Strukturen,
 - Kopplung und Authentifizierung,
 - Hardwarekonfiguration und generische Ausgänge,
-- WebSocket-Sitzungen, Pixel-Frames und Timelineprogramme,
+- WebSocket-Sitzungen, Pixel-Frames, Timelineprogramme und Binary-I/O-Ereignisse,
 - Firmwareübertragung per OTA,
 - Zustände, Timeouts, Wiederholungen und Fehlerbehandlung.
 
@@ -21,13 +21,13 @@ gehören ausdrücklich nicht in diesen Vertrag.
 
 Die Schlüsselwörter **MUSS**, **DARF NICHT**, **SOLL**, **SOLL NICHT** und **DARF**
 sind im Sinn von RFC 2119 zu verstehen. Ein Teilnehmer ist nur dann
-hDP-1.0-draft-konform, wenn er alle MUSS-Anforderungen dieses Dokuments erfüllt.
+HDP-1.0-draft-konform, wenn er alle MUSS-Anforderungen dieses Dokuments erfüllt.
 
 ### 1.1 Verbindliche Zuständigkeitsgrenze
 
 Der Adapter beziehungsweise das zugehörige Plugin ist allein verantwortlich für:
 
-- die semantische Bedeutung von `device_type`;
+- die anwendungsspezifische Bedeutung von `device_type` und aller Topics;
 - Datenquellen, Prozent-, Richtungs-, Schwellen- und Anzeigelogik;
 - die Berechnung jedes logischen RGB-Pixelwerts;
 - Farben, Übergänge, Effekte und Animationen;
@@ -38,16 +38,18 @@ Das Gerät ist allein verantwortlich für:
 
 - Pairing, Binding, Authentifizierung und Sitzungsverwaltung;
 - Persistierung und Validierung der physischen Hardwarekonfiguration;
-- Ansteuerung der konfigurierten Ausgänge und deren physische Pinbelegung;
+- Auswahl der durch `device_type` festgelegten generischen Laufzeitschicht beim
+  Booten sowie Ansteuerung der konfigurierten Ein- und Ausgänge;
 - zeitgesteuerte Wiedergabe bereits berechneter Timelineereignisse;
 - Durchsetzung der deklarierten Größen-, Timing-, Helligkeits- und Stromgrenzen;
 - sichere Offline-, Neustart- und Fehlerzustände.
 
-Das Gerät DARF `device_type` nicht semantisch auswerten und DARF insbesondere
-keine Prozentanzeige, Richtungsanzeige, Topic-Logik, Farbauswahl oder
-anwendungsspezifische Animation selbst erzeugen. Ein Timeline-Decoder,
-Pixelpuffer, Scheduler, Treiber und elektrische Schutzfunktionen gelten als
-generische Ausgabeschicht und liegen ausdrücklich auf dem Gerät.
+Das Gerät DARF `device_type` ausschließlich zur Auswahl des normierten
+Laufzeitprofils und seiner physischen Treiberschicht auswerten. Es DARF keine
+Prozentanzeige, Richtungsanzeige, Topic-Logik, Farbauswahl, Toggle-, Set- oder
+Counterlogik und keine anwendungsspezifische Animation selbst erzeugen. Ein
+Timeline-Decoder, Pixelpuffer, Scheduler, Binary-Pin-Treiber, Entprellung und
+elektrische Schutzfunktionen gelten als generische Geräteschicht.
 
 ## 2. Protokollidentität und Kompatibilität
 
@@ -58,15 +60,20 @@ Der exakte Protokollbezeichner lautet:
 ```
 
 Adapter und Gerät MÜSSEN diesen Wert unverändert in mDNS, `/device`, `/manifest`,
-Pairing und WebSocket verwenden. Das in diesem Draft definierte Laufzeitprofil
-lautet zusätzlich exakt:
+Pairing und WebSocket verwenden. Dieser Draft definiert zwei Laufzeitprofile:
 
 ```text
 pixel-timeline-v1
+binary-io-v1
 ```
 
-Es wird in mDNS, `/device`, `/manifest` und im WebSocket-Hello ausgetauscht.
-Dadurch bleibt das bereits persistierte hDP-1.0-Pairing unverändert, während
+`percentage_indicator` und `argb_output` verwenden `pixel-timeline-v1`;
+`binary_io` verwendet `binary-io-v1`. Mehrere Gerätetypen DÜRFEN sich ein
+Laufzeitprofil teilen: Das Profil beschreibt ausschließlich die Ausgabeschicht
+des Geräts, nicht die Bedeutung, die der Adapter den Bildern gibt. Das aktive
+Profil wird in mDNS, `/device`, `/manifest` und im WebSocket-Hello ausgetauscht
+und MUSS an allen vier Stellen identisch sein.
+Dadurch bleibt das bereits persistierte HDP-1.0-Pairing unverändert, während
 experimentelle Firmware- und Adapterstände mit unterschiedlicher
 Ausgabeschicht keine scheinbar kompatible Steuersitzung aufbauen.
 
@@ -98,7 +105,7 @@ einen neuen Protokollbezeichner.
 
 ### 3.1 Netzwerkprofil
 
-hDP 1.0-draft verwendet ein lokales IPv4-Netzwerk.
+HDP 1.0-draft verwendet ein lokales IPv4-Netzwerk.
 
 | Kanal | Transport |
 |---|---|
@@ -111,16 +118,16 @@ TLS ist in diesem Profil nicht vorgeschrieben. Der `binding_key` wird deshalb nu
 in einem vertrauenswürdigen lokalen Netz übertragen. Ein Gerät DARF dieses Profil
 nicht über das öffentliche Internet exponieren.
 
-WLAN-Provisionierung und Captive-Portal-HTML sind nicht Bestandteil von hDP
+WLAN-Provisionierung und Captive-Portal-HTML sind nicht Bestandteil von HDP
 1.0-draft. Sie erfolgen vor der Discovery über einen gerätespezifischen,
 außerhalb dieses Vertrags liegenden Kanal. Ein Adapter DARF keine
-Portal-Route als hDP-API behandeln.
+Portal-Route als HDP-API behandeln.
 
 ### 3.2 HTTP
 
 - Basis-URI: `/api/v1`
 - Pfade sind case-sensitive und werden ohne abschließenden Slash verwendet.
-- hDP 1.0-draft definiert keine Query-Parameter.
+- HDP 1.0-draft definiert keine Query-Parameter.
 - JSON-Encoding: UTF-8 ohne BOM
 - JSON-Request-Content-Type: `application/json`; optional ist ausschließlich der
   Parameter `charset=utf-8`, Groß-/Kleinschreibung ist nicht relevant
@@ -377,12 +384,12 @@ Der SRV-Port ist der HTTP-API-Port. Der Hostname SOLL
 |---|---|
 | `device_id` | Abschnitt 4.1 |
 | `protocol_version` | exakt `1.0-draft` |
-| `runtime_profile` | exakt `pixel-timeline-v1` |
+| `runtime_profile` | aktives Profil: `pixel-timeline-v1` oder `binary-io-v1` |
 | `firmware_version` | SemVer |
 | `platform` | nicht leerer ASCII-Identifier |
 | `pairing_state` | `pairable`, `pairing`, `paired` |
 | `binding_id` | 64 lowercase Hexzeichen oder leer |
-| `configured_device_type` | gültiger opaker `device_type` nach Abschnitt 12.2 oder leer |
+| `configured_device_type` | gültiger `device_type` nach Abschnitt 12.2 oder leer |
 | `hardware_config_present` | `true` oder `false` |
 | `config_revision` | dezimaler `uint32` |
 | `api_port` | dezimaler Port |
@@ -402,7 +409,7 @@ IP-Adressänderungen als dasselbe Gerät behandeln.
 
 ### 8.1 Profile
 
-hDP 1.0-draft definiert genau ein Owner-Authentifizierungsprofil:
+HDP 1.0-draft definiert genau ein Owner-Authentifizierungsprofil:
 
 ```text
 local-binding-key-v1
@@ -411,8 +418,8 @@ local-binding-key-v1
 HTTP-Requests mit Authentifizierungsklasse **A** MÜSSEN enthalten:
 
 ```text
-X-hDP-Instance: <instance_id>
-X-hDP-Binding-Key: <binding_key>
+X-HDP-Instance: <instance_id>
+X-HDP-Binding-Key: <binding_key>
 ```
 
 Beide Werte MÜSSEN vorhanden sein. Teilweise vorhandene Credentials ergeben
@@ -479,7 +486,7 @@ Response:
   "ok": true,
   "data": {
     "device_id": "hdp-esp8266-a1b2c3",
-    "model": "hDP Universal ESP8266",
+    "model": "HDP Universal ESP8266",
     "platform": "esp8266",
     "firmware_version": "0.2.0",
     "protocol_version": "1.0-draft",
@@ -497,7 +504,8 @@ Response:
 Invarianten:
 
 - `paired` ist genau bei `pairing_state == "paired"` wahr.
-- `runtime_profile` ist exakt `pixel-timeline-v1`.
+- `runtime_profile` entspricht exakt dem durch `configured_device_type`
+  ausgewählten Profil.
 - `binding_id` ist nur bei `paired=true` ein String, sonst `null`.
 - `configured_device_type` ist ohne Hardwarekonfiguration `null`.
 - `hardware_config_revision` ist ohne Hardwarekonfiguration `0`.
@@ -516,7 +524,8 @@ Response:
     "api_version": "v1",
     "auth_profile": "local-binding-key-v1",
     "runtime_profile": "pixel-timeline-v1",
-    "device_type_profile": "opaque-id-v1",
+    "device_type_profile": "boot-dispatch-v1",
+    "device_types": ["percentage_indicator", "argb_output", "binary_io"],
     "output_types": ["argb_strip"],
     "frame_encodings": [
       "rgb8-base64",
@@ -531,17 +540,27 @@ Response:
       "ota": true,
       "frame_output": true,
       "timeline_output": true,
-      "timeline_loop": true
+      "timeline_loop": true,
+      "runtime_brightness": true,
+      "binary_input": true,
+      "binary_output": true
     },
     "hardware_capabilities": {
       "argb_pins": [0, 1, 2, 3, 4, 5, 12, 13, 14, 15, 16],
       "led_types": ["WS2812"],
-      "color_orders": ["RGB", "GRB"]
+      "color_orders": ["RGB", "GRB"],
+      "binary_pins": [0, 1, 2, 3, 4, 5, 12, 13, 14, 15, 16],
+      "binary_pullup_pins": [0, 1, 2, 3, 4, 5, 12, 13, 14],
+      "binary_boot_sensitive_pins": [0, 2, 15],
+      "binary_serial_pins": [1, 3],
+      "binary_input_types": ["switch", "button"]
     },
     "limits": {
       "maximum_json_body_bytes": 3072,
       "maximum_websocket_message_bytes": 2048,
       "maximum_outputs": 1,
+      "maximum_binary_pins": 11,
+      "binary_input_debounce_milliseconds": 30,
       "maximum_led_count": 300,
       "minimum_frame_interval_milliseconds": 20,
       "maximum_timeline_bytes": 65536,
@@ -555,11 +574,42 @@ Response:
 
 `hardware_capabilities.argb_pins` ist die für dieses konkrete Gerät verbindliche
 Menge zulässiger GPIO-Nummern. Der Adapter MUSS sie statt einer eigenen
-Boardtabelle verwenden.
+Boardtabelle verwenden. Dasselbe gilt für
+`hardware_capabilities.binary_pins` bei `binary_io`. Ein GPIO, der einen
+`argb_strip` treiben kann, ist auch als Binary-Ausgang zulässig; beide Mengen
+dürfen sich daher decken.
 
-`runtime_profile` MUSS exakt `pixel-timeline-v1` sein.
-`device_type_profile=opaque-id-v1` bedeutet, dass das Gerät den gespeicherten
-`device_type` nur transportiert und nicht interpretiert.
+Die folgenden drei Listen sind OPTIONAL und beschreiben ausschließlich
+Eigenheiten einzelner GPIOs. Sie schränken die zulässige Pinauswahl NICHT ein;
+ein Adapter DARF die betroffenen Pins nicht sperren, SOLL sie beim Einrichten
+aber kenntlich machen. Jede vorhandene Liste MUSS eine duplikatfreie Teilmenge
+von `binary_pins` sein.
+
+| Feld | Bedeutung |
+| --- | --- |
+| `binary_pullup_pins` | GPIOs mit nutzbarem internem Pull-up. Ein GPIO aus `binary_pins`, der hier fehlt, benötigt als aktiv-low-Eingang einen externen Pull-up; die Firmware konfiguriert ihn dann als `INPUT` statt `INPUT_PULLUP`. |
+| `binary_boot_sensitive_pins` | GPIOs, deren Pegel beim Reset den Bootmodus bestimmt. Ein bereits geschlossener Schalter kann den Start blockieren. |
+| `binary_serial_pins` | GPIOs, die die serielle Konsole belegen. |
+
+Fehlt eine Liste, macht das Gerät zu dieser Eigenschaft keine Aussage; der
+Adapter MUSS ihr Fehlen als „unbekannt" und nicht als „trifft auf keinen Pin
+zu" behandeln.
+
+`runtime_profile` MUSS das Laufzeitprofil des aktiven Gerätetyps sein.
+`device_type_profile=boot-dispatch-v1` bedeutet, dass die Firmware zwischen den
+in `device_types` genannten Laufzeitschichten umschaltet. Das Manifest
+beschreibt die Fähigkeiten aller Schichten, auch wenn immer nur eine davon
+aktiv ist.
+
+Gerätetypen mit demselben Laufzeitprofil teilen sich Hardwarevertrag und
+Nachrichtensatz vollständig; sie unterscheiden sich ausschließlich in der
+Bedeutung, die der Adapter der Ausgabe gibt. `percentage_indicator` und
+`argb_output` sind ein solches Paar: Beide beschreiben genau einen
+`argb_strip` und tauschen Frames und Timelines über `pixel-timeline-v1` aus.
+Die Prozentanzeige füllt den Strang anteilig; der ARGB-Ausgang verknüpft
+einzelne LEDs mit einzelnen Zuständen. Welche Pixel gesetzt werden, berechnet
+in beiden Fällen ausschließlich der Adapter — das Gerät kennt weder Prozentwert
+noch Zustandsquelle.
 
 `output_types`, `frame_encodings` und `timeline_encodings` enthalten
 ausschließlich die von diesem konkreten Gerät ausführbaren Profile. Alle
@@ -645,7 +695,7 @@ vorhandene persistente Dateien nicht mit Defaults überschreiben. Der Adapter MU
 den Zustand als Recovery-/Servicefall anzeigen und DARF keine automatische
 Konfigurationsschreiboperation auslösen. `PUT /config`, `POST /pairing/start` und
 `POST /pairing/confirm` ergeben in diesem Zustand
-`CONFIG_RECOVERY_REQUIRED`, bis die Daten außerhalb des normalen hDP-Ablaufs
+`CONFIG_RECOVERY_REQUIRED`, bis die Daten außerhalb des normalen HDP-Ablaufs
 wiederhergestellt oder per bestätigtem Factory Reset gelöscht wurden.
 
 ## 11. Pairing und Binding
@@ -760,7 +810,7 @@ Regeln:
 
 Request-Body: keiner.
 
-Die Header `X-hDP-Instance` und `X-hDP-Binding-Key` sind entweder beide vorhanden
+Die Header `X-HDP-Instance` und `X-HDP-Binding-Key` sind entweder beide vorhanden
 oder beide abwesend. Nur einer der Header ergibt
 `INCOMPLETE_BINDING_CREDENTIALS`.
 
@@ -830,12 +880,46 @@ Kein Konfliktfall DARF durch Überschreiben des Geräte-Bindings behoben werden.
 }
 ```
 
+Für `binary_io` lautet dasselbe vollständige Konfigurationsobjekt alternativ:
+
+```json
+{
+  "revision": 7,
+  "device_type": "binary_io",
+  "pins": [
+    { "pin": 4, "direction": "input", "input_type": "switch" },
+    { "pin": 5, "direction": "input", "input_type": "button" },
+    { "pin": 12, "direction": "output" }
+  ]
+}
+```
+
+Für `argb_output` enthält dasselbe Objekt **beide** Abschnitte: `outputs`
+beschreibt den Strang, `pins` die Binary-Rollen aller übrigen GPIOs.
+
+```json
+{
+  "revision": 11,
+  "device_type": "argb_output",
+  "outputs": [ { "output_id": "main", "pin": 4, "…": "…" } ],
+  "pins": [
+    { "pin": 0, "direction": "input", "input_type": "button" },
+    { "pin": 1, "direction": "input", "input_type": "switch" },
+    { "pin": 15, "direction": "output" },
+    { "pin": 16, "direction": "output" }
+  ]
+}
+```
+
+Für `percentage_indicator` steht ausschließlich `outputs`, für `binary_io`
+ausschließlich `pins`.
+
 ### 12.2 Feldregeln
 
 | Feld | Typ | Erlaubte Werte |
 |---|---|---|
 | `revision` | uint32 | nur Response |
-| `device_type` | string | 1…32 Zeichen aus `a-z`, `0-9`, `.`, `_`, `-` |
+| `device_type` | string | Eintrag aus `manifest.device_types` |
 | `outputs` | array | 1…`limits.maximum_outputs` vollständige Objekte |
 | `outputs[].output_id` | string | 1…32 Zeichen aus `A-Z`, `a-z`, `0-9`, `.`, `_`, `-`; innerhalb der Konfiguration eindeutig |
 | `outputs[].output_type` | string | Eintrag aus `manifest.output_types` |
@@ -849,11 +933,51 @@ Kein Konfliktfall DARF durch Überschreiben des Geräte-Bindings behoben werden.
 | `outputs[].current_per_pixel_milliamps` | uint8 | 1…100 |
 | `outputs[].offline_mode` | string | `retain_last_frame`, `clear`, `continue_timeline` |
 
-`device_type` ist ein opaker, vom Plugin interpretierter Auswahlschlüssel. Das
-Gerät MUSS ihn speichern und unverändert zurückgeben, darf daraus aber weder
-Ausgabewerte noch Verhalten ableiten.
+Für `binary_io` gelten zusätzlich beziehungsweise anstelle von `outputs`:
 
-hDP 1.0-draft definiert für `output_type=argb_strip` ausschließlich
+| Feld | Typ | Erlaubte Werte |
+|---|---|---|
+| `pins` | array | 1…`limits.maximum_binary_pins` vollständige Objekte |
+| `pins[].pin` | uint8 | eindeutiger Eintrag aus `hardware_capabilities.binary_pins` |
+| `pins[].direction` | string | `input`, `output` |
+| `pins[].input_type` | string | bei `input` Pflicht: `switch`, `button`; bei `output` verboten |
+
+#### 12.2.1 Feste GPIO-Belegung bei `argb_output`
+
+Bei `binary_io` ist die Pinbelegung frei. Bei `argb_output` ist sie es NICHT:
+Sie folgt zwingend der Hardware, damit am Gerät außer dem Datenpin nichts zu
+entscheiden bleibt. Es gilt genau eine Regel, abgeleitet allein aus
+`hardware_capabilities.binary_pins` und `binary_pullup_pins`:
+
+| GPIO | Rolle |
+|---|---|
+| in `binary_pins`, nicht in `binary_pullup_pins` | fest `output` — ohne nutzbaren internen Pull-up taugt er nicht als aktiv-low-Eingang, wohl aber zum Schalten von Relais oder Schützen |
+| `outputs[0].pin` | ARGB-Datenleitung; MUSS in `binary_pullup_pins` enthalten sein und DARF in `pins` nicht vorkommen |
+| alle übrigen aus `binary_pins` | `input` mit frei wählbarem `input_type` |
+
+`pins` MUSS deshalb jeden Eintrag aus `binary_pins` außer dem Datenpin genau
+einmal in der vorgeschriebenen Richtung enthalten. Eine unvollständige Liste,
+eine abweichende Richtung oder ein Datenpin ohne Pull-up MÜSSEN mit
+`INVALID_CONFIGURATION` abgelehnt werden — eine Lücke wäre eine stille
+Fehlbelegung. Der Adapter leitet die Liste ab, statt sie erfragen zu lassen;
+das Gerät prüft sie gegen dieselbe Regel.
+
+Ein `argb_output`-Gerät verarbeitet damit sowohl die `output.*`- als auch die
+`binary.*`-Nachrichten seines Laufzeitprofils. Welche Nachrichten ein Gerät
+annimmt, folgt dem konfigurierten `device_type`; welche es überhaupt beherrscht,
+steht in `features`.
+
+`device_type` wählt ausschließlich die generische Laufzeitschicht. Jede darüber
+hinausgehende Semantik bleibt beim Adapter. Ein Gerätetypwechsel MUSS persistent
+gespeichert werden. Wechselt dabei auch das Laufzeitprofil, MUSS das Gerät den
+neuen Typ durch einen Neustart aktivieren; die bisher aktive Laufzeitschicht
+DARF nicht im laufenden Betrieb mit der neuen Pinbelegung vermischt werden.
+Bleibt das Laufzeitprofil gleich — etwa zwischen `percentage_indicator` und
+`argb_output` —, gilt der Wechsel wie jede andere Konfigurationsänderung: Er
+wird sofort übernommen und über `config.changed` bekanntgegeben, ein Neustart
+wäre hier eine grundlose Unterbrechung.
+
+HDP 1.0-draft definiert für `output_type=argb_strip` ausschließlich
 `driver=WS2812`. Pixelindizes auf dem Wire sind immer logische Indizes
 `0…pixel_count-1`. Bei `reverse=false` entspricht der logische Index dem
 physischen Index; bei `reverse=true` gilt:
@@ -875,6 +999,14 @@ schwarz. Nach `session.ready` MUSS der Adapter den gewünschten absoluten Frame
 ersetzen oder eine vollständig hochgeladene Timeline starten. Eine
 anwendungsspezifische Offline-Anzeige kann ausschließlich als zuvor gestartete
 Loop-Timeline in Verbindung mit `continue_timeline` realisiert werden.
+
+Binary-Eingänge verwenden `INPUT_PULLUP`; logisch `state=true` bedeutet deshalb
+einen elektrisch nach GND gezogenen, aktiven Eingang. Das Gerät MUSS sowohl
+Flanken zum aktiven als auch zum inaktiven Zustand 30 ms entprellen. Schalter
+erzeugen nach stabiler Änderung ein Ereignis; Taster erzeugen nur beim stabilen
+Übergang auf aktiv ein `pressed`-Ereignis. Binary-Ausgänge MÜSSEN beim Booten,
+bei Controllerverlust und während eines Gerätetypwechsels logisch `false`/LOW
+sein. Invertierung gehört ausschließlich in das Adapter-Binding.
 
 ### 12.3 `GET /api/v1/config`
 
@@ -950,9 +1082,13 @@ Regeln:
   werden.
 - Erst nach erfolgreicher Persistierung dürfen neue Revision und Inhalt nach außen
   sichtbar werden und die Erfolgsantwort gesendet werden.
-- Nach Erfolg MUSS `config.changed` per WebSocket gesendet und mDNS aktualisiert
-  werden.
-- Nach erfolgreicher Änderung MUSS das Gerät aktive Timelinewiedergaben stoppen,
+- Bleibt `device_type` unverändert, MUSS nach Erfolg `config.changed` per
+  WebSocket gesendet und mDNS aktualisiert werden.
+- Ändert sich `device_type`, MUSS das Gerät erst die Erfolgsantwort vollständig
+  senden und 500…2000 ms danach neu starten. Die bestehende WebSocket-Sitzung
+  endet dabei; das neue `runtime_profile` wird erst nach dem Boot per mDNS,
+  `/device`, `/manifest` und neuem Hello sichtbar.
+- Nach erfolgreicher Pixel-Konfigurationsänderung MUSS das Gerät aktive Timelinewiedergaben stoppen,
   alle hochgeladenen Timelines verwerfen und sämtliche neu konfigurierten
   Ausgänge schwarz initialisieren. Ein fehlgeschlagener PUT DARF den bisherigen
   Frame, die bisherige Konfiguration oder das Binding nicht verändern.
@@ -1036,7 +1172,7 @@ Request:
 }
 ```
 
-Nur `true` ist in hDP 1.0-draft zulässig.
+Nur `true` ist in HDP 1.0-draft zulässig.
 
 Response HTTP 202:
 
@@ -1130,14 +1266,14 @@ Authorization: Basic <base64-token>
 `<base64-token>` verwendet das Standardalphabet aus RFC 4648 einschließlich
 erforderlicher `=`-Paddingzeichen. Innerhalb des Tokens sind CR, LF,
 Leerzeichen und Zeilenfaltung unzulässig. Insbesondere darf ein Encoder lange
-hDP-Credentials nicht nach 72 Zeichen umbrechen.
+HDP-Credentials nicht nach 72 Zeichen umbrechen.
 
 Eine neue gültig authentifizierte Steuersitzung ersetzt eine bestehende Sitzung.
 Die alte Sitzung erhält `SESSION_REPLACED` und wird danach geschlossen.
 
 Ungültige Credentials MÜSSEN den HTTP-Upgrade mit 401 ablehnen.
 Die 401-Antwort MUSS syntaktisch gültiges HTTP/1.1 sein, den Header
-`WWW-Authenticate: Basic realm="homeESS hDP"` enthalten und ihre Headersektion
+`WWW-Authenticate: Basic realm="homeESS HDP"` enthalten und ihre Headersektion
 mit `\r\n\r\n` abschließen. Falls ein Body gesendet wird, MUSS
 `Content-Length` dessen exakter Bytezahl entsprechen. Eine bodylose Antwort
 verwendet `Content-Length: 0`.
@@ -1158,7 +1294,7 @@ Jede Textnachricht MUSS dieses Envelope besitzen:
 - Binärframes sind nicht erlaubt.
 - Die maximale Textgröße ist
   `manifest.limits.maximum_websocket_message_bytes` UTF-8-Bytes.
-- Jede hDP-Nachricht MUSS als einzelner, nicht fragmentierter RFC-6455-Textframe
+- Jede HDP-Nachricht MUSS als einzelner, nicht fragmentierter RFC-6455-Textframe
   übertragen werden. Fragmentierte Datenframes sind in diesem Profil nicht
   zulässig und ergeben `INVALID_REQUEST`; danach wird die Verbindung geschlossen.
 - Binäre Frame- und Timeline-Nutzdaten werden innerhalb des JSON-Envelopes mit
@@ -1223,6 +1359,10 @@ Das Gerät antwortet:
 }
 ```
 
+Die Beispiele zeigen `pixel-timeline-v1`. Für ein als `binary_io`
+konfiguriertes Gerät steht an allen drei Stellen stattdessen exakt
+`binary-io-v1`. Ein Profilmix innerhalb derselben Sitzung ist unzulässig.
+
 Vor `session.ready` DARF der Adapter keine Laufzeitwerte senden. Fehler oder Timeout
 schließen die Verbindung. Die Fehlerzuordnung ist:
 
@@ -1236,7 +1376,7 @@ schließen die Verbindung. Die Fehlerzuordnung ist:
 
 Weicht `config_revision` in `device.hello` oder `session.ready` von der lokal
 bekannten Revision ab, MUSS der Adapter vor der nächsten mutierenden
-`output.*`-Nachricht
+`output.*`- oder `binary.output.*`-Nachricht
 `GET /config` ausführen.
 
 ### 14.4 Heartbeat
@@ -1267,6 +1407,64 @@ Das Gerät antwortet mit eigenem `message_id` und eigener Sequenz:
 
 Empfängt das Gerät 45000 ms lang keine gültige Adapter-Nachricht, MUSS es
 `HEARTBEAT_TIMEOUT` senden und die Verbindung schließen.
+
+#### 14.4.1 Gerätetelemetrie
+
+Nach `session.ready` sendet das Gerät frühestens nach 1000 ms und spätestens
+nach 15000 ms eine aktuelle Telemetrie. Danach sendet es mindestens alle
+15000 ms sowie nach einer physischen Ausgabeveränderung, jedoch höchstens
+einmal pro 1000 ms:
+
+```json
+{
+  "type": "device.status",
+  "message_id": "device-12",
+  "sequence": 12,
+  "payload": {
+    "output_id": "main",
+    "config_revision": 4,
+    "wifi_rssi": -57,
+    "effective_brightness": 20,
+    "runtime_brightness": 100,
+    "estimated_current_milliamps": 11.2,
+    "power_limit_active": false
+  }
+}
+```
+
+`wifi_rssi` ist die aktuelle WLAN-Signalstärke in dBm oder `null`, wenn keine
+WLAN-Verbindung besteht. `effective_brightness` ist ein `uint8` von 0 bis 100
+und bezeichnet den tatsächlich auf RGB-Komponenten angewendeten
+Helligkeitsfaktor nach Laufzeithelligkeit, konfiguriertem Helligkeits- und
+Stromlimit. `runtime_brightness` spiegelt bei
+`features.runtime_brightness=true` den zuletzt angewendeten Laufzeitfaktor von
+0 bis 100.
+`estimated_current_milliamps` ist eine nichtnegative Zahl und wird aus dem
+logischen Pixelbild, `current_per_pixel_milliamps` und den aktiven Limits
+berechnet; sie ist ausdrücklich keine Messung durch einen Stromsensor.
+`power_limit_active` ist genau dann `true`, wenn das konfigurierte Stromlimit
+den Ausgang zusätzlich dimmt.
+
+`output_id` und `config_revision` bezeichnen den Zustand, auf den sich die
+Ausgabetelemetrie bezieht. Das Ereignis verändert die physische Ausgabe nicht.
+
+Im Profil `binary-io-v1` enthält `device.status` keine erfundene Helligkeits-
+oder Stromtelemetrie, sondern ausschließlich:
+
+```json
+{
+  "type": "device.status",
+  "message_id": "device-12",
+  "sequence": 12,
+  "payload": {
+    "config_revision": 7,
+    "runtime_profile": "binary-io-v1",
+    "wifi_rssi": -57
+  }
+}
+```
+
+Pinzustände werden verbindlich über Abschnitt 14.9 übertragen.
 
 ### 14.5 Direkte Frames
 
@@ -1685,6 +1883,35 @@ Das Gerät antwortet:
 `position_milliseconds` sind nur in den beiden Timelinemodi nicht `null`.
 Der Status verändert die Ausgabe nicht.
 
+#### 14.7.4 Laufzeithelligkeit
+
+Wenn `features.runtime_brightness=true` ist, sendet der Adapter die dynamische
+Plugin-Helligkeit getrennt vom logischen RGB-Puffer:
+
+```json
+{
+  "type": "output.brightness.set",
+  "message_id": "adapter-62",
+  "sequence": 62,
+  "payload": {
+    "output_id": "main",
+    "config_revision": 4,
+    "brightness_percent": 72
+  }
+}
+```
+
+`brightness_percent` ist ein `uint8` von 0 bis 100. Das Gerät multipliziert
+diesen Laufzeitfaktor mit dem konfigurierten Helligkeits- und Stromlimit erst
+beim physischen Rendern. Der logische RGB-Puffer sowie Frame-, Timeline- und
+Schedulerzustand dürfen dadurch nicht verändert werden.
+
+Das Gerät bestätigt mit `output.brightness.applied`; der Payload enthält
+`reply_to`, `output_id`, `config_revision`, `brightness_percent` und
+`applied_at_uptime_milliseconds`. `device.status.runtime_brightness` spiegelt
+den aktiven Laufzeitfaktor. `effective_brightness` enthält bei dieser Capability
+bereits den resultierenden Gesamtfaktor einschließlich Laufzeithelligkeit.
+
 ### 14.8 `config.changed`
 
 Nach erfolgreichem `PUT /config` sendet das Gerät:
@@ -1707,12 +1934,136 @@ Verbindungsaufbau die Synchronisation. Der Adapter MUSS nach dem Ereignis
 
 RFC-6455-Ping/Pong-Control-Frames DÜRFEN jederzeit zusätzlich verwendet werden,
 auch zwischen Upgrade und `homeess.hello`. Ein Ping MUSS nach RFC 6455 mit einem
-Pong beantwortet werden; ein Pong MUSS ohne hDP-Fehler akzeptiert werden.
-Control-Frames besitzen kein hDP-Envelope, verbrauchen keine hDP-Sequenz und
+Pong beantwortet werden; ein Pong MUSS ohne HDP-Fehler akzeptiert werden.
+Control-Frames besitzen kein HDP-Envelope, verbrauchen keine HDP-Sequenz und
 setzen weder den 5000-ms-Hello-Timeout noch den in Abschnitt 14.4 definierten
 Anwendungs-Heartbeat zurück.
 
-### 14.9 OTA-Ereignisse
+### 14.9 Binary-I/O
+
+Alle Nachrichten dieses Abschnitts sind ausschließlich bei aktivem
+`binary-io-v1` erlaubt. GPIO-Nummern beziehen sich direkt auf die eindeutigen
+`pins[].pin`-Werte der aktiven Konfigurationsrevision.
+
+#### 14.9.1 Eingangssnapshot
+
+Frühestens 1000 ms und spätestens 2000 ms nach `session.ready` sendet das Gerät
+genau einen entprellten Eingangssnapshot:
+
+```json
+{
+  "type": "binary.input.snapshot",
+  "message_id": "device-3",
+  "sequence": 3,
+  "payload": {
+    "config_revision": 7,
+    "captured_at_uptime_milliseconds": 1842,
+    "inputs": [
+      { "pin": 4, "input_type": "switch", "state": false },
+      { "pin": 5, "input_type": "button", "state": true }
+    ],
+    "outputs": [
+      { "pin": 12, "state": false }
+    ]
+  }
+}
+```
+
+Vor diesem Snapshot sendet das Gerät in der neuen Sitzung keine
+`binary.input.event`-Nachricht. Der Snapshot ist der Abgleichpunkt; offline oder
+vor dem Snapshot aufgetretene Tasterereignisse werden nicht gepuffert.
+
+#### 14.9.2 Aktive Eingangsereignisse
+
+Nach jeder entprellten Schalteränderung sendet das Gerät:
+
+```json
+{
+  "type": "binary.input.event",
+  "message_id": "device-8",
+  "sequence": 8,
+  "payload": {
+    "pin": 4,
+    "input_type": "switch",
+    "event": "changed",
+    "state": true,
+    "event_sequence": 19,
+    "occurred_at_uptime_milliseconds": 15220,
+    "config_revision": 7
+  }
+}
+```
+
+Ein Taster sendet nur für den entprellten aktiven Übergang ein Ereignis mit
+`input_type="button"`, `event="pressed"` und `state=true`. Das Loslassen wird
+entprellt und intern übernommen, erzeugt aber kein Ereignis.
+
+`event_sequence` ist ein bootlokaler, bei 1 beginnender `uint32`-Zähler der
+erkannten Ereignisse. Beobachtete Lücken sind zulässig; der Zähler ist keine
+Exactly-once-Zustellgarantie und wird nach einem Boot zurückgesetzt. Der Adapter
+MUSS `config_revision`, Pinrichtung und Eingangstyp prüfen, bevor er das Ereignis
+verarbeitet.
+
+Topics, Toggle-/Set-/Counterregeln, Zielwerte, Skalierungen und sonstige
+Automationssemantik sind ausdrücklich kein Bestandteil des Wire-Payloads. Sie
+MÜSSEN ausschließlich im Adapter gespeichert und ausgeführt werden.
+
+#### 14.9.3 Ausgang setzen
+
+Der Adapter setzt einen Ausgang mit:
+
+```json
+{
+  "type": "binary.output.set",
+  "message_id": "adapter-12",
+  "sequence": 12,
+  "payload": {
+    "pin": 12,
+    "state": true,
+    "config_revision": 7
+  }
+}
+```
+
+Nach physischer Übernahme antwortet das Gerät:
+
+```json
+{
+  "type": "binary.output.applied",
+  "message_id": "device-13",
+  "sequence": 13,
+  "payload": {
+    "reply_to": "adapter-12",
+    "pin": 12,
+    "state": true,
+    "config_revision": 7,
+    "applied_at_uptime_milliseconds": 16640
+  }
+}
+```
+
+Die Bestätigung MUSS den tatsächlich ausgegebenen logischen Zustand enthalten.
+Der Adapter DARF den Befehl nur an einen als `output` konfigurierten Pin senden.
+
+#### 14.9.4 Statusabfrage
+
+`binary.status.get` verwendet ein leeres Payloadobjekt. Das Gerät antwortet mit
+`binary.status`; dessen Payload entspricht `binary.input.snapshot`, enthält
+zusätzlich `reply_to` und listet sowohl Eingänge als auch Ausgänge. Die Abfrage
+verändert keinen Pin.
+
+#### 14.9.5 Fehler und Offline-Verhalten
+
+- unbekannter Pin: `BINARY_PIN_NOT_FOUND`;
+- als Eingang konfigurierter Zielpin: `BINARY_PIN_DIRECTION_MISMATCH`;
+- falsche Revision: `BINARY_CONFIG_REVISION_MISMATCH`;
+- mutierender Ausgangsbefehl während OTA: `DEVICE_BUSY`.
+
+Bei Verlust der aktiven Steuersitzung setzt das Gerät alle Binary-Ausgänge ohne
+weitere Wire-Nachricht auf `false`. Nach der nächsten Sitzung MUSS der Adapter
+aus seinen Topicwerten erneut absolute Ausgangszustände senden.
+
+### 14.10 OTA-Ereignisse
 
 Erlaubte Typen:
 
@@ -1752,7 +2103,7 @@ Jedes OTA-Ereignis verwendet dieses Payload:
 `progress_percent` ist `uint8` im Bereich 0…100. `error_code` und `message` sind
 nur bei `firmware.update.failed` Strings, sonst `null`.
 
-### 14.10 WebSocket-Fehler
+### 14.11 WebSocket-Fehler
 
 ```json
 {
@@ -1874,7 +2225,8 @@ kann ein Fehler nach `failed` führen. Ein neuer Upload ist nur aus `idle`,
 Solange der Betriebszustand `updating` ist, ergeben `PUT /config`,
 `POST /pairing/start`, `POST /pairing/confirm`, `POST /unpair`,
 `POST /restart`, `POST /factory-reset` sowie alle mutierenden
-WebSocket-Nachrichten mit Präfix `output.` den Fehler `DEVICE_BUSY`.
+WebSocket-Nachrichten mit Präfix `output.` sowie `binary.output.set` den Fehler
+`DEVICE_BUSY`.
 `output.status.get` und HTTP-Leseoperationen bleiben zulässig.
 `POST /firmware/restart` bleibt in `ready_to_restart` ausdrücklich zulässig.
 
@@ -1900,18 +2252,18 @@ Pflichtheader:
 ```text
 Content-Type: application/octet-stream
 Content-Length: <exact image bytes>
-X-hDP-Instance: <instance_id>
-X-hDP-Binding-Key: <binding_key>
-X-hDP-Firmware-Name: <name>
-X-hDP-Firmware-Version: <semver>
-X-hDP-Firmware-Channel: stable|beta|development
-X-hDP-Platform: <platform>
-X-hDP-Board: <board>
-X-hDP-Variant: <variant>
-X-hDP-Protocol-Version: 1.0-draft
-X-hDP-Config-Schema-Version: <uint16>
-X-hDP-Firmware-Size: <exact image bytes>
-X-hDP-Firmware-SHA256: <64 lowercase hex>
+X-HDP-Instance: <instance_id>
+X-HDP-Binding-Key: <binding_key>
+X-HDP-Firmware-Name: <name>
+X-HDP-Firmware-Version: <semver>
+X-HDP-Firmware-Channel: stable|beta|development
+X-HDP-Platform: <platform>
+X-HDP-Board: <board>
+X-HDP-Variant: <variant>
+X-HDP-Protocol-Version: 1.0-draft
+X-HDP-Config-Schema-Version: <uint16>
+X-HDP-Firmware-Size: <exact image bytes>
+X-HDP-Firmware-SHA256: <64 lowercase hex>
 ```
 
 `Content-Type` MUSS exakt `application/octet-stream` sein; andernfalls gilt
@@ -1920,18 +2272,18 @@ X-hDP-Firmware-SHA256: <64 lowercase hex>
 Optionale Header:
 
 ```text
-X-hDP-Firmware-Signature: <detached signature>
-X-hDP-Allow-Downgrade: true|false
-X-hDP-Restart-After-Success: true|false
+X-HDP-Firmware-Signature: <detached signature>
+X-HDP-Allow-Downgrade: true|false
+X-HDP-Restart-After-Success: true|false
 ```
 
 Fehlende Boolean-Header bedeuten `false`.
 
 Ist `signature_verification == "enabled"`, ist
-`X-hDP-Firmware-Signature` Pflicht. Der Wert ist die kanonische, gepaddete
+`X-HDP-Firmware-Signature` Pflicht. Der Wert ist die kanonische, gepaddete
 Base64-Kodierung nach RFC 4648 einer 64-Byte-Ed25519-Signatur. Signiert werden
 exakt die 32 rohen Bytes, die durch Dekodieren von
-`X-hDP-Firmware-SHA256` entstehen. Fehlende, syntaktisch falsche oder nicht zum
+`X-HDP-Firmware-SHA256` entstehen. Fehlende, syntaktisch falsche oder nicht zum
 in `/firmware` genannten Schlüssel passende Signaturen ergeben
 `OTA_SIGNATURE_INVALID`.
 
@@ -1978,7 +2330,7 @@ Response HTTP 202:
 }
 ```
 
-Bei `X-hDP-Restart-After-Success: false` bleibt das Gerät in
+Bei `X-HDP-Restart-After-Success: false` bleibt das Gerät in
 `ready_to_restart`, bis der Adapter den Restart-Endpoint aufruft. Bei `true`
 wechselt es unmittelbar nach der Response zu `restarting` und startet nach
 500…2000 ms neu; der Adapter DARF dann keinen zusätzlichen Restart senden.
@@ -2047,6 +2399,9 @@ der Status `completed` meldet.
 | `OUTPUT_BASE_FRAME_REQUIRED` | WS | Patch ist ohne Baselineframe der Sitzung unzulässig |
 | `OUTPUT_RATE_LIMITED` | WS | physische Framefrequenz würde das Manifestlimit verletzen |
 | `OUTPUT_BUSY` | WS | Output führt eine mit dem Befehl unvereinbare Timeline aus |
+| `BINARY_PIN_NOT_FOUND` | WS | GPIO gehört nicht zur aktiven Binary-Konfiguration |
+| `BINARY_PIN_DIRECTION_MISMATCH` | WS | mutierender Befehl adressiert keinen Ausgang |
+| `BINARY_CONFIG_REVISION_MISMATCH` | WS | Befehl bezieht sich nicht auf die aktive Binary-Konfigurationsrevision |
 | `TIMELINE_UPLOAD_IN_PROGRESS` | WS | ein anderer Staging-Upload ist in derselben Sitzung aktiv |
 | `TIMELINE_NOT_FOUND` | WS | referenzierte Timeline ist nicht committed |
 | `TIMELINE_OFFSET_MISMATCH` | WS | Chunkoffset weicht von `details.expected_offset` ab |
@@ -2061,7 +2416,7 @@ der Status `completed` meldet.
 | `SESSION_REPLACED` | WS | neue authentifizierte Steuersitzung hat die alte ersetzt |
 | `DEVICE_BUSY` | 423/WS | Zustandsänderung während laufender OTA-Transaktion |
 | `FACTORY_RESET_NOT_ALLOWED` | 403 | Gerät nicht im Recovery-Modus |
-| `INTERNAL_ERROR` | 500 | persistenter oder interner Fehler |
+| `INTERNAL_ERROR` | 500/WS | persistenter oder interner Fehler |
 | `OTA_AUTH_REQUIRED` | 401 | OTA-Owner-Authentifizierung fehlgeschlagen |
 | `OTA_ALREADY_RUNNING` | 423 | OTA bereits aktiv oder restartbereit |
 | `OTA_INVALID_METADATA` | 400/422 | Metadaten fehlen oder sind ungültig |
@@ -2083,7 +2438,7 @@ der Status `completed` meldet.
 | `OTA_RESTART_NOT_READY` | 409 | kein verifiziertes Image restartbereit |
 | `OTA_BOOT_VALIDATION_FAILED` | 500 | Validierung nach Neustart fehlgeschlagen |
 
-Nicht registrierte Fehlercodes sind in hDP 1.0-draft unzulässig.
+Nicht registrierte Fehlercodes sind in HDP 1.0-draft unzulässig.
 
 ## 17. Verbindliche Timeouts und Retryregeln
 
@@ -2098,6 +2453,7 @@ Nicht registrierte Fehlercodes sind in hDP 1.0-draft unzulässig.
 | unpair/restart/factory-reset | 2000 ms | 5000 ms |
 | WebSocket-Upgrade | 3000 ms | 5000 ms bis `session.ready` |
 | `output.frame.set` | – | 5000 ms |
+| `binary.output.set`, `binary.status.get` | – | 5000 ms |
 | Timeline begin/chunk/play/stop/status | – | 5000 ms |
 | Timeline commit | – | 10000 ms |
 | OTA-Metadaten/Status | 2000 ms | 5000 ms |
@@ -2126,6 +2482,7 @@ Nicht registrierte Fehlercodes sind in hDP 1.0-draft unzulässig.
 | `/pairing/confirm` ohne Response | zuerst `/pairing/status` mit Pending-Credentials; bei `match` aktivieren, bei `unpaired` identischen Confirm erneut senden, bei `conflict` abbrechen |
 | `PUT /config` ohne Response | ausschließlich Verfahren aus Abschnitt 12.5 |
 | `output.frame.set` ohne Response | mit derselben `frame_id` und byteidentischem Payload einmal erneut senden; bei erneutem Verbindungsverlust nach neuer Sitzung absoluten Replace-Frame senden |
+| `binary.output.set` ohne Response | nach neuer Sitzung `binary.status.get` senden und nur bei abweichendem Ausgangszustand den absoluten Befehl erneut senden |
 | Timeline begin/chunk/commit ohne Response | in derselben Sitzung denselben idempotenten Request wiederholen; nach Sitzungsverlust Upload mit `begin` und Offset 0 neu beginnen |
 | `output.timeline.play` ohne Response | `output.status.get` senden; nur starten, wenn nicht bereits dieselbe `timeline_id` mit demselben `loop`-Wert läuft oder geplant ist |
 | `output.timeline.stop` ohne Response | `output.status.get` senden; bei `idle` oder `frame` als Erfolg behandeln, andernfalls denselben Stopp wiederholen |
@@ -2166,21 +2523,27 @@ folgende Ende-zu-Ende-Fälle bestanden sind:
 10. Neustart mit erhaltener Kopplung und Hardwarekonfiguration.
 11. Entkopplung mit erhaltener Hardwarekonfiguration.
 12. WebSocket-Handshake, Sequenzprüfung, Heartbeat und Reconnect.
-13. Runtime-Profilabgleich und Ablehnung eines inkompatiblen Profils.
-14. Absoluter Replace-Frame, idempotente Wiederholung, Patch und fehlender
+13. Boot-Umschaltung zwischen `pixel-timeline-v1` und `binary-io-v1` ohne
+    Vermischung der Pin-Treiber.
+14. 30-ms-Entprellung, Schalteränderung, ausschließliches Taster-Pressed-Ereignis
+    und Eingangssnapshot nach Sitzungsaufbau.
+15. Binary-Ausgangsbestätigung sowie LOW-Sicherheitszustand bei Boot und
+    Controllerverlust.
+16. Runtime-Profilabgleich und Ablehnung eines inkompatiblen Profils.
+17. Absoluter Replace-Frame, idempotente Wiederholung, Patch und fehlender
     Baselineframe.
-15. Ablehnung falscher Output-ID, Konfigurationsrevision, Framegröße und
+18. Ablehnung falscher Output-ID, Konfigurationsrevision, Framegröße und
     Pixeldatentypen ohne Teilanwendung.
-16. Chunkweiser Upload des verbindlichen Timeline-Testvektors einschließlich
+19. Chunkweiser Upload des verbindlichen Timeline-Testvektors einschließlich
     Offset-, Größen-, Hash- und Programmfehlern.
-17. Timeline-Start, Loopgrenze, Scheduler-Aufholen, Stopp, Statusabgleich und
+20. Timeline-Start, Loopgrenze, Scheduler-Aufholen, Stopp, Statusabgleich und
     Wiederaufnahme nach verlorener Response.
-18. Offlineverhalten und Verlust aller flüchtigen Frames, Timelines und
+21. Offlineverhalten und Verlust aller flüchtigen Frames, Timelines und
     Stagingdaten nach Neustart bei unverändertem Binding und unveränderter
     Hardwarekonfiguration.
-19. Helligkeits- und Strombegrenzung ohne Veränderung des logischen Puffers.
-20. OTA-Erfolg, Transferabbruch, falsche Größe und falscher SHA-256.
-21. Rediscovery und Versionsbestätigung nach OTA.
+22. Helligkeits- und Strombegrenzung ohne Veränderung des logischen Puffers.
+23. OTA-Erfolg, Transferabbruch, falsche Größe und falscher SHA-256.
+24. Rediscovery und Versionsbestätigung nach OTA.
 
 Beispiele in diesem Dokument sind normativ hinsichtlich Feldnamen, Datentypen und
 Einheiten. Beispielwerte sind nicht normativ.

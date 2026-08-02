@@ -31,6 +31,7 @@ const messenSchaltenRoutes = require('./routes/messen-schalten');
 const adapterRoutes = require('./routes/adapters');
 const statesRoutes = require('./routes/states');
 const remoteAccessRoutes = require('./routes/remote-access');
+const updateRoutes = require('./routes/update');
 const pairingState = require('./remote-access/pairing-state');
 const identityStore = require('./remote-access/identity-store');
 const connectionService = require('./remote-access/connection-service');
@@ -78,7 +79,7 @@ function createApp() {
     // seinem Manifest ausdrücklich als öffentlich erklärt hat. Ohne diese
     // Ausnahme käme das USB-Flashtool nicht an die Firmware, denn es kann
     // keine Sitzung führen.
-    openPaths: ['/', '/login', '/logout', '/energiefluss/export', '/adapter-public'],
+    openPaths: ['/', '/login', '/logout', '/energiefluss/export', '/adapter-public', '/update/health'],
     sharedPaths: ['/live', '/me', '/states/catalog'],
   }));
 
@@ -99,6 +100,7 @@ function createApp() {
   app.use(adapterRoutes(db));
   app.use(statesRoutes(db));
   app.use(remoteAccessRoutes());
+  app.use(updateRoutes());
 
   // Fernzugriff: dauerhafte Instanzidentität und Origin-WebSocket vorbereiten.
   // Der Relay-Client ist ein optionaler Subdienst — Fehler dürfen den normalen

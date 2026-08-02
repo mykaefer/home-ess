@@ -41,6 +41,8 @@ Session ab und liefert dem Browser nur die für die Darstellung nötigen Daten
 | `src/remote-access/relay-connection.js` | Origin-WebSocket-Client (State-Machine): `hello`, Challenge-Validierung, Signatur, `authenticated`, Reconnect-Backoff, Heartbeat, Tunnel-Dispatch, Shutdown. |
 | `src/remote-access/origin-tunnel.js` | Origin-Ende des Relay-Tunnels: lokale HTTP-Requests validieren/ausführen, Status/Header/Body streamen, Sequenzen, Timeouts, Backpressure und Cleanup. |
 | `src/remote-access/connection-service.js` | Prozessweiter Singleton-Wrapper um genau eine Origin-Verbindung (Init/Autostart/Status/Shutdown). |
+| `src/update/` | Tägliche, persistente GitHub-Releaseprüfung und unprivilegierte Anforderung eines bestätigten Updates. |
+| `updater/` | Separat installierter systemd-One-shot-Helper für Staging, atomaren Wechsel, Neustartprüfung und Rollback. |
 | `src/remote-access/errors.js` | Stabile interne Fehlercodes (`RemoteAccessError`). |
 | `src/remote-access/redact.js` | Redaction + Logging für Fernzugriff-Ereignisse (inkl. Private Key, Signatur, Proof, Nonce, Challenge). |
 | `src/routes/remote-access.js` | Kompatibilitätsroute `/remote-access` (Weiterleitung zum Einstellungs-Tab) + lokale API `/api/remote-access/pairing[/confirm|/reject|/provision]` und `/api/remote-access/connection[/connect|/disconnect]` (Auth, CSRF, `no-store`). |

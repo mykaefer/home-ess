@@ -171,7 +171,11 @@ function strictInteger(value, min, max, label) {
 
 function validateHardwareConfig(input, capabilities = {}) {
   const config = input && typeof input === 'object' ? input : {};
-  if (config.device_type === 'binary_io' || Array.isArray(config.pins)) {
+  // `argb_output` führt beide Abschnitte: den Strang und die Binary-Rollen der
+  // übrigen GPIOs. Allein an `pins` lässt sich der Gerätetyp deshalb nicht mehr
+  // erkennen — `outputs` entscheidet.
+  if (config.device_type === 'binary_io'
+      || (Array.isArray(config.pins) && !Array.isArray(config.outputs))) {
     return validateBinaryConfig(config, capabilities);
   }
   if (Array.isArray(config.outputs)) return validateOutputConfig(config, capabilities);
@@ -283,9 +287,112 @@ function validateBinaryConfig(input, capabilities = {}) {
   return result;
 }
 
+// Einschaltkriterien einer ARGB-Statusanzeige. Eine LED leuchtet, solange der
+// verknüpfte State das Kriterium erfüllt; sonst zeigt sie die Aus-Farbe.
+const ARGB_OPERATORS = Object.freeze(['equals', 'less_than', 'greater_than', 'between']);
+const ARGB_OPERATOR_LABELS = Object.freeze({
+  equals: 'ist gleich (x)',
+  less_than: 'ist kleiner als (< x)',
+  greater_than: 'ist größer als (> x)',
+  between: 'liegt zwischen (x bis y)',
+});
+
+// homeESS-States liefern Zahlen, Booleans und Texte. Für die Vergleiche
+// <x, >x und x-y zählt ausschließlich die Zahl; Booleans sind dabei 1 und 0,
+// damit ein Schaltzustand ohne Umweg als Kriterium „= 1“ nutzbar bleibt.
+function numericValue(value) {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value === 'boolean') return value ? 1 : 0;
+  if (value == null) return null;
+  const text = String(value).trim();
+  if (!text) return null;
+  const lower = text.toLowerCase();
+  if (['true', 'on', 'yes', 'ein', 'an'].includes(lower)) return 1;
+  if (['false', 'off', 'no', 'aus'].includes(lower)) return 0;
+  const number = Number(text.replace(',', '.'));
+  return Number.isFinite(number) ? number : null;
+}
+
+function comparableText(value) {
+  if (value == null) return '';
+  return String(typeof value === 'boolean' ? (value ? 'true' : 'false') : value)
+    .trim().toLowerCase();
+}
+
+function validateArgbCondition(input, label = 'Bedingung') {
+  const source = input && typeof input === 'object' ? input : {};
+  const operator = ARGB_OPERATORS.includes(source.operator) ? source.operator : 'equals';
+  // Nur „ist gleich“ vergleicht auch Text; alle Ordnungsvergleiche brauchen
+  // zwingend eine Zahl, sonst wäre das Kriterium schlicht nicht auswertbar.
+  const rawValue = source.value == null ? '' : String(source.value).trim();
+  const value = numericValue(rawValue);
+  if (operator !== 'equals' && value == null) {
+    throw new Error(`${label}: Der Vergleichswert muss numerisch sein.`);
+  }
+  if (operator !== 'between') {
+    return { operator, value: rawValue, value_max: '' };
+  }
+  const rawMaximum = source.value_max == null ? '' : String(source.value_max).trim();
+  const maximum = numericValue(rawMaximum);
+  if (maximum == null) throw new Error(`${label}: Der obere Bereichswert muss numerisch sein.`);
+  if (maximum < value) throw new Error(`${label}: Der obere Bereichswert darf nicht kleiner als der untere sein.`);
+  return { operator, value: rawValue, value_max: rawMaximum };
+}
+
+// Ein noch nie empfangener State erfüllt kein Kriterium; die LED bleibt dann
+// auf ihrer Aus-Farbe, statt einen erfundenen Zustand anzuzeigen.
+function argbConditionActive(condition, value) {
+  if (value === undefined) return false;
+  const source = condition && typeof condition === 'object' ? condition : {};
+  const operator = ARGB_OPERATORS.includes(source.operator) ? source.operator : 'equals';
+  const current = numericValue(value);
+  const target = numericValue(source.value);
+  if (operator === 'equals') {
+    if (current != null && target != null) return current === target;
+    return comparableText(value) === comparableText(source.value);
+  }
+  if (current == null || target == null) return false;
+  if (operator === 'less_than') return current < target;
+  if (operator === 'greater_than') return current > target;
+  const maximum = numericValue(source.value_max);
+  if (maximum == null) return false;
+  return current >= target && current <= maximum;
+}
+
 function validateOpaqueId(value, label, pattern = /^[A-Za-z0-9._-]{1,32}$/) {
   if (typeof value !== 'string' || !pattern.test(value)) throw new Error(`${label} ist ungültig.`);
   return value;
+}
+
+// Beim ARGB-Ausgang ist die Pinbelegung nicht frei: Ein GPIO ohne nutzbaren
+// internen Pull-up taugt nicht als aktiv-low-Eingang und ist deshalb fest
+// Ausgang. Genau ein weiterer GPIO trägt die Datenleitung, alle übrigen sind
+// Eingänge. Die Regel folgt allein aus `binary_pins` und `binary_pullup_pins`
+// des Manifests — ein eigenes Manifestfeld wäre nur eine zweite Wahrheit.
+function argbOutputPinRoles(hardware, argbPin) {
+  const all = Array.isArray(hardware.binary_pins) ? hardware.binary_pins : [];
+  const pullup = Array.isArray(hardware.binary_pullup_pins)
+    ? hardware.binary_pullup_pins : all;
+  const fixedOutputs = all.filter((pin) => !pullup.includes(pin));
+  const dataCandidates = all.filter((pin) => pullup.includes(pin));
+  const inputs = dataCandidates.filter((pin) => pin !== argbPin);
+  return { all, fixedOutputs, dataCandidates, inputs };
+}
+
+// Die vollständige Pinliste, die ein argb_output-Gerät erwartet. Der Adapter
+// leitet sie ab, statt sie den Benutzer eintragen zu lassen; die Firmware
+// prüft sie anschließend gegen dieselbe Regel.
+function argbOutputPins(hardware, argbPin, inputTypes = {}) {
+  const roles = argbOutputPinRoles(hardware, argbPin);
+  return roles.all
+    .filter((pin) => pin !== argbPin)
+    .map((pin) => (roles.fixedOutputs.includes(pin)
+      ? { pin, direction: 'output' }
+      : {
+        pin,
+        direction: 'input',
+        input_type: inputTypes[String(pin)] === 'button' ? 'button' : 'switch',
+      }));
 }
 
 function validateOutputConfig(input, capabilities = {}) {
@@ -328,6 +435,47 @@ function validateOutputConfig(input, capabilities = {}) {
       };
     }),
   };
+  // Der ARGB-Ausgang führt zusätzlich die Binary-Rollen aller übrigen GPIOs.
+  // Der Datenpin muss dafür einen nutzbaren Pull-up haben — sonst wäre er selbst
+  // ein fester Ausgang. Die Pinliste wird hier nur geprüft und normalisiert,
+  // niemals erfunden: Ein Gerät, das keine meldet, führt auch keine. Erzeugt
+  // wird sie ausschließlich dort, wo eine Konfiguration geschrieben wird.
+  if (result.device_type === 'argb_output') {
+    const argbPin = result.outputs[0].pin;
+    const roles = argbOutputPinRoles(hardware, argbPin);
+    if (!roles.all.length) throw new Error('Gerätemanifest nennt keine Binary-GPIOs.');
+    if (!roles.dataCandidates.includes(argbPin)) {
+      throw new Error('Der ARGB-Datenpin braucht einen nutzbaren internen Pull-up; GPIO '
+        + `${roles.fixedOutputs.join(', ')} sind fest Ausgänge.`);
+    }
+    if (Array.isArray(config.pins)) {
+      const inputTypes = {};
+      for (const source of config.pins) {
+        if (!source || typeof source !== 'object' || Array.isArray(source)) {
+          throw new Error('Binary-Pinkonfiguration ist ungültig.');
+        }
+        const pin = strictInteger(source.pin, 0, 255, 'GPIO');
+        if (pin === argbPin) {
+          throw new Error('Der ARGB-Datenpin darf keine Binary-Rolle haben.');
+        }
+        if (!roles.all.includes(pin)) {
+          throw new Error('GPIO wird für Binary-I/O nicht unterstützt.');
+        }
+        const wantsOutput = roles.fixedOutputs.includes(pin);
+        if (wantsOutput !== (source.direction === 'output')) {
+          throw new Error(`GPIO ${pin} muss beim ARGB-Ausgang `
+            + `${wantsOutput ? 'Ausgang' : 'Eingang'} sein.`);
+        }
+        if (source.direction === 'input') {
+          if (!['switch', 'button'].includes(source.input_type)) {
+            throw new Error('Binary-Eingangstyp muss switch oder button sein.');
+          }
+          inputTypes[String(pin)] = source.input_type;
+        }
+      }
+      result.pins = argbOutputPins(hardware, argbPin, inputTypes);
+    }
+  }
   if (Object.prototype.hasOwnProperty.call(config, 'revision')) {
     result.revision = strictInteger(config.revision, 0, 0xffffffff, 'Revision');
   }
@@ -342,4 +490,7 @@ module.exports = {
   compatibleProtocol, parseSemVer, compareSemVer, color, colorStops, scale,
   interpolateColor, validateHardwareConfig, validateOutputConfig, validateBinaryConfig,
   validateOpaqueId,
+  ARGB_OPERATORS, ARGB_OPERATOR_LABELS,
+  numericValue, comparableText, validateArgbCondition, argbConditionActive,
+  argbOutputPinRoles, argbOutputPins,
 };
