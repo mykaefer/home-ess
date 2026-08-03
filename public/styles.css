@@ -320,6 +320,20 @@ body {
     accent-color: #007bff;
 }
 
+.time-source-status {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 8px;
+    margin-top: 16px;
+    padding: 12px;
+    border: 1px solid #e3e8ee;
+    border-radius: 9px;
+    background: #f8fafc;
+}
+.time-source-status > div { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.time-source-status span { color: #6b7280; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; }
+.time-source-status strong { color: #1f2937; font-size: 13px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+
 .range-field {
     display: flex;
     align-items: center;
@@ -3231,6 +3245,82 @@ body.dash-editing .widget-group {
     border-bottom: 1px solid #e5e7eb;
 }
 .states-inst-name { font-weight: 700; font-family: monospace; color: #1f2937; }
+
+/* Custom-States-Verwaltung: kompakter, beliebig tiefer Verzeichnisbaum in
+   voller Inhaltsbreite. Die Einrückung sitzt nur im Kopf bzw. in den Zeilen,
+   damit verschachtelte Ebenen keine immer schmaleren Karten erzeugen. */
+.custom-states-tree {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    margin-top: 12px;
+    border: 1px solid #e2e6ea;
+    border-radius: 8px;
+    overflow: hidden;
+    background: #fff;
+}
+.custom-folder { width: 100%; background: #fff; }
+.custom-folder-head {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    width: 100%;
+    min-height: 32px;
+    padding: 4px 8px 4px calc(10px + var(--tree-depth, 0) * 18px);
+    border-top: 1px solid #e2e8f0;
+    background: color-mix(in srgb, #eef2f7 calc(100% - var(--tree-depth, 0) * 7%), #fff);
+    cursor: pointer;
+    user-select: none;
+}
+.custom-states-tree > .custom-folder:first-child > .custom-folder-head { border-top: 0; }
+.custom-folder-head:hover { background: #e2e8f0; }
+.custom-folder-name { flex: 1; min-width: 0; font-size: 13px; font-weight: 700; color: #0f172a; }
+.custom-folder-body { display: none; flex-direction: column; }
+.custom-folder.is-open > .custom-folder-body { display: flex; }
+.custom-folder.is-open > .custom-folder-head > .value-cat-caret { transform: rotate(90deg); }
+.custom-folder-head .widget-actions,
+.custom-state-row .widget-actions { display: flex; align-items: center; gap: 3px; }
+.custom-folder-head form,
+.custom-state-row form { display: inline-flex; margin: 0; }
+.custom-root-states { display: flex; flex-direction: column; }
+.custom-state-row {
+    display: grid;
+    grid-template-columns: minmax(130px, 1fr) minmax(230px, 1.7fr) minmax(100px, .65fr) minmax(190px, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    min-height: 34px;
+    padding: 3px 8px 3px calc(28px + var(--tree-depth, 0) * 18px);
+    border-top: 1px solid #f0f2f4;
+    font-size: 12px;
+}
+.custom-folder-body > .custom-state-row { padding-left: calc(28px + var(--tree-depth, 0) * 18px); }
+.custom-state-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 600; color: #1f2937; }
+.custom-state-topic { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: #64748b; }
+.custom-state-type { color: #64748b; }
+.custom-state-editor { display: flex; align-items: center; gap: 5px; }
+.custom-state-value { width: 100%; min-width: 80px; height: 27px; padding: 2px 7px; font-size: 12px; }
+.custom-value-save { min-height: 27px; padding: 3px 8px; font-size: 11px; }
+.custom-empty { padding: 18px; margin: 0; }
+.custom-rounding-fields { display: contents; }
+
+@media (max-width: 900px) {
+    .custom-state-row {
+        grid-template-columns: minmax(110px, 1fr) minmax(160px, 1.4fr) minmax(180px, 1fr) auto;
+    }
+    .custom-state-type { display: none; }
+}
+@media (max-width: 620px) {
+    .custom-state-row {
+        grid-template-columns: 1fr auto;
+        gap: 4px 8px;
+        padding-top: 7px;
+        padding-bottom: 7px;
+    }
+    .custom-state-topic { grid-column: 1 / -1; grid-row: 2; }
+    .custom-state-editor { grid-column: 1; grid-row: 3; }
+    .custom-state-row > .widget-actions { grid-column: 2; grid-row: 1; }
+    .custom-folder-head { padding-left: calc(8px + var(--tree-depth, 0) * 12px); }
+}
 
 /* State-Picker: an das Topic-Feld angedockter Dropdown (Popover, Top-Layer) */
 .state-picker-pop {

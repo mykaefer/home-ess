@@ -1,6 +1,7 @@
 'use strict';
 
 const { loadMqttConfig, buildEnvironmentSnapshot } = require('../mqtt/config');
+const { localCalendar } = require('../local-time');
 const { converterEfficiency } = require('./converters');
 const { loadFactors, currentBucket, getFactor, effectiveFactor } = require('./calibration');
 const { DEFAULT_SUN_CUTOFF_PERCENT } = require('./plants');
@@ -125,10 +126,12 @@ function pad(value) {
 }
 
 function getDateKey(date = new Date()) {
+  if (date && date.dateKey) return date.dateKey;
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
 function getWeekKey(date = new Date()) {
+  if (date && date.weekKey) return date.weekKey;
   const local = new Date(date.getFullYear(), date.getMonth(), date.getDate());
   const day = local.getDay() || 7;
   local.setDate(local.getDate() + 4 - day);
@@ -138,6 +141,7 @@ function getWeekKey(date = new Date()) {
 }
 
 function getYearKey(date = new Date()) {
+  if (date && date.yearKey) return date.yearKey;
   return String(date.getFullYear());
 }
 
@@ -360,33 +364,9 @@ function solarGeometryAt(config, dateParts, timeParts) {
 
 function buildSolarContext(config, cache) {
   const environment = buildEnvironmentSnapshot(cache);
-  const now = new Date();
-
-  const dateParts =
-    environment.date && environment.date.year != null
-      ? {
-          year: environment.date.year,
-          month: environment.date.month,
-          day: environment.date.day,
-        }
-      : {
-          year: now.getFullYear(),
-          month: now.getMonth() + 1,
-          day: now.getDate(),
-        };
-
-  const timeParts =
-    environment.time && environment.time.hours != null
-      ? {
-          hours: environment.time.hours,
-          minutes: environment.time.minutes,
-          seconds: environment.time.seconds,
-        }
-      : {
-          hours: now.getHours(),
-          minutes: now.getMinutes(),
-          seconds: now.getSeconds(),
-        };
+  const clock = localCalendar(cache, config.timezone, new Date(), observesDst(config));
+  const dateParts = { year: clock.year, month: clock.month, day: clock.day };
+  const timeParts = { hours: clock.hours, minutes: clock.minutes, seconds: clock.seconds };
 
   const geometry = solarGeometryAt(config, dateParts, timeParts);
   return {
@@ -667,8 +647,8 @@ async function buildPhotovoltaikSnapshot(db, cache, plants) {
   const solarContext = buildSolarContext(mqttConfig, cache);
   const factorsMap = await loadFactors(db);
   const bucket = currentBucket(cache);
-  const now = new Date();
-  const dayKey = getDateKey(now);
+  const now = localCalendar(cache, mqttConfig.timezone, new Date(), observesDst(mqttConfig));
+  const dayKey = now.dateKey;
   const yieldStates = await loadPlantYieldStates(db);
   const enrichedPlants = [];
   let currentTotal = 0;
@@ -773,7 +753,7 @@ async function readPhotovoltaikValues(db, cache, plants) {
   const factorsMap = await loadFactors(db);
   const bucket = currentBucket(cache);
   const state = await loadSummaryState(db);
-  const dayKey = getDateKey();
+  const dayKey = localCalendar(cache, mqttConfig.timezone, new Date(), observesDst(mqttConfig)).dateKey;
   const yieldStates = await loadPlantYieldStates(db);
 
   let currentTotal = 0;

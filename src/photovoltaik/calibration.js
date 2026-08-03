@@ -17,8 +17,9 @@
 // Geometrie-/Skalierungshelfer aus aggregation.js per lazy require im
 // Funktionsrumpf geholt (aggregation.js requirt dieses Modul → Zyklus vermeiden).
 
-const { loadMqttConfig, buildEnvironmentSnapshot } = require('../mqtt/config');
+const { loadMqttConfig } = require('../mqtt/config');
 const wetter = require('../wetter/client');
+const { localCalendar } = require('../local-time');
 
 const BUCKET_MINUTES = 15;
 const BUCKET_COUNT = (24 * 60) / BUCKET_MINUTES; // 96
@@ -89,15 +90,9 @@ function bucketForParts(hours, minutes) {
 
 // Lokales Datum + Uhrzeit aus dem MQTT-Umfeld (wie das Idealmodell), Fallback now.
 function localDateTime(cache, now = new Date()) {
-  const env = buildEnvironmentSnapshot(cache);
-  const date =
-    env.date && env.date.year != null
-      ? { year: env.date.year, month: env.date.month, day: env.date.day }
-      : { year: now.getFullYear(), month: now.getMonth() + 1, day: now.getDate() };
-  const time =
-    env.time && env.time.hours != null
-      ? { hours: env.time.hours, minutes: env.time.minutes }
-      : { hours: now.getHours(), minutes: now.getMinutes() };
+  const clock = localCalendar(cache, null, now);
+  const date = { year: clock.year, month: clock.month, day: clock.day };
+  const time = { hours: clock.hours, minutes: clock.minutes };
   return { date, time };
 }
 

@@ -1,7 +1,7 @@
 'use strict';
 
 const mqttClient = require('../mqtt/client');
-const { buildEnvironmentSnapshot } = require('../mqtt/config');
+const timeHandler = require('../time-handler');
 const { loadPoolConfig, readPoolValue } = require('./config');
 const { assessHeaderSkyState } = require('../photovoltaik/aggregation');
 const { listPvPlants } = require('../photovoltaik/plants');
@@ -72,13 +72,11 @@ function timeToMinutes(t) {
   return h * 60 + m;
 }
 
-// Exakt dieselbe MQTT-Zeitquelle wie die Uhr in der Titelzeile verwenden.
-function currentMinutes(cache) {
-  const environment = buildEnvironmentSnapshot(cache);
-  if (environment.time.hours != null && environment.time.minutes != null) {
-    return environment.time.hours * 60 + environment.time.minutes;
-  }
-  return null;
+// Zeitfenster verwenden die zentrale homeESS-Uhr und laufen daher auch ohne
+// Broker beziehungsweise bei Ausfall des MQTT-Zeittopics weiter.
+function currentMinutes() {
+  const current = timeHandler.calendar();
+  return current.hours * 60 + current.minutes;
 }
 
 function inWindow(start, end, now) {
@@ -153,7 +151,7 @@ async function tick(db) {
   const cfg = await new Promise((resolve) => loadPoolConfig(db, resolve));
   const cache = mqttClient.getCache();
   const now = Date.now();
-  const localMinutes = currentMinutes(cache);
+  const localMinutes = currentMinutes();
   const gridControlEnabled = isEnabled('grid-control');
   const gridCfg = gridControlEnabled ? await load(loadGridControlConfig, db) : null;
   const gridState = gridControlEnabled ? gridControlAutomation.getState() : null;

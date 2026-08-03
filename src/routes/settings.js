@@ -8,6 +8,7 @@ const { loadAllStateDefinitions } = require('../mqtt/state-definitions');
 const { listUsers, createUser, updateUser, deleteUser, getUser } = require('../auth/users');
 const modulesState = require('../modules');
 const renderSettings = require('../views/settings');
+const timeHandler = require('../time-handler');
 
 // Query-Parameter (?tab=) auf einen gültigen Tab abbilden. Der alte
 // /remote-access-Link leitet mit ?tab=remote-access hierher.
@@ -31,11 +32,15 @@ function settingsRoutes(db) {
     ]);
     const registry = modulesState.getRegistry();
     const enabledKeys = new Set(registry.filter((m) => modulesState.isEnabled(m.key)).map((m) => m.key));
-    res.send(renderSettings({ mqtt: cfg, users, registry, enabledKeys, ...extra }));
+    res.send(renderSettings({ mqtt: cfg, timeStatus: timeHandler.snapshot(), users, registry, enabledKeys, ...extra }));
   }
 
   router.get('/settings', requireAuth, (req, res, next) => {
     sendSettings(res, { activeTab: tabFromQuery(req.query.tab) }).catch(next);
+  });
+
+  router.get('/settings/time.json', requireAuth, (_req, res) => {
+    res.json(timeHandler.snapshot());
   });
 
   // --- Module (früher eigener Menüpunkt, jetzt Tab „Module") ---------------
@@ -132,6 +137,7 @@ function settingsRoutes(db) {
       if (err) {
         return sendSettings(res, { mqtt: req.body, mqttMessage: 'Fehler beim Speichern.' }).catch(next);
       }
+      timeHandler.configure(cfg);
       loadAllStateDefinitions(db)
         .then((definitions) => {
           mqttClient.setStateDefinitions(definitions);

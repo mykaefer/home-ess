@@ -7,6 +7,24 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 
 ### Hinzugefügt
 
+- **Zentraler, ausfallsicherer Timehandler.** Die laufende Systemuhr ist nun die
+  primäre Zeitquelle für homeESS und wird gemäß konfigurierter Zeitzone sowie
+  Sommer-/Winterzeit ausgewertet. Ist ein MQTT-Zeittopic konfiguriert, bildet
+  homeESS fortlaufend einen gleitenden mittleren Versatz zur Systemuhr; dieser
+  bleibt auch bei MQTT-Ausfall wirksam, sodass Prognosen und Tageswechsel
+  weiterlaufen. Lokale Systemzeit, interne Zeit und MQTT-Abgleich sind in den
+  allgemeinen Einstellungen sichtbar. Interne Uhrzeit und Datum stehen als
+  `system://homeess/operating.time` und `system://homeess/operating.date` bereit.
+- **Frei verwaltbare Custom States.** Unter der neuen States-Unterseite lassen
+  sich beliebig tief verschachtelte Verzeichnisse und persistente Werte für
+  Counter, Betriebszustände und Zwischenberechnungen anlegen. Boolean, Integer,
+  Floating Point, Text und JSON werden beim Schreiben typgeprüft; numerische
+  Fließkommawerte unterstützen Einheit, Nachkommastellen und wählbares Auf-, Ab-,
+  Abschneiden oder kaufmännisches Runden. Die Werte erscheinen als les- und
+  schreibbare `custom://`-Topics in der States-Liste und in allen bestehenden
+  State-Pickern. Der kompakte Verzeichnisbaum merkt seinen Aufklappzustand.
+  Die Anlegedialoge merken außerdem das zuletzt gewählte Zielverzeichnis und
+  bei States den Datentyp, solange die jeweilige Auswahl noch vorhanden ist.
 - **Sicheres Self-Update mit täglicher Releaseprüfung.** homeESS prüft
   höchstens einmal täglich das neueste stabile GitHub-Release und zeigt
   Administratoren eine hellgrüne Updateolive links neben den Leistungswerten.

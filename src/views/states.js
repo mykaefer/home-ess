@@ -11,7 +11,7 @@ function renderStates({ tree = [] } = {}) {
     : '<div class="info-card"><p class="muted">Noch keine States vorhanden.</p></div>';
 
   const body = `        <h1>States</h1>
-        <p class="muted" style="margin-bottom:16px;">Zentrale Übersicht aller internen Systemwerte und Adapter-States. Adapter-States werden über <code>prefix://instanz/adresse</code> angesprochen und lassen sich hinter Topic-Feldern direkt auswählen.</p>
+        <p class="muted" style="margin-bottom:16px;">Zentrale Übersicht aller internen Systemwerte, Custom States und Adapter-States. Eigene les- und schreibbare Werte lassen sich unter <a href="/states/custom">Custom States</a> verwalten.</p>
         <div class="states-tree">
 ${blocks}
         </div>`;
@@ -81,7 +81,7 @@ function renderInstanceBlock(inst) {
 
   // System und virtuelle Blöcke haben keinen
   // Adapter-Prozess: sprechender Name statt prefix://instanz, kein Status-Badge.
-  const title = inst.virtual
+  const title = inst.custom ? 'custom://' : inst.virtual
     ? escapeHtml(inst.adapterName || inst.instanceName)
     : `${escapeHtml(inst.prefix)}://${escapeHtml(inst.instanceName)}`;
   const status = inst.virtual ? '' : `

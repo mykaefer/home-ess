@@ -1,5 +1,7 @@
 'use strict';
 
+const timeHandler = require('../time-handler');
+
 const { loadPoolConfig, readPoolValue } = require('./config');
 const { isEnabled } = require('../modules');
 
@@ -74,7 +76,7 @@ async function updatePoolEnergyModel(db, cache, housePowerW) {
     }
   }
   const now = Date.now();
-  const dayKey = new Date(now).toISOString().slice(0, 10);
+  const dayKey = timeHandler.calendar(new Date(now)).dateKey;
   const yearKey = dayKey.slice(0, 4);
   let dayKwh = row && row.day_key === dayKey ? Number(row.day_kwh) || 0 : 0;
   let yearKwh = row && row.year_key === yearKey ? Number(row.year_kwh) || 0 : 0;

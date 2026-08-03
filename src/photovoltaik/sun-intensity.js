@@ -14,6 +14,7 @@ const {
   buildSolarContext,
   getSolarElevationDeg,
 } = require('./aggregation');
+const timeHandler = require('../time-handler');
 
 const SAMPLE_RETENTION_MS = 2 * 24 * 60 * 60 * 1000; // 2 Tage (für Vortag)
 const TEN_MINUTES_MS = 10 * 60 * 1000;
@@ -24,14 +25,14 @@ function pad(value) {
   return String(value).padStart(2, '0');
 }
 
-function getDateKey(date = new Date()) {
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+function getDateKey(date = null) {
+  return timeHandler.calendar(date || timeHandler.now()).dateKey;
 }
 
-function getYesterdayKey(now = new Date()) {
-  const date = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  date.setDate(date.getDate() - 1);
-  return getDateKey(date);
+function getYesterdayKey(now = null) {
+  const calendar = timeHandler.calendar(now || timeHandler.now());
+  const date = new Date(Date.UTC(calendar.year, calendar.month - 1, calendar.day - 1));
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}`;
 }
 
 function dbRun(db, sql, params = []) {
@@ -141,16 +142,17 @@ function computeBrightnessPercent(mqttConfig, cache, sunIntensitySample) {
 }
 
 // Einen Messpunkt erfassen und alte Samples aufräumen.
-async function recordSample(db, cache, now = new Date()) {
+async function recordSample(db, cache, now = null) {
   const sample = await computeSunIntensitySample(db, cache);
   if (sample == null) return null;
-  const ts = now.getTime();
+  const clockNow = now || timeHandler.now();
+  const ts = clockNow.getTime();
   await dbRun(
     db,
     `INSERT INTO sun_intensity_samples
      (recorded_at, day_key, intensity, day_average_eligible)
      VALUES (?, ?, ?, ?)`,
-    [ts, getDateKey(now), sample.intensity, sample.dayAverageEligible ? 1 : 0]
+    [ts, getDateKey(clockNow), sample.intensity, sample.dayAverageEligible ? 1 : 0]
   );
   await dbRun(db, 'DELETE FROM sun_intensity_samples WHERE recorded_at < ?', [
     ts - SAMPLE_RETENTION_MS,
@@ -159,20 +161,21 @@ async function recordSample(db, cache, now = new Date()) {
 }
 
 // Mittelwerte (in Prozent) für die drei Zeitfenster; null, wenn keine Samples.
-async function readSunIntensityAverages(db, now = new Date()) {
+async function readSunIntensityAverages(db, now = null) {
+  const clockNow = now || timeHandler.now();
   const [tenMin, today, yesterday] = await Promise.all([
     dbGet(db, 'SELECT AVG(intensity) AS avg FROM sun_intensity_samples WHERE recorded_at >= ?', [
-      now.getTime() - TEN_MINUTES_MS,
+      clockNow.getTime() - TEN_MINUTES_MS,
     ]),
     dbGet(
       db,
       'SELECT AVG(intensity) AS avg FROM sun_intensity_samples WHERE day_key = ? AND day_average_eligible = 1',
-      [getDateKey(now)]
+      [getDateKey(clockNow)]
     ),
     dbGet(
       db,
       'SELECT AVG(intensity) AS avg FROM sun_intensity_samples WHERE day_key = ? AND day_average_eligible = 1',
-      [getYesterdayKey(now)]
+      [getYesterdayKey(clockNow)]
     ),
   ]);
   const value = (row) => (row && row.avg != null ? row.avg : null);

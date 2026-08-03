@@ -12,6 +12,7 @@ const { parseSystemTopic } = require('./system-topics');
 const {
   listCalculatedInternalValues,
 } = require('./system-values');
+const customStates = require('./custom');
 
 const PAGE_SIZE = 100;
 const MAX_PATH_LENGTH = 1000;
@@ -89,9 +90,10 @@ function entriesFromProvidedBlocks(blocks) {
 }
 
 async function listLocalValues(db, cache) {
-  const [calculated, provided] = await Promise.all([
+  const [calculated, provided, custom] = await Promise.all([
     listCalculatedInternalValues(db, cache),
     buildProvidedStatesBlocks(db, cache),
+    customStates.listCatalogEntries(db),
   ]);
   return [
     ...calculated.map((entry) => ({
@@ -106,6 +108,7 @@ async function listLocalValues(db, cache) {
       sourceType: 'system',
       topicSelectable: true,
     })),
+    ...custom,
   ];
 }
 
@@ -281,7 +284,11 @@ async function listCatalogLevel(db, cache, rawPath = '', rawOffset = 0) {
     // Öffnen ihrer Kategorie erzeugt; Adapterwerte bleiben bis zum jeweiligen
     // Blatt vollständig unangetastet.
     const adapters = await adapterCounts(db);
-    const localNodes = [{ name: 'System', path: 'System', count: null }];
+    const customCount = (await dbGet(db, 'SELECT COUNT(*) AS count FROM custom_states')).count || 0;
+    const localNodes = [
+      { name: 'System', path: 'System', count: null },
+      ...(customCount ? [{ name: 'Custom', path: 'Custom', count: Number(customCount) }] : []),
+    ];
     const adapterNodes = adapters.map((instance) => ({
       name: adapterRoot(instance),
       path: adapterRoot(instance),
@@ -381,13 +388,19 @@ async function resolveInternalValues(db, cache, sourceIds) {
   const missing = [...wanted].filter((id) => !foundIds.has(id));
   if (!missing.length) return found;
 
+  const custom = await customStates.listCatalogEntries(db);
+  found.push(...custom.filter((entry) => wanted.has(entry.id)));
+  const customIds = new Set(found.map((entry) => entry.id));
+  const missingAfterCustom = missing.filter((id) => !customIds.has(id));
+  if (!missingAfterCustom.length) return found;
+
   const instances = await instancesRepo.listInstances(db);
   const instanceByKey = new Map();
   for (const instance of instances) {
     instanceByKey.set(`${adapterPrefix(instance)}\u0000${instance.name}`, instance);
   }
   const unresolved = [];
-  for (const id of missing) {
+  for (const id of missingAfterCustom) {
     const parsed = parseSchemeTopic(id);
     const instance = parsed && instanceByKey.get(`${parsed.scheme}\u0000${parsed.instance}`);
     if (!parsed || !instance) {

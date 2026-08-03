@@ -12,6 +12,7 @@ const {
 } = require('../adapters/states');
 const { listCalculatedInternalValues, VALUE_CATEGORIES } = require('./system-values');
 const { topicForId } = require('./system-topics');
+const customStates = require('./custom');
 
 const SNAPSHOT_CACHE_MS = 900;
 let snapshotCache = null;
@@ -99,9 +100,10 @@ function decorateAdapterBlocks(blocks) {
 }
 
 async function buildStatesTree(db, cache = bus.getCache()) {
-  const [system, adapters] = await Promise.all([
+  const [system, adapters, custom] = await Promise.all([
     listCalculatedInternalValues(db, cache),
     buildAdapterStatesTree(db),
+    customStates.buildStatesBlock(db),
   ]);
   const decorated = decorateAdapterBlocks(adapters);
   const virtual = decorated.filter((block) => block.virtual);
@@ -121,7 +123,7 @@ async function buildStatesTree(db, cache = bus.getCache()) {
       ...systemCategories(system),
       ...virtual.flatMap((block) => block.categories || []),
     ]),
-  }, ...physical];
+  }, custom, ...physical];
 }
 
 function entriesFromBlocks(blocks) {
@@ -162,7 +164,8 @@ async function listAllStates(db, cache = bus.getCache()) {
   const promise = Promise.all([
     listCalculatedInternalValues(db, cache),
     buildAdapterStatesTree(db),
-  ]).then(([system, adapters]) => [
+    customStates.listCatalogEntries(db),
+  ]).then(([system, adapters, custom]) => [
     ...system.map((entry) => ({
       ...entry,
       sourceType: 'system',
@@ -170,6 +173,7 @@ async function listAllStates(db, cache = bus.getCache()) {
       topicSelectable: false,
     })),
     ...entriesFromBlocks(decorateAdapterBlocks(adapters)),
+    ...custom,
   ].sort((a, b) => String(a.label).localeCompare(String(b.label), 'de')));
   snapshotInFlight = { db, cache, promise };
   try {

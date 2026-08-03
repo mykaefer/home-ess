@@ -28,6 +28,7 @@ function setHost(nextHost) {
 // sein. write/read solcher Topics laufen an die registrierten Handler statt an
 // den Host; Werte melden die Module selbst über ingestFromInstance.
 const virtualInstances = new Map(); // instanceName -> { write?, read? }
+const virtualSchemes = new Map(); // scheme -> { write(path, value)?, read(path)? }
 function registerVirtualInstance(instanceName, scheme, handlers) {
   virtualInstances.set(String(instanceName), handlers || {});
   setInstanceScheme(instanceName, scheme);
@@ -35,6 +36,12 @@ function registerVirtualInstance(instanceName, scheme, handlers) {
 function unregisterVirtualInstance(instanceName) {
   virtualInstances.delete(String(instanceName));
   removeInstanceScheme(instanceName);
+}
+function registerVirtualScheme(scheme, handlers) {
+  virtualSchemes.set(String(scheme).toLowerCase(), handlers || {});
+}
+function unregisterVirtualScheme(scheme) {
+  virtualSchemes.delete(String(scheme).toLowerCase());
 }
 
 function registerScheme(scheme, adapterId) {
@@ -100,6 +107,11 @@ function unregisterRoute(topic, cacheKey) {
 function write(topic, value) {
   const parsed = parseSchemeTopic(topic);
   if (!parsed) return false;
+  const scheme = virtualSchemes.get(parsed.scheme);
+  if (scheme) {
+    if (typeof scheme.write === 'function') scheme.write([parsed.instance, parsed.address].filter(Boolean).join('/'), value);
+    return true;
+  }
   const virtual = virtualInstances.get(parsed.instance);
   if (virtual) {
     if (typeof virtual.write === 'function') virtual.write(parsed.address, value);
@@ -113,6 +125,11 @@ function write(topic, value) {
 function requestValue(topic) {
   const parsed = parseSchemeTopic(topic);
   if (!parsed) return false;
+  const scheme = virtualSchemes.get(parsed.scheme);
+  if (scheme) {
+    if (typeof scheme.read === 'function') scheme.read([parsed.instance, parsed.address].filter(Boolean).join('/'));
+    return true;
+  }
   const virtual = virtualInstances.get(parsed.instance);
   if (virtual) {
     if (typeof virtual.read === 'function') virtual.read(parsed.address);
@@ -148,6 +165,18 @@ function ingestBatchFromInstance(instanceName, values, receivedAt) {
   bus.ingestBatch(items, { topic: `${scheme}://${instanceName}`, receivedAt: receivedAt || Date.now() });
 }
 
+// Virtuelle Schemes ohne feste Instanz (custom://<pfad>) speisen denselben
+// Routing-/Retained-Pfad wie Adapterwerte.
+function ingestTopic(topic, value, receivedAt) {
+  const canonical = canonicalTopic(topic);
+  if (!canonical) return false;
+  const keys = routes.get(canonical);
+  const targetKeys = keys ? Array.from(keys) : [];
+  if (!targetKeys.includes(canonical)) targetKeys.push(canonical);
+  bus.ingest(targetKeys, value, { topic: canonical, receivedAt: receivedAt || Date.now() });
+  return true;
+}
+
 // Das Schema (prefix) einer Instanz – wird vom Host gepflegt; hier nur als
 // Rückgriff, falls nicht gesetzt, der erste registrierte Scheme.
 const instanceSchemes = new Map(); // instanceName -> scheme
@@ -165,6 +194,8 @@ module.exports = {
   setHost,
   registerVirtualInstance,
   unregisterVirtualInstance,
+  registerVirtualScheme,
+  unregisterVirtualScheme,
   registerScheme,
   clearSchemes,
   adapterIdForScheme,
@@ -175,6 +206,7 @@ module.exports = {
   requestValue,
   ingestFromInstance,
   ingestBatchFromInstance,
+  ingestTopic,
   setInstanceScheme,
   removeInstanceScheme,
   schemeForInstance,

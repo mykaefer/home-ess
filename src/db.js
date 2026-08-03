@@ -649,6 +649,41 @@ function openDatabase() {
     db.run(
       'CREATE INDEX IF NOT EXISTS idx_adapter_states_instance_category ON adapter_states (instance_id, category)'
     );
+    // Frei anlegbare, typisierte Zustände. Ordner und Werte liegen bewusst in
+    // der zentralen Datenbank: custom:// ist eine homeESS-eigene State-Quelle
+    // und kein zweiter Adapter mit eigener Persistenz.
+    db.run(
+      `CREATE TABLE IF NOT EXISTS custom_state_folders (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        parent_id INTEGER,
+        name TEXT NOT NULL,
+        position INTEGER NOT NULL DEFAULT 0,
+        FOREIGN KEY (parent_id) REFERENCES custom_state_folders(id) ON DELETE CASCADE
+      )`
+    );
+    db.run(
+      `CREATE TABLE IF NOT EXISTS custom_states (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        folder_id INTEGER,
+        name TEXT NOT NULL,
+        data_type TEXT NOT NULL DEFAULT 'text',
+        unit TEXT NOT NULL DEFAULT '',
+        decimals INTEGER,
+        rounding TEXT NOT NULL DEFAULT 'nearest',
+        value_json TEXT NOT NULL DEFAULT '""',
+        position INTEGER NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL DEFAULT 0,
+        FOREIGN KEY (folder_id) REFERENCES custom_state_folders(id) ON DELETE CASCADE
+      )`
+    );
+    db.run(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_custom_folders_parent_name
+         ON custom_state_folders (IFNULL(parent_id, -1), name COLLATE NOCASE)`
+    );
+    db.run(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_custom_states_folder_name
+         ON custom_states (IFNULL(folder_id, -1), name COLLATE NOCASE)`
+    );
     // Historisierte, abgeschlossene Tageswerte einzelner Kennzahlen (PV-Ertrag,
     // Netzbezug, Eigenverbrauch) für die
     // Jahres-Statistik (Durchschnitt/Minimum/Maximum inkl. Datum) im

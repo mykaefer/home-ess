@@ -32,7 +32,10 @@ const NAV_CORE = [
   },
   { path: '/prognose', label: 'Prognose', section: 'main' },
   { path: '/adapter', label: 'Adapter', section: 'main' },
-  { path: '/states', label: 'States', section: 'main' },
+  {
+    path: '/states', label: 'States', section: 'main',
+    children: [{ path: '/states/custom', label: 'Custom States' }],
+  },
   { path: '/output', label: 'Output', section: 'main' },
   // Module und Fernzugriff sind in die Einstellungsseite (Tabs) integriert; der
   // Footer trägt daher nur noch die Einstellungen.
