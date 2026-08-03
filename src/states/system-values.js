@@ -41,6 +41,7 @@ const { loadMqttConfig } = require('../mqtt/config');
 const { localCalendar } = require('../local-time');
 const { computeYearStats, getDailyMetricValue, statsFromRows, dayKeyOffset } = require('../history/daily-metrics');
 const metrics = require('../runtime-metrics');
+const timeHandler = require('../time-handler');
 
 // Kategorien entsprechen der Herkunft des Wertes (Seite, von der er stammt) und
 // werden anhand des stabilen id-Präfix zugeordnet. Die Reihenfolge bestimmt die
@@ -158,6 +159,11 @@ function numberEntry(id, label, value) {
   return { id, label, value: rounded, display: rounded == null ? '—' : String(rounded) };
 }
 
+function textEntry(id, label, value) {
+  const text = value == null ? '' : String(value);
+  return { id, label, value: text, display: text || '—' };
+}
+
 function secondsUntilNextCharge(nextCharge, now = Date.now()) {
   if (!nextCharge) return 0;
   return Math.max(0, Math.round((nextCharge.at - now) / 1000));
@@ -266,6 +272,9 @@ async function buildCalculatedInternalValues(db, cache) {
   // nächsten Tageswechsel auf false.
   entries.push(boolEntry('operating.autark', 'Autark', operatingState.getState().autark));
   entries.push(boolEntry('operating.notstrom', 'Notstrombetrieb', operatingState.getState().emergencyMode));
+  const clock = timeHandler.snapshot();
+  entries.push(textEntry(timeHandler.TIME_STATE_ID, 'Interne Uhrzeit', clock.internal.time));
+  entries.push(textEntry(timeHandler.DATE_STATE_ID, 'Internes Datum', clock.internal.date));
   entries.push(numberEntry('prognose.autarkeTageJahr', 'Prognose autarke Tage im Jahr', operatingState.getState().autarkDaysCount));
   entries.push(numberEntry(
     'prognose.autarkeTageVorjahr',

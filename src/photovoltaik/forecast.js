@@ -24,9 +24,8 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
-// Lokales „Jetzt" (Datum + Uhrzeit) bevorzugt aus dem MQTT-Umfeld (wie das
-// Idealmodell), Fallback Serverzeit. Dient der Aufteilung des heutigen Ertrags
-// in „bereits erwartet" und „noch erwartet".
+// Zentrales lokales „Jetzt". Dient der Aufteilung des heutigen Ertrags in
+// „bereits erwartet" und „noch erwartet" und läuft auch ohne MQTT-Zeit weiter.
 function localNowParts(cache) {
   const now = new Date();
   if (cache && typeof cache.get === 'function') return localDateTime(cache, now);

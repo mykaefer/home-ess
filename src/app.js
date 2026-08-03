@@ -15,6 +15,8 @@ const { refreshWeather } = require('./photovoltaik/forecast');
 const { loadAllStateDefinitions } = require('./mqtt/state-definitions');
 const outputEngine = require('./output/engine');
 const systemStatesRuntime = require('./states/system-runtime');
+const customStates = require('./states/custom');
+const timeHandler = require('./time-handler');
 
 const authRoutes = require('./auth/routes');
 const dashboardRoutes = require('./routes/dashboard');
@@ -135,9 +137,15 @@ function createApp() {
   const adaptersReady = adapterHost.initAdapters(db).catch((err) => {
     console.error('[adapters] Init fehlgeschlagen:', err && err.message);
   });
+  const customStatesReady = customStates.init(db).catch((err) => {
+    console.error('[custom-states] Init fehlgeschlagen:', err && err.message);
+  });
+  const timeReady = timeHandler.init(db).catch((err) => {
+    console.error('[time-handler] Init fehlgeschlagen:', err && err.message);
+  });
   modulesReady
     .then(() => operatingReady)
-    .then(() => adaptersReady)
+    .then(() => Promise.all([adaptersReady, customStatesReady, timeReady]))
     .then(() => loadAllStateDefinitions(db))
     .then((defs) => {
       mqttClient.setStateDefinitions(defs);
@@ -153,7 +161,7 @@ function createApp() {
 
   // Output-Engine: schreibt interne Werte bei Aenderung an ihre Ziel-Topics.
   outputEngine.init(db).catch(() => {});
-  Promise.all([modulesReady, operatingReady])
+  Promise.all([modulesReady, operatingReady, timeReady])
     .then(() => {
       systemStatesRuntime.init(db);
       operatingLevelHandler.init();

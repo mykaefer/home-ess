@@ -98,6 +98,7 @@ function renderSettings({
     clockDateTopic: '',
   },
   mqttMessage = '',
+  timeStatus = null,
   users = [],
   userMessage = '',
   userError = '',
@@ -113,6 +114,11 @@ function renderSettings({
   const dstChecked = mqtt.dstEnabled === undefined || mqtt.dstEnabled ? ' checked' : '';
   const currentTab = SETTINGS_TAB_KEYS.has(activeTab) ? activeTab : 'allgemein';
   const remote = remoteAccessPanel();
+  const clock = timeStatus || {
+    local: { time: '--:--:--', date: '--.--.----' },
+    internal: { time: '--:--:--', date: '--.--.----' },
+    mqtt: { available: false, fresh: false, display: '' }, offsetSeconds: 0,
+  };
 
   const tabBar = SETTINGS_TABS
     .map((tab) => {
@@ -151,7 +157,7 @@ ${tabBar}
             <section class="settings-card">
               <div class="settings-card-head">
                 <h2>Standort &amp; Zeit</h2>
-                <p class="settings-card-hint">Geografische Position und Zeitzone für die spätere Verfeinerung des Clear-Sky-Modells. Diese Werte beeinflussen weder die übermittelte Uhrzeit noch das Datum – die per MQTT empfangenen Zeiten entsprechen bereits der lokalen Ortszeit.</p>
+                <p class="settings-card-hint">Die Systemuhr ist die dauerhaft laufende Primärquelle. Eine konfigurierte MQTT-Uhrzeit korrigiert sie über einen gleitenden mittleren Versatz. Zeitzone und automatische Sommer-/Winterzeit gelten für die interne homeESS-Zeit.</p>
               </div>
               <div class="field-grid">
                 <div class="field">
@@ -173,6 +179,11 @@ ${tabBar}
                 <input type="checkbox" id="dstEnabled" name="dstEnabled" value="1"${dstChecked}>
                 <span>Automatische Zeitumstellung (Sommer-/Winterzeit) aktivieren</span>
               </label>
+              <div class="time-source-status" id="timeSourceStatus">
+                <div><span>Lokale Systemzeit</span><strong id="localSystemTime">${escapeHtml(`${clock.local.date} ${clock.local.time}`)}</strong></div>
+                <div><span>Interne homeESS-Zeit</span><strong id="internalHomeessTime">${escapeHtml(`${clock.internal.date} ${clock.internal.time}`)}</strong></div>
+                <div><span>MQTT-Abgleich</span><strong id="mqttTimeStatus">${escapeHtml(clock.mqtt.available ? `${clock.mqtt.fresh ? 'aktiv' : 'zuletzt'} · ${clock.mqtt.display} · Versatz ${Number(clock.offsetSeconds).toFixed(2).replace('.', ',')} s` : 'nicht vorhanden · Versatz 0,00 s')}</strong></div>
+              </div>
             </section>
 
             <section class="settings-card">
@@ -262,6 +273,22 @@ ${remote.body}
   }));
 
   const script = `    var settingsUsers = ${JSON.stringify(clientUsers)};
+    function refreshTimeStatus() {
+      fetch('/settings/time.json', { headers: { Accept: 'application/json' } })
+        .then(function (response) { return response.ok ? response.json() : null; })
+        .then(function (status) {
+          if (!status) return;
+          var local = document.getElementById('localSystemTime');
+          var internal = document.getElementById('internalHomeessTime');
+          var mqtt = document.getElementById('mqttTimeStatus');
+          if (local) local.textContent = status.local.date + ' ' + status.local.time;
+          if (internal) internal.textContent = status.internal.date + ' ' + status.internal.time;
+          if (mqtt) mqtt.textContent = status.mqtt.available
+            ? (status.mqtt.fresh ? 'aktiv' : 'zuletzt') + ' · ' + status.mqtt.display + ' · Versatz ' + Number(status.offsetSeconds).toFixed(2).replace('.', ',') + ' s'
+            : 'nicht vorhanden · Versatz 0,00 s';
+        }).catch(function () {});
+    }
+    refreshTimeStatus(); setInterval(refreshTimeStatus, 1000);
     var allPageKeys = ${JSON.stringify(PAGES.map((p) => p.key))};
     var initialUserDialog = ${userDialogOpen ? JSON.stringify({
       mode: userDialogMode,

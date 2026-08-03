@@ -9,6 +9,7 @@ const { assessHeaderSkyState, readPhotovoltaikValues } = require('../photovoltai
 const { readLivePowerValues } = require('../stromverbrauch/aggregation');
 const { readBatterieData } = require('../batterie/config');
 const operatingState = require('../operating-state');
+const timeHandler = require('../time-handler');
 
 function renderEvent(name, data) {
   return `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -27,6 +28,7 @@ function liveRoutes(db) {
   router.get('/live/header', requireAuth, async (req, res) => {
     const cache = mqttClient.getCache();
     const snapshot = buildEnvironmentSnapshot(cache);
+    const internalClock = timeHandler.snapshot();
     let sky = 'moon';
     let pvPower = null;
     let gridPower = null;
@@ -48,6 +50,8 @@ function liveRoutes(db) {
     const batterySoc = socRaw != null ? parseFloat(String(socRaw.value)) : NaN;
     res.json({
       ...snapshot,
+      time: { iso: internalClock.internal.time, display: internalClock.internal.time.slice(0, 5) },
+      date: { iso: internalClock.internal.date, display: internalClock.internal.date },
       sky,
       batterySoc: Number.isFinite(batterySoc) ? batterySoc : null,
       power: {

@@ -160,7 +160,9 @@ function normalizeDate(value) {
     }
   }
 
-  if (!year || !month || !day || month > 12 || day > 31) {
+  const calendarDate = new Date(Date.UTC(year || 0, (month || 1) - 1, day || 1));
+  if (!year || !month || !day || month > 12 || day > 31 ||
+      calendarDate.getUTCFullYear() !== year || calendarDate.getUTCMonth() + 1 !== month || calendarDate.getUTCDate() !== day) {
     return { raw, year: null, month: null, day: null, iso: '', display: '--.--.----' };
   }
 
@@ -196,4 +198,6 @@ module.exports = {
   ENVIRONMENT_STATE_IDS,
   buildMqttStateDefinitions,
   buildEnvironmentSnapshot,
+  normalizeTime,
+  normalizeDate,
 };
