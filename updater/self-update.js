@@ -38,6 +38,23 @@ function command(program, args, options = {}) {
   });
 }
 
+// Der Helper läuft als gehärteter systemd-Dienst mit ProtectHome=true: /root ist
+// dort leer und schreibgeschützt, npm kann seinen Standardcache `$HOME/.npm`
+// also weder anlegen noch beschreiben und bricht mit ENOENT ab. Cache und HOME
+// zeigen deshalb ausdrücklich in das beschreibbare Updateverzeichnis. Der Cache
+// bleibt dort erhalten und beschleunigt spätere Updates; in der Installation
+// selbst landet er nie.
+function npmEnvironment() {
+  const cache = path.join(UPDATE_DIR, 'npm-cache');
+  fs.mkdirSync(cache, { recursive: true, mode: 0o750 });
+  return {
+    ...process.env,
+    HOME: UPDATE_DIR,
+    npm_config_cache: cache,
+    npm_config_update_notifier: 'false',
+  };
+}
+
 function atomicJson(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o750 });
   const temporary = `${file}.${process.pid}.tmp`;
@@ -167,7 +184,7 @@ async function main() {
   }
 
   report('dependencies', 'Produktionsabhängigkeiten werden im neuen Release installiert.');
-  await command('/usr/bin/npm', ['ci', '--omit=dev', '--no-audit', '--no-fund'], { cwd: stageDir });
+  await command('/usr/bin/npm', ['ci', '--omit=dev', '--no-audit', '--no-fund'], { cwd: stageDir, env: npmEnvironment() });
   const testDir = path.join(stageDir, 'test');
   if (fs.existsSync(testDir)) fs.rmSync(testDir, { recursive: true, force: true });
   await command('/usr/bin/chown', ['-R', 'root:root', stageDir]);

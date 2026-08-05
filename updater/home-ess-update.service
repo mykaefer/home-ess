@@ -8,6 +8,10 @@ Type=oneshot
 User=root
 Group=root
 Environment=HOME_ESS_DATA_DIR=/var/lib/home-ess
+# ProtectHome=true blendet /root aus. Ohne beschreibbares HOME scheitert npm
+# beim Anlegen seines Cache-Verzeichnisses; der Helper setzt zusätzlich
+# npm_config_cache im Updateverzeichnis.
+Environment=HOME=/var/lib/home-ess/update
 ExecStart=/usr/bin/node /usr/local/lib/home-ess/self-update.js
 UMask=0027
 NoNewPrivileges=true
