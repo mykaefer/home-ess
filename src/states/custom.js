@@ -169,13 +169,32 @@ async function addFolder(db, input) {
   const name = cleanName(input.name);
   const parentId = input.parentId === '' || input.parentId == null ? null : Number(input.parentId);
   if (parentId != null && !(await dbGet(db, 'SELECT id FROM custom_state_folders WHERE id = ?', [parentId]))) throw new Error('Zielverzeichnis nicht gefunden.');
-  try { return await dbRun(db, 'INSERT INTO custom_state_folders (parent_id, name) VALUES (?, ?)', [parentId, name]); }
+  const next = await dbGet(db, 'SELECT COALESCE(MAX(position), -1) + 1 AS position FROM custom_state_folders WHERE parent_id IS ?', [parentId]);
+  try { return await dbRun(db, 'INSERT INTO custom_state_folders (parent_id, name, position) VALUES (?, ?, ?)', [parentId, name, next.position]); }
   catch (err) { if (err && err.code === 'SQLITE_CONSTRAINT') throw new Error('In diesem Verzeichnis gibt es den Namen bereits.'); throw err; }
 }
 async function updateFolder(db, id, input) {
+  const folderId = Number(id);
+  const current = await dbGet(db, 'SELECT id, parent_id, position FROM custom_state_folders WHERE id = ?', [folderId]);
+  if (!current) throw new Error('Verzeichnis nicht gefunden.');
   const name = cleanName(input.name);
+  const parentId = Object.prototype.hasOwnProperty.call(input, 'parentId')
+    ? (input.parentId === '' || input.parentId == null ? null : Number(input.parentId))
+    : current.parent_id;
+  if (parentId === folderId) throw new Error('Ein Verzeichnis kann nicht sein eigenes übergeordnetes Verzeichnis sein.');
+  if (parentId != null) {
+    if (!(await dbGet(db, 'SELECT id FROM custom_state_folders WHERE id = ?', [parentId]))) {
+      throw new Error('Zielverzeichnis nicht gefunden.');
+    }
+    const descendants = await descendantFolderIds(db, folderId);
+    if (descendants.includes(parentId)) throw new Error('Ein Verzeichnis kann nicht in eines seiner Unterverzeichnisse verschoben werden.');
+  }
   const before = await rowsWithPaths(db);
-  try { await dbRun(db, 'UPDATE custom_state_folders SET name = ? WHERE id = ?', [name, Number(id)]); }
+  const moved = parentId !== current.parent_id;
+  const next = moved
+    ? await dbGet(db, 'SELECT COALESCE(MAX(position), -1) + 1 AS position FROM custom_state_folders WHERE parent_id IS ?', [parentId])
+    : { position: current.position };
+  try { await dbRun(db, 'UPDATE custom_state_folders SET name = ?, parent_id = ?, position = ? WHERE id = ?', [name, parentId, next.position, folderId]); }
   catch (err) { if (err && err.code === 'SQLITE_CONSTRAINT') throw new Error('In diesem Verzeichnis gibt es den Namen bereits.'); throw err; }
   // Ein Ordnername ist Teil aller Topics seines Unterbaums. Neue kanonische
   // Keys sofort bereitstellen und die alten Cache-Keys nicht als Geisterwerte
@@ -208,9 +227,10 @@ async function addState(db, input) {
   const folderId = input.folderId === '' || input.folderId == null ? null : Number(input.folderId);
   if (folderId != null && !(await dbGet(db, 'SELECT id FROM custom_state_folders WHERE id = ?', [folderId]))) throw new Error('Zielverzeichnis nicht gefunden.');
   const value = coerceValue(input.value, def);
+  const next = await dbGet(db, 'SELECT COALESCE(MAX(position), -1) + 1 AS position FROM custom_states WHERE folder_id IS ?', [folderId]);
   try {
-    const result = await dbRun(db, `INSERT INTO custom_states (folder_id, name, data_type, unit, decimals, rounding, value_json, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [folderId, def.name, def.dataType, def.unit, def.decimals, def.rounding, JSON.stringify(value), Date.now()]);
+    const result = await dbRun(db, `INSERT INTO custom_states (folder_id, name, data_type, unit, decimals, rounding, value_json, position, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [folderId, def.name, def.dataType, def.unit, def.decimals, def.rounding, JSON.stringify(value), next.position, Date.now()]);
     const state = (await rowsWithPaths(db)).states.find((item) => item.id === result.id);
     if (state) adapterRouter.ingestTopic(state.topic, state.value, state.updatedAt);
     return state;
@@ -222,10 +242,14 @@ async function updateState(db, id, input) {
   if (!old) throw new Error('Custom State nicht gefunden.');
   const def = normalizeDefinition(input);
   const folderId = input.folderId === '' || input.folderId == null ? null : Number(input.folderId);
+  if (folderId != null && !(await dbGet(db, 'SELECT id FROM custom_state_folders WHERE id = ?', [folderId]))) throw new Error('Zielverzeichnis nicht gefunden.');
   const value = coerceValue(input.value, def);
+  const next = folderId !== old.folderId
+    ? await dbGet(db, 'SELECT COALESCE(MAX(position), -1) + 1 AS position FROM custom_states WHERE folder_id IS ?', [folderId])
+    : { position: old.position };
   try {
-    await dbRun(db, `UPDATE custom_states SET folder_id = ?, name = ?, data_type = ?, unit = ?, decimals = ?, rounding = ?, value_json = ?, updated_at = ? WHERE id = ?`,
-      [folderId, def.name, def.dataType, def.unit, def.decimals, def.rounding, JSON.stringify(value), Date.now(), Number(id)]);
+    await dbRun(db, `UPDATE custom_states SET folder_id = ?, name = ?, data_type = ?, unit = ?, decimals = ?, rounding = ?, value_json = ?, position = ?, updated_at = ? WHERE id = ?`,
+      [folderId, def.name, def.dataType, def.unit, def.decimals, def.rounding, JSON.stringify(value), next.position, Date.now(), Number(id)]);
   } catch (err) { if (err && err.code === 'SQLITE_CONSTRAINT') throw new Error('In diesem Verzeichnis gibt es den Namen bereits.'); throw err; }
   const state = (await rowsWithPaths(db)).states.find((item) => item.id === Number(id));
   if (old.topic !== state.topic) bus.remove(old.topic);
@@ -236,6 +260,100 @@ async function deleteState(db, id) {
   const data = await rowsWithPaths(db); const old = data.states.find((item) => item.id === Number(id));
   await dbRun(db, 'DELETE FROM custom_states WHERE id = ?', [Number(id)]);
   if (old) bus.remove(old.topic);
+}
+
+function layoutId(value, label) {
+  const id = Number(value);
+  if (!Number.isInteger(id) || id <= 0) throw new Error(`${label} ist ungültig.`);
+  return id;
+}
+
+function layoutPosition(value) {
+  const position = Number(value);
+  if (!Number.isInteger(position) || position < 0) throw new Error('Layoutposition ist ungültig.');
+  return position;
+}
+
+// Drag&Drop überträgt immer den vollständigen sichtbaren Baum. Dadurch können
+// Positionen und Elternbeziehungen als eine konsistente Momentaufnahme geprüft
+// und gespeichert werden, statt einzelne Zwischenzustände zu persistieren.
+async function updateLayout(db, input = {}) {
+  const before = await rowsWithPaths(db);
+  const folders = Array.isArray(input.folders) ? input.folders : [];
+  const states = Array.isArray(input.states) ? input.states : [];
+  if (folders.length !== before.folders.length || states.length !== before.states.length) {
+    throw new Error('Das Layout ist unvollständig; bitte die Seite neu laden.');
+  }
+
+  const knownFolders = new Map(before.folders.map((folder) => [folder.id, folder]));
+  const knownStates = new Map(before.states.map((state) => [state.id, state]));
+  const folderLayout = new Map();
+  const stateLayout = new Map();
+  for (const entry of folders) {
+    const id = layoutId(entry.id, 'Verzeichnis-ID');
+    if (!knownFolders.has(id) || folderLayout.has(id)) throw new Error('Das Verzeichnislayout enthält unbekannte oder doppelte Einträge.');
+    const parentId = entry.parentId === '' || entry.parentId == null ? null : layoutId(entry.parentId, 'Übergeordnetes Verzeichnis');
+    folderLayout.set(id, { parentId, position: layoutPosition(entry.position) });
+  }
+  for (const entry of states) {
+    const id = layoutId(entry.id, 'State-ID');
+    if (!knownStates.has(id) || stateLayout.has(id)) throw new Error('Das State-Layout enthält unbekannte oder doppelte Einträge.');
+    const folderId = entry.folderId === '' || entry.folderId == null ? null : layoutId(entry.folderId, 'Zielverzeichnis');
+    stateLayout.set(id, { folderId, position: layoutPosition(entry.position) });
+  }
+
+  for (const [id, entry] of folderLayout) {
+    if (entry.parentId != null && !folderLayout.has(entry.parentId)) throw new Error('Zielverzeichnis nicht gefunden.');
+    const seen = new Set([id]);
+    let cursor = entry.parentId;
+    while (cursor != null) {
+      if (seen.has(cursor)) throw new Error('Verzeichnisse dürfen keinen Kreis bilden.');
+      seen.add(cursor);
+      cursor = folderLayout.get(cursor).parentId;
+    }
+  }
+  for (const entry of stateLayout.values()) {
+    if (entry.folderId != null && !folderLayout.has(entry.folderId)) throw new Error('Zielverzeichnis nicht gefunden.');
+  }
+
+  const folderNames = new Set();
+  for (const folder of before.folders) {
+    const parentId = folderLayout.get(folder.id).parentId;
+    const key = `${parentId == null ? 'root' : parentId}\u0000${folder.name.toLocaleLowerCase('de')}`;
+    if (folderNames.has(key)) throw new Error('Im Zielverzeichnis gibt es bereits ein Verzeichnis mit diesem Namen.');
+    folderNames.add(key);
+  }
+  const stateNames = new Set();
+  for (const state of before.states) {
+    const folderId = stateLayout.get(state.id).folderId;
+    const key = `${folderId == null ? 'root' : folderId}\u0000${state.name.toLocaleLowerCase('de')}`;
+    if (stateNames.has(key)) throw new Error('Im Zielverzeichnis gibt es bereits einen State mit diesem Namen.');
+    stateNames.add(key);
+  }
+
+  await dbRun(db, 'BEGIN IMMEDIATE');
+  try {
+    for (const [id, entry] of folderLayout) {
+      await dbRun(db, 'UPDATE custom_state_folders SET parent_id = ?, position = ? WHERE id = ?', [entry.parentId, entry.position, id]);
+    }
+    for (const [id, entry] of stateLayout) {
+      await dbRun(db, 'UPDATE custom_states SET folder_id = ?, position = ? WHERE id = ?', [entry.folderId, entry.position, id]);
+    }
+    await dbRun(db, 'COMMIT');
+  } catch (error) {
+    await dbRun(db, 'ROLLBACK').catch(() => {});
+    if (error && error.code === 'SQLITE_CONSTRAINT') throw new Error('Das Ziel enthält bereits einen gleichnamigen Eintrag.');
+    throw error;
+  }
+
+  const after = await rowsWithPaths(db);
+  const oldById = new Map(before.states.map((state) => [state.id, state]));
+  for (const state of after.states) {
+    const old = oldById.get(state.id);
+    if (old && old.topic !== state.topic) bus.remove(old.topic);
+    adapterRouter.ingestTopic(state.topic, state.value, state.updatedAt || Date.now());
+  }
+  return after;
 }
 
 function buildTree(data) {
@@ -288,5 +406,5 @@ async function listCatalogEntries(db) {
     sourceType: 'custom', writable: true, topicSelectable: true }));
 }
 
-module.exports = { init, rowsWithPaths, addFolder, updateFolder, deleteFolder, addState, updateState, deleteState, setValue,
+module.exports = { init, rowsWithPaths, addFolder, updateFolder, deleteFolder, addState, updateState, deleteState, setValue, updateLayout,
   coerceValue, normalizeDefinition, formatValue, managementTree, buildStatesBlock, listCatalogEntries, TYPES, ROUNDINGS };

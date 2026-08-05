@@ -70,10 +70,24 @@ eigenständige Desktop- und Mobilansichten.
 - Optionale Module lassen sich in den Einstellungen aktivieren, ohne parallele
   Server- oder Authentifizierungsstrukturen anzulegen.
 
-## Adapter, States und Output
+## Adapter, States, Automationen und Output
 
 - Isolierte Adapterinstanzen binden Modbus, Tasmota, Shelly, Homematic RPC, hDP
   und weitere portable Integrationen an.
+- Jedes hDP-ARGB-Gerät kann einen eigenen Dimmschalter verwenden: Entspricht
+  der gewählte State dem hinterlegten Vergleichswert, reduziert homeESS die
+  berechnete Ausgabehelligkeit vor der Übertragung um den eingestellten Anteil.
+- Custom States verwenden dasselbe vollbreite Gruppenraster wie Messen +
+  Schalten. Eigene Drag-Flächen sortieren oder verschieben Verzeichnisse und
+  States; alle Verzeichnis- und State-Eigenschaften bleiben nach dem Anlegen
+  bearbeitbar.
+- Persistente Bedingungen kombinieren beliebig viele Trigger, Prüfungen und
+  geordnete Aktionen. Sie reagieren auf Intervalle, Wochenzeitpläne,
+  Wertänderungen oder exakte State-Ereignisse, vergleichen typisierte Werte und
+  schreiben Aktionen über die zentrale State-Grenze. Die responsive Verwaltung
+  verwendet dasselbe ausklappbare Gruppenraster wie Messen + Schalten und
+  Custom States, inklusive verschachtelbarer Verzeichnisse, in die sich
+  Bedingungen per Drag&Drop einsortieren lassen.
 - Administratoren können geprüfte ZIP-Pakete hochladen. Archivstruktur, Pfade,
   Prüfsummen, Limits, Manifestwerte und JavaScript-Syntax werden geprüft, bevor
   ein Adapter `/adapter/` erreicht.

@@ -284,6 +284,19 @@ test('hDP normalisiert Skalierungsartefakte im Prozentwert', () => {
   device.rawBrightness = 50;
   createHdpAdapter._test.calculateState(device);
   assert.equal(device.effectiveBrightness, 18);
+
+  device.bindings.dimming_switch = {
+    topic: 'system://kino/aktiv', value: '1', dimming_percent: 80,
+  };
+  device.rawDimmingSwitch = 1;
+  const dimmedState = createHdpAdapter._test.calculateState(device);
+  assert.equal(device.brightnessBeforeDimming, 50);
+  assert.equal(device.dimmingSwitchActive, true);
+  assert.equal(dimmedState.brightness, 10);
+  assert.equal(device.effectiveBrightness, 4);
+  device.rawDimmingSwitch = 0;
+  assert.equal(createHdpAdapter._test.calculateState(device).brightness, 50);
+  assert.equal(device.dimmingSwitchActive, false);
   assert.doesNotThrow(() => renderPercentageFrame({
     pixelCount: 4,
     percentage: brightnessState.percentage,
@@ -2426,6 +2439,8 @@ test('veröffentlichte hDP-States folgen einem einheitlichen Schema je Gerätety
   assert.ok(percentageChannels[0].states.some((state) => state.name === 'Maximalhelligkeit'));
   assert.ok(percentageChannels[1].states.some((state) => state.name === 'Prozentwert'));
   assert.ok(percentageChannels[1].states.some((state) => state.name === 'Aktive Timeline'));
+  assert.ok(percentageChannels[1].states.some((state) => state.name === 'Dimmschalter aktiv'));
+  assert.ok(!percentageChannels[0].states.some((state) => state.name === 'Dimmschalter aktiv'));
   assert.ok(deviceStateCatalog(percentage)
     .find((state) => state.name === 'Prozentwert').category.endsWith('/ Prozentanzeige'));
 
@@ -2467,6 +2482,8 @@ test('veröffentlichte hDP-States folgen einem einheitlichen Schema je Gerätety
   assert.deepEqual(argbChannels.map((channel) => channel.name),
     ['Status', 'ARGB-Ausgang', 'LED-Zustände', 'Binary-Eingänge', 'Binary-Ausgänge']);
   assert.ok(!deviceStateValues(argb).some((state) => /percentage|timeline-id/.test(state.address)));
+  assert.ok(argbChannels.find((channel) => channel.name === 'ARGB-Ausgang')
+    .states.some((state) => state.name === 'Dimmschalter aktiv'));
   assert.deepEqual(argbChannels.find((channel) => channel.name === 'Binary-Ausgänge')
     .states.map((state) => state.name), ['GPIO 15', 'GPIO 16']);
 
@@ -2926,6 +2943,8 @@ test('ARGB-Ausgang verknüpft einzelne LEDs über Einschaltkriterien mit States'
   assert.match(argbPage.body, /name="argb_topic_3"/);
   assert.doesNotMatch(argbPage.body, /name="argb_topic_4"/);
   assert.match(argbPage.body, /type="color" name="argb_color_on_0" value="#00ff00"/);
+  assert.match(argbPage.body, /name="dimming_switch_topic"/);
+  assert.match(argbPage.body, /80 % Dimmung lässt 20 %/);
 
   // Zwei LEDs verknüpfen — eine per Bereich, eine per Gleichheit.
   const saved = await adapter.handleManagementRequest({
@@ -2941,6 +2960,8 @@ test('ARGB-Ausgang verknüpft einzelne LEDs über Einschaltkriterien mit States'
       binary_topic_0: 'licht/kueche', binary_action_0: 'toggle',
       binary_topic_15: 'relais/pumpe', binary_invert_15: 'on',
       brightness_mode: 'fixed', brightness_fixed: '100',
+      dimming_switch_topic: 'kino/aktiv', dimming_switch_value: '1',
+      dimming_switch_percent: '80',
       update_mode: 'manual', update_channel: 'stable',
     },
   });
@@ -2954,6 +2975,10 @@ test('ARGB-Ausgang verknüpft einzelne LEDs über Einschaltkriterien mit States'
   assert.deepEqual(stored['0'], {
     topic: 'batterie/soc', operator: 'between', value: '20', value_max: '80',
     color_on: { r: 255, g: 170, b: 0 }, color_off: { r: 0, g: 0, b: 0 },
+  });
+  assert.deepEqual(current.bindings.dimming_switch, {
+    topic: 'kino/aktiv', value: '1', dimming_percent: 80,
+    source_adapter: 'mqtt', source_instance: '', source_state_id: 'kino/aktiv',
   });
 
   // Die Binary-Bindungen laufen über dasselbe Schema wie beim Binary-I/O-Gerät.
@@ -2970,6 +2995,7 @@ test('ARGB-Ausgang verknüpft einzelne LEDs über Einschaltkriterien mit States'
   // Auch die Binary-Topics werden abonniert.
   assert.equal(subscriptions.filter((entry) => entry.topic === 'licht/kueche').length, 1);
   assert.equal(subscriptions.filter((entry) => entry.topic === 'relais/pumpe').length, 1);
+  assert.equal(subscriptions.filter((entry) => entry.topic === 'kino/aktiv').length, 1);
   const ledAddresses = published.at(-1).map((value) => value.address)
     .filter((address) => address.includes('/argb/'));
   assert.deepEqual(ledAddresses, [
@@ -2984,6 +3010,16 @@ test('ARGB-Ausgang verknüpft einzelne LEDs über Einschaltkriterien mit States'
   subscriptions.find((entry) => entry.topic === 'batterie/soc').listener(95);
   assert.equal(published.at(-1)
     .find((value) => value.address === `devices/${DEVICE_ID}/argb/led-0`).value, false);
+
+  // Der Dimmschalter skaliert nur adapterseitig die übertragene Helligkeit.
+  subscriptions.find((entry) => entry.topic === 'kino/aktiv').listener(1);
+  const dimmed = (await adapter.handleManagementRequest({
+    method: 'GET', path: `/api/devices/${DEVICE_ID}`,
+    basePath: '/adapter/instance/1/manage', body: {}, access: { canWrite: true },
+  })).json;
+  assert.equal(dimmed.brightnessBeforeDimming, 100);
+  assert.equal(dimmed.dimmingSwitchActive, true);
+  assert.equal(dimmed.requestedBrightness, 20);
 
   // Unerfüllbare Kriterien werden beim Speichern abgewiesen, nicht still
   // verworfen.
@@ -3160,6 +3196,9 @@ test('hDP Adapter persistiert Pairing-Secrets und gruppiert die Gerätekonfigura
     assert.ok(body.indexOf(sections[index - 1]) < body.indexOf(sections[index]),
       `${sections[index - 1]} steht vor ${sections[index]}`);
   }
+  assert.match(body, /name="dimming_switch_topic"/);
+  assert.match(body, /name="dimming_switch_value" value="1"/);
+  assert.match(body, /name="dimming_switch_percent" value="80"/);
   assert.match(body, /<dialog id="hdp-hardware-dialog"/);
   assert.match(body, /Hardware auf Gerät speichern/);
   assert.ok(body.indexOf('Gerät entkoppeln') < body.indexOf('id="hdp-hardware-dialog"'),

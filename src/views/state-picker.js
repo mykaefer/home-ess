@@ -34,6 +34,7 @@ function statePickerScript() {
   return `    var statePickerTarget = null;
     var statePickerData = null;
     var statePickerAnchor = null;
+    var statePickerWritableOnly = false;
     var statePickerWired = false;
     var statePickerHome = null;
     var STATE_PICKER_WIDTH = 460;
@@ -65,6 +66,7 @@ function statePickerScript() {
     function statePickerOpen(inputId) {
       statePickerTarget = inputId;
       var input = document.getElementById(inputId);
+      statePickerWritableOnly = !!(input && input.hasAttribute('data-state-picker-writable'));
       statePickerAnchor = (input && input.closest && input.closest('.topic-input-row')) || input;
       var pop = document.getElementById('state-picker-pop');
       if (!pop) return;
@@ -179,13 +181,24 @@ function statePickerScript() {
       statePickerSaveExpanded(map);
     }
 
+    function statePickerSelectableCount(cat) {
+      if (!statePickerWritableOnly) return cat.stateCount == null ? (cat.states || []).length : cat.stateCount;
+      var count = 0;
+      for (var i = 0; i < (cat.states || []).length; i++) if (cat.states[i].writable === true) count++;
+      for (var c = 0; c < (cat.children || []).length; c++) count += statePickerSelectableCount(cat.children[c]);
+      return count;
+    }
+
     function statePickerRenderCategory(cat, depth, path, instKey) {
+      var selectableCount = statePickerSelectableCount(cat);
+      if (statePickerWritableOnly && !selectableCount) return '';
       var currentPath = path ? path + ' ' + cat.name : cat.name;
       var treeKey = instKey + '/' + currentPath;
       var openClass = statePickerExpandedCache[treeKey] === true ? ' is-open' : '';
-      var html = '<div class="value-cat state-tree-level' + (depth ? ' value-cat--nested' : '') + openClass + '" style="--tree-depth:' + depth + '" data-tree-key="' + statePickerEsc(treeKey) + '"><button type="button" class="value-cat-head" onclick="statePickerToggle(this)"><span class="value-cat-caret">▸</span><span class="value-cat-name">' + statePickerEsc(cat.name) + '</span><span class="value-cat-count">' + (cat.stateCount == null ? cat.states.length : cat.stateCount) + '</span></button><div class="value-cat-body">';
+      var html = '<div class="value-cat state-tree-level' + (depth ? ' value-cat--nested' : '') + openClass + '" style="--tree-depth:' + depth + '" data-tree-key="' + statePickerEsc(treeKey) + '"><button type="button" class="value-cat-head" onclick="statePickerToggle(this)"><span class="value-cat-caret">▸</span><span class="value-cat-name">' + statePickerEsc(cat.name) + '</span><span class="value-cat-count">' + selectableCount + '</span></button><div class="value-cat-body">';
       for (var s = 0; s < cat.states.length; s++) {
         var st = cat.states[s];
+        if (statePickerWritableOnly && st.writable !== true) continue;
         html += '<button type="button" class="value-row" data-topic="' + statePickerEsc(st.topic) + '" data-search="' + statePickerEsc((currentPath + ' ' + st.name + ' ' + st.topic).toLowerCase()) + '" onclick="statePickerSelect(this.getAttribute(\\'data-topic\\'))"><span class="value-row-label">' + statePickerEsc(st.name) + '</span><span class="value-row-now">' + statePickerEsc(st.display == null ? '—' : st.display) + '</span></button>';
       }
       for (var c = 0; c < (cat.children || []).length; c++) html += statePickerRenderCategory(cat.children[c], depth + 1, currentPath, instKey);
@@ -205,6 +218,11 @@ function statePickerScript() {
       var html = '';
       for (var i = 0; i < data.instances.length; i++) {
         var inst = data.instances[i];
+        if (statePickerWritableOnly) {
+          var writableCount = 0;
+          for (var wc = 0; wc < inst.categories.length; wc++) writableCount += statePickerSelectableCount(inst.categories[wc]);
+          if (!writableCount) continue;
+        }
         var instKey = inst.system ? 'System' : inst.prefix + '://' + inst.instanceName;
         var instLabel = inst.system ? 'System' : instKey;
         html += '<div class="state-inst"><div class="state-inst-name">' + statePickerEsc(instLabel) + '</div>';
@@ -213,7 +231,7 @@ function statePickerScript() {
         }
         html += '</div>';
       }
-      body.innerHTML = html;
+      body.innerHTML = html || '<p class="muted" style="padding:12px;">Keine schreibbaren States vorhanden.</p>';
       // Zuletzt gemerkte Scrollposition wiederherstellen (nach dem Aufbau).
       statePickerRestoreScroll();
     }

@@ -15,6 +15,28 @@ genau **einen** HTTP-Server und **ein** Authentifizierungssystem
 (Routen unter `src/routes/`, Views unter `src/views/`, Fachlogik unter
 `src/<domäne>/`).
 
+## Bedingungen und Automationen
+
+Das Automationssystem unter `src/conditions/` verwendet keinen eigenen Broker
+und keinen parallelen Scheduler. Definitionen und Laufzeitstatus liegen in
+`automation_conditions` und `automation_condition_items`; die rein
+organisatorische Ablage in `automation_condition_folders` folgt demselben
+Verzeichnisprinzip wie die Custom States und hat keinen Einfluss auf die
+Auswertung. Über die Oberfläche sortierbar sind ausschließlich Verzeichnisse und
+Bedingungen; Trigger, Wenns und Danns behalten ihre Anlagereihenfolge. Die Engine bindet
+Trigger und Wenn-Prüfungen über die bestehenden Ad-hoc-Routen an den gemeinsamen
+`state-bus`; dadurch funktionieren MQTT-, Adapter-, System- und Custom-States
+über dieselbe Grenze. Zeittrigger verwenden ausschließlich die zentrale
+homeESS-Uhr aus `time-handler.js`.
+
+Jeder Trigger einer aktiven Automation kann ihre Auswertung starten. Danach
+müssen alle Wenn-Prüfungen erfüllt sein; erst dann werden alle Dann-Aktionen in
+der gespeicherten Reihenfolge über `mqtt/client.publish()` ausgegeben. Die
+Bus-Änderungserkennung, eine bedingungsbezogene Laufzeitsperre und eine harte
+Ausführungsgrenze pro Minute verhindern unmittelbare Wiederholungs-,
+Rückkopplungs- und Automationsschleifen. Berechnete
+`system://`-States bleiben schreibgeschützt.
+
 ## Internationalisierung und Sprachdateien
 
 homeESS besitzt genau **eine systemweite Sprachwahl**. Die Registry unter

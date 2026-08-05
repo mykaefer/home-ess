@@ -32,6 +32,7 @@ const wallboxRoutes = require('./routes/wallbox');
 const messenSchaltenRoutes = require('./routes/messen-schalten');
 const adapterRoutes = require('./routes/adapters');
 const statesRoutes = require('./routes/states');
+const conditionsRoutes = require('./routes/conditions');
 const remoteAccessRoutes = require('./routes/remote-access');
 const updateRoutes = require('./routes/update');
 const pairingState = require('./remote-access/pairing-state');
@@ -60,6 +61,7 @@ const prognosisBehavior = require('./prognosis/behavior');
 const jobs = require('./job-scheduler');
 const { updatePoolEnergyModel } = require('./pool/energy-model');
 const i18n = require('./i18n');
+const conditionEngine = require('./conditions/engine');
 
 // Baut die Express-App zusammen: DB öffnen, Middleware, Routen registrieren,
 // MQTT-Verbindung mit gespeicherter Konfiguration starten.
@@ -120,6 +122,7 @@ function createApp() {
   app.use(messenSchaltenRoutes(db));
   app.use(adapterRoutes(db));
   app.use(statesRoutes(db));
+  app.use(conditionsRoutes(db));
   app.use(remoteAccessRoutes());
   app.use(updateRoutes());
 
@@ -169,17 +172,21 @@ function createApp() {
     .then(() => operatingReady)
     .then(() => Promise.all([adaptersReady, customStatesReady, timeReady]))
     .then(() => loadAllStateDefinitions(db))
-    .then((defs) => {
+    .then(async (defs) => {
       mqttClient.setStateDefinitions(defs);
+      await conditionEngine.init(db);
       loadMqttConfig(db, (cfg) => {
         i18n.setTimezone(cfg.timezone);
         if (cfg.host) mqttClient.connect(cfg);
       });
     })
-    .catch(() => {
-      loadMqttConfig(db, (cfg) => {
-        i18n.setTimezone(cfg.timezone);
-        if (cfg.host) mqttClient.connect(cfg);
+    .catch((error) => {
+      if (error) console.error('[startup] State-/Bedingungs-Init fehlgeschlagen:', error && error.message);
+      conditionEngine.init(db).catch((err) => console.error('[conditions] Fallback-Init fehlgeschlagen:', err && err.message)).finally(() => {
+        loadMqttConfig(db, (cfg) => {
+          i18n.setTimezone(cfg.timezone);
+          if (cfg.host) mqttClient.connect(cfg);
+        });
       });
     });
 

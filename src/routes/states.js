@@ -24,23 +24,44 @@ function statesRoutes(db) {
     try { await customPage(res, { message: String(req.query.ok || '').slice(0, 200) }); } catch (_) { res.status(500).send('Fehler beim Laden der Custom States.'); }
   });
 
-  const mutate = (action, successMessage) => async (req, res) => {
+  const mutate = (action, successMessage, dialogForError = null) => async (req, res) => {
     try {
       await action(req);
       invalidateStates();
       res.redirect(`/states/custom?ok=${encodeURIComponent(successMessage)}`);
     } catch (err) {
-      try { await customPage(res, { status: 400, error: err.message || 'Die Änderung konnte nicht gespeichert werden.' }); }
+      try {
+        const initialDialog = typeof dialogForError === 'function' ? dialogForError(req) : dialogForError;
+        if (initialDialog) initialDialog.error = err.message || 'Die Änderung konnte nicht gespeichert werden.';
+        await customPage(res, {
+          status: 400,
+          error: err.message || 'Die Änderung konnte nicht gespeichert werden.',
+          initialDialog,
+        });
+      }
       catch (_) { res.status(500).send('Fehler beim Speichern der Custom States.'); }
     }
   };
 
-  router.post('/states/custom/folder', requireAuth, mutate((req) => customStates.addFolder(db, req.body), 'Verzeichnis angelegt.'));
-  router.post('/states/custom/folder/:id', requireAuth, mutate((req) => customStates.updateFolder(db, req.params.id, req.body), 'Verzeichnis gespeichert.'));
+  router.post('/states/custom/folder', requireAuth, mutate((req) => customStates.addFolder(db, req.body), 'Verzeichnis angelegt.',
+    (req) => ({ kind: 'folder', mode: 'add', parentId: req.body.parentId, values: req.body })));
+  router.post('/states/custom/folder/:id', requireAuth, mutate((req) => customStates.updateFolder(db, req.params.id, req.body), 'Verzeichnis gespeichert.',
+    (req) => ({ kind: 'folder', mode: 'edit', id: Number(req.params.id), values: req.body })));
   router.post('/states/custom/folder/:id/delete', requireAuth, mutate((req) => customStates.deleteFolder(db, req.params.id), 'Verzeichnis entfernt.'));
-  router.post('/states/custom/state', requireAuth, mutate((req) => customStates.addState(db, req.body), 'Custom State angelegt.'));
-  router.post('/states/custom/state/:id', requireAuth, mutate((req) => customStates.updateState(db, req.params.id, req.body), 'Custom State gespeichert.'));
+  router.post('/states/custom/state', requireAuth, mutate((req) => customStates.addState(db, req.body), 'Custom State angelegt.',
+    (req) => ({ kind: 'state', mode: 'add', folderId: req.body.folderId, values: req.body })));
+  router.post('/states/custom/state/:id', requireAuth, mutate((req) => customStates.updateState(db, req.params.id, req.body), 'Custom State gespeichert.',
+    (req) => ({ kind: 'state', mode: 'edit', id: Number(req.params.id), values: req.body })));
   router.post('/states/custom/state/:id/delete', requireAuth, mutate((req) => customStates.deleteState(db, req.params.id), 'Custom State entfernt.'));
+  router.post('/states/custom/layout', requireAuth, async (req, res) => {
+    try {
+      await customStates.updateLayout(db, req.body || {});
+      invalidateStates();
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(400).json({ error: err.message || 'Layout konnte nicht gespeichert werden.' });
+    }
+  });
   router.post('/states/custom/state/:id/value', requireAuth, async (req, res) => {
     try {
       const state = await customStates.setValue(db, req.params.id, req.body.value);

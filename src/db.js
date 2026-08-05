@@ -705,6 +705,52 @@ function openDatabase() {
       `CREATE UNIQUE INDEX IF NOT EXISTS idx_custom_states_folder_name
          ON custom_states (IFNULL(folder_id, -1), name COLLATE NOCASE)`
     );
+    // Frei kombinierbare Automationen. Eine Bedingung besteht aus mindestens
+    // einem Trigger, einer Wenn-Prüfung und einer Dann-Aktion. Die Konfiguration
+    // der typabhängigen Elemente bleibt als validiertes JSON erweiterbar.
+    // Verzeichnisse ordnen die Bedingungen genauso wie bei Custom States rein
+    // organisatorisch; sie haben keinen Einfluss auf die Auswertung.
+    db.run(
+      `CREATE TABLE IF NOT EXISTS automation_condition_folders (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        parent_id INTEGER,
+        name TEXT NOT NULL,
+        position INTEGER NOT NULL DEFAULT 0,
+        FOREIGN KEY (parent_id) REFERENCES automation_condition_folders(id) ON DELETE CASCADE
+      )`
+    );
+    db.run(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_condition_folders_parent_name
+         ON automation_condition_folders (IFNULL(parent_id, -1), name COLLATE NOCASE)`
+    );
+    db.run(
+      `CREATE TABLE IF NOT EXISTS automation_conditions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        folder_id INTEGER,
+        name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        position INTEGER NOT NULL DEFAULT 0,
+        last_triggered_at INTEGER,
+        last_result TEXT NOT NULL DEFAULT '',
+        last_error TEXT NOT NULL DEFAULT '',
+        FOREIGN KEY (folder_id) REFERENCES automation_condition_folders(id) ON DELETE CASCADE
+      )`
+    );
+    db.run(
+      `CREATE TABLE IF NOT EXISTS automation_condition_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        condition_id INTEGER NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('trigger', 'when', 'then')),
+        type TEXT NOT NULL,
+        config_json TEXT NOT NULL DEFAULT '{}',
+        position INTEGER NOT NULL DEFAULT 0,
+        last_fired_at INTEGER,
+        FOREIGN KEY (condition_id) REFERENCES automation_conditions(id) ON DELETE CASCADE
+      )`
+    );
+    db.run(
+      'CREATE INDEX IF NOT EXISTS idx_automation_items_condition_kind ON automation_condition_items (condition_id, kind, position, id)'
+    );
     // Historisierte, abgeschlossene Tageswerte einzelner Kennzahlen (PV-Ertrag,
     // Netzbezug, Eigenverbrauch) für die
     // Jahres-Statistik (Durchschnitt/Minimum/Maximum inkl. Datum) im
@@ -751,9 +797,20 @@ function openDatabase() {
     migrateWallboxes(db);
     migrateMessSchaltActors(db);
     migrateMessSchaltTemperaturePower(db);
+    migrateConditionFolders(db);
   });
 
   return db;
+}
+
+// Bedingungen gab es zuerst ohne Verzeichnisse. Bestehende Automationen bleiben
+// nach dem Update im Wurzelverzeichnis (folder_id NULL) liegen.
+function migrateConditionFolders(db) {
+  db.all('PRAGMA table_info(automation_conditions)', (err, rows) => {
+    if (err || !Array.isArray(rows) || rows.length === 0) return;
+    const existing = new Set(rows.map((row) => row.name));
+    if (!existing.has('folder_id')) db.run('ALTER TABLE automation_conditions ADD COLUMN folder_id INTEGER');
+  });
 }
 
 function seedPrognosisConfig(db) {
@@ -879,10 +936,10 @@ function migrateUsers(db) {
   });
 }
 
-// `/states` war früher kein eigener Berechtigungsbereich, sondern ein
-// Navigations-Unterpunkt von Adapter und direkt für jeden angemeldeten Nutzer
-// erreichbar. Beim Herauslösen zur Hauptseite bleibt dieser Zugriff für alle
-// bestehenden expliziten Seitenlisten erhalten.
+// Neue zentrale Seiten bleiben für vorhandene explizite Seitenlisten sichtbar:
+// `/states` wurde aus der Adapternavigation herausgelöst, `/conditions` kam als
+// Automationsbereich hinzu. Eine gemeinsame Aktualisierung verhindert, dass
+// parallele Migrationen sich gegenseitig überschreiben.
 function migrateStatesVisibility(db) {
   db.all('SELECT id, visible_pages FROM users WHERE visible_pages IS NOT NULL', (err, rows) => {
     if (err || !Array.isArray(rows)) return;
@@ -893,8 +950,12 @@ function migrateStatesVisibility(db) {
       } catch (_) {
         continue;
       }
-      if (!Array.isArray(pages) || pages.includes('states')) continue;
-      db.run('UPDATE users SET visible_pages = ? WHERE id = ?', [JSON.stringify([...pages, 'states']), row.id]);
+      if (!Array.isArray(pages)) continue;
+      const next = [...pages];
+      if (!next.includes('states')) next.push('states');
+      if (!next.includes('conditions')) next.push('conditions');
+      if (next.length === pages.length) continue;
+      db.run('UPDATE users SET visible_pages = ? WHERE id = ?', [JSON.stringify(next), row.id]);
     }
   });
 }

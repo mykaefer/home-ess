@@ -49,6 +49,7 @@ test('pageForPath ordnet Unterrouten der Seite zu; canSeePage prüft Sichtbarkei
   assert.equal(accessMod.pageForPath('/stromverbrauch/data'), 'stromverbrauch');
   assert.equal(accessMod.pageForPath('/states'), 'states');
   assert.equal(accessMod.pageForPath('/states/data.json'), 'states');
+  assert.equal(accessMod.pageForPath('/conditions/12/items'), 'conditions');
   assert.equal(accessMod.pageForPath('/live/header'), null);
   // Module und Fernzugriff gehören zur Einstellungsseite (Tabs).
   assert.equal(accessMod.pageForPath('/module/pool/enable'), 'settings');
@@ -86,7 +87,7 @@ test('Migration repariert eine bestehende Installation ohne Administrator', asyn
   db.close();
 });
 
-test('Migration: bestehende explizite Seitenlisten behalten Zugriff auf States', async () => {
+test('Migration: bestehende explizite Seitenlisten behalten Zugriff auf States und Bedingungen', async () => {
   let db = await freshDb();
   const user = await usersRepo.createUser(db, {
     name: 'Bestand',
@@ -99,7 +100,7 @@ test('Migration: bestehende explizite Seitenlisten behalten Zugriff auf States',
   db = openDatabase();
   await new Promise((resolve) => setTimeout(resolve, 400));
   const migrated = await usersRepo.getUser(db, user.id);
-  assert.deepEqual(migrated.visiblePages, ['dashboard', 'states']);
+  assert.deepEqual(migrated.visiblePages, ['dashboard', 'states', 'conditions']);
   db.close();
 });
 

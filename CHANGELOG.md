@@ -3,18 +3,36 @@
 Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
-## [Unreleased]
-
-### Behoben
-
-- **Eindeutige hDP-Bestätigungswarnung.** Bleibt bei weiterhin aktiver
-  WebSocket-Verbindung nur die Bestätigung eines Ausgabebefehls aus, wird das
-  Gerät nicht mehr widersprüchlich als `DEVICE_OFFLINE` bezeichnet. Der Hinweis
-  benennt stattdessen den unklaren Befehlsstatus und verschwindet nach der
-  nächsten erfolgreich bestätigten Ausgabe wieder.
+## [1.4.0] — 2026-08-05
 
 ### Hinzugefügt
 
+- **Persistentes Bedingungs- und Automationssystem.** Die neue Hauptseite
+  „Bedingungen“ verwaltet ausklappbare, sortierbare Automationen im gemeinsamen
+  Gruppenraster. Jede Automation besitzt mindestens einen Trigger, eine
+  Wenn-Prüfung und eine Dann-Aktion; weitere Elemente lassen sich über die
+  zentrale Plus-Zeile ergänzen und vollständig bearbeiten. Unterstützt werden
+  Intervalle und feste Wochenzeitpunkte, Wertänderungen, exakte State-Ereignisse,
+  typisierte Vergleiche sowie geordnete Schreibaktionen. Auswertung und
+  State-Zugriffe laufen über den zentralen Bus und Schreibweg, die Definitionen
+  und letzten Ergebnisse bleiben in SQLite erhalten. Die Seite ist über die
+  Benutzerverwaltung wie jede andere Hauptseite je Zugang freischaltbar.
+- **State-Picker mit Schreibfilter.** Felder, die ausschließlich ein
+  Schreibziel aufnehmen — etwa das Ziel einer Dann-Aktion —, zeigen im
+  Auswahlbaum nur schreibbare States. Instanzen und Verzeichnisse ohne solche
+  States erscheinen gar nicht, die Zähler nennen die tatsächlich wählbaren
+  Einträge, und ist nichts schreibbar, sagt der Picker das ausdrücklich.
+- **Dialoge behalten ihre Eingaben nach einem Fehler.** Weist der Server eine
+  Eingabe in Custom States oder Bedingungen zurück, öffnet sich derselbe Dialog
+  erneut mit allen bereits eingetragenen Werten und der Fehlermeldung, statt
+  die Eingaben zu verwerfen.
+- **Gerätespezifischer hDP-Dimmschalter.** Prozentanzeigen und ARGB-Ausgänge
+  können einen optionalen homeESS-State, dessen Vergleichswert und eine
+  Dimmung in Prozent hinterlegen. Trifft der Wert zu, skaliert der Adapter die
+  zuvor berechnete Helligkeit vor der Übertragung; beispielsweise lässt eine
+  Dimmung um 80 Prozent noch 20 Prozent übrig. Firmwareänderungen sind dafür
+  nicht erforderlich, und Aktivzustand sowie Helligkeit vor der Dimmung werden
+  in der gerätespezifischen State-Gruppe veröffentlicht.
 - **Abgesichertes Löschen installierter Adapter.** Administratoren können
   instanzlose Adapter nach einer ausdrücklichen Sicherheitswarnung und Eingabe
   der exakten Adapter-ID dauerhaft entfernen. Serverseitig verhindern Rollen-,
@@ -44,7 +62,6 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
   Sprachdateien mitbringen und erkennen die Systemwahl über Host-API,
   Management-Request oder Browser-Zugriffs-API; alle mitgelieferten Adapter
   enthalten deutsche und englische Kataloge.
-
 - **Direktnavigation zu hDP-Instanzen.** Ausschließlich die Geräteverwaltungen
   des universellen hDP-Adapters erscheinen mit dem jeweiligen Instanznamen als
   eigene Hauptmenüpunkte. Sie stehen alphanumerisch sortiert zwischen Adapter
@@ -215,6 +232,28 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 
 ### Geändert
 
+- **Bedingungen liegen in Verzeichnissen, ihre Elemente sind nicht mehr
+  verschiebbar.** Die Seite „Bedingungen“ nutzt denselben Verzeichnisbaum wie
+  „Messen + Schalten“ und die Custom States: Verzeichnisse lassen sich anlegen,
+  umbenennen, verschachteln und samt Inhalt entfernen, Bedingungen per Drag&Drop
+  zwischen ihnen einsortieren oder im Dialog zuordnen. Trigger, Wenns und Danns
+  haben keine Dragfläche mehr, weil ihre Reihenfolge für die Auswertung ohne
+  Bedeutung ist. Serverseitige Layoutprüfungen verhindern unvollständige Bäume,
+  Zyklen und Namenskollisionen; bestehende Automationen bleiben nach dem Update
+  im Wurzelverzeichnis.
+- **Das Hauptmenü scrollt unabhängig vom festen Fußblock.** Bei geringer
+  Bildschirmhöhe bleiben Einstellungen, Abmelden, Copyright und Version im
+  Desktop- und Mobilmenü dauerhaft erreichbar, während ausschließlich die
+  Hauptnavigation in ihrem eigenen Bereich scrollt. Die native Scrollbar ist
+  browserübergreifend schmal und dunkel gestaltet; helle Spur und Scrollpfeile
+  erscheinen nicht mehr auf der dunklen Navigation.
+- **Custom States entsprechen jetzt „Messen + Schalten“.** Die Verwaltung nutzt
+  dasselbe vollbreite Gruppenraster mit dunklen Verzeichnisköpfen, kompakten
+  State-Zeilen und eigenen Drag-Flächen. Verzeichnisse und States lassen sich
+  frei sortieren und zwischen Ebenen verschieben; Namen, Zuordnung, Datentyp,
+  Einheit, Wert und Rundung bleiben nachträglich vollständig bearbeitbar.
+  Serverseitige Layoutprüfungen verhindern unvollständige Bäume, Zyklen und
+  Namenskollisionen.
 - **Kurze zweisprachige Projekt-Startseite.** `README.md` ist nun die kompakte
   englische Einstiegsseite mit Projektzweck, Hardwareanforderungen und
   Installation; `README_de.md` enthält die spiegelgleiche deutsche Fassung.
@@ -401,6 +440,16 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 
 ### Behoben
 
+- **Sortieren auf der Bedingungsseite schlägt nicht mehr fehl.** Das Speichern
+  des Layouts lief bisher in die allgemeine Bedingungsroute und beantwortete den
+  JSON-Aufruf mit einer HTML-Seite („Unexpected token '<'“). Feste Pfade
+  (`/conditions/layout`, `/conditions/folder/…`) werden jetzt vor `/conditions/:id`
+  ausgewertet.
+- **Eindeutige hDP-Bestätigungswarnung.** Bleibt bei weiterhin aktiver
+  WebSocket-Verbindung nur die Bestätigung eines Ausgabebefehls aus, wird das
+  Gerät nicht mehr widersprüchlich als `DEVICE_OFFLINE` bezeichnet. Der Hinweis
+  benennt stattdessen den unklaren Befehlsstatus und verschwindet nach der
+  nächsten erfolgreich bestätigten Ausgabe wieder.
 - **Administratorzugang bei bestehenden Installationen repariert.** Falls eine
   ältere Datenbank zwar Benutzer, aber durch einen früheren Zwischenstand kein
   gesetztes Admin-Flag enthält, wird der älteste Zugang einmalig zum

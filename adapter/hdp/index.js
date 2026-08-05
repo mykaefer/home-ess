@@ -70,6 +70,7 @@ function defaultBindings() {
       mode: 'fixed', fixed: 100, topic: '',
       input_min: 0, input_max: 100, output_min: 0, output_max: 100, clamp: true, invert: false,
     },
+    dimming_switch: { topic: '', value: '1', dimming_percent: 80 },
     indicator: {
       rising_topic: '', falling_topic: '',
       sweep_milliseconds: 600, pulse_interval_milliseconds: 4000, dimming_percent: 40,
@@ -110,6 +111,7 @@ function mergeBindings(value) {
     percentage: { ...base.percentage, ...(input.percentage || {}) },
     color: { ...base.color, ...(input.color || {}) },
     brightness: { ...base.brightness, ...(input.brightness || {}) },
+    dimming_switch: { ...base.dimming_switch, ...(input.dimming_switch || {}) },
     indicator: { ...base.indicator, ...(input.indicator || {}) },
     display: { ...base.display, ...(input.display || {}) },
     binary: input.binary && typeof input.binary === 'object'
@@ -248,6 +250,22 @@ function normalizeDeviceBindings(device, hardwareConfig) {
   );
 }
 
+function validateDimmingSwitch(bindings) {
+  const dimmingSwitch = bindings.dimming_switch || {};
+  dimmingSwitch.topic = String(dimmingSwitch.topic || '').trim();
+  dimmingSwitch.value = dimmingSwitch.value == null
+    ? '' : String(dimmingSwitch.value).trim();
+  dimmingSwitch.dimming_percent = require('./validation').integer(
+    dimmingSwitch.dimming_percent, 0, 100, 'Dimmschalter-Dimmung',
+  );
+  if (dimmingSwitch.topic && !dimmingSwitch.value) {
+    throw new Error('Dimmschalter-Vergleichswert fehlt.');
+  }
+  if (dimmingSwitch.topic) Object.assign(dimmingSwitch, sourceParts(dimmingSwitch.topic));
+  bindings.dimming_switch = dimmingSwitch;
+  return bindings;
+}
+
 function sourceParts(topic) {
   const text = String(topic || '').trim();
   const match = /^([a-z][a-z0-9_-]*):\/\/([^/]+)\/(.+)$/.exec(text);
@@ -277,6 +295,7 @@ function sanitizeDevice(device) {
   delete copy.binaryOutputRunning;
   delete copy.argbValues;
   delete copy.argbStates;
+  delete copy.rawDimmingSwitch;
   return copy;
 }
 
@@ -302,6 +321,16 @@ function dynamicBrightness(device) {
       value = bounded(scale(device.rawBrightness, binding), 0, 100, 'Dynamische Helligkeit');
     }
     if (value == null) throw new Error('Unbekannter Helligkeitsmodus.');
+    device.brightnessBeforeDimming = Math.round(value);
+    const dimmingSwitch = device.bindings.dimming_switch || {};
+    device.dimmingSwitchActive = !!dimmingSwitch.topic && argbConditionActive({
+      operator: 'equals', value: dimmingSwitch.value,
+    }, device.rawDimmingSwitch);
+    if (device.dimmingSwitchActive) {
+      value *= (100 - bounded(
+        dimmingSwitch.dimming_percent, 0, 100, 'Dimmschalter-Dimmung',
+      )) / 100;
+    }
     // homeESS-Quellen dürfen Prozentwerte mit Nachkommastellen liefern (z. B.
     // die Prognose-Helligkeit). hDP überträgt die Plugin-Helligkeit als
     // ganzzahligen Prozentwert; deshalb erst an dieser Protokollgrenze runden.
@@ -596,6 +625,9 @@ function deviceStateChannels(device) {
       state('color', 'Farbe', device.calculatedColor
         ? `${device.calculatedColor.r},${device.calculatedColor.g},${device.calculatedColor.b}` : ''),
       state('requested-brightness', 'Angeforderte Helligkeit', device.requestedBrightness, '%'),
+      state('brightness-before-dimming', 'Helligkeit vor Dimmung', device.brightnessBeforeDimming, '%'),
+      state('dimming-switch-active', 'Dimmschalter aktiv', !!device.dimmingSwitchActive),
+      state('dimming-percent', 'Dimmschalter-Dimmung', device.bindings.dimming_switch.dimming_percent, '%'),
       state('indicator-direction', 'Richtungsindikator', device.indicatorDirection || 'off'),
       state('output-mode', 'Ausgabemodus', device.outputMode),
       state('timeline-id', 'Aktive Timeline', device.activeTimelineId),
@@ -606,6 +638,9 @@ function deviceStateChannels(device) {
   } else if (type === 'argb_output') {
     channels.push({ address: 'argb-output', name: 'ARGB-Ausgang', states: [
       state('requested-brightness', 'Angeforderte Helligkeit', device.requestedBrightness, '%'),
+      state('brightness-before-dimming', 'Helligkeit vor Dimmung', device.brightnessBeforeDimming, '%'),
+      state('dimming-switch-active', 'Dimmschalter aktiv', !!device.dimmingSwitchActive),
+      state('dimming-percent', 'Dimmschalter-Dimmung', device.bindings.dimming_switch.dimming_percent, '%'),
       state('output-mode', 'Ausgabemodus', device.outputMode),
       state('effective-brightness', 'Effektive Helligkeit', device.effectiveBrightness, '%'),
       state('estimated-current', 'Geschätzter Strom', device.estimatedCurrent, 'mA'),
@@ -958,6 +993,24 @@ function createHdpAdapter(host, dependencies = {}) {
   // Jede LED hängt an genau einem State; derselbe State darf mehrere LEDs
   // versorgen. Der Rohwert wird gemerkt, damit ein Kriteriumswechsel ohne
   // erneutes Eintreffen des Wertes sofort wirkt.
+  function subscribeDimmingSwitch(device) {
+    const binding = device.bindings.dimming_switch || {};
+    if (!binding.topic) {
+      device.rawDimmingSwitch = undefined;
+      return;
+    }
+    const unsubscribe = host.subscribeState(binding.topic, (value) => {
+      device.rawDimmingSwitch = value;
+      try {
+        applyRuntime(device);
+      } catch (err) {
+        device.lastError = `Dimmschalter: ${err.message}`;
+        publishDevice(device);
+      }
+    });
+    device.unsubscribers.push(unsubscribe);
+  }
+
   function subscribeArgbSources(device) {
     device.argbValues = device.argbValues || {};
     for (const [key, binding] of Object.entries(device.bindings.argb || {})) {
@@ -981,6 +1034,7 @@ function createHdpAdapter(host, dependencies = {}) {
       });
       device.unsubscribers.push(unsubscribe);
     }
+    subscribeDimmingSwitch(device);
   }
 
   function applyRuntime(device) {
@@ -990,7 +1044,7 @@ function createHdpAdapter(host, dependencies = {}) {
         return;
       }
       if (isArgbDevice(device)) {
-        if (/^(Datenquelle:|Helligkeitsquelle:|Statusquelle)/.test(device.lastError || '')) {
+        if (/^(Datenquelle:|Helligkeitsquelle:|Dimmschalter:|Statusquelle)/.test(device.lastError || '')) {
           device.lastError = '';
         }
         applyArgbRuntime(device);
@@ -998,7 +1052,7 @@ function createHdpAdapter(host, dependencies = {}) {
         return;
       }
       const state = calculateState(device);
-      if (/^(Datenquelle:|Prozentquelle:|Prozentwertquelle liefert|Farbquelle:|Helligkeitsquelle:|Keine Prozentwertquelle)/.test(device.lastError || '')) {
+      if (/^(Datenquelle:|Prozentquelle:|Prozentwertquelle liefert|Farbquelle:|Helligkeitsquelle:|Dimmschalter:|Keine Prozentwertquelle)/.test(device.lastError || '')) {
         device.lastError = '';
       }
       if (device.runtimeProfile === RUNTIME_PROFILE) {
@@ -1072,6 +1126,7 @@ function createHdpAdapter(host, dependencies = {}) {
     if (device.bindings.brightness.mode === 'separate_numeric_source') {
       subscribe(device.bindings.brightness.topic, 'Helligkeitsquelle', (value) => { device.rawBrightness = value; });
     }
+    subscribeDimmingSwitch(device);
     const subscribeIndicator = (topic, label, assign) => {
       if (!topic) return;
       const unsubscribe = host.subscribeState(topic, (value) => {
@@ -1557,7 +1612,7 @@ function createHdpAdapter(host, dependencies = {}) {
     if (typeof bindings.display.fractional_pixel !== 'boolean') {
       throw new Error('Anteiliger Pixel muss ein Booleanwert sein.');
     }
-    return bindings;
+    return validateDimmingSwitch(bindings);
   }
 
   function validateBinaryBindings(device, input) {
@@ -1632,7 +1687,7 @@ function createHdpAdapter(host, dependencies = {}) {
     // Der ARGB-Ausgang führt zusätzlich Binary-Ein- und -Ausgänge. Sie werden
     // exakt nach denselben Regeln geprüft wie beim reinen Binary-I/O-Gerät.
     bindings.binary = validateBinaryBindings(device, input).binary;
-    return bindings;
+    return validateDimmingSwitch(bindings);
   }
 
   function saveBindings(deviceId, input) {
@@ -1645,6 +1700,10 @@ function createHdpAdapter(host, dependencies = {}) {
         : validateBindings(input.bindings || input);
     if (!isBinaryDevice(device) && !isArgbDevice(device)) {
       resetChangedIndicatorState(device, previousBindings, nextBindings);
+    }
+    if (!isBinaryDevice(device)
+        && previousBindings.dimming_switch.topic !== nextBindings.dimming_switch.topic) {
+      device.rawDimmingSwitch = undefined;
     }
     device.bindings = nextBindings;
     device.updateSettings = { ...device.updateSettings, ...(input.updateSettings || {}) };
@@ -2175,6 +2234,11 @@ function createHdpAdapter(host, dependencies = {}) {
           output_max: number(body.brightness_output_max, 100),
           clamp: bool(body.brightness_clamp), invert: bool(body.brightness_invert),
         },
+        dimming_switch: {
+          topic: String(body.dimming_switch_topic || '').trim(),
+          value: String(body.dimming_switch_value == null ? '1' : body.dimming_switch_value).trim(),
+          dimming_percent: number(body.dimming_switch_percent, 80),
+        },
       });
     }
     return validateBindings({
@@ -2196,6 +2260,11 @@ function createHdpAdapter(host, dependencies = {}) {
         input_min: number(body.brightness_input_min, 0), input_max: number(body.brightness_input_max, 100),
         output_min: number(body.brightness_output_min, 0), output_max: number(body.brightness_output_max, 100),
         clamp: bool(body.brightness_clamp), invert: bool(body.brightness_invert),
+      },
+      dimming_switch: {
+        topic: String(body.dimming_switch_topic || '').trim(),
+        value: String(body.dimming_switch_value == null ? '1' : body.dimming_switch_value).trim(),
+        dimming_percent: number(body.dimming_switch_percent, 80),
       },
       indicator: {
         rising_topic: String(body.indicator_rising_topic || '').trim(),
@@ -2730,6 +2799,15 @@ hdp-flash.exe --channel development</code></pre>
     </section>`;
   }
 
+  function dimmingSwitchFields(binding) {
+    const dimmingSwitch = binding.dimming_switch || defaultBindings().dimming_switch;
+    return `<div class="hdp-form-grid hdp-dimming-switch-grid">
+      <div class="field hdp-span-full"><label>Dimmschalter-State</label><input data-state-picker name="dimming_switch_topic" value="${esc(dimmingSwitch.topic)}" placeholder="Optionalen State auswählen"><p class="settings-card-hint">Optional: Reduziert die berechnete Helligkeit, sobald der State dem Vergleichswert entspricht.</p></div>
+      <div class="field"><label>Vergleichswert (x)</label><input name="dimming_switch_value" value="${esc(dimmingSwitch.value)}" placeholder="z. B. 1"></div>
+      <div class="field"><label>Dimmung um (y %)</label><input type="number" min="0" max="100" name="dimming_switch_percent" value="${esc(dimmingSwitch.dimming_percent)}"><p class="settings-card-hint">80 % Dimmung lässt 20 % der zuvor berechneten Helligkeit übrig.</p></div>
+    </div>`;
+  }
+
   function renderBinaryDevicePage(device) {
     const hardware = device.hardwareConfig || {};
     const firmware = device.firmwareInfo || {};
@@ -2790,7 +2868,7 @@ hdp-flash.exe --channel development</code></pre>
           <div><dt>WLAN</dt><dd>${esc(device.rssi == null ? '—' : `${device.rssi} dBm`)}</dd><small>hDP ${esc(device.protocolVersion || '—')}</small></div>
           <div><dt>Belegte LEDs</dt><dd>${boundCount} von ${pixelCount}</dd><small>Ausgabe ${esc(device.outputMode || '—')}</small></div>
           <div><dt>GPIOs</dt><dd>${inputCount} Ein / ${outputCount} Aus</dd><small>${binaryPins.length ? esc(binaryPins.map((pin) => `${pin.pin}${pin.direction === 'input' ? (pin.input_type === 'button' ? 'T' : 'S') : 'A'}`).join(' · ')) : 'nicht eingerichtet'}</small></div>
-          <div><dt>Helligkeit</dt><dd>${esc(device.effectiveBrightness == null ? '—' : `${device.effectiveBrightness} %`)}</dd><small>${esc(device.requestedBrightness == null ? '—' : `${device.requestedBrightness} % von maximal ${hardwareBrightnessLimit(device)} %`)}</small></div>
+          <div><dt>Helligkeit</dt><dd>${esc(device.effectiveBrightness == null ? '—' : `${device.effectiveBrightness} %`)}</dd><small>${esc(device.requestedBrightness == null ? '—' : `${device.requestedBrightness} % von maximal ${hardwareBrightnessLimit(device)} %`)}${device.dimmingSwitchActive ? ` · Dimmschalter aktiv, vorher ${esc(device.brightnessBeforeDimming)} %` : ''}</small></div>
           <div><dt>Strom</dt><dd>${esc(device.estimatedCurrent == null ? '—' : `${device.estimatedCurrent} mA`)}</dd><small>Begrenzung ${device.powerLimited == null ? 'unbekannt' : device.powerLimited ? 'aktiv' : 'inaktiv'}</small></div>
         </dl>
         ${pixelCount ? `<div class="hdp-argb-strip" aria-label="Aktuelle Anzeige">${argbStatusStrip(device)}</div>` : ''}
@@ -2825,6 +2903,7 @@ hdp-flash.exe --channel development</code></pre>
             <label><input type="checkbox" name="brightness_clamp"${binding.brightness.clamp !== false ? ' checked' : ''}> Auf den Wertebereich begrenzen</label>
             <label><input type="checkbox" name="brightness_invert"${binding.brightness.invert ? ' checked' : ''}> Helligkeit invertieren</label>
           </div>
+          ${dimmingSwitchFields(binding)}
         </section>
 
         <section class="settings-card hdp-config-card">
@@ -2894,7 +2973,7 @@ hdp-flash.exe --channel development</code></pre>
           <div><dt>Verbindung</dt><dd>${esc(device.connectionState || (device.online ? 'Verbunden' : 'Offline'))}</dd><small>Versuch ${esc(device.reconnectAttempt || 0)} · nächster ${esc(device.nextReconnectAt || '—')}</small></div>
           <div><dt>WLAN</dt><dd>${esc(device.rssi == null ? '—' : `${device.rssi} dBm`)}</dd><small>hDP ${esc(device.protocolVersion || '—')}</small></div>
           <div><dt>Anzeigewert</dt><dd>${esc(device.calculatedPercentage == null ? '—' : `${device.calculatedPercentage} %`)}</dd><small>Farbe ${esc(device.calculatedColor ? JSON.stringify(device.calculatedColor) : '—')}</small></div>
-          <div><dt>Helligkeit</dt><dd>${esc(device.effectiveBrightness == null ? '—' : `${device.effectiveBrightness} %`)}</dd><small>${esc(device.requestedBrightness == null ? '—' : `${device.requestedBrightness} % von maximal ${hardwareBrightnessLimit(device)} %`)}</small></div>
+          <div><dt>Helligkeit</dt><dd>${esc(device.effectiveBrightness == null ? '—' : `${device.effectiveBrightness} %`)}</dd><small>${esc(device.requestedBrightness == null ? '—' : `${device.requestedBrightness} % von maximal ${hardwareBrightnessLimit(device)} %`)}${device.dimmingSwitchActive ? ` · Dimmschalter aktiv, vorher ${esc(device.brightnessBeforeDimming)} %` : ''}</small></div>
           <div><dt>Strom</dt><dd>${esc(device.estimatedCurrent == null ? '—' : `${device.estimatedCurrent} mA`)}</dd><small>Begrenzung ${device.powerLimited == null ? 'unbekannt' : device.powerLimited ? 'aktiv' : 'inaktiv'}</small></div>
         </dl>
         ${device.runtimeProfile === RUNTIME_PROFILE
@@ -2952,6 +3031,7 @@ hdp-flash.exe --channel development</code></pre>
             <label><input type="checkbox" name="brightness_clamp"${binding.brightness.clamp !== false ? ' checked' : ''}> Auf den Wertebereich begrenzen</label>
             <label><input type="checkbox" name="brightness_invert"${binding.brightness.invert ? ' checked' : ''}> Helligkeit invertieren</label>
           </div>
+          ${dimmingSwitchFields(binding)}
         </section>
 
         <section class="settings-card hdp-config-card">
