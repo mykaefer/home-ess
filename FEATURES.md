@@ -68,10 +68,22 @@ desktop and mobile layouts.
 - Optional modules can be enabled or disabled from the settings page without
   creating parallel server or authentication structures.
 
-## Adapters, states and output
+## Adapters, states, automations and output
 
 - Isolated adapter instances connect Modbus, Tasmota, Shelly, Homematic RPC,
   hDP and additional portable integrations.
+- Every hDP ARGB device can apply a device-specific dimming switch: when a
+  selected state equals the configured value, homeESS reduces the calculated
+  output brightness by the configured percentage before sending it.
+- Custom States use the same full-width group layout as Measuring + Switching.
+  Direct drag handles reorder or move folders and states, while all folder and
+  state properties remain editable after creation.
+- Persistent conditions combine any number of triggers, checks and ordered
+  actions. They react to intervals, weekly schedules, value changes or exact
+  state events, evaluate typed state comparisons and write actions through the
+  central state boundary. The responsive editor uses the same expandable group
+  layout as Measuring + Switching and Custom States, including nested folders
+  that conditions can be dragged into.
 - Administrators can upload validated ZIP packages. Archive structure, paths,
   checksums, limits, manifest values and JavaScript syntax are checked before
   an adapter reaches `/adapter/`.

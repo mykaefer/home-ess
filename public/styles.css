@@ -134,13 +134,48 @@ body {
     display: flex;
     flex-direction: column;
     padding: 16px 0 0;
+    overflow: hidden;
 }
 
-.sidebar-nav { flex: 1; }
+.sidebar-nav {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+    scrollbar-width: thin;
+    scrollbar-color: #60756d var(--color-shell);
+    padding-bottom: 12px;
+}
+
+/* Native Scrollbars bleiben voll bedienbar, fügen sich aber in die dunkle
+   Navigation ein. Firefox nutzt scrollbar-color/-width, Chromium und WebKit
+   die folgenden Pseudoelemente. */
+.sidebar-nav::-webkit-scrollbar,
+.mobile-nav-links::-webkit-scrollbar { width: 9px; }
+.sidebar-nav::-webkit-scrollbar-track,
+.mobile-nav-links::-webkit-scrollbar-track { background: var(--color-shell); }
+.sidebar-nav::-webkit-scrollbar-thumb,
+.mobile-nav-links::-webkit-scrollbar-thumb {
+    min-height: 36px;
+    border: 2px solid var(--color-shell);
+    border-radius: 999px;
+    background: #60756d;
+}
+.sidebar-nav::-webkit-scrollbar-thumb:hover,
+.mobile-nav-links::-webkit-scrollbar-thumb:hover { background: #7c9189; }
+.sidebar-nav::-webkit-scrollbar-button,
+.mobile-nav-links::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
 
 .sidebar-footer {
     display: flex;
     flex-direction: column;
+    flex: 0 0 auto;
+    position: relative;
+    z-index: 1;
+    background: #333;
+    box-shadow: 0 -10px 18px -18px rgba(0, 0, 0, 0.9);
 }
 
 .sidebar a {
@@ -3300,80 +3335,300 @@ body.dash-editing .widget-group {
 }
 .states-inst-name { font-weight: 700; font-family: monospace; color: #1f2937; }
 
-/* Custom-States-Verwaltung: kompakter, beliebig tiefer Verzeichnisbaum in
-   voller Inhaltsbreite. Die Einrückung sitzt nur im Kopf bzw. in den Zeilen,
-   damit verschachtelte Ebenen keine immer schmaleren Karten erzeugen. */
-.custom-states-tree {
+/* Custom States verwendet bewusst dasselbe Gruppen-/Zeilenraster wie
+   „Messen + Schalten“: dunkle Verzeichnisköpfe, weiße Wertezeilen und echte
+   Drag-Zonen für beide Ebenen. */
+.custom-states-groups { margin-top: 0; }
+.custom-root-folder-zone,
+.custom-folder-zone {
     display: flex;
     flex-direction: column;
-    width: 100%;
-    margin-top: 12px;
-    border: 1px solid #e2e6ea;
-    border-radius: 8px;
-    overflow: hidden;
-    background: #fff;
-}
-.custom-folder { width: 100%; background: #fff; }
-.custom-folder-head {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    width: 100%;
-    min-height: 32px;
-    padding: 4px 8px 4px calc(10px + var(--tree-depth, 0) * 18px);
-    border-top: 1px solid #e2e8f0;
-    background: color-mix(in srgb, #eef2f7 calc(100% - var(--tree-depth, 0) * 7%), #fff);
-    cursor: pointer;
-    user-select: none;
-}
-.custom-states-tree > .custom-folder:first-child > .custom-folder-head { border-top: 0; }
-.custom-folder-head:hover { background: #e2e8f0; }
-.custom-folder-name { flex: 1; min-width: 0; font-size: 13px; font-weight: 700; color: #0f172a; }
-.custom-folder-body { display: none; flex-direction: column; }
-.custom-folder.is-open > .custom-folder-body { display: flex; }
-.custom-folder.is-open > .custom-folder-head > .value-cat-caret { transform: rotate(90deg); }
-.custom-folder-head .widget-actions,
-.custom-state-row .widget-actions { display: flex; align-items: center; gap: 3px; }
-.custom-folder-head form,
-.custom-state-row form { display: inline-flex; margin: 0; }
-.custom-root-states { display: flex; flex-direction: column; }
-.custom-state-row {
-    display: grid;
-    grid-template-columns: minmax(130px, 1fr) minmax(230px, 1.7fr) minmax(100px, .65fr) minmax(190px, 1fr) auto;
-    align-items: center;
     gap: 10px;
+    min-height: 8px;
+}
+.custom-root-folder-zone { min-height: 36px; }
+.custom-root-folder-zone.custom-drag-over,
+.custom-folder-zone.custom-drag-over {
+    outline: 2px dashed #0891b2;
+    outline-offset: 3px;
+    border-radius: 8px;
+    min-height: 36px;
+}
+.custom-folder { width: 100%; }
+.custom-folder-head .ms-group-count { margin-right: auto; }
+.custom-folder-head.custom-drag-over { outline: 2px solid #0891b2; outline-offset: -3px; background: rgba(8, 145, 178, 0.3); }
+.custom-folder-body > .custom-folder-zone {
     min-height: 34px;
-    padding: 3px 8px 3px calc(28px + var(--tree-depth, 0) * 18px);
-    border-top: 1px solid #f0f2f4;
+}
+.custom-folder-body > .custom-folder-zone:empty::after {
+    content: 'Keine Unterverzeichnisse – Verzeichnis hierher ziehen.';
+    display: block;
+    padding: 7px 10px;
+    color: #94a3b8;
     font-size: 12px;
 }
-.custom-folder-body > .custom-state-row { padding-left: calc(28px + var(--tree-depth, 0) * 18px); }
-.custom-state-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 600; color: #1f2937; }
+.custom-state-dropzone {
+    display: flex;
+    flex-direction: column;
+    min-height: 36px;
+    background: #fff;
+}
+.custom-state-dropzone:empty::after {
+    content: 'Keine States – zum Zuordnen hierher ziehen.';
+    display: block;
+    padding: 8px 12px;
+    color: #94a3b8;
+    font-size: 12px;
+}
+.custom-state-dropzone.custom-drag-over,
+.custom-folder-head.custom-drag-over { outline: 2px dashed #3b82f6; outline-offset: -3px; }
+.custom-state-row {
+    display: grid;
+    grid-template-columns: 24px 12px minmax(130px, 1.1fr) minmax(220px, 1.6fr) minmax(100px, .65fr) minmax(190px, 1fr) 60px;
+    align-items: center;
+    gap: 10px;
+    min-height: 36px;
+    padding: 2px 12px 2px 6px;
+    border-top: 1px solid #eef1f4;
+    background: #fff;
+    font-size: 13px;
+    line-height: 1.4;
+}
+.custom-state-dropzone .custom-state-row:first-child { border-top: 0; }
+.custom-state-row.dragging,
+.custom-folder.group-dragging { opacity: .45; }
+.custom-state-row.custom-drop-before,
+.custom-folder.custom-drop-before { box-shadow: inset 0 3px 0 #3b82f6; }
+.custom-state-row.custom-drop-after,
+.custom-folder.custom-drop-after { box-shadow: inset 0 -3px 0 #3b82f6; }
+.custom-state-row .widget-drag { justify-self: center; }
+.custom-state-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: var(--color-text); }
 .custom-state-topic { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: #64748b; }
 .custom-state-type { color: #64748b; }
 .custom-state-editor { display: flex; align-items: center; gap: 5px; }
 .custom-state-value { width: 100%; min-width: 80px; height: 27px; padding: 2px 7px; font-size: 12px; }
 .custom-value-save { min-height: 27px; padding: 3px 8px; font-size: 11px; }
-.custom-empty { padding: 18px; margin: 0; }
+.custom-state-row .widget-actions { justify-self: end; }
+.custom-state-row:hover .widget-actions,
+.custom-state-row:focus-within .widget-actions,
+.custom-folder-head:hover .widget-group-actions,
+.custom-folder-head:focus-visible .widget-group-actions { opacity: 1; }
 .custom-rounding-fields { display: contents; }
+.custom-state-value-field textarea { width: 100%; resize: vertical; }
+.access-read .main-content .custom-state-editor,
+.access-operate .main-content .custom-state-editor {
+    pointer-events: none;
+    opacity: .6;
+}
 
 @media (max-width: 900px) {
     .custom-state-row {
-        grid-template-columns: minmax(110px, 1fr) minmax(160px, 1.4fr) minmax(180px, 1fr) auto;
+        grid-template-columns: 24px 12px minmax(110px, 1fr) minmax(150px, 1.3fr) minmax(170px, 1fr) 60px;
     }
     .custom-state-type { display: none; }
 }
 @media (max-width: 620px) {
     .custom-state-row {
-        grid-template-columns: 1fr auto;
+        grid-template-columns: 12px minmax(0, 1fr) auto;
         gap: 4px 8px;
-        padding-top: 7px;
-        padding-bottom: 7px;
+        padding: 7px 8px;
     }
+    .custom-state-row > .widget-drag { display: none; }
+    .custom-state-row > .ms-status-dot { grid-column: 1; grid-row: 1; }
+    .custom-state-name { grid-column: 2; grid-row: 1; }
+    .custom-state-row > .widget-actions { grid-column: 3; grid-row: 1; opacity: 1; }
     .custom-state-topic { grid-column: 1 / -1; grid-row: 2; }
-    .custom-state-editor { grid-column: 1; grid-row: 3; }
-    .custom-state-row > .widget-actions { grid-column: 2; grid-row: 1; }
-    .custom-folder-head { padding-left: calc(8px + var(--tree-depth, 0) * 12px); }
+    .custom-state-editor { grid-column: 1 / -1; grid-row: 3; }
+    .custom-folder-body > .custom-folder-zone:empty::after { content: 'Keine Unterverzeichnisse'; }
+}
+
+/* Bedingungen: dasselbe vollbreite, einklappbare Gruppenprinzip wie Messen +
+   Schalten und Custom States. Innerhalb jeder Automation bleiben Trigger,
+   Prüfungen und Aktionen als kompakte, editierbare Zeilen erkennbar.
+   Verzeichnisse ordnen die Automationen wie bei den Custom States. */
+.conditions-groups { margin-top: 0; }
+.conditions-empty { margin-top: 12px; }
+.condition-root-folder-zone,
+.condition-folder-zone {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-height: 8px;
+}
+.condition-root-folder-zone { min-height: 36px; }
+.condition-root-folder-zone.condition-drag-over,
+.condition-folder-zone.condition-drag-over {
+    outline: 2px dashed #0891b2;
+    outline-offset: 3px;
+    border-radius: 8px;
+    min-height: 36px;
+}
+.condition-folder { width: 100%; }
+.condition-folder-head .ms-group-count { margin-right: auto; }
+.condition-folder-head.condition-drag-over { outline: 2px solid #0891b2; outline-offset: -3px; background: rgba(8, 145, 178, 0.3); }
+.condition-folder-body > .condition-folder-zone { min-height: 34px; }
+.condition-folder-body > .condition-folder-zone:empty::after {
+    content: 'Keine Unterverzeichnisse – Verzeichnis hierher ziehen.';
+    display: block;
+    padding: 7px 10px;
+    color: #94a3b8;
+    font-size: 12px;
+}
+.condition-dropzone {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-height: 36px;
+    padding: 10px;
+    background: var(--color-surface-subtle);
+}
+.condition-dropzone:empty::after {
+    content: 'Keine Bedingungen – zum Zuordnen hierher ziehen.';
+    display: block;
+    padding: 8px 12px;
+    color: #94a3b8;
+    font-size: 12px;
+}
+.condition-dropzone.condition-drag-over { outline: 2px dashed #3b82f6; outline-offset: -3px; }
+.condition-head .ms-group-count { margin-right: 0; }
+.condition-enabled {
+    flex: 0 0 auto;
+    border-radius: 999px;
+    padding: 1px 8px;
+    font-size: 10px;
+    font-weight: 700;
+}
+.condition-enabled.is-enabled { color: #bbf7d0; background: rgba(34, 197, 94, .2); }
+.condition-enabled.is-disabled { color: #cbd5e1; background: rgba(148, 163, 184, .18); }
+.condition-runtime {
+    min-width: 0;
+    max-width: 340px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #c8d3cf;
+    font-size: 11px;
+    font-weight: 500;
+}
+.condition-runtime--error { color: #fca5a5; }
+.condition-body { background: var(--color-surface-subtle); }
+.condition-section { background: #fff; border-top: 1px solid var(--color-border); }
+.condition-section:first-child { border-top: 0; }
+.condition-section-head {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 6px 12px;
+    background: #eef2f0;
+    color: var(--color-text-soft);
+    font-size: 11px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+}
+.condition-section-count {
+    border-radius: 999px;
+    padding: 0 6px;
+    background: #dce5e1;
+    font-size: 10px;
+}
+.condition-item-zone { min-height: 36px; }
+/* Trigger, Wenns und Danns tragen bewusst keine Dragfläche: ihre Reihenfolge
+   ist für die Auswertung ohne Bedeutung. */
+.condition-item {
+    display: grid;
+    grid-template-columns: 68px minmax(0, 1fr) 60px;
+    align-items: center;
+    gap: 9px;
+    min-height: 38px;
+    padding: 3px 12px 3px 6px;
+    border-top: 1px solid #edf1ef;
+    background: #fff;
+    font-size: 13px;
+}
+.condition-item:first-child { border-top: 0; }
+.condition-group.group-dragging,
+.condition-folder.group-dragging { opacity: .45; }
+.condition-group.condition-drop-before,
+.condition-folder.condition-drop-before { box-shadow: inset 0 3px 0 #3b82f6; }
+.condition-group.condition-drop-after,
+.condition-folder.condition-drop-after { box-shadow: inset 0 -3px 0 #3b82f6; }
+.condition-kind {
+    border-radius: 999px;
+    padding: 2px 7px;
+    text-align: center;
+    font-size: 10px;
+    font-weight: 800;
+    text-transform: uppercase;
+}
+.condition-kind--trigger { color: #155e75; background: #cffafe; }
+.condition-kind--when { color: #854d0e; background: #fef3c7; }
+.condition-kind--then { color: #166534; background: #dcfce7; }
+.condition-item-description { min-width: 0; overflow-wrap: anywhere; color: var(--color-text); }
+.condition-item .widget-actions { justify-self: end; }
+.condition-item .widget-icon-btn:disabled { opacity: .3; cursor: not-allowed; }
+.condition-item:hover .widget-actions,
+.condition-item:focus-within .widget-actions,
+.condition-head:hover .widget-group-actions,
+.condition-head:focus-visible .widget-group-actions { opacity: 1; }
+.condition-add-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    min-height: 40px;
+    border: 0;
+    border-top: 1px solid var(--color-border);
+    border-radius: 0;
+    background: #f7f9f8;
+    color: var(--color-action);
+    font-size: 25px;
+    font-weight: 400;
+    line-height: 1;
+    cursor: pointer;
+}
+.condition-add-row:hover,
+.condition-add-row:focus-visible { background: var(--color-action-tint); color: var(--color-action-hover); }
+.condition-inline-fields { display: grid; grid-template-columns: minmax(80px, .7fr) minmax(110px, 1fr); gap: 7px; }
+.condition-weekdays { display: flex; flex-wrap: wrap; gap: 5px; }
+.condition-weekdays label { position: relative; }
+.condition-weekdays input { position: absolute; opacity: 0; pointer-events: none; }
+.condition-weekdays span {
+    display: block;
+    min-width: 34px;
+    padding: 7px 6px;
+    border: 1px solid var(--color-border-strong);
+    border-radius: 7px;
+    background: #fff;
+    text-align: center;
+    cursor: pointer;
+}
+.condition-weekdays input:checked + span { border-color: var(--color-action); background: var(--color-action-tint); color: var(--color-action-hover); font-weight: 700; }
+.condition-weekdays input:focus-visible + span { outline: 2px solid var(--color-action); outline-offset: 2px; }
+.condition-dialog { width: min(760px, calc(100vw - 24px)); }
+
+@media (max-width: 768px) {
+    .condition-runtime { display: none; }
+    .condition-head .condition-drag { display: none; }
+    .condition-head { padding-left: 10px; }
+    .condition-item {
+        grid-template-columns: 62px minmax(0, 1fr) auto;
+        gap: 6px 8px;
+        padding: 7px 8px;
+    }
+    .condition-folder-head .condition-folder-drag { display: none; }
+    .condition-item .widget-actions { opacity: 1; }
+    .condition-kind { grid-column: 1; }
+    .condition-item-description { grid-column: 2; }
+    .condition-item .widget-actions { grid-column: 3; }
+    .condition-add-row { min-height: 46px; }
+}
+
+@media (max-width: 480px) {
+    .condition-enabled { display: none; }
+    .condition-head .ms-group-count { margin-right: auto; }
+    .condition-item { grid-template-columns: 58px minmax(0, 1fr) auto; }
+    .condition-inline-fields { grid-template-columns: 1fr; }
 }
 
 /* State-Picker: an das Topic-Feld angedockter Dropdown (Popover, Top-Layer) */
@@ -4140,6 +4395,8 @@ body,
     background: var(--color-shell);
 }
 
+.sidebar-footer { background: var(--color-shell); }
+
 .dashboard-header {
     box-shadow: none;
 }
@@ -4489,7 +4746,7 @@ body,
         z-index: 1050;
         background: var(--color-shell);
         color: #fff;
-        overflow-y: auto;
+        overflow: hidden;
         padding: 12px 16px calc(74px + env(safe-area-inset-bottom));
         transform: translateX(-100%);
         opacity: 0;
@@ -4519,6 +4776,7 @@ body,
 
     .mobile-nav-head {
         display: flex;
+        flex: 0 0 auto;
         align-items: center;
         justify-content: space-between;
         margin-bottom: 8px;
@@ -4541,7 +4799,15 @@ body,
     .mobile-nav-links {
         display: flex;
         flex-direction: column;
-        flex: 1;
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow-x: hidden;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        scrollbar-gutter: stable;
+        scrollbar-width: thin;
+        scrollbar-color: #60756d var(--color-shell);
+        padding-bottom: 10px;
     }
 
     .mobile-nav-link {
@@ -4571,7 +4837,15 @@ body,
         background: rgba(255, 255, 255, 0.14);
     }
 
-    .mobile-nav-foot { margin-top: 16px; }
+    .mobile-nav-foot {
+        flex: 0 0 auto;
+        position: relative;
+        z-index: 1;
+        background: var(--color-shell);
+        box-shadow: 0 -12px 20px -20px rgba(0, 0, 0, 0.95);
+    }
+
+    .mobile-nav-foot .mobile-nav-divider { margin-top: 0; }
 
     .mobile-nav-foot .logout-button {
         width: 100%;
@@ -5392,6 +5666,7 @@ body,
 .access-read .main-content .pump-mode-btn,
 .access-read .main-content .sg-row-remove,
 .access-read .main-content .sg-add-device,
+.access-read .main-content .condition-add-row,
 .access-read .main-content .dashboard-toolbar,
 .access-read .main-content .widget-drag,
 .access-read .main-content .button-row button,
@@ -5402,6 +5677,7 @@ body,
 .access-operate .main-content .module-toggle-btn,
 .access-operate .main-content .sg-row-remove,
 .access-operate .main-content .sg-add-device,
+.access-operate .main-content .condition-add-row,
 .access-operate .main-content .dashboard-toolbar,
 .access-operate .main-content .widget-drag,
 .access-operate .main-content .button-row button {

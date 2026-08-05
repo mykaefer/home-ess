@@ -38,6 +38,7 @@ const NAV_CORE = [
     path: '/states', label: 'States', section: 'main',
     children: [{ path: '/states/custom', label: 'Custom States' }],
   },
+  { path: '/conditions', label: 'Bedingungen', section: 'main' },
   { path: '/output', label: 'Output', section: 'main' },
   // Module und Fernzugriff sind in die Einstellungsseite (Tabs) integriert; der
   // Footer trägt daher nur noch die Einstellungen.
@@ -149,10 +150,10 @@ function renderMobileNav(activePath, access) {
       </div>
       <nav class="mobile-nav-links">
         ${mainLinks}
-        <div class="mobile-nav-divider"></div>
-        ${footerLinks}
       </nav>
       <div class="mobile-nav-foot">
+        <div class="mobile-nav-divider"></div>
+        ${footerLinks}
         <button class="logout-button" onclick="window.location.href='/logout'">Abmelden</button>
         <div class="sidebar-copyright">
           Copyright (C) 2026 Kevin Käfer | <a class="sidebar-copyright-link" href="https://apps.mykaefer.net" target="_blank" rel="noopener noreferrer">MyKaefer Apps</a><br>
