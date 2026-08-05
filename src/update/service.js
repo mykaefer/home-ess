@@ -3,11 +3,14 @@
 const fs = require('fs');
 const path = require('path');
 const config = require('../config');
+const timeHandler = require('../time-handler');
 const { fetchLatestRelease } = require('./release-client');
 const { normalizeVersion, compareVersions } = require('./version');
+const updateSettingsRepo = require('./settings');
 
 const pkg = require('../../package.json');
 const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const AUTOMATION_TICK_MS = 60 * 1000;
 const UPDATE_UNIT = '/etc/systemd/system/home-ess-update.path';
 
 function readJson(file) {
@@ -31,6 +34,7 @@ class UpdateService {
     this.currentVersion = normalizeVersion(options.currentVersion || pkg.version);
     this.fetchLatest = options.fetchLatest || fetchLatestRelease;
     this.now = options.now || (() => Date.now());
+    this.calendar = options.calendar || ((instant) => timeHandler.calendar(instant));
     this.infrastructureFile = options.infrastructureFile || UPDATE_UNIT;
     this.updateDir = path.join(this.dataDir, 'update');
     this.checkFile = path.join(this.updateDir, 'release-check.json');
@@ -38,8 +42,11 @@ class UpdateService {
     this.requestFile = path.join(this.updateDir, 'request.json');
     this.check = readJson(this.checkFile) || {};
     this.timer = null;
+    this.automationTimer = null;
     this.started = false;
     this.checkPromise = null;
+    this.db = null;
+    this.settings = { ...updateSettingsRepo.DEFAULTS };
   }
 
   isSupported() {
@@ -54,7 +61,8 @@ class UpdateService {
   async checkNow({ force = false } = {}) {
     if (this.checkPromise) return this.checkPromise;
     const checkedAt = Date.parse(this.check.checkedAt || '');
-    if (!force && Number.isFinite(checkedAt) && this.now() - checkedAt < CHECK_INTERVAL_MS) {
+    const intervalMs = updateSettingsRepo.INTERVALS[this.settings.checkInterval] || CHECK_INTERVAL_MS;
+    if (!force && Number.isFinite(checkedAt) && this.now() - checkedAt < intervalMs) {
       return this.getStatus();
     }
 
@@ -71,6 +79,7 @@ class UpdateService {
               publishedAt: release.publishedAt,
               etag: release.etag || null,
               error: null,
+              ...(previous.automaticAttemptKey ? { automaticAttemptKey: previous.automaticAttemptKey } : {}),
             };
       } catch (error) {
         this.check = {
@@ -94,6 +103,7 @@ class UpdateService {
       checkedAt: this.check.checkedAt || null,
       checkError: this.check.error || null,
       supported: this.isSupported(),
+      settings: { ...this.settings },
       operation: operation && typeof operation === 'object' ? operation : null,
     };
   }
@@ -120,25 +130,68 @@ class UpdateService {
     return this.getStatus();
   }
 
+  async init(db) {
+    this.db = db;
+    const settings = await updateSettingsRepo.load(db);
+    this.configure(settings);
+    return settings;
+  }
+
+  configure(settings) {
+    this.settings = updateSettingsRepo.normalize(settings);
+    if (this.started) this.scheduleNextCheck();
+    return { ...this.settings };
+  }
+
+  scheduleNextCheck() {
+    if (this.timer) clearTimeout(this.timer);
+    const intervalMs = updateSettingsRepo.INTERVALS[this.settings.checkInterval] || CHECK_INTERVAL_MS;
+    const checkedAt = Date.parse(this.check.checkedAt || '');
+    const elapsed = Number.isFinite(checkedAt) ? Math.max(0, this.now() - checkedAt) : intervalMs;
+    const delay = Math.max(1000, intervalMs - elapsed);
+    this.timer = setTimeout(async () => {
+      await this.checkNow().catch(() => {});
+      await this.maybeInstallAutomatic().catch(() => {});
+      this.scheduleNextCheck();
+    }, delay);
+    this.timer.unref();
+  }
+
+  async maybeInstallAutomatic() {
+    if (!this.settings.automaticEnabled || !this.isSupported()) return false;
+    const version = this.availableVersion();
+    if (!version || fs.existsSync(this.requestFile)) return false;
+    const operation = readJson(this.statusFile);
+    if (operation && !['completed', 'failed', 'failed_rollback'].includes(operation.state)) return false;
+
+    const calendar = this.calendar(new Date(this.now()));
+    const localTime = `${String(calendar.hours).padStart(2, '0')}:${String(calendar.minutes).padStart(2, '0')}`;
+    if (!updateSettingsRepo.timeInWindow(localTime, this.settings.maintenanceStart, this.settings.maintenanceEnd)) return false;
+    const attemptKey = `${calendar.dateKey}:${version}`;
+    if (this.check.automaticAttemptKey === attemptKey) return false;
+
+    // Vor dem Netzaufruf merken, damit ein nicht erreichbares GitHub nicht jede
+    // Minute erneut angesprochen wird. Am nächsten lokalen Kalendertag ist ein
+    // neuer Versuch möglich.
+    this.check = { ...this.check, automaticAttemptKey: attemptKey };
+    writeJsonAtomic(this.checkFile, this.check);
+    await this.requestUpdate(version);
+    return true;
+  }
+
   start() {
     if (this.started) return;
     this.started = true;
-    const scheduleNext = () => {
-      const checkedAt = Date.parse(this.check.checkedAt || '');
-      const elapsed = Number.isFinite(checkedAt) ? Math.max(0, this.now() - checkedAt) : CHECK_INTERVAL_MS;
-      const delay = Math.max(1000, CHECK_INTERVAL_MS - elapsed);
-      this.timer = setTimeout(async () => {
-        await this.checkNow().catch(() => {});
-        scheduleNext();
-      }, delay);
-      this.timer.unref();
-    };
-    this.checkNow().catch(() => {}).finally(scheduleNext);
+    this.checkNow().catch(() => {}).then(() => this.maybeInstallAutomatic()).catch(() => {}).finally(() => this.scheduleNextCheck());
+    this.automationTimer = setInterval(() => this.maybeInstallAutomatic().catch(() => {}), AUTOMATION_TICK_MS);
+    this.automationTimer.unref();
   }
 
   shutdown() {
     if (this.timer) clearTimeout(this.timer);
+    if (this.automationTimer) clearInterval(this.automationTimer);
     this.timer = null;
+    this.automationTimer = null;
     this.started = false;
   }
 }

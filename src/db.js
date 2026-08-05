@@ -55,6 +55,20 @@ function openDatabase() {
       'CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, expires_at INTEGER NOT NULL, user_id INTEGER)'
     );
     db.run(
+      `CREATE TABLE IF NOT EXISTS update_config (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        automatic_enabled INTEGER NOT NULL DEFAULT 0,
+        maintenance_start TEXT NOT NULL DEFAULT '03:00',
+        maintenance_end TEXT NOT NULL DEFAULT '04:00',
+        check_interval TEXT NOT NULL DEFAULT 'daily'
+      )`
+    );
+    db.run(
+      `INSERT OR IGNORE INTO update_config
+        (id, automatic_enabled, maintenance_start, maintenance_end, check_interval)
+       VALUES (1, 0, '03:00', '04:00', 'daily')`
+    );
+    db.run(
       'CREATE TABLE IF NOT EXISTS stromverbrauch_config (id INTEGER PRIMARY KEY CHECK (id = 1), current_topic TEXT, eigenverbrauch_l1_topic TEXT, eigenverbrauch_l2_topic TEXT, eigenverbrauch_l3_topic TEXT, netzbezug_l1_topic TEXT, netzbezug_l2_topic TEXT, netzbezug_l3_topic TEXT, today_topic TEXT, netzbezug_zaehler_l1_topic TEXT, netzbezug_zaehler_l2_topic TEXT, netzbezug_zaehler_l3_topic TEXT, einspeisung_zaehler_l1_topic TEXT, einspeisung_zaehler_l2_topic TEXT, einspeisung_zaehler_l3_topic TEXT, eigenverbrauch_zaehler_l1_topic TEXT, eigenverbrauch_zaehler_l2_topic TEXT, eigenverbrauch_zaehler_l3_topic TEXT)'
     );
     db.run(
@@ -845,6 +859,16 @@ function migrateUsers(db) {
     if (!existing.has('visible_pages')) {
       db.run('ALTER TABLE users ADD COLUMN visible_pages TEXT');
     }
+    // Einige Zwischenstände hatten die Spalte bereits mit dem Default 0
+    // angelegt, ohne einen bestehenden Zugang zum Administrator zu machen.
+    // Eine Installation darf nicht dauerhaft ohne verwaltbaren Admin bleiben:
+    // Nur wenn wirklich kein Admin existiert, übernimmt der älteste Zugang.
+    db.run(
+      `UPDATE users
+          SET is_admin = 1, role = 'write', visible_pages = NULL
+        WHERE id = (SELECT MIN(id) FROM users)
+          AND NOT EXISTS (SELECT 1 FROM users WHERE is_admin = 1)`
+    );
   });
 }
 

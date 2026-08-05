@@ -46,6 +46,7 @@ const { initModules, isEnabled } = require('./modules');
 const adapterHost = require('./adapters/host');
 const adapterSecrets = require('./adapters/secrets');
 const adapterData = require('./adapters/data-store');
+const adapterNavigation = require('./adapters/navigation');
 const gridControlAutomation = require('./grid-control/automation');
 const operatingState = require('./operating-state');
 const operatingLevelHandler = require('./operating-level/handler');
@@ -134,7 +135,10 @@ function createApp() {
   // Adapter-Host vor loadAllStateDefinitions hochfahren: Registry/Schemes und der
   // Router-Host müssen stehen, bevor State-Definitionen (ggf. mit prefix://-Topics)
   // ihre Routen aufbauen.
-  const adaptersReady = adapterHost.initAdapters(db).catch((err) => {
+  const adaptersReady = Promise.all([
+    adapterHost.initAdapters(db),
+    adapterNavigation.refresh(db),
+  ]).catch((err) => {
     console.error('[adapters] Init fehlgeschlagen:', err && err.message);
   });
   const customStatesReady = customStates.init(db).catch((err) => {

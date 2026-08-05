@@ -5,6 +5,7 @@ const { escapeHtml, statusText } = require('./components');
 const { PAGES, ROLES, ROLE_LABELS } = require('../auth/access');
 const { modulesPanel } = require('./modules');
 const { remoteAccessPanel } = require('./remote-access');
+const { INTERVAL_LABELS } = require('../update/settings');
 
 // Reihenfolge und Beschriftung der Einstellungs-Tabs.
 const SETTINGS_TABS = [
@@ -109,6 +110,14 @@ function renderSettings({
   registry = [],
   enabledKeys = new Set(),
   moduleMessage = '',
+  updateConfig = {
+    automaticEnabled: false,
+    maintenanceStart: '03:00',
+    maintenanceEnd: '04:00',
+    checkInterval: 'daily',
+  },
+  updateStatus = null,
+  updateMessage = '',
   activeTab = 'allgemein',
 } = {}) {
   const dstChecked = mqtt.dstEnabled === undefined || mqtt.dstEnabled ? ' checked' : '';
@@ -119,6 +128,11 @@ function renderSettings({
     internal: { time: '--:--:--', date: '--.--.----' },
     mqtt: { available: false, fresh: false, display: '' }, offsetSeconds: 0,
   };
+  const update = updateStatus || { currentVersion: '—', availableVersion: null, checkedAt: null, checkError: null, supported: false };
+  const automaticChecked = updateConfig.automaticEnabled ? ' checked' : '';
+  const intervalOptions = Object.entries(INTERVAL_LABELS)
+    .map(([value, label]) => `<option value="${value}"${updateConfig.checkInterval === value ? ' selected' : ''}>${escapeHtml(label)}</option>`)
+    .join('');
 
   const tabBar = SETTINGS_TABS
     .map((tab) => {
@@ -240,6 +254,44 @@ ${tabBar}
               <textarea id="mqttLog" readonly class="mqtt-log" placeholder="Protokollausgabe">${escapeHtml(mqttMessage)}</textarea>
             </section>
           </form>
+
+          <form action="/settings/update" method="POST" class="settings-card settings-form update-settings-card">
+            <div class="settings-card-head">
+              <h2>homeESS-Updates</h2>
+              <p class="settings-card-hint">Prüft stabile Releases aus dem offiziellen GitHub-Repository. Automatische Installationen sind standardmäßig ausgeschaltet und erfolgen ausschließlich im festgelegten Wartungsfenster.</p>
+            </div>
+            ${statusText(updateMessage, 'success')}
+            <div class="update-settings-versions" aria-live="polite">
+              <div><span>Installierte Version</span><strong id="settingsUpdateCurrent">${escapeHtml(update.currentVersion)}</strong></div>
+              <div><span>Online verfügbar</span><strong id="settingsUpdateAvailable">${escapeHtml(update.availableVersion || 'Kein neueres Release')}</strong></div>
+              <div><span>Letzte Prüfung</span><strong id="settingsUpdateChecked">${escapeHtml(update.checkedAt ? new Date(update.checkedAt).toLocaleString('de-DE') : 'Noch nicht geprüft')}</strong></div>
+            </div>
+            <p class="settings-card-hint settings-update-result" id="settingsUpdateResult">${escapeHtml(update.checkError || '')}</p>
+            <label class="checkbox-field" for="automaticUpdatesEnabled">
+              <input type="checkbox" id="automaticUpdatesEnabled" name="automaticEnabled" value="1"${automaticChecked} onchange="toggleUpdateMaintenanceFields()">
+              <span>Neue Versionen automatisch im Wartungsfenster installieren</span>
+            </label>
+            <div class="field-grid update-maintenance-fields" id="updateMaintenanceFields">
+              <div class="field">
+                <label for="updateCheckInterval">Auf Updates prüfen</label>
+                <select id="updateCheckInterval" name="checkInterval">${intervalOptions}</select>
+              </div>
+              <div class="field">
+                <label for="updateMaintenanceStart">Wartungsfenster von</label>
+                <input type="time" id="updateMaintenanceStart" name="maintenanceStart" value="${escapeHtml(updateConfig.maintenanceStart)}">
+              </div>
+              <div class="field">
+                <label for="updateMaintenanceEnd">Wartungsfenster bis</label>
+                <input type="time" id="updateMaintenanceEnd" name="maintenanceEnd" value="${escapeHtml(updateConfig.maintenanceEnd)}">
+              </div>
+            </div>
+            <p class="settings-card-hint">Das Wartungsfenster verwendet die oben konfigurierte homeESS-Zeitzone. Gleiche Start- und Endzeit bedeutet ganztägig; ein Fenster über Mitternacht ist möglich.</p>
+            <div class="button-row update-settings-actions">
+              <button type="submit">Updateeinstellungen speichern</button>
+              <button type="button" class="button-secondary" id="settingsUpdateCheck" onclick="checkHomeessUpdate()">Jetzt auf Updates prüfen</button>
+              <button type="button" id="settingsUpdateNow" data-version="${escapeHtml(update.availableVersion || '')}" onclick="installHomeessUpdate()"${update.availableVersion && update.supported ? '' : ' disabled'}>Jetzt updaten</button>
+            </div>
+          </form>
           </div>
         </div>
 
@@ -289,6 +341,51 @@ ${remote.body}
         }).catch(function () {});
     }
     refreshTimeStatus(); setInterval(refreshTimeStatus, 1000);
+    function toggleUpdateMaintenanceFields() {
+      var enabled = document.getElementById('automaticUpdatesEnabled');
+      var fields = document.querySelectorAll('#updateMaintenanceFields input[type="time"]');
+      for (var i = 0; i < fields.length; i++) fields[i].disabled = !(enabled && enabled.checked);
+      var block = document.getElementById('updateMaintenanceFields');
+      if (block) block.classList.toggle('is-disabled', !(enabled && enabled.checked));
+    }
+
+    function renderSettingsUpdateStatus(status) {
+      if (!status) return;
+      var current = document.getElementById('settingsUpdateCurrent');
+      var available = document.getElementById('settingsUpdateAvailable');
+      var checked = document.getElementById('settingsUpdateChecked');
+      var result = document.getElementById('settingsUpdateResult');
+      var updateNow = document.getElementById('settingsUpdateNow');
+      if (current) current.textContent = status.currentVersion || '—';
+      if (available) available.textContent = status.availableVersion || 'Kein neueres Release';
+      if (checked) checked.textContent = status.checkedAt ? new Date(status.checkedAt).toLocaleString('de-DE') : 'Noch nicht geprüft';
+      if (result) result.textContent = status.checkError || (status.availableVersion ? 'Eine neue Version ist verfügbar.' : 'homeESS ist aktuell.');
+      if (updateNow) {
+        updateNow.disabled = !(status.supported && status.availableVersion);
+        updateNow.setAttribute('data-version', status.availableVersion || '');
+      }
+    }
+
+    function checkHomeessUpdate() {
+      var button = document.getElementById('settingsUpdateCheck');
+      var result = document.getElementById('settingsUpdateResult');
+      if (button) button.disabled = true;
+      if (result) result.textContent = 'GitHub-Release wird geprüft …';
+      var api = window.homeESSUpdate;
+      if (!api || typeof api.checkNow !== 'function') return;
+      api.checkNow().catch(function (error) {
+        if (result) result.textContent = error.message || 'Updateprüfung fehlgeschlagen.';
+      }).finally(function () { if (button) button.disabled = false; });
+    }
+
+    function installHomeessUpdate() {
+      var button = document.getElementById('settingsUpdateNow');
+      var version = button && button.getAttribute('data-version');
+      if (version && window.homeESSUpdate) window.homeESSUpdate.confirm(version);
+    }
+
+    document.addEventListener('homeess:update-status', function (event) { renderSettingsUpdateStatus(event.detail); });
+    toggleUpdateMaintenanceFields();
     var allPageKeys = ${JSON.stringify(PAGES.map((p) => p.key))};
     var initialUserDialog = ${userDialogOpen ? JSON.stringify({
       mode: userDialogMode,

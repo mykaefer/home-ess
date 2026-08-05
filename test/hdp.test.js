@@ -2970,6 +2970,7 @@ test('hDP Adapter persistiert Pairing-Secrets und gruppiert die Gerätekonfigura
   const storage = {};
   const secrets = new Map();
   const host = {
+    name: 'HDP Testinstanz',
     async getInstanceIdentity() { return { instanceId: INSTANCE_ID, fingerprint: 'a'.repeat(64) }; },
     async getSecret(key) { return secrets.get(key) || null; },
     async setSecret(key, value) { events.push('secret'); secrets.set(key, value); },
@@ -3011,7 +3012,7 @@ test('hDP Adapter persistiert Pairing-Secrets und gruppiert die Gerätekonfigura
     basePath: '/adapter/instance/1/manage', body: {}, access: { canWrite: true },
   });
   assert.equal(overviewPage.view.title, 'Geräteverwaltung');
-  assert.match(overviewPage.view.body, /<h1>Geräteverwaltung<\/h1>/);
+  assert.match(overviewPage.view.body, /<h1>HDP Testinstanz – Geräteverwaltung<\/h1>/);
   assert.match(overviewPage.view.body, /WLAN-Signal/);
   assert.match(overviewPage.view.body, /Gut <small>-58 dBm<\/small>/);
   assert.match(overviewPage.view.body, />Verwalten <span/);

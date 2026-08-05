@@ -20,6 +20,7 @@ const { buildSchemeTopic } = require('../mqtt/topics');
 const { renderLayout } = require('../views/layout');
 const adapterSecrets = require('../adapters/secrets');
 const adapterData = require('../adapters/data-store');
+const adapterNavigation = require('../adapters/navigation');
 
 function streamUpload(req, maxBytes) {
   return new Promise((resolve, reject) => {
@@ -81,6 +82,7 @@ async function suggestPort(start) {
 
 function adapterRoutes(db) {
   const router = express.Router();
+  const refreshNavigation = () => adapterNavigation.refresh(db).catch(() => {});
 
   async function sendOverview(res, { message = '', error = '' } = {}) {
     const reg = registry.getRegistry();
@@ -245,6 +247,7 @@ function adapterRoutes(db) {
     if (!name) return sendOverview(res, { error: 'Bitte einen Namen angeben.' });
     instancesRepo
       .createInstance(db, manifest.id, name)
+      .then(refreshNavigation)
       .then(() => sendOverview(res, { message: `Instanz „${name}" angelegt.` }))
       .catch(() => sendOverview(res, { error: 'Anlegen fehlgeschlagen.' }));
   });
@@ -295,7 +298,7 @@ function adapterRoutes(db) {
     if (!name) return res.redirect(`/adapter/instance/${req.params.id}`);
     instancesRepo
       .renameInstance(db, Number(req.params.id), name)
-      .then(() => reload(req.params.id))
+      .then(() => Promise.all([reload(req.params.id), refreshNavigation()]))
       .then(() => res.redirect(`/adapter/instance/${req.params.id}`))
       .catch(() => res.redirect(`/adapter/instance/${req.params.id}`));
   });
@@ -351,6 +354,7 @@ function adapterRoutes(db) {
     host
       .stopInstance(instanceId)
       .then(() => instancesRepo.deleteInstance(db, instanceId))
+      .then(refreshNavigation)
       .then(() => adapterSecrets.removeInstance(instanceId))
       .then(() => sendOverview(res, { message: 'Instanz gelöscht.' }))
       .catch(() => sendOverview(res, { error: 'Löschen fehlgeschlagen.' }));
@@ -460,9 +464,10 @@ function adapterRoutes(db) {
       if (response && response.redirect) return res.redirect(status >= 300 && status < 400 ? status : 303, String(response.redirect));
       if (response && response.json !== undefined) return res.status(status).json(response.json);
       if (response && response.view) {
+        const managementPath = `/adapter/instance/${instance.id}/manage`;
         return res.status(status).send(renderLayout({
           title: response.view.title || `${manifest.name} – ${manifest.managementPage.label}`,
-          activePath: '/adapter',
+          activePath: manifest.id === 'hdp' ? managementPath : '/adapter',
           body: String(response.view.body || ''),
           script: String(response.view.script || ''),
           stylesheets: manifest.managementPage.stylesheet

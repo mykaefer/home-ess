@@ -70,6 +70,22 @@ test('Migration/Seed: erster Nutzer ist Administrator', async () => {
   db.close();
 });
 
+test('Migration repariert eine bestehende Installation ohne Administrator', async () => {
+  let db = await freshDb();
+  await new Promise((resolve, reject) => db.run(
+    "UPDATE users SET is_admin = 0, role = 'write'",
+    (error) => error ? reject(error) : resolve()
+  ));
+  db.close();
+
+  db = openDatabase();
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  const users = await usersRepo.listUsers(db);
+  assert.equal(users.filter((user) => user.isAdmin).length, 1);
+  assert.equal(users[0].isAdmin, true);
+  db.close();
+});
+
 test('Migration: bestehende explizite Seitenlisten behalten Zugriff auf States', async () => {
   let db = await freshDb();
   const user = await usersRepo.createUser(db, {

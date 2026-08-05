@@ -7,6 +7,18 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 
 ### Hinzugefügt
 
+- **Direktnavigation zu hDP-Instanzen.** Ausschließlich die Geräteverwaltungen
+  des universellen hDP-Adapters erscheinen mit dem jeweiligen Instanznamen als
+  eigene Hauptmenüpunkte. Sie stehen alphanumerisch sortiert zwischen Adapter
+  und States und sind in Desktop- und Mobilnavigation verfügbar.
+- **Updateverwaltung in den allgemeinen Einstellungen.** Eine eigene Karte
+  zeigt installierte und online verfügbare Version sowie den Zeitpunkt der
+  letzten Prüfung. Administratoren können dort unmittelbar prüfen oder ein
+  angebotenes Update starten, das Prüfintervall auf stündlich, täglich,
+  wöchentlich oder monatlich stellen und automatische Installationen in einem
+  täglichen Wartungsfenster aktivieren. Die Automatik ist standardmäßig aus,
+  verwendet die konfigurierte homeESS-Zeitzone, unterstützt Fenster über
+  Mitternacht und versucht eine Version höchstens einmal je Kalendertag.
 - **Zentraler, ausfallsicherer Timehandler.** Die laufende Systemuhr ist nun die
   primäre Zeitquelle für homeESS und wird gemäß konfigurierter Zeitzone sowie
   Sommer-/Winterzeit ausgewertet. Ist ein MQTT-Zeittopic konfiguriert, bildet
@@ -25,8 +37,8 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
   State-Pickern. Der kompakte Verzeichnisbaum merkt seinen Aufklappzustand.
   Die Anlegedialoge merken außerdem das zuletzt gewählte Zielverzeichnis und
   bei States den Datentyp, solange die jeweilige Auswahl noch vorhanden ist.
-- **Sicheres Self-Update mit täglicher Releaseprüfung.** homeESS prüft
-  höchstens einmal täglich das neueste stabile GitHub-Release und zeigt
+- **Sicheres Self-Update mit persistenter Releaseprüfung.** homeESS prüft im
+  konfigurierten Intervall das neueste stabile GitHub-Release und zeigt
   Administratoren eine hellgrüne Updateolive links neben den Leistungswerten.
   Nach ausdrücklicher Bestätigung übernimmt ein eng begrenzter, root-geführter
   systemd-One-shot-Helper: Er validiert das Release nochmals, lädt und bereitet
@@ -165,6 +177,11 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 
 ### Geändert
 
+- **Updateolive nur in der PC-Ansicht.** Der Hinweis auf eine verfügbare
+  Version wird im mobilen Layout vollständig ausgeblendet. Die Updatekarte in
+  den allgemeinen Einstellungen bleibt dort weiterhin erreichbar.
+- Die sichtbare Überschrift der hDP-Geräteverwaltung stellt nun den jeweiligen
+  Instanznamen voran; Menü- und Buttonbeschriftungen bleiben unverändert.
 - **Firmwarebereich der Geräteverwaltung neu aufgebaut.** Statt einer
   sechsspaltigen Tabelle, die schon auf dem Notebook nur mit Querscrollen
   lesbar war, zeigt jeder Kanal jetzt eine eigene Karte mit Version, Status,
@@ -331,6 +348,11 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 
 ### Behoben
 
+- **Administratorzugang bei bestehenden Installationen repariert.** Falls eine
+  ältere Datenbank zwar Benutzer, aber durch einen früheren Zwischenstand kein
+  gesetztes Admin-Flag enthält, wird der älteste Zugang einmalig zum
+  Administrator. Dadurch erscheinen die geschützte Updatekarte und weitere
+  reine Administratorfunktionen wieder zuverlässig.
 - **Neuinstallation ohne veraltete Service-Unit brach ab.** Der optionale
   Cleanup für frühe `server.service`-Installationen gab im normalen
   „nicht vorhanden“-Fall Status 1 zurück, den `set -e` als Fehler behandelte.

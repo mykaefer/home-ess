@@ -2,6 +2,7 @@
 
 const { escapeHtml } = require('./components');
 const { getEnabledNavItems } = require('../modules');
+const { getHdpNavItems } = require('../adapters/navigation');
 const { statePickerModal, statePickerScript, statePickerAutoAttach } = require('./state-picker');
 const { currentAccess, canSeePage, pageForPath } = require('../auth/access');
 
@@ -88,9 +89,21 @@ function navItemVisible(item, access) {
   return canSeePage(access, pageKey);
 }
 
+// hDP ist das universelle homeESS-Geräteprotokoll. Seine instanzbezogenen
+// Geräteverwaltungen stehen als eigene Hauptpunkte direkt hinter „Adapter“;
+// andere Adapter erhalten unabhängig von ihren Unterseiten keinen Eintrag.
+function getMainNavItems() {
+  const items = NAV_CORE.filter((item) => item.section === 'main');
+  const adapterIndex = items.findIndex((item) => item.path === '/adapter');
+  items.splice(adapterIndex + 1, 0, ...getHdpNavItems());
+  return [...items, ...getEnabledNavItems()];
+}
+
 function renderNavLinks(section, activePath, access) {
-  const extra = section === 'main' ? getEnabledNavItems() : [];
-  return [...NAV_CORE.filter((item) => item.section === section), ...extra]
+  const items = section === 'main'
+    ? getMainNavItems()
+    : NAV_CORE.filter((item) => item.section === section);
+  return items
     .filter((item) => navItemVisible(item, access))
     .map((item) => renderNavItem(item, activePath))
     .join('\n          ');
@@ -108,7 +121,7 @@ function renderMobileNav(activePath, access) {
     }).join('\n      ');
 
   const flatLinks = [];
-  const mainItems = [...NAV_CORE.filter((item) => item.section === 'main'), ...getEnabledNavItems()]
+  const mainItems = getMainNavItems()
     .filter((item) => navItemVisible(item, access));
   for (const item of mainItems) {
     flatLinks.push({ path: item.path, label: item.label, sub: false });
@@ -367,6 +380,7 @@ function renderUpdateScript() {
           if (targetVersion) pill.textContent = 'Version ' + targetVersion + ' verfügbar';
         }
         renderOperation(status.operation, status.currentVersion);
+        try { document.dispatchEvent(new CustomEvent('homeess:update-status', { detail: status })); } catch (_) {}
       }
 
       function fetchStatus() {
@@ -424,6 +438,25 @@ function renderUpdateScript() {
           });
         });
       }
+      window.homeESSUpdate = {
+        checkNow: function () {
+          return fetch('/update/check', {
+            method: 'POST',
+            headers: { Accept: 'application/json', 'X-HomeESS-Update': 'check' }
+          }).then(function (response) {
+            return response.json().then(function (body) {
+              if (!response.ok) throw new Error(body.error || 'Updateprüfung fehlgeschlagen.');
+              applyStatus(body);
+              return body;
+            });
+          });
+        },
+        confirm: function (version) {
+          targetVersion = version;
+          if (versionNode) versionNode.textContent = version;
+          if (dialog && typeof dialog.showModal === 'function') dialog.showModal();
+        }
+      };
       fetchStatus();
       window.addEventListener('beforeunload', function () { if (pollTimer) window.clearTimeout(pollTimer); });
     })();

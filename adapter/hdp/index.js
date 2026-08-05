@@ -2464,6 +2464,7 @@ hdp-flash.exe --channel development</code></pre>
   }
 
   function renderOverview(state = snapshot()) {
+    const instanceName = String(host.name || '').trim();
     const byAvailabilityAndName = (left, right) =>
       Number(!!right.online) - Number(!!left.online)
       || String(left.name || left.hostname || left.deviceId).localeCompare(
@@ -2503,7 +2504,7 @@ hdp-flash.exe --channel development</code></pre>
     </article>`;
     return `<div class="hdp-overview" data-hdp-revision="${overviewRevision(state)}">
       <header class="hdp-overview-head">
-        <div><h1>Geräteverwaltung</h1><p>hDP-Geräte auf einen Blick prüfen, koppeln und einzeln verwalten.</p></div>
+        <div><h1>${instanceName ? `${esc(instanceName)} – ` : ''}Geräteverwaltung</h1><p>hDP-Geräte auf einen Blick prüfen, koppeln und einzeln verwalten.</p></div>
         <form method="post" action="/adapter/instance/INSTANCE/manage/api/discovery/refresh">
           <button class="button-secondary" title="Suche im lokalen Netzwerk neu starten">Geräte suchen</button>
         </form>

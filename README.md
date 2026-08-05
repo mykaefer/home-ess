@@ -521,13 +521,21 @@ damit eine manuell verwaltete Installation nicht überschrieben wird.
 
 ### Self-Update
 
-homeESS fragt einmal täglich das neueste stabile Release im GitHub-Repository
+homeESS fragt im konfigurierten Intervall (stündlich, täglich, wöchentlich oder
+monatlich; Standard täglich) das neueste stabile Release im GitHub-Repository
 `mykaefer/home-ess` ab. Ist dessen Version neuer, erscheint für
 Administratoren oben links neben den aktuellen Leistungswerten eine hellgrüne
 Olive. Nach Klick und ausdrücklicher Bestätigung wird das Release vorbereitet
 und homeESS für den eigentlichen Wechsel kurz neu gestartet. Der Fortschritt
 bleibt im Browser sichtbar; nach erfolgreichem Start folgt automatisch das
 Dashboard.
+
+Unter **Einstellungen → Allgemeine Einstellungen → homeESS-Updates** werden
+installierte und verfügbare Version sowie die letzte Prüfung angezeigt. Dort
+kann die Prüfung manuell ausgelöst, ein verfügbares Update sofort gestartet
+oder die automatische Installation aktiviert werden. Die Automatik ist
+standardmäßig ausgeschaltet und verwendet ein tägliches Wartungsfenster in der
+konfigurierten homeESS-Zeitzone; Zeiträume über Mitternacht werden unterstützt.
 
 Die Webanwendung selbst erhält dabei keine root-Rechte. Sie legt nur eine eng
 validierte Updateanforderung im Datenverzeichnis ab. `home-ess-update.path`
