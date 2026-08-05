@@ -8,11 +8,18 @@ const pairingState = require('./src/remote-access/pairing-state');
 const connectionService = require('./src/remote-access/connection-service');
 const updateService = require('./src/update/service');
 
-const { app } = createApp();
+const { app, db } = createApp();
 
 const server = app.listen(config.PORT, () => {
   console.log(`homeESS läuft auf Port ${config.PORT}`);
-  updateService.start();
+  // Erst die persistierte Intervall-/Automatikkonfiguration laden, dann den
+  // ersten Release-Check planen. So löst ein Neustart bei z. B. monatlichem
+  // Intervall nicht kurzzeitig den täglichen Default-Check aus.
+  updateService.init(db)
+    .catch((error) => {
+      console.error('[update] Einstellungen konnten nicht geladen werden:', error && error.message);
+    })
+    .finally(() => updateService.start());
 });
 
 // Kontrollierter Shutdown: flüchtigen Pairing-Zustand (Token/QR) aus dem

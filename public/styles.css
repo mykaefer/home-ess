@@ -250,6 +250,31 @@ body {
     font-weight: 600;
 }
 
+.update-settings-versions {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+    margin: 0 0 18px;
+}
+.update-settings-versions > div {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    min-width: 0;
+    padding: 12px 14px;
+    border: 1px solid var(--color-border);
+    border-radius: 9px;
+    background: var(--color-surface-subtle);
+}
+.update-settings-versions span { color: var(--color-text-soft); font-size: 12px; }
+.update-settings-versions strong { overflow-wrap: anywhere; font-size: 14px; }
+.settings-update-result { min-height: 20px; margin: -7px 0 14px; }
+.update-maintenance-fields { margin: 18px 0 10px; transition: opacity 0.2s ease; }
+.update-maintenance-fields.is-disabled { opacity: 0.5; }
+.update-settings-actions { flex-wrap: wrap; margin-top: 18px; }
+.update-settings-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
+body[data-admin="false"] .update-settings-card { display: none; }
+
 .settings-form {
     display: flex;
     flex-direction: column;
@@ -4333,10 +4358,13 @@ body,
         gap: 6px;
     }
 
-    .header-update-pill { min-height: 30px; padding: 4px 10px; font-size: 11px; }
+    /* Die Updateverwaltung bleibt über die Einstellungen erreichbar; der
+       zusätzliche Hinweis in der Titelzeile ist der Desktopansicht vorbehalten. */
+    .header-update-pill { display: none !important; }
     .update-confirm-actions { flex-direction: column-reverse; }
     .update-confirm-actions button { width: 100%; }
     .update-progress-card { padding: 24px 18px; }
+    .update-settings-versions { grid-template-columns: 1fr; }
 
     /* Zeit/Datum zeigt das Smartphone selbst — Pills entfallen. Das
        Temperatur-Label entfällt ebenfalls, der °C-Wert spricht für sich. */

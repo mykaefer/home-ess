@@ -9,6 +9,8 @@ const { listUsers, createUser, updateUser, deleteUser, getUser } = require('../a
 const modulesState = require('../modules');
 const renderSettings = require('../views/settings');
 const timeHandler = require('../time-handler');
+const updateSettings = require('../update/settings');
+const updateService = require('../update/service');
 
 // Query-Parameter (?tab=) auf einen gültigen Tab abbilden. Der alte
 // /remote-access-Link leitet mit ?tab=remote-access hierher.
@@ -26,13 +28,23 @@ function settingsRoutes(db) {
   // Zusätzliche Zustände (Dialog offen, Fehler, Erfolgsmeldung, aktiver Tab)
   // werden durchgereicht.
   async function sendSettings(res, extra = {}) {
-    const [cfg, users] = await Promise.all([
+    const [cfg, users, updateConfig] = await Promise.all([
       new Promise((resolve) => loadMqttConfig(db, resolve)),
       listUsers(db),
+      updateSettings.load(db),
     ]);
     const registry = modulesState.getRegistry();
     const enabledKeys = new Set(registry.filter((m) => modulesState.isEnabled(m.key)).map((m) => m.key));
-    res.send(renderSettings({ mqtt: cfg, timeStatus: timeHandler.snapshot(), users, registry, enabledKeys, ...extra }));
+    res.send(renderSettings({
+      mqtt: cfg,
+      timeStatus: timeHandler.snapshot(),
+      users,
+      registry,
+      enabledKeys,
+      updateConfig,
+      updateStatus: updateService.getStatus(),
+      ...extra,
+    }));
   }
 
   router.get('/settings', requireAuth, (req, res, next) => {
@@ -152,6 +164,31 @@ function settingsRoutes(db) {
   router.post('/settings/mqtt/test', requireAuth, async (req, res) => {
     const result = await mqttClient.testConnection(req.body);
     res.json(result);
+  });
+
+  // --- homeESS-Updates -----------------------------------------------------
+  router.post('/settings/update', requireAuth, async (req, res, next) => {
+    if (!req.access || !req.access.isAdmin) {
+      return res.status(403).send('Nur Administratoren dürfen Updateeinstellungen ändern.');
+    }
+    try {
+      // Deaktivierte Zeitfelder werden vom Browser nicht übertragen. In dem
+      // Fall die bereits gespeicherten Werte behalten, damit Ausschalten der
+      // Automatik das vorbereitete Wartungsfenster nicht zurücksetzt.
+      const existing = await updateSettings.load(db);
+      const saved = await updateSettings.save(db, {
+        ...existing,
+        ...req.body,
+        automaticEnabled: req.body.automaticEnabled === '1' || req.body.automaticEnabled === 'on',
+      });
+      updateService.configure(saved);
+      return sendSettings(res, {
+        activeTab: 'allgemein',
+        updateMessage: 'Updateeinstellungen gespeichert.',
+      });
+    } catch (error) {
+      return next(error);
+    }
   });
 
   return router;
