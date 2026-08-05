@@ -39,10 +39,62 @@ Inhalt: [Überblick](#überblick) · [Verzeichnislayout](#verzeichnislayout) ·
   demo/                   ← Referenz-Adapter (siehe /adapter/demo)
     adapter.json
     index.js
+    languages/             ← optional: adaptereigene Übersetzungen
+      de.json
+      en.json
 ```
 
 Das Verzeichnis ist standardmäßig `/<repo>/adapter`. Es lässt sich per Umgebungs­
 variable `HOME_ESS_ADAPTER_DIR` umlenken.
+
+### Installation als ZIP-Paket
+
+Administratoren können portable Adapter auf der Adapterseite als ZIP-Datei
+hochladen. Das Archiv enthält entweder die Adapterdateien direkt oder genau
+einen umschließenden Ordner:
+
+```text
+mein-adapter.zip
+└── mein-adapter/
+    ├── adapter.json
+    ├── index.js
+    └── ...
+```
+
+Für Uploadpakete müssen `id`, `name`, `prefix`, `version` und `main` im Manifest
+explizit gesetzt sein. `adapter.json` und die mit `main` bezeichnete reguläre
+JavaScript-Datei sind Pflicht. Benötigte JavaScript-Abhängigkeiten müssen im
+Paket enthalten sein; homeESS führt beim Upload weder `npm install` noch
+Adaptercode aus.
+
+Vor der Installation prüft homeESS das gesamte Archiv in einem temporären,
+isolierten Verzeichnis: ZIP-Struktur und Prüfsummen, Größenlimits, sichere
+relative Pfade, reguläre Dateien ohne Symlinks, Manifeststruktur, eindeutige ID
+und eindeutigen Prefix sowie die JavaScript-Syntax der Einstiegdatei. Erst nach
+vollständigem Erfolg wird der geprüfte Ordner nach `/adapter/<id>/` übernommen
+und die Registry neu geladen. Vorhandene Adapter werden nicht überschrieben.
+Fehlerhafte Pakete hinterlassen keinen Ordner im Adapterverzeichnis. Hochgeladene
+Adapter bleiben bei einem homeESS-Update erhalten, solange ein späteres Release
+nicht selbst einen Adapter mit derselben ID mitliefert.
+
+Administratoren können einen Adapter auf derselben Seite wieder löschen. Aus
+Sicherheitsgründen müssen zuvor alle zugehörigen Instanzen einzeln entfernt und
+im Löschdialog die exakte Adapter-ID eingegeben werden. Erst danach entfernt
+homeESS das komplette Adapterverzeichnis dauerhaft. Diese Aktion kann nicht
+rückgängig gemacht werden; persistente Instanzdaten werden nicht automatisch als
+Teil einer Adapterlöschung ausgewählt oder mitgelöscht.
+
+Die entfernte Adapter-ID wird außerhalb des Programmverzeichnisses dauerhaft
+gespeichert. Sowohl der Curl-Installer als auch die interne Updatefunktion
+aktualisieren weiterhin installierte offizielle Adapter, übernehmen eigene
+Adapter und lassen bewusst entfernte IDs aus. Neue offizielle Adapter werden
+normal hinzugefügt. Nur der ausdrücklich mit `--all` gestartete Curl-Installer
+hebt diese Entfernungsauswahl auf und stellt alle offiziellen Adapter wieder
+her:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mykaefer/home-ess/main/install.sh | sudo bash -s -- --all
+```
 
 ## Das Manifest (`adapter.json`)
 
@@ -224,10 +276,45 @@ Das an die Factory übergebene `host`-Objekt:
 | `host.setSecret(key, value)` | Schreibt ein Secret mit 0600/0700-Rechten außerhalb der normalen Adaptereinstellungen. |
 | `host.deleteSecret(key)` | Entfernt ein Secret der eigenen Instanz. |
 | `host.getConfig()` | Liefert die aktuellen **Instanz-Einstellungen** (Objekt). |
+| `host.language` | Aktiver systemweiter Sprachcode als String (Read-only). |
+| `host.getLanguage()` | Liefert `{code, name, locale, direction, fallback}` der systemweiten Sprachwahl. |
+| `host.t(key, defaultText)` | Übersetzt einen adaptereigenen Schlüssel; `defaultText` bleibt bei einsprachigen/noch unvollständigen Adaptern erhalten. |
 | `host.log(...args)` | Info-Log in die homeESS-Konsole (mit Adapter-/Instanz-Präfix). |
 | `host.error(...args)` | Fehler-Log. |
 | `host.debug(...args)` / `host.warn(...args)` | Debug- beziehungsweise Warn-Log; Debugausgabe wird nur bei aktivierter Adapterdiagnose geschrieben. |
 | `host.name` | Name der Instanz (Read-only). |
+
+### Optional: Mehrsprachige Adapter
+
+Adapter können Sprachdateien unter `languages/<code>.json` mitliefern. Das
+Format entspricht den homeESS-Sprachdateien:
+
+```json
+{
+  "code": "en",
+  "name": "English",
+  "locale": "en-GB",
+  "direction": "ltr",
+  "messages": {
+    "temperature": "Temperature",
+    "measurements": "Measurements"
+  }
+}
+```
+
+`de.json` dient bei den mitgelieferten Adaptern zugleich als Ausgangskatalog.
+Manifesttexte, generische Settings, State-Namen/-Kategorien und die optionale
+Management-View werden dadurch gemeinsam mit dem System lokalisiert. Eigener
+Code kann `host.t('temperature', 'Temperatur')` und
+`host.getLanguage().locale` für Texte beziehungsweise Formatierung verwenden.
+`handleManagementRequest(request)` erhält die Sprachinformation außerdem als
+`request.language`; ein Browser-Frontend findet sie unter `GET /me/access`.
+Nach einer Sprachänderung startet homeESS aktive Adapter kontrolliert neu.
+
+Sprachdateien sind optional: Ein einsprachiger Adapter ohne `languages/` bleibt
+vollständig gültig. Wer mehrere Sprachen anbietet, sollte mindestens Deutsch und
+Englisch vollständig und UTF-8-kodiert mit echten Umlauten/Sonderzeichen
+liefern. Fehlende Schlüssel folgen dem systemweiten Standort-Fallback.
 
 `host.setStates`-Eintrag:
 

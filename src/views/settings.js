@@ -6,6 +6,7 @@ const { PAGES, ROLES, ROLE_LABELS } = require('../auth/access');
 const { modulesPanel } = require('./modules');
 const { remoteAccessPanel } = require('./remote-access');
 const { INTERVAL_LABELS } = require('../update/settings');
+const i18n = require('../i18n');
 
 // Reihenfolge und Beschriftung der Einstellungs-Tabs.
 const SETTINGS_TABS = [
@@ -118,8 +119,13 @@ function renderSettings({
   },
   updateStatus = null,
   updateMessage = '',
+  languages = [],
+  currentLanguage = { code: 'de' },
+  languageMessage = '',
+  languageError = '',
   activeTab = 'allgemein',
 } = {}) {
+  const locale = i18n.current().locale;
   const dstChecked = mqtt.dstEnabled === undefined || mqtt.dstEnabled ? ' checked' : '';
   const currentTab = SETTINGS_TAB_KEYS.has(activeTab) ? activeTab : 'allgemein';
   const remote = remoteAccessPanel();
@@ -194,10 +200,37 @@ ${tabBar}
                 <span>Automatische Zeitumstellung (Sommer-/Winterzeit) aktivieren</span>
               </label>
               <div class="time-source-status" id="timeSourceStatus">
-                <div><span>Lokale Systemzeit</span><strong id="localSystemTime">${escapeHtml(`${clock.local.date} ${clock.local.time}`)}</strong></div>
-                <div><span>Interne homeESS-Zeit</span><strong id="internalHomeessTime">${escapeHtml(`${clock.internal.date} ${clock.internal.time}`)}</strong></div>
+                <div><span>Lokale Systemzeit</span><strong id="localSystemTime">${escapeHtml(`${i18n.formatDate(clock.local.date)} ${clock.local.time}`)}</strong></div>
+                <div><span>Interne homeESS-Zeit</span><strong id="internalHomeessTime">${escapeHtml(`${i18n.formatDate(clock.internal.date)} ${clock.internal.time}`)}</strong></div>
                 <div><span>MQTT-Abgleich</span><strong id="mqttTimeStatus">${escapeHtml(clock.mqtt.available ? `${clock.mqtt.fresh ? 'aktiv' : 'zuletzt'} · ${clock.mqtt.display} · Versatz ${Number(clock.offsetSeconds).toFixed(2).replace('.', ',')} s` : 'nicht vorhanden · Versatz 0,00 s')}</strong></div>
               </div>
+            </section>
+
+            <section class="settings-card language-settings-card">
+              <div class="settings-card-head">
+                <h2>Sprache</h2>
+                <p class="settings-card-hint">Die gewählte Sprache gilt systemweit und wird von mehrsprachigen Adaptern übernommen. Fehlende Texte fallen abhängig vom Standort auf Deutsch oder Englisch zurück.</p>
+              </div>
+              ${statusText(languageError)}
+              ${statusText(languageMessage, 'success')}
+              <div class="field-grid">
+                <div class="field">
+                  <label for="systemLanguage">Installierte Sprache</label>
+                  <select id="systemLanguage" name="language">
+                    ${languages.map((language) => `<option value="${escapeHtml(language.code)}"${language.code === currentLanguage.code ? ' selected' : ''}>${escapeHtml(language.name)} (${escapeHtml(language.code)})</option>`).join('')}
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="languageFile">Neue Sprachdatei</label>
+                  <input type="file" id="languageFile" accept="application/json,.json">
+                </div>
+              </div>
+              <p class="settings-card-hint">UTF-8-kodierte JSON-Datei auswählen. Sie wird geprüft und die Sprachliste anschließend neu eingelesen.</p>
+              <div class="button-row">
+                <button type="submit" formaction="/settings/language" formmethod="POST" formnovalidate>Übernehmen</button>
+                <button type="button" class="button-secondary" id="languageUploadButton" onclick="uploadLanguageFile()">Sprachdatei hochladen</button>
+              </div>
+              <p class="settings-card-hint settings-card-hint-strong" id="languageUploadStatus" aria-live="polite"></p>
             </section>
 
             <section class="settings-card">
@@ -264,7 +297,7 @@ ${tabBar}
             <div class="update-settings-versions" aria-live="polite">
               <div><span>Installierte Version</span><strong id="settingsUpdateCurrent">${escapeHtml(update.currentVersion)}</strong></div>
               <div><span>Online verfügbar</span><strong id="settingsUpdateAvailable">${escapeHtml(update.availableVersion || 'Kein neueres Release')}</strong></div>
-              <div><span>Letzte Prüfung</span><strong id="settingsUpdateChecked">${escapeHtml(update.checkedAt ? new Date(update.checkedAt).toLocaleString('de-DE') : 'Noch nicht geprüft')}</strong></div>
+              <div><span>Letzte Prüfung</span><strong id="settingsUpdateChecked">${escapeHtml(update.checkedAt ? new Date(update.checkedAt).toLocaleString(locale) : 'Noch nicht geprüft')}</strong></div>
             </div>
             <p class="settings-card-hint settings-update-result" id="settingsUpdateResult">${escapeHtml(update.checkError || '')}</p>
             <label class="checkbox-field" for="automaticUpdatesEnabled">
@@ -325,7 +358,37 @@ ${remote.body}
   }));
 
   const script = `    var settingsUsers = ${JSON.stringify(clientUsers)};
+    function uploadLanguageFile() {
+      var input = document.getElementById('languageFile');
+      var button = document.getElementById('languageUploadButton');
+      var status = document.getElementById('languageUploadStatus');
+      var file = input && input.files && input.files[0];
+      if (!file) { if (status) status.textContent = 'Bitte eine JSON-Sprachdatei auswählen.'; return; }
+      if (file.size > ${1024 * 1024}) { if (status) status.textContent = 'Die Sprachdatei ist zu groß.'; return; }
+      if (button) button.disabled = true;
+      file.text().then(function (text) {
+        var language;
+        try { language = JSON.parse(text); } catch (_) { throw new Error('Die Datei enthält kein gültiges JSON.'); }
+        return fetch('/settings/language/upload', {
+          method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({ filename: file.name, language: language })
+        });
+      }).then(function (response) {
+        return response.json().then(function (body) { if (!response.ok) throw new Error(body.error || 'Sprachdatei konnte nicht installiert werden.'); return body; });
+      }).then(function () {
+        if (status) status.textContent = 'Sprachdatei wurde installiert.';
+        window.setTimeout(function () { window.location.reload(); }, 500);
+      }).catch(function (error) {
+        if (status) status.textContent = error.message || 'Sprachdatei konnte nicht installiert werden.';
+      }).finally(function () { if (button) button.disabled = false; });
+    }
     function refreshTimeStatus() {
+      function localeDate(value) {
+        var match = String(value || '').match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+        if (!match) return value;
+        return new Date(Date.UTC(Number(match[3]), Number(match[2]) - 1, Number(match[1])))
+          .toLocaleDateString(document.documentElement.lang || 'de-DE', { timeZone: 'UTC' });
+      }
       fetch('/settings/time.json', { headers: { Accept: 'application/json' } })
         .then(function (response) { return response.ok ? response.json() : null; })
         .then(function (status) {
@@ -333,8 +396,8 @@ ${remote.body}
           var local = document.getElementById('localSystemTime');
           var internal = document.getElementById('internalHomeessTime');
           var mqtt = document.getElementById('mqttTimeStatus');
-          if (local) local.textContent = status.local.date + ' ' + status.local.time;
-          if (internal) internal.textContent = status.internal.date + ' ' + status.internal.time;
+          if (local) local.textContent = localeDate(status.local.date) + ' ' + status.local.time;
+          if (internal) internal.textContent = localeDate(status.internal.date) + ' ' + status.internal.time;
           if (mqtt) mqtt.textContent = status.mqtt.available
             ? (status.mqtt.fresh ? 'aktiv' : 'zuletzt') + ' · ' + status.mqtt.display + ' · Versatz ' + Number(status.offsetSeconds).toFixed(2).replace('.', ',') + ' s'
             : 'nicht vorhanden · Versatz 0,00 s';
@@ -358,7 +421,7 @@ ${remote.body}
       var updateNow = document.getElementById('settingsUpdateNow');
       if (current) current.textContent = status.currentVersion || '—';
       if (available) available.textContent = status.availableVersion || 'Kein neueres Release';
-      if (checked) checked.textContent = status.checkedAt ? new Date(status.checkedAt).toLocaleString('de-DE') : 'Noch nicht geprüft';
+      if (checked) checked.textContent = status.checkedAt ? new Date(status.checkedAt).toLocaleString(document.documentElement.lang || 'de-DE') : 'Noch nicht geprüft';
       if (result) result.textContent = status.checkError || (status.availableVersion ? 'Eine neue Version ist verfügbar.' : 'homeESS ist aktuell.');
       if (updateNow) {
         updateNow.disabled = !(status.supported && status.availableVersion);

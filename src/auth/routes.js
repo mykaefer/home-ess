@@ -7,6 +7,7 @@ const { listUsersForLogin, getUserWithSecret } = require('./users');
 const access = require('./access');
 const renderLogin = require('../views/login');
 const pairingState = require('../remote-access/pairing-state');
+const i18n = require('../i18n');
 
 // Landeseite eines angemeldeten Nutzers: das Dashboard, sofern sichtbar, sonst
 // die erste freigeschaltete Seite.
@@ -83,6 +84,7 @@ function authRoutes(db) {
       canRead: true,
       canOperate: acc.canOperate,
       canWrite: acc.canWrite,
+      language: i18n.current(),
     });
   });
 

@@ -209,8 +209,11 @@ class RuntimeConnection extends EventEmitter {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingRequests.delete(sent.message_id);
-        reject(Object.assign(new Error(`${type} wurde nicht innerhalb von ${timeoutMs} ms bestätigt.`), {
-          code: 'DEVICE_OFFLINE', uncertain: true, request: sent,
+        reject(Object.assign(new Error(
+          `${type} wurde nicht innerhalb von ${timeoutMs} ms bestätigt. `
+          + 'Die hDP-Verbindung ist weiterhin aktiv; ob der Befehl übernommen wurde, ist unklar.',
+        ), {
+          code: 'REQUEST_TIMEOUT', uncertain: true, request: sent,
         }));
       }, timeoutMs);
       this.pendingRequests.set(sent.message_id, { resolve, reject, timer, request: sent });

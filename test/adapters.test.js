@@ -73,10 +73,20 @@ function getFreePort() {
 test('Registry scannt /adapter und validiert Prefix/Manifest', () => {
   writeAdapter('demo', 'demo', { settings: [{ key: 'interval', type: 'number', default: 5 }] });
   writeAdapter('bad', 'Inv@lid'); // ungültiger Prefix -> verworfen
+  writeAdapter('escape', 'escape');
+  const escapedManifest = JSON.parse(fs.readFileSync(path.join(ADAPTER_DIR, 'escape', 'adapter.json'), 'utf8'));
+  escapedManifest.main = '../demo/index.js';
+  fs.writeFileSync(path.join(ADAPTER_DIR, 'escape', 'adapter.json'), JSON.stringify(escapedManifest));
+  writeAdapter('.upload-staging', 'staging');
+  const stagingManifest = JSON.parse(fs.readFileSync(path.join(ADAPTER_DIR, '.upload-staging', 'adapter.json'), 'utf8'));
+  stagingManifest.id = 'staging';
+  fs.writeFileSync(path.join(ADAPTER_DIR, '.upload-staging', 'adapter.json'), JSON.stringify(stagingManifest));
   const list = registry.loadRegistry();
   const ids = list.map((m) => m.id);
   assert.ok(ids.includes('demo'), 'demo gefunden');
   assert.ok(!ids.includes('bad'), 'ungültiger Prefix verworfen');
+  assert.ok(!ids.includes('escape'), 'Einstiegspunkt außerhalb des Adapterverzeichnisses verworfen');
+  assert.ok(!ids.includes('staging'), 'internes Upload-Staging verworfen');
   const demo = registry.getManifest('demo');
   assert.equal(demo.prefix, 'demo');
   assert.equal(demo.settings.length, 1);

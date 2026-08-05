@@ -64,6 +64,13 @@ function openDatabase() {
       )`
     );
     db.run(
+      `CREATE TABLE IF NOT EXISTS language_config (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        language TEXT NOT NULL DEFAULT 'de'
+      )`
+    );
+    db.run("INSERT OR IGNORE INTO language_config (id, language) VALUES (1, 'de')");
+    db.run(
       `INSERT OR IGNORE INTO update_config
         (id, automatic_enabled, maintenance_start, maintenance_end, check_interval)
        VALUES (1, 0, '03:00', '04:00', 'daily')`

@@ -5,7 +5,45 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 
 ## [Unreleased]
 
+### Behoben
+
+- **Eindeutige hDP-Bestätigungswarnung.** Bleibt bei weiterhin aktiver
+  WebSocket-Verbindung nur die Bestätigung eines Ausgabebefehls aus, wird das
+  Gerät nicht mehr widersprüchlich als `DEVICE_OFFLINE` bezeichnet. Der Hinweis
+  benennt stattdessen den unklaren Befehlsstatus und verschwindet nach der
+  nächsten erfolgreich bestätigten Ausgabe wieder.
+
 ### Hinzugefügt
+
+- **Abgesichertes Löschen installierter Adapter.** Administratoren können
+  instanzlose Adapter nach einer ausdrücklichen Sicherheitswarnung und Eingabe
+  der exakten Adapter-ID dauerhaft entfernen. Serverseitig verhindern Rollen-,
+  Bestätigungs-, Pfad- und Instanzprüfungen versehentliches oder unsicheres
+  Löschen; die Registry wird anschließend ohne Neustart aktualisiert. Die
+  Auswahl bleibt über Curl- und interne Updates erhalten: bewusst entfernte
+  offizielle Adapter werden nicht erneut installiert, eigene Adapter bleiben
+  bestehen und nur der explizite Installer-Schalter `--all` stellt sämtliche
+  offiziellen Adapter wieder her.
+- **Sicherer Upload portabler Adapterpakete.** Die Adapterseite beginnt für
+  Administratoren mit einer schmalen Uploadkachel für ZIP-Dateien. Archive
+  werden außerhalb von `/adapter/` vollständig auf Pfade, Symlinks,
+  Prüfsummen, Größenlimits, Mindestdateien, Manifestwerte, ID-/Prefixkollisionen
+  und JavaScript-Syntax geprüft; erst danach wird ein neuer Adapter atomar in
+  sein eigenes Verzeichnis übernommen und die Registry neu geladen. Fehlerhafte
+  Pakete erreichen das produktive Adapterverzeichnis nicht und vorhandene
+  Adapter werden nie überschrieben. Installer und Self-Updater halten nur die
+  Adapterwurzel gezielt beschreibbar und bewahren hochgeladene Fremdadapter bei
+  Versionswechseln.
+- **Systemweite Mehrsprachigkeit.** Die allgemeinen Einstellungen enthalten
+  direkt unter Standort und Zeit eine Sprachkarte mit installierten Sprachen,
+  sicherem JSON-Upload und Übernehmen-Aktion. Sprachdateien werden beim Start
+  und nach Upload neu gescannt; Deutsch und Englisch werden mitgeliefert,
+  Uploads updatefest im Datenverzeichnis gehalten. Fehlende Schlüssel fallen
+  für `Europe/Berlin` auf Deutsch, sonst auf Englisch zurück. Alle gemeinsamen
+  Views nutzen UTF-8, Unicode-NFC und die aktive Locale. Adapter können eigene
+  Sprachdateien mitbringen und erkennen die Systemwahl über Host-API,
+  Management-Request oder Browser-Zugriffs-API; alle mitgelieferten Adapter
+  enthalten deutsche und englische Kataloge.
 
 - **Direktnavigation zu hDP-Instanzen.** Ausschließlich die Geräteverwaltungen
   des universellen hDP-Adapters erscheinen mit dem jeweiligen Instanznamen als
@@ -177,6 +215,21 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 
 ### Geändert
 
+- **Kurze zweisprachige Projekt-Startseite.** `README.md` ist nun die kompakte
+  englische Einstiegsseite mit Projektzweck, Hardwareanforderungen und
+  Installation; `README_de.md` enthält die spiegelgleiche deutsche Fassung.
+  Der ausführliche Funktionsumfang steht getrennt in `FEATURES.md` und
+  `FEATURES_de.md`. Alle vier Dokumente verlinken ihre jeweilige Sprachfassung
+  direkt am Anfang, damit die Installationsinformationen nicht mehr unter einem
+  langen Featureblock verborgen liegen.
+- **Einheitliches gerätetypspezifisches hDP-State-Schema.** Unter „Status“
+  stehen nur noch allgemeine Geräte- und Hardwareprofilwerte wie Online- und
+  WLAN-Zustand, IP-Adresse, Gerätetyp, Firmware, Laufzeit sowie die physischen
+  Pixellimits. Prozentanzeige, ARGB-Ausgabe, zugeordnete LEDs und Binary-I/O
+  besitzen eigene Gerätegruppen; unpassende States werden für den gewählten
+  Gerätetyp weder katalogisiert noch publiziert. Binary-Ein- und -Ausgänge sind
+  getrennt und vollständig aufgeführt, einschließlich der festen ARGB-Ausgänge
+  auf GPIO 15 und 16.
 - **Updateolive nur in der PC-Ansicht.** Der Hinweis auf eine verfügbare
   Version wird im mobilen Layout vollständig ausgeblendet. Die Updatekarte in
   den allgemeinen Einstellungen bleibt dort weiterhin erreichbar.

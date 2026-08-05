@@ -5,6 +5,7 @@ const { getEnabledNavItems } = require('../modules');
 const { getHdpNavItems } = require('../adapters/navigation');
 const { statePickerModal, statePickerScript, statePickerAutoAttach } = require('./state-picker');
 const { currentAccess, canSeePage, pageForPath } = require('../auth/access');
+const i18n = require('../i18n');
 
 let pkgVersion = '—';
 try {
@@ -483,8 +484,9 @@ function renderLayout({
     .filter((href) => typeof href === 'string' && href.startsWith('/') && !href.startsWith('//'))
     .map((href) => `  <link rel="stylesheet" href="${escapeHtml(href)}">`)
     .join('\n');
-  return `<!DOCTYPE html>
-<html lang="de">
+  const language = i18n.current();
+  const html = `<!DOCTYPE html>
+<html lang="${escapeHtml(language.code)}" dir="${escapeHtml(language.direction)}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
@@ -580,6 +582,7 @@ ${statePickerAutoAttach()}
 ${script ? `  <script>\n${script}\n  </script>` : ''}
 </body>
 </html>`;
+  return i18n.localizeText(html);
 }
 
 module.exports = { renderLayout, NAV };

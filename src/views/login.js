@@ -1,6 +1,7 @@
 'use strict';
 
 const { escapeHtml, statusText } = require('./components');
+const i18n = require('../i18n');
 
 // Login-Seite — eigenständige Hülle (vor der Anmeldung gibt es keine Sidebar).
 // Die Nutzerauswahl erfolgt durch Klick auf einen Namen (nicht durch Tippen);
@@ -22,8 +23,9 @@ function renderLogin({ users = [], error = false, remember = false, selectedUser
     ? ''
     : '<p class="muted">Keine Benutzer vorhanden.</p>';
 
-  return `<!DOCTYPE html>
-<html lang="de">
+  const language = i18n.current();
+  const html = `<!DOCTYPE html>
+<html lang="${escapeHtml(language.code)}" dir="${escapeHtml(language.direction)}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -84,6 +86,7 @@ ${userTiles}
   </script>
 </body>
 </html>`;
+  return i18n.localizeText(html);
 }
 
 module.exports = renderLogin;

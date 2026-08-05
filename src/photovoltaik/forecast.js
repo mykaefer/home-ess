@@ -7,6 +7,7 @@
 
 const { loadMqttConfig } = require('../mqtt/config');
 const wetter = require('../wetter/client');
+const i18n = require('../i18n');
 const {
   solarGeometryAt,
   transposePlaneIrradiance,
@@ -210,7 +211,7 @@ function formatLocation(weather) {
 }
 
 function formatCoordinate(value, positive, negative) {
-  const abs = Math.abs(value).toLocaleString('de-DE', {
+  const abs = Math.abs(value).toLocaleString(i18n.current().locale, {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });

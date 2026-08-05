@@ -255,13 +255,14 @@ function clientScript() {
         if (!v) return 'Unbekannt';
         var ms = Date.parse(v);
         if (!isFinite(ms)) return 'Unbekannt';
-        return new Date(ms).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) + ' Uhr';
+        var lang = document.documentElement.lang || 'de';
+        return new Date(ms).toLocaleTimeString(lang, { hour: '2-digit', minute: '2-digit' }) + (lang === 'de' ? ' Uhr' : '');
       }
       function formatDateTime(v) {
         if (!v) return 'Unbekannt';
         var ms = Date.parse(v);
         if (!isFinite(ms)) return 'Unbekannt';
-        return new Date(ms).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+        return new Date(ms).toLocaleString(document.documentElement.lang || 'de-DE', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
       }
       function connectionLabel(conn) {
         if (!conn) return 'Nicht verbunden';
@@ -560,7 +561,7 @@ function devicesScript() {
         if (!v) return 'Unbekannt';
         var ms = Date.parse(v);
         if (!isFinite(ms)) return 'Unbekannt';
-        return new Date(ms).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+        return new Date(ms).toLocaleString(document.documentElement.lang || 'de-DE', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
       }
 
       function renderSummary(view) {

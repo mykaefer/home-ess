@@ -281,7 +281,7 @@ function sanitizeDevice(device) {
 }
 
 function clearAppliedOutputError(device) {
-  if (!device || !/^\[OUTPUT_[A-Z0-9_]+\]/.test(String(device.lastError || ''))) return false;
+  if (!device || !/^(?:\[OUTPUT_[A-Z0-9_]+\]|\[REQUEST_TIMEOUT\])/.test(String(device.lastError || ''))) return false;
   device.lastError = '';
   return true;
 }
@@ -523,50 +523,148 @@ function binaryPinSlots(manifest) {
   return Math.min(limit, 32);
 }
 
-function deviceStateCatalog(device) {
+function configuredOutput(device) {
+  const config = device && device.hardwareConfig;
+  if (config && Array.isArray(config.outputs) && config.outputs[0]) return config.outputs[0];
+  if (!config || !config.hardware) return null;
+  return {
+    pin: config.hardware.argb_pin,
+    pixel_count: config.hardware.led_count,
+    driver: config.hardware.led_type,
+    color_order: config.hardware.color_order,
+    reverse: config.hardware.reverse,
+    maximum_brightness_percent: config.power && config.power.maximum_brightness_percent,
+    maximum_current_milliamps: config.power && config.power.maximum_current_milliamps,
+    current_per_pixel_milliamps: config.power && config.power.current_per_led_milliamps,
+    offline_mode: config.offline && config.offline.mode,
+  };
+}
+
+function stateValue(value) {
+  return value == null ? '' : value;
+}
+
+// States-Baum, State-Picker und Geräteseite leiten sich aus demselben,
+// gerätetypspezifischen Schema ab. So können keine Laufzeitwerte mehr in der
+// allgemeinen Statusgruppe oder bei einem unpassenden Gerätetyp verbleiben.
+function deviceStateChannels(device) {
   const root = `devices/${encodeURIComponent(device.deviceId)}`;
-  const category = `${device.name || device.deviceId} / Status`;
-  const states = [
-    { address: `${root}/online`, name: 'Online', category },
-    { address: `${root}/connection-state`, name: 'Verbindungszustand', category },
-    { address: `${root}/next-reconnect`, name: 'Nächster Verbindungsversuch', category },
-    { address: `${root}/rssi`, name: 'WLAN-Signal', category, unit: 'dBm' },
-    { address: `${root}/percentage`, name: 'Prozentwert', category, unit: '%' },
-    { address: `${root}/color`, name: 'Farbe', category },
-    { address: `${root}/requested-brightness`, name: 'Angeforderte Helligkeit', category, unit: '%' },
-    { address: `${root}/indicator-direction`, name: 'Richtungsindikator', category },
-    { address: `${root}/output-mode`, name: 'Ausgabemodus', category },
-    { address: `${root}/timeline-id`, name: 'Aktive Timeline', category },
-    { address: `${root}/effective-brightness`, name: 'Effektive Helligkeit', category, unit: '%' },
-    { address: `${root}/estimated-current`, name: 'Geschätzter Strom', category, unit: 'mA' },
-    { address: `${root}/power-limited`, name: 'Strombegrenzung aktiv', category },
-    { address: `${root}/firmware-version`, name: 'Firmwareversion', category },
-    { address: `${root}/config-revision`, name: 'Konfigurationsrevision', category },
-    { address: `${root}/last-error`, name: 'Letzter Fehler', category },
-  ];
+  const type = deviceTypeOf(device);
+  const output = configuredOutput(device);
+  const state = (suffix, name, value, unit = '') => ({
+    address: `${root}/${suffix}`, name, value: stateValue(value), ...(unit ? { unit } : {}),
+  });
+  const channels = [{
+    address: 'status', name: 'Status', states: [
+      state('online', 'Online', !!device.online),
+      state('connection-state', 'Verbindungszustand', device.connectionState || (device.online ? 'connected' : 'offline')),
+      state('next-reconnect', 'Nächster Verbindungsversuch', device.nextReconnectAt),
+      state('wifi-connected', 'WLAN verbunden', device.wifiConnected),
+      state('rssi', 'WLAN-Signal', device.rssi, 'dBm'),
+      state('ip-address', 'IP-Adresse', device.ipAddress || device.address),
+      state('device-type', 'Gerätetyp', type),
+      state('platform', 'Plattform', device.platform),
+      state('firmware-version', 'Firmwareversion', (device.firmwareInfo && device.firmwareInfo.version) || device.firmwareVersion),
+      state('config-revision', 'Konfigurationsrevision', device.configRevision),
+      state('uptime', 'Gerätelaufzeit', device.uptimeSeconds, 's'),
+      state('free-heap', 'Freier Arbeitsspeicher', device.freeHeapBytes, 'B'),
+      state('last-reset-reason', 'Letzter Resetgrund', device.lastBoot && device.lastBoot.reset_reason),
+      state('config-load-status', 'Hardwareprofil-Ladestatus', device.lastBoot && device.lastBoot.config_load_status),
+      state('last-error', 'Letzter Fehler', device.lastError),
+    ],
+  }];
+
+  // Diese Werte beschreiben das gespeicherte Hardwareprofil und sind nur bei
+  // Gerätetypen mit physischem Pixel-Ausgang sinnvoll.
+  if (PIXEL_DEVICE_TYPES.includes(type) && output) {
+    channels[0].states.push(
+      state('hardware/data-pin', 'ARGB-Datenpin', output.pin),
+      state('hardware/pixel-count', 'LED-Anzahl', output.pixel_count),
+      state('hardware/driver', 'LED-Typ', output.driver),
+      state('hardware/color-order', 'Farbreihenfolge', output.color_order),
+      state('hardware/reverse', 'Ausgaberichtung umgekehrt', output.reverse),
+      state('hardware/maximum-brightness', 'Maximalhelligkeit', output.maximum_brightness_percent, '%'),
+      state('hardware/maximum-current', 'Maximalstrom', output.maximum_current_milliamps, 'mA'),
+      state('hardware/current-per-pixel', 'Strom je LED', output.current_per_pixel_milliamps, 'mA'),
+      state('hardware/offline-mode', 'Verhalten bei Verbindungsverlust', output.offline_mode),
+    );
+  }
+
+  if (type === 'percentage_indicator') {
+    channels.push({ address: 'percentage-indicator', name: 'Prozentanzeige', states: [
+      state('percentage', 'Prozentwert', device.calculatedPercentage, '%'),
+      state('color', 'Farbe', device.calculatedColor
+        ? `${device.calculatedColor.r},${device.calculatedColor.g},${device.calculatedColor.b}` : ''),
+      state('requested-brightness', 'Angeforderte Helligkeit', device.requestedBrightness, '%'),
+      state('indicator-direction', 'Richtungsindikator', device.indicatorDirection || 'off'),
+      state('output-mode', 'Ausgabemodus', device.outputMode),
+      state('timeline-id', 'Aktive Timeline', device.activeTimelineId),
+      state('effective-brightness', 'Effektive Helligkeit', device.effectiveBrightness, '%'),
+      state('estimated-current', 'Geschätzter Strom', device.estimatedCurrent, 'mA'),
+      state('power-limited', 'Strombegrenzung aktiv', device.powerLimited),
+    ] });
+  } else if (type === 'argb_output') {
+    channels.push({ address: 'argb-output', name: 'ARGB-Ausgang', states: [
+      state('requested-brightness', 'Angeforderte Helligkeit', device.requestedBrightness, '%'),
+      state('output-mode', 'Ausgabemodus', device.outputMode),
+      state('effective-brightness', 'Effektive Helligkeit', device.effectiveBrightness, '%'),
+      state('estimated-current', 'Geschätzter Strom', device.estimatedCurrent, 'mA'),
+      state('power-limited', 'Strombegrenzung aktiv', device.powerLimited),
+    ] });
+    const ledStates = Object.keys(device.bindings && device.bindings.argb ? device.bindings.argb : {})
+      .map(Number).filter(Number.isInteger).sort((left, right) => left - right)
+      .map((index) => state(`argb/led-${index}`, `LED ${index + 1}`,
+        device.argbStates && device.argbStates[String(index)]));
+    if (ledStates.length) channels.push({ address: 'argb-leds', name: 'LED-Zustände', states: ledStates });
+  }
+
   if (hasBinaryIo(device)) {
-    const pinCategory = `${device.name || device.deviceId} / Binary-I/O`;
-    for (const pin of (device.hardwareConfig && Array.isArray(device.hardwareConfig.pins)
-      ? device.hardwareConfig.pins : [])) {
-      states.push({
-        address: `${root}/binary/pin-${pin.pin}`,
-        name: `GPIO ${pin.pin} (${pin.direction === 'input' ? pin.input_type : 'output'})`,
-        category: pinCategory,
+    const pins = device.hardwareConfig && Array.isArray(device.hardwareConfig.pins)
+      ? device.hardwareConfig.pins : [];
+    for (const direction of ['input', 'output']) {
+      const pinStates = pins.filter((pin) => pin.direction === direction).map((pin) => state(
+        `binary/pin-${pin.pin}`,
+        direction === 'input'
+          ? `GPIO ${pin.pin} (${pin.input_type === 'button' ? 'Taster' : 'Schalter'})`
+          : `GPIO ${pin.pin}`,
+        device.binaryStates && device.binaryStates[String(pin.pin)],
+      ));
+      if (pinStates.length) channels.push({
+        address: direction === 'input' ? 'binary-inputs' : 'binary-outputs',
+        name: direction === 'input' ? 'Binary-Eingänge' : 'Binary-Ausgänge',
+        states: pinStates,
       });
     }
   }
-  if (isArgbDevice(device)) {
-    const ledCategory = `${device.name || device.deviceId} / ARGB-Ausgang`;
-    for (const key of Object.keys(device.bindings && device.bindings.argb ? device.bindings.argb : {})
-      .map(Number).filter(Number.isInteger).sort((left, right) => left - right)) {
-      states.push({
-        address: `${root}/argb/led-${key}`,
-        name: `LED ${key + 1}`,
-        category: ledCategory,
-      });
-    }
-  }
-  return states;
+  return channels;
+}
+
+function deviceStateCatalog(device) {
+  const deviceName = device.name || device.deviceId;
+  return deviceStateChannels(device).flatMap((channel) => channel.states.map(({ value, ...state }) => ({
+    ...state, category: `${deviceName} / ${channel.name}`,
+  })));
+}
+
+function deviceStateValues(device) {
+  return deviceStateChannels(device).flatMap((channel) => channel.states.map((state) => ({
+    address: state.address, value: state.value,
+  })));
+}
+
+function applyDeviceStatus(device, status) {
+  if (!device || !status || typeof status !== 'object') return;
+  if (typeof status.wifi_connected === 'boolean') device.wifiConnected = status.wifi_connected;
+  if (Object.prototype.hasOwnProperty.call(status, 'ip_address')) device.ipAddress = status.ip_address;
+  if (Number.isInteger(status.uptime_seconds)) device.uptimeSeconds = status.uptime_seconds;
+  if (Number.isInteger(status.free_heap_bytes)) device.freeHeapBytes = status.free_heap_bytes;
+  if (status.last_boot && typeof status.last_boot === 'object') device.lastBoot = status.last_boot;
+  const rssi = status.wifi_rssi_dbm == null
+    ? (status.wifi_rssi == null ? status.rssi : status.wifi_rssi)
+    : status.wifi_rssi_dbm;
+  if (rssi != null || ['wifi_rssi_dbm', 'wifi_rssi', 'rssi']
+    .some((key) => Object.prototype.hasOwnProperty.call(status, key))) device.rssi = rssi;
+  if (Number.isInteger(status.config_revision)) device.configRevision = status.config_revision;
 }
 
 function createHdpAdapter(host, dependencies = {}) {
@@ -598,16 +696,14 @@ function createHdpAdapter(host, dependencies = {}) {
       address: device.deviceId,
       name: device.name || device.hostname || device.deviceId,
       customName: '',
-      type: device.deviceType || '',
+      type: deviceTypeOf(device),
       generation: device.platform || '',
       online: !!device.online,
-      channels: [{
-        address: 'status',
-        name: device.paired ? 'Gekoppelt' : 'Discovery',
-        states: device.paired ? deviceStateCatalog(device).map((state) => ({
-          address: state.address, name: state.name, unit: state.unit || '',
-        })) : [],
-      }],
+      channels: device.paired ? deviceStateChannels(device).map((channel) => ({
+        address: channel.address,
+        name: channel.name,
+        states: channel.states.map(({ value, ...state }) => state),
+      })) : [{ address: 'status', name: 'Discovery', states: [] }],
     }));
   }
 
@@ -640,45 +736,7 @@ function createHdpAdapter(host, dependencies = {}) {
   }
 
   function publishDevice(device) {
-    const root = `devices/${encodeURIComponent(device.deviceId)}`;
-    const values = [
-      { address: `${root}/online`, value: !!device.online },
-      { address: `${root}/connection-state`, value: device.connectionState || (device.online ? 'connected' : 'offline') },
-      { address: `${root}/next-reconnect`, value: device.nextReconnectAt || '' },
-      { address: `${root}/rssi`, value: device.rssi == null ? '' : device.rssi },
-      { address: `${root}/percentage`, value: device.calculatedPercentage == null ? '' : device.calculatedPercentage },
-      { address: `${root}/color`, value: device.calculatedColor ? `${device.calculatedColor.r},${device.calculatedColor.g},${device.calculatedColor.b}` : '' },
-      { address: `${root}/requested-brightness`, value: device.requestedBrightness == null ? '' : device.requestedBrightness },
-      { address: `${root}/indicator-direction`, value: device.indicatorDirection || 'off' },
-      { address: `${root}/output-mode`, value: device.outputMode || '' },
-      { address: `${root}/timeline-id`, value: device.activeTimelineId || '' },
-      { address: `${root}/effective-brightness`, value: device.effectiveBrightness == null ? '' : device.effectiveBrightness },
-      { address: `${root}/estimated-current`, value: device.estimatedCurrent == null ? '' : device.estimatedCurrent },
-      { address: `${root}/power-limited`, value: device.powerLimited == null ? '' : !!device.powerLimited },
-      { address: `${root}/firmware-version`, value: (device.firmwareInfo && device.firmwareInfo.version) || device.firmwareVersion || '' },
-      { address: `${root}/config-revision`, value: device.configRevision == null ? '' : device.configRevision },
-      { address: `${root}/last-error`, value: device.lastError || '' },
-    ];
-    if (hasBinaryIo(device)) {
-      for (const pin of (device.hardwareConfig && Array.isArray(device.hardwareConfig.pins)
-        ? device.hardwareConfig.pins : [])) {
-        const state = device.binaryStates && device.binaryStates[String(pin.pin)];
-        values.push({
-          address: `${root}/binary/pin-${pin.pin}`,
-          value: state == null ? '' : !!state,
-        });
-      }
-    }
-    if (isArgbDevice(device)) {
-      for (const key of Object.keys(device.bindings && device.bindings.argb ? device.bindings.argb : {})) {
-        const state = device.argbStates && device.argbStates[key];
-        values.push({
-          address: `${root}/argb/led-${key}`,
-          value: state == null ? '' : !!state,
-        });
-      }
-    }
-    host.publishStates(values);
+    host.publishStates(deviceStateValues(device));
   }
 
   function setError(device, error, context) {
@@ -1085,6 +1143,7 @@ function createHdpAdapter(host, dependencies = {}) {
     });
     connection.on('offline', () => {
       device.online = false;
+      device.wifiConnected = null;
       device.rssi = null;
       device.reportedBrightnessLimit = null;
       device.effectiveBrightness = null;
@@ -1111,7 +1170,7 @@ function createHdpAdapter(host, dependencies = {}) {
         + (event.error ? ` (${connectionErrorMessage(event.error)})` : ''));
     });
     connection.on('status', (status) => {
-      device.rssi = status.wifi_rssi == null ? status.rssi : status.wifi_rssi;
+      applyDeviceStatus(device, status);
       const nativeRuntimeBrightness = device.manifest && device.manifest.features
         && device.manifest.features.runtime_brightness === true;
       if (!nativeRuntimeBrightness && status.effective_brightness != null) {
@@ -1193,7 +1252,8 @@ function createHdpAdapter(host, dependencies = {}) {
       paired: restoredBindingState === 'active',
       online: false, discoveredOnline: false, connectionState: 'offline',
       reconnectAttempt: 0, nextReconnectAt: null,
-      rssi: null, effectiveBrightness: null, estimatedCurrent: null, powerLimited: null,
+      wifiConnected: null, rssi: null, uptimeSeconds: null, freeHeapBytes: null,
+      effectiveBrightness: null, estimatedCurrent: null, powerLimited: null,
       reportedBrightnessLimit: null,
       unsubscribers: [],
     };
@@ -1298,7 +1358,7 @@ function createHdpAdapter(host, dependencies = {}) {
     device.hardwareConfig = remoteConfig;
     device.configRevision = remoteConfig.revision;
     device.configOrigin = device.hardwareConfigPresent ? 'device' : null;
-    device.lastBoot = deviceStatus.last_boot || null;
+    applyDeviceStatus(device, deviceStatus);
     device.recoveryRequired = !!(device.lastBoot
       && ['invalid', 'storage_unavailable'].includes(device.lastBoot.config_load_status));
     device.lastError = '';
@@ -1590,6 +1650,7 @@ function createHdpAdapter(host, dependencies = {}) {
     device.updateSettings = { ...device.updateSettings, ...(input.updateSettings || {}) };
     stopSubscriptions(device);
     subscribeSources(device);
+    publishCatalog();
     persist();
     applyRuntime(device);
     return sanitizeDevice(device);
@@ -3543,7 +3604,7 @@ module.exports._test = {
   defaultBindings, defaultUpdateSettings, mergeBindings, sanitizeDevice,
   sourceParts, displayColor, dynamicBrightness, hardwareBrightnessLimit,
   effectiveDynamicBrightness, normalizedPercentage,
-  calculateState, indicatorActive, deviceStateCatalog,
+  calculateState, indicatorActive, deviceStateChannels, deviceStateCatalog, deviceStateValues,
   resetChangedIndicatorState, bindingNeedsReconcile, requestedDeviceName,
   clearAppliedOutputError,
   number,
@@ -3553,4 +3614,5 @@ module.exports._test = {
   deviceTypeOf, isBinaryDevice, isArgbDevice, supportedDeviceTypes, binaryPinSlots,
   insideMaintenanceWindow, otaInProgress, releaseInterruptedOta,
   reconcileOtaProgress,
+  applyDeviceStatus,
 };

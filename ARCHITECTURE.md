@@ -15,6 +15,50 @@ genau **einen** HTTP-Server und **ein** Authentifizierungssystem
 (Routen unter `src/routes/`, Views unter `src/views/`, Fachlogik unter
 `src/<domäne>/`).
 
+## Internationalisierung und Sprachdateien
+
+homeESS besitzt genau **eine systemweite Sprachwahl**. Die Registry unter
+`src/i18n/` scannt beim Prozessstart die mit dem Release ausgelieferten Dateien
+in `/languages` sowie die updatefesten Uploads in
+`HOME_ESS_LANGUAGE_DIR` (Default `<data>/languages`). Nach einem erfolgreichen
+Upload wird unmittelbar erneut gescannt. Deutsch (`de.json`) und Englisch
+(`en.json`) gehören immer zur Grundversion; Uploads dürfen weitere Sprachen
+ergänzen oder eine gleichnamige Basisdatei updatefest überlagern.
+
+Eine Sprachdatei ist UTF-8-kodiertes JSON mit `code`, `name`, `locale`, optional
+`direction` (`ltr`/`rtl`) und einem `messages`-Objekt aus stabilen Schlüsseln und
+Texten. Uploads sind auf 1 MiB begrenzt, Dateiname und Sprachcode müssen
+übereinstimmen und werden vor dem atomaren Schreiben vollständig validiert.
+Texte werden beim Laden auf Unicode NFC normalisiert; Views liefern immer
+`<meta charset="utf-8">` sowie passendes `lang`/`dir`. Dadurch müssen Umlaute,
+Akzente und sprachübliche Sonderzeichen ausgeschrieben werden — ASCII-Ersatz
+wie `ae`, `oe`, `ue` ist in Sprachdateien nicht zulässig, wenn das echte Zeichen
+gemeint ist.
+
+`i18n.t(key, params, defaultText)` löst zuerst die gewählte Sprache auf. Fehlt
+ein Schlüssel (etwa weil homeESS neuer als eine hochgeladene Übersetzung ist),
+folgt der Standort-Fallback: nur `Europe/Berlin` verwendet Deutsch, jede andere
+konfigurierte Zeitzone Englisch. Danach wird als letzte Rückfallebene die jeweils
+andere mitgelieferte Basissprache verwendet. Neue oder geänderte Seiten,
+Browsermeldungen, JSON-Fehler, Module und System-State-Bezeichnungen müssen ihre
+sichtbaren Texte als Schlüssel **gleichzeitig in Deutsch und Englisch** ergänzen;
+locale-abhängige Zahlen, Datumswerte, Sortierungen und Pluralformen verwenden
+die `locale` der aktiven Sprache. Der gemeinsame `renderLayout` lokalisiert die
+servergerenderten Bestandsansichten zentral, sodass es kein zweites Frontend und
+keine abweichende Sprachwahl pro Seite gibt.
+
+Adapter bleiben eigenständige Pakete. Ein Adapter kann seine Übersetzungen in
+`adapter/<id>/languages/<code>.json` mit demselben Format mitliefern. Die
+Registry lokalisiert Manifest, Settings-Schema und generische Host-Seiten; der
+isolierte Prozess erhält `host.language`, `host.getLanguage()` und
+`host.t(key, defaultText)`. Management-Requests enthalten zusätzlich
+`request.language`; Browser-Frontends lesen dieselbe Information über
+`GET /me/access`. Bei einer systemweiten Sprachänderung werden aktive Adapter
+kontrolliert neu geladen, damit State-Namen und Kategorien ebenfalls wechseln.
+Adapter ohne Sprachdateien bleiben ausdrücklich zulässig und laufen unverändert
+einsprachig weiter. Die von homeESS mitgelieferten Adapter liefern immer Deutsch
+und Englisch mit.
+
 ## Fernzugriff / Pairing / Relay-Tunnel
 
 ### Datenfluss

@@ -2,13 +2,15 @@
 
 const { renderLayout } = require('./layout');
 const { escapeHtml, statusText } = require('./components');
+const { currentAccess } = require('../auth/access');
 
 // Adapter-Verwaltungsseite: listet die im /adapter-Verzeichnis gefundenen Adapter,
 // je Adapter die angelegten Instanzen als kompakte, volle-Breite-Tabelle mit
 // Status (aktiv) UND Verbindungszustand sowie Aktionen. Status wird live gepollt.
 function renderAdapters({ registry = [], instancesByAdapter = new Map(), statusById = {}, message = '', error = '' } = {}) {
+  const isAdmin = currentAccess().isAdmin;
   const blocks = registry.length
-    ? registry.map((adapter) => renderAdapterBlock(adapter, instancesByAdapter.get(adapter.id) || [], statusById)).join('\n')
+    ? registry.map((adapter) => renderAdapterBlock(adapter, instancesByAdapter.get(adapter.id) || [], statusById, isAdmin)).join('\n')
     : '<div class="info-card"><p class="muted">Keine Adapter gefunden. Lege einen Adapter unter <code>/adapter/&lt;name&gt;/</code> mit einer <code>adapter.json</code> an (siehe ADAPTER.md).</p></div>';
 
   const body = `        <div class="page-head page-head--split">
@@ -23,12 +25,122 @@ function renderAdapters({ registry = [], instancesByAdapter = new Map(), statusB
         </div>
         ${message ? statusText(message, 'success') : ''}
         ${error ? statusText(error) : ''}
+        ${isAdmin ? `        <section class="adapter-upload-card" aria-labelledby="adapter-upload-title">
+          <div class="adapter-upload-copy">
+            <strong id="adapter-upload-title">Adapterpaket installieren</strong>
+            <span class="muted">Geprüfte ZIP-Datei, maximal 32 MiB. Vorhandene Adapter werden nicht überschrieben.</span>
+          </div>
+          <form id="adapter-upload-form" class="adapter-upload-form">
+            <input id="adapter-upload-file" type="file" accept=".zip,application/zip" required>
+            <button id="adapter-upload-submit" type="submit">Hochladen</button>
+          </form>
+          <output id="adapter-upload-status" class="adapter-upload-status" aria-live="polite"></output>
+        </section>` : ''}
         <div class="adapter-list">
 ${blocks}
-        </div>`;
+        </div>
+        ${isAdmin ? `        <dialog id="adapter-delete-dialog" class="adapter-delete-dialog" aria-labelledby="adapter-delete-title">
+          <form id="adapter-delete-form">
+            <h2 id="adapter-delete-title">Adapter dauerhaft löschen</h2>
+            <p class="danger-text"><strong>Sicherheitswarnung:</strong> Der Adaptercode und alle mitgelieferten Dateien werden unwiderruflich aus <code>/adapter/</code> entfernt.</p>
+            <p>Zu löschender Adapter: <strong id="adapter-delete-name"></strong></p>
+            <label for="adapter-delete-confirmation">Zur Bestätigung die Adapter-ID <code id="adapter-delete-id-label"></code> eingeben:</label>
+            <input id="adapter-delete-confirmation" name="confirmation" type="text" autocomplete="off" required>
+            <output id="adapter-delete-status" class="adapter-upload-status adapter-upload-status--error" aria-live="polite"></output>
+            <div class="button-row">
+              <button id="adapter-delete-cancel" type="button" class="module-toggle-btn">Abbrechen</button>
+              <button id="adapter-delete-submit" type="submit" class="button-danger" disabled>Dauerhaft löschen</button>
+            </div>
+          </form>
+        </dialog>` : ''}`;
 
   const script = `
     var ADAPTER_HIDE_INACTIVE_KEY = 'homeess.adapters.hideInactive.v1';
+    var ADAPTER_UPLOAD_MESSAGE_KEY = 'homeess.adapters.uploadMessage.v1';
+
+    function adapterUploadMessage(text, failed) {
+      var output = document.getElementById('adapter-upload-status');
+      if (!output) return;
+      output.textContent = text || '';
+      output.className = 'adapter-upload-status' + (failed ? ' adapter-upload-status--error' : '');
+    }
+    var adapterUploadForm = document.getElementById('adapter-upload-form');
+    try {
+      var uploadedMessage = sessionStorage.getItem(ADAPTER_UPLOAD_MESSAGE_KEY);
+      if (uploadedMessage) {
+        sessionStorage.removeItem(ADAPTER_UPLOAD_MESSAGE_KEY);
+        adapterUploadMessage(uploadedMessage, false);
+      }
+    } catch (_) {}
+    if (adapterUploadForm) adapterUploadForm.addEventListener('submit', function (event) {
+      event.preventDefault();
+      var input = document.getElementById('adapter-upload-file');
+      var button = document.getElementById('adapter-upload-submit');
+      var file = input && input.files && input.files[0];
+      if (!file) return adapterUploadMessage('Bitte eine ZIP-Datei auswählen.', true);
+      if (!/\\.zip$/i.test(file.name)) return adapterUploadMessage('Die Datei muss die Endung .zip haben.', true);
+      if (file.size > 32 * 1024 * 1024) return adapterUploadMessage('Das Adapterpaket ist größer als 32 MiB.', true);
+      if (button) button.disabled = true;
+      adapterUploadMessage('Paket wird hochgeladen und geprüft …', false);
+      fetch('/adapter/upload', {
+        method: 'POST', credentials: 'same-origin', body: file,
+        headers: { Accept: 'application/json', 'Content-Type': 'application/zip', 'X-Upload-Filename': file.name }
+      }).then(function (response) {
+        return response.json().catch(function () { return {}; }).then(function (payload) {
+          if (!response.ok) throw new Error(payload.error || 'Adapterpaket wurde abgewiesen.');
+          try { sessionStorage.setItem(ADAPTER_UPLOAD_MESSAGE_KEY, payload.message || 'Adapter wurde installiert.'); }
+          catch (_) {}
+          window.location.reload();
+        });
+      }).catch(function (uploadError) {
+        adapterUploadMessage(uploadError.message || 'Upload fehlgeschlagen.', true);
+        if (button) button.disabled = false;
+      });
+    });
+
+    var adapterDeleteDialog = document.getElementById('adapter-delete-dialog');
+    var adapterDeleteForm = document.getElementById('adapter-delete-form');
+    var adapterDeleteInput = document.getElementById('adapter-delete-confirmation');
+    var adapterDeleteSubmit = document.getElementById('adapter-delete-submit');
+    var adapterDeleteId = '';
+    document.querySelectorAll('[data-delete-adapter]').forEach(function (button) {
+      button.addEventListener('click', function () {
+        adapterDeleteId = button.getAttribute('data-adapter-id') || '';
+        var name = button.getAttribute('data-adapter-name') || adapterDeleteId;
+        document.getElementById('adapter-delete-name').textContent = name;
+        document.getElementById('adapter-delete-id-label').textContent = adapterDeleteId;
+        adapterDeleteInput.value = '';
+        adapterDeleteSubmit.disabled = true;
+        document.getElementById('adapter-delete-status').textContent = '';
+        adapterDeleteDialog.showModal();
+        adapterDeleteInput.focus();
+      });
+    });
+    if (adapterDeleteInput) adapterDeleteInput.addEventListener('input', function () {
+      adapterDeleteSubmit.disabled = adapterDeleteInput.value.trim().toLowerCase() !== adapterDeleteId;
+    });
+    var adapterDeleteCancel = document.getElementById('adapter-delete-cancel');
+    if (adapterDeleteCancel) adapterDeleteCancel.addEventListener('click', function () { adapterDeleteDialog.close(); });
+    if (adapterDeleteForm) adapterDeleteForm.addEventListener('submit', function (event) {
+      event.preventDefault();
+      if (!adapterDeleteId || adapterDeleteInput.value.trim().toLowerCase() !== adapterDeleteId) return;
+      adapterDeleteSubmit.disabled = true;
+      fetch('/adapter/' + encodeURIComponent(adapterDeleteId) + '/delete', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirmation: adapterDeleteInput.value.trim() })
+      }).then(function (response) {
+        return response.json().catch(function () { return {}; }).then(function (payload) {
+          if (!response.ok) throw new Error(payload.error || 'Adapter konnte nicht gelöscht werden.');
+          try { sessionStorage.setItem(ADAPTER_UPLOAD_MESSAGE_KEY, payload.message || 'Adapter wurde gelöscht.'); }
+          catch (_) {}
+          window.location.reload();
+        });
+      }).catch(function (deleteError) {
+        document.getElementById('adapter-delete-status').textContent = deleteError.message || 'Löschen fehlgeschlagen.';
+        adapterDeleteSubmit.disabled = false;
+      });
+    });
 
     function restoreAdapterVisibilityPreference(toggle) {
       if (!toggle) return;
@@ -106,7 +218,7 @@ function badge(role, cls, text, title) {
   return `<span class="adapter-badge adapter-badge--${cls}" data-role="${role}"${title ? ` title="${escapeHtml(title)}"` : ''}>${escapeHtml(text)}</span>`;
 }
 
-function renderAdapterBlock(adapter, instances, statusById) {
+function renderAdapterBlock(adapter, instances, statusById, isAdmin) {
   const hasActive = instances.some((inst) => !!(statusById[inst.id] && statusById[inst.id].running));
   const rows = instances.length
     ? instances.map((inst) => renderInstanceRow(adapter, inst, statusById[inst.id] || {})).join('\n')
@@ -126,10 +238,13 @@ function renderAdapterBlock(adapter, instances, statusById) {
                 <span class="muted">${escapeHtml(adapter.description)} · v${escapeHtml(adapter.version)}</span>
 ${adapter.copyright ? `                <span class="adapter-copyright muted">${escapeHtml(adapter.copyright)}</span>` : ''}
               </div>
-              <form action="/adapter/${escapeHtml(adapter.id)}/instances" method="POST" class="adapter-add-form">
-                <input type="text" name="name" placeholder="Neue Instanz" required>
-                <button type="submit">+ Instanz</button>
-              </form>
+              <div class="adapter-block-actions">
+                <form action="/adapter/${escapeHtml(adapter.id)}/instances" method="POST" class="adapter-add-form">
+                  <input type="text" name="name" placeholder="Neue Instanz" required>
+                  <button type="submit">+ Instanz</button>
+                </form>
+                ${isAdmin ? `<button type="button" class="module-toggle-btn button-danger" data-delete-adapter data-adapter-id="${escapeHtml(adapter.id)}" data-adapter-name="${escapeHtml(adapter.name)}"${instances.length ? ` disabled title="Zuerst ${instances.length === 1 ? 'die vorhandene Instanz' : 'alle vorhandenen Instanzen'} löschen"` : ''}>Adapter löschen</button>` : ''}
+              </div>
             </div>
             <div class="adapter-rows">
 ${header}

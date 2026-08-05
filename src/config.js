@@ -38,6 +38,12 @@ module.exports = {
   // Verzeichnis mit den Adapter-Unterordnern (jeder Adapter ein Unterordner mit
   // adapter.json). Per HOME_ESS_ADAPTER_DIR überschreibbar (z. B. für Tests).
   ADAPTER_DIR: process.env.HOME_ESS_ADAPTER_DIR || path.join(ROOT_DIR, 'adapter'),
+  ADAPTER_SELECTION_FILE: process.env.HOME_ESS_ADAPTER_SELECTION_FILE
+    || path.join(DATA_DIR, 'adapter-selection.json'),
+  // Mitgelieferte Sprachdateien bleiben Teil des Releases. Hochgeladene
+  // Ergänzungen liegen dagegen updatefest im Datenverzeichnis.
+  BUILTIN_LANGUAGE_DIR: path.join(ROOT_DIR, 'languages'),
+  LANGUAGE_DIR: process.env.HOME_ESS_LANGUAGE_DIR || path.join(DATA_DIR, 'languages'),
 
   // Standard-Zugangsdaten beim ersten Start (wird gehasht abgelegt).
   DEFAULT_PASSWORD: 'admin',

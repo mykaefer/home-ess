@@ -17,6 +17,7 @@ const identityStore = require('../remote-access/identity-store');
 const secretStore = require('./secrets');
 const dataStore = require('./data-store');
 const crypto = require('crypto');
+const i18n = require('../i18n');
 
 const RUNTIME_PATH = path.join(__dirname, 'runtime.js');
 const RESTART_BASE_MS = 1000;
@@ -250,6 +251,8 @@ function spawnChild(entry) {
     mainPath: manifest.mainPath,
     name: instance.name,
     config: instance.settings || {},
+    language: i18n.current(),
+    translations: i18n.adapterTranslations(manifest.dir),
   });
 }
 
@@ -360,6 +363,17 @@ async function reloadInstance(instanceId) {
   if (instance && instance.enabled) startInstance(instance);
 }
 
+async function reloadAllForLanguage() {
+  const ids = Array.from(running.keys());
+  // Parallel stoppen, danach aus der DB mit den frisch lokalisierten Manifesten
+  // wieder starten. Deaktivierte Instanzen bleiben deaktiviert.
+  await Promise.all(ids.map((id) => stopInstance(id)));
+  if (!db) return;
+  const instances = await instancesRepo.listInstances(db);
+  for (const instance of instances) if (instance.enabled) startInstance(instance);
+  await require('./navigation').refresh(db).catch(() => {});
+}
+
 // Aktivierte Instanzen aus der DB starten und Router an diesen Host binden.
 async function initAdapters(database) {
   db = database;
@@ -422,6 +436,7 @@ module.exports = {
   initAdapters,
   reloadRegistry,
   reloadInstance,
+  reloadAllForLanguage,
   startInstance,
   stopInstance,
   stopAll,

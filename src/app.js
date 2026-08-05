@@ -59,6 +59,7 @@ const batterieMinSocSync = require('./batterie/min-soc-sync');
 const prognosisBehavior = require('./prognosis/behavior');
 const jobs = require('./job-scheduler');
 const { updatePoolEnergyModel } = require('./pool/energy-model');
+const i18n = require('./i18n');
 
 // Baut die Express-App zusammen: DB öffnen, Middleware, Routen registrieren,
 // MQTT-Verbindung mit gespeicherter Konfiguration starten.
@@ -66,10 +67,27 @@ function createApp() {
   const db = openDatabase();
   const app = express();
 
+  // Sprachdateien vor der ersten gerenderten Antwort scannen; die persistierte
+  // Auswahl wird parallel aus SQLite geladen.
+  i18n.init(db).catch((error) => console.error('[i18n] Initialisierung fehlgeschlagen:', error.message));
+
   // Statische Assets (nur CSS o. Ä. — die Seiten selbst werden dynamisch gerendert).
   app.use(express.static(config.PUBLIC_DIR, { index: false }));
   app.use(express.urlencoded({ extended: true }));
-  app.use(express.json());
+  app.use(express.json({ limit: '1mb' }));
+  app.use((_req, _res, next) => i18n.ready().then(() => next(), next));
+  app.use((_req, res, next) => {
+    const send = res.send.bind(res);
+    const json = res.json.bind(res);
+    res.send = (body) => {
+      const type = String(res.getHeader('Content-Type') || '');
+      return send(typeof body === 'string' && !type.includes('application/json') && !body.trimStart().startsWith('<')
+        ? i18n.localizeText(body)
+        : body);
+    };
+    res.json = (body) => json(i18n.localizePayload(body));
+    next();
+  });
   app.use(sessionMiddleware(db));
 
   // Globale Autorisierung nach dem Rechtemodell (read/operate/write + sichtbare
@@ -154,11 +172,13 @@ function createApp() {
     .then((defs) => {
       mqttClient.setStateDefinitions(defs);
       loadMqttConfig(db, (cfg) => {
+        i18n.setTimezone(cfg.timezone);
         if (cfg.host) mqttClient.connect(cfg);
       });
     })
     .catch(() => {
       loadMqttConfig(db, (cfg) => {
+        i18n.setTimezone(cfg.timezone);
         if (cfg.host) mqttClient.connect(cfg);
       });
     });

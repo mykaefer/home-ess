@@ -1415,9 +1415,37 @@ test('Eine erfolgreiche Ausgabe löscht nur einen vorherigen Outputfehler', () =
   const recovered = { lastError: '[OUTPUT_RATE_LIMITED] zu schnell' };
   assert.equal(clearAppliedOutputError(recovered), true);
   assert.equal(recovered.lastError, '');
+  const confirmationRecovered = { lastError: '[REQUEST_TIMEOUT] Bestätigung fehlt' };
+  assert.equal(clearAppliedOutputError(confirmationRecovered), true);
+  assert.equal(confirmationRecovered.lastError, '');
   const unrelated = { lastError: '[WEBSOCKET] Verbindung verloren' };
   assert.equal(clearAppliedOutputError(unrelated), false);
   assert.equal(unrelated.lastError, '[WEBSOCKET] Verbindung verloren');
+});
+
+test('Ein hDP-Bestätigungstimeout erklärt den unklaren Befehl ohne das Gerät offline zu melden', async () => {
+  const sent = [];
+  const connection = new RuntimeConnection({
+    device: { deviceId: DEVICE_ID, address: '127.0.0.1', apiPort: 80, wsPort: 81 },
+    credentials: { instanceId: INSTANCE_ID, bindingKey: BINDING_KEY },
+  });
+  connection.socket = {
+    readyState: 1,
+    send(value) { sent.push(JSON.parse(value)); },
+  };
+  connection.ready = true;
+
+  await assert.rejects(connection.request('output.brightness.set', {
+    output_id: 'main', config_revision: 4, brightness_percent: 72,
+  }, 5), (error) => {
+    assert.equal(error.code, 'REQUEST_TIMEOUT');
+    assert.equal(error.uncertain, true);
+    assert.match(error.message, /hDP-Verbindung ist weiterhin aktiv/);
+    assert.doesNotMatch(error.message, /offline/i);
+    return true;
+  });
+  assert.equal(connection.ready, true);
+  assert.equal(sent.length, 1);
 });
 
 test('pixel-timeline-v1 übernimmt den Gerätenamen getrennt vom Wire-Configobjekt', () => {
@@ -2373,6 +2401,83 @@ test('Geräteverwaltung schaltet Seite und Hardwaredialog exklusiv auf den Gerä
   });
   assert.equal(rejected.status, 422);
   legacyAdapter.stop();
+});
+
+test('veröffentlichte hDP-States folgen einem einheitlichen Schema je Gerätetyp', () => {
+  const {
+    defaultBindings, deviceStateChannels, deviceStateCatalog, deviceStateValues, applyDeviceStatus,
+  } = createHdpAdapter._test;
+  const common = {
+    deviceId: DEVICE_ID, name: 'Flur', online: true, connectionState: 'connected',
+    address: '192.168.1.20', platform: 'esp8266', firmwareVersion: '0.5.1',
+    configRevision: 4, rssi: -51, bindings: defaultBindings(),
+  };
+
+  const percentage = {
+    ...common, hardwareConfig: outputConfig(), calculatedPercentage: 42,
+    calculatedColor: { r: 1, g: 2, b: 3 }, requestedBrightness: 80,
+    outputMode: 'timeline_playing', activeTimelineId: 'indicator-1',
+    effectiveBrightness: 28, estimatedCurrent: 120, powerLimited: false,
+  };
+  const percentageChannels = deviceStateChannels(percentage);
+  assert.deepEqual(percentageChannels.map((channel) => channel.name), ['Status', 'Prozentanzeige']);
+  assert.deepEqual(percentageChannels[0].states.map((state) => state.name).filter((name) =>
+    ['Prozentwert', 'Aktive Timeline', 'Ausgabemodus'].includes(name)), []);
+  assert.ok(percentageChannels[0].states.some((state) => state.name === 'Maximalhelligkeit'));
+  assert.ok(percentageChannels[1].states.some((state) => state.name === 'Prozentwert'));
+  assert.ok(percentageChannels[1].states.some((state) => state.name === 'Aktive Timeline'));
+  assert.ok(deviceStateCatalog(percentage)
+    .find((state) => state.name === 'Prozentwert').category.endsWith('/ Prozentanzeige'));
+
+  const binary = {
+    ...common,
+    hardwareConfig: {
+      revision: 7, device_type: 'binary_io', pins: [
+        { pin: 4, direction: 'input', input_type: 'switch' },
+        { pin: 15, direction: 'output' }, { pin: 16, direction: 'output' },
+      ],
+    },
+    binaryStates: { 4: true, 15: false, 16: true },
+  };
+  const binaryChannels = deviceStateChannels(binary);
+  assert.deepEqual(binaryChannels.map((channel) => channel.name),
+    ['Status', 'Binary-Eingänge', 'Binary-Ausgänge']);
+  assert.deepEqual(binaryChannels.find((channel) => channel.name === 'Binary-Ausgänge')
+    .states.map((state) => state.name), ['GPIO 15', 'GPIO 16']);
+  const binaryAddresses = deviceStateValues(binary).map((state) => state.address);
+  assert.ok(binaryAddresses.includes(`devices/${DEVICE_ID}/binary/pin-15`));
+  assert.ok(binaryAddresses.includes(`devices/${DEVICE_ID}/binary/pin-16`));
+  assert.ok(!binaryAddresses.some((address) => /percentage|timeline|brightness|current|argb/.test(address)));
+
+  const argb = {
+    ...common,
+    hardwareConfig: {
+      ...outputConfig(), device_type: 'argb_output',
+      pins: [
+        { pin: 0, direction: 'input', input_type: 'button' },
+        { pin: 15, direction: 'output' }, { pin: 16, direction: 'output' },
+      ],
+    },
+    bindings: { ...defaultBindings(), argb: { 0: { topic: 'a' }, 2: { topic: 'b' } } },
+    argbStates: { 0: true, 2: false }, binaryStates: { 0: false, 15: true, 16: false },
+    requestedBrightness: 75, outputMode: 'frame', effectiveBrightness: 26,
+    estimatedCurrent: 33, powerLimited: false,
+  };
+  const argbChannels = deviceStateChannels(argb);
+  assert.deepEqual(argbChannels.map((channel) => channel.name),
+    ['Status', 'ARGB-Ausgang', 'LED-Zustände', 'Binary-Eingänge', 'Binary-Ausgänge']);
+  assert.ok(!deviceStateValues(argb).some((state) => /percentage|timeline-id/.test(state.address)));
+  assert.deepEqual(argbChannels.find((channel) => channel.name === 'Binary-Ausgänge')
+    .states.map((state) => state.name), ['GPIO 15', 'GPIO 16']);
+
+  applyDeviceStatus(argb, {
+    wifi_connected: true, wifi_rssi_dbm: -47, ip_address: '192.168.1.42',
+    uptime_seconds: 123, free_heap_bytes: 32000,
+    last_boot: { reset_reason: 'power_on', config_load_status: 'ok' },
+  });
+  const statusStates = deviceStateChannels(argb)[0].states;
+  assert.equal(statusStates.find((state) => state.name === 'IP-Adresse').value, '192.168.1.42');
+  assert.equal(statusStates.find((state) => state.name === 'Gerätelaufzeit').value, 123);
 });
 
 test('Gemerkter OTA-Fehlschlag weicht dem, was das Gerät selbst meldet', () => {

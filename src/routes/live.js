@@ -10,6 +10,7 @@ const { readLivePowerValues } = require('../stromverbrauch/aggregation');
 const { readBatterieData } = require('../batterie/config');
 const operatingState = require('../operating-state');
 const timeHandler = require('../time-handler');
+const i18n = require('../i18n');
 
 function renderEvent(name, data) {
   return `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -19,7 +20,7 @@ function renderEvent(name, data) {
 function formatHeaderPower(value) {
   const parsed = value == null ? NaN : Number(value);
   if (!Number.isFinite(parsed)) return '— W';
-  return `${new Intl.NumberFormat('de-DE', { maximumFractionDigits: 0 }).format(parsed)} W`;
+  return `${new Intl.NumberFormat(i18n.current().locale, { maximumFractionDigits: 0 }).format(parsed)} W`;
 }
 
 function liveRoutes(db) {
@@ -51,7 +52,7 @@ function liveRoutes(db) {
     res.json({
       ...snapshot,
       time: { iso: internalClock.internal.time, display: internalClock.internal.time.slice(0, 5) },
-      date: { iso: internalClock.internal.date, display: internalClock.internal.date },
+      date: { iso: internalClock.internal.date, display: i18n.formatDate(internalClock.internal.date) },
       sky,
       batterySoc: Number.isFinite(batterySoc) ? batterySoc : null,
       power: {
