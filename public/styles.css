@@ -3101,6 +3101,26 @@ body.dash-editing .widget-group {
     margin: 0;
 }
 .adapter-list { display: flex; flex-direction: column; gap: 16px; }
+.adapter-upload-card {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 14px;
+    min-height: 48px;
+    margin-bottom: 16px;
+    padding: 9px 12px;
+    border: 1px solid #dbe3ee;
+    border-radius: 10px;
+    background: #f8fafc;
+}
+.adapter-upload-copy { display: flex; flex-direction: column; gap: 2px; min-width: 230px; }
+.adapter-upload-copy .muted { font-size: 12px; }
+.adapter-upload-form { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.adapter-upload-form input[type="file"] { max-width: 290px; font-size: 12px; }
+.adapter-upload-form button { padding: 6px 11px; }
+.adapter-upload-status { flex-basis: 100%; color: #15803d; font-size: 12px; font-weight: 600; }
+.adapter-upload-status:empty { display: none; }
+.adapter-upload-status--error { color: #b91c1c; }
 .adapter-block {
     border: 1px solid #e5e7eb;
     border-radius: 10px;
@@ -3128,8 +3148,14 @@ body.dash-editing .widget-group {
 }
 /* Copyright je Adapter – eigenständige Anwendung, daher eigener Vermerk. */
 .adapter-copyright { flex-basis: 100%; font-size: 12px; }
+.adapter-block-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .adapter-add-form { display: flex; gap: 6px; }
 .adapter-add-form input { padding: 5px 8px; }
+.adapter-delete-dialog { width: min(520px, calc(100vw - 32px)); padding: 20px; border: 0; border-radius: 12px; }
+.adapter-delete-dialog::backdrop { background: rgba(15, 23, 42, 0.58); }
+.adapter-delete-dialog form { display: flex; flex-direction: column; gap: 12px; }
+.adapter-delete-dialog h2, .adapter-delete-dialog p { margin: 0; }
+.adapter-delete-dialog .danger-text { padding: 10px 12px; border: 1px solid #fecaca; border-radius: 8px; background: #fef2f2; color: #991b1b; }
 
 .adapter-rows { display: flex; flex-direction: column; }
 .adapter-row {
@@ -3187,6 +3213,9 @@ body.dash-editing .widget-group {
         justify-content: flex-start;
         margin-left: 0;
     }
+    .adapter-upload-card { align-items: stretch; flex-direction: column; }
+    .adapter-upload-form { align-items: stretch; flex-direction: column; margin-left: 0; }
+    .adapter-upload-form input[type="file"] { max-width: 100%; }
     .adapter-row, .adapter-row--head {
         grid-template-columns: 1fr 1fr;
         row-gap: 4px;

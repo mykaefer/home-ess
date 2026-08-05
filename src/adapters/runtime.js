@@ -11,6 +11,8 @@
 let adapter = null;
 let currentConfig = {};
 let instanceName = '';
+let language = { code: 'de', locale: 'de-DE', direction: 'ltr', fallback: 'de' };
+let translations = {};
 let hostCallSequence = 0;
 let subscriptionSequence = 0;
 const hostCalls = new Map();
@@ -24,6 +26,29 @@ function send(message) {
       /* Parent weg – beim nächsten Lebenszyklus neu */
     }
   }
+}
+
+function localize(value) {
+  let result = String(value == null ? '' : value);
+  const entries = Object.entries(translations || {}).sort((a, b) => b[0].length - a[0].length);
+  for (const [source, translated] of entries) {
+    if (!source || source === translated) continue;
+    if (result === source) return translated;
+    const escaped = source.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const flexibleWhitespace = escaped.replace(/\s+/g, '\\s+');
+    result = result.replace(new RegExp(`(>\\s*)${flexibleWhitespace}(\\s*<)`, 'gu'), (_match, before, after) => `${before}${translated}${after}`);
+    for (const quote of ['"', "'", '`']) {
+      if (!source.includes(quote)) result = result.replace(new RegExp(`${quote}${escaped}${quote}`, 'gu'), `${quote}${translated}${quote}`);
+    }
+  }
+  return result;
+}
+
+function localizeCategory(value) {
+  return String(value == null ? '' : value)
+    .split(' / ')
+    .map((part) => localize(part))
+    .join(' / ');
 }
 
 function buildHost() {
@@ -45,6 +70,19 @@ function buildHost() {
     getConfig() {
       return currentConfig;
     },
+    get language() {
+      return language.code;
+    },
+    getLanguage() {
+      return { ...language };
+    },
+    // Adaptereigene Sprachdateien verwenden stabile Schlüssel. Fehlt ein
+    // Schlüssel, bleibt der mitgegebene Standardtext erhalten.
+    t(key, defaultText) {
+      if (Object.prototype.hasOwnProperty.call(translations, `@${key}`)) return translations[`@${key}`];
+      const source = defaultText == null ? String(key) : String(defaultText);
+      return localize(source);
+    },
     // Einen einzelnen State-Wert melden.
     publishState(address, value) {
       if (address == null) return;
@@ -62,11 +100,15 @@ function buildHost() {
     // Eintrag: { address, name?, category?, unit?, writable? }
     setStates(list) {
       const states = Array.isArray(list) ? list : [];
-      send({ type: 'states', list: states });
+      send({ type: 'states', list: states.map((state) => state && ({
+        ...state,
+        name: state.name == null ? state.name : localize(state.name),
+        category: state.category == null ? state.category : localizeCategory(state.category),
+      })) });
     },
     // Verbindungszustand zum Gerät/Dienst melden (für die Adapter-Seite).
     setConnected(connected, detail) {
-      send({ type: 'status', connected: !!connected, detail: detail == null ? '' : String(detail) });
+      send({ type: 'status', connected: !!connected, detail: detail == null ? '' : localize(detail) });
     },
     // Persistente Instanzdaten unter settings[key] ablegen, ohne die Instanz neu
     // zu laden. Gedacht für dynamisch erkannte Geräte/Metadaten.
@@ -135,9 +177,11 @@ function buildHost() {
   };
 }
 
-async function start(mainPath, name, cfg) {
+async function start(mainPath, name, cfg, selectedLanguage, selectedTranslations) {
   instanceName = name;
   currentConfig = cfg || {};
+  language = selectedLanguage || language;
+  translations = selectedTranslations || {};
   // eslint-disable-next-line global-require, import/no-dynamic-require
   const factory = require(mainPath);
   const create = typeof factory === 'function' ? factory : factory && factory.createAdapter;
@@ -164,7 +208,7 @@ async function stop() {
 process.on('message', (msg) => {
   if (!msg || typeof msg !== 'object') return;
   if (msg.type === 'init') {
-    start(msg.mainPath, msg.name, msg.config).catch((err) => {
+    start(msg.mainPath, msg.name, msg.config, msg.language, msg.translations).catch((err) => {
       send({ type: 'error', message: err && err.message ? err.message : String(err) });
       process.exit(1);
     });
@@ -208,7 +252,15 @@ process.on('message', (msg) => {
         }
         return adapter.handleManagementRequest(msg.request || {});
       })
-      .then((response) => send({ type: 'management-result', requestId: msg.requestId, response }))
+      .then((response) => {
+        if (response && response.view) response = { ...response, view: {
+          ...response.view,
+          title: localize(response.view.title),
+          body: localize(response.view.body),
+          script: localize(response.view.script),
+        } };
+        send({ type: 'management-result', requestId: msg.requestId, response });
+      })
       .catch((err) => send({ type: 'management-result', requestId: msg.requestId,
         response: { status: 500, json: { error: err && err.message ? err.message : String(err) } } }));
   }

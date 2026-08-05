@@ -8,6 +8,7 @@
 const fs = require('fs');
 const path = require('path');
 const config = require('../config');
+const i18n = require('../i18n');
 
 // Erlaubte Schema-/ID-Form: Kleinbuchstabe, dann Buchstaben/Ziffern/_/-.
 const ID_RE = /^[a-z][a-z0-9_-]*$/;
@@ -142,7 +143,8 @@ function normalizeManagementPage(raw, adapterPath) {
   return result;
 }
 
-function readManifest(dir, folderName) {
+function readManifest(dir, folderName, options = {}) {
+  const report = typeof options.report === 'function' ? options.report : (message) => console.error(message);
   const manifestPath = path.join(dir, folderName, 'adapter.json');
   let raw;
   try {
@@ -154,23 +156,49 @@ function readManifest(dir, folderName) {
   try {
     parsed = JSON.parse(raw);
   } catch (err) {
-    console.error(`[adapters] Ungültiges JSON in ${manifestPath}: ${err.message}`);
+    report(`[adapters] Ungültiges JSON in ${manifestPath}: ${err.message}`);
     return null;
   }
+  // Adapter liefern ihre UI-Texte eigenständig mit. Ohne Sprachverzeichnis
+  // bleibt das Manifest unverändert und damit vollständig abwärtskompatibel.
+  const translations = options.localize === false
+    ? {} : i18n.adapterTranslations(path.join(dir, folderName));
+  const localize = (value) => {
+    if (typeof value === 'string') return i18n.localizeText(value, translations);
+    if (Array.isArray(value)) return value.map(localize);
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, localize(entry)]));
+    }
+    return value;
+  };
+  parsed = localize(parsed);
   const id = String(parsed.id || folderName).toLowerCase();
   const prefix = String(parsed.prefix || id).toLowerCase();
   if (!ID_RE.test(id)) {
-    console.error(`[adapters] Ungültige Adapter-ID "${id}" (${manifestPath})`);
+    report(`[adapters] Ungültige Adapter-ID "${id}" (${manifestPath})`);
     return null;
   }
   if (!ID_RE.test(prefix)) {
-    console.error(`[adapters] Ungültiger Prefix "${prefix}" (${manifestPath})`);
+    report(`[adapters] Ungültiger Prefix "${prefix}" (${manifestPath})`);
     return null;
   }
   const main = String(parsed.main || 'index.js');
-  const mainPath = path.join(dir, folderName, main);
-  if (!fs.existsSync(mainPath)) {
-    console.error(`[adapters] Einstiegsdatei fehlt: ${mainPath}`);
+  const adapterPath = path.join(dir, folderName);
+  if (main.includes('\\') || path.isAbsolute(main)
+      || main.split('/').some((part) => !part || part === '.' || part === '..')) {
+    report(`[adapters] Ungültiger Pfad der Einstiegsdatei "${main}" (${manifestPath})`);
+    return null;
+  }
+  const mainPath = path.join(adapterPath, ...main.split('/'));
+  let mainStat;
+  try {
+    mainStat = fs.lstatSync(mainPath);
+  } catch (_) {
+    report(`[adapters] Einstiegsdatei fehlt: ${mainPath}`);
+    return null;
+  }
+  if (!mainStat.isFile() || mainStat.isSymbolicLink()) {
+    report(`[adapters] Einstiegsdatei ist keine reguläre Datei: ${mainPath}`);
     return null;
   }
   const settings = Array.isArray(parsed.settings)
@@ -179,7 +207,7 @@ function readManifest(dir, folderName) {
   return {
     id,
     folder: folderName,
-    dir: path.join(dir, folderName),
+    dir: adapterPath,
     name: parsed.name ? String(parsed.name) : id,
     prefix,
     version: parsed.version ? String(parsed.version) : '0.0.0',
@@ -211,7 +239,10 @@ function loadRegistry() {
     return manifests;
   }
   for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
+    // Versteckte Verzeichnisse sind interne/transiente Arbeitsordner und nie
+    // eigenständige Adapter. Das verhindert insbesondere, dass ein nach einem
+    // Prozessabbruch übrig gebliebenes Upload-Staging geladen wird.
+    if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
     const manifest = readManifest(dir, entry.name);
     if (!manifest) continue;
     if (seenId.has(manifest.id)) {
@@ -226,7 +257,7 @@ function loadRegistry() {
     seenPrefix.add(manifest.prefix);
     result.push(manifest);
   }
-  result.sort((a, b) => a.name.localeCompare(b.name, 'de'));
+  result.sort((a, b) => a.name.localeCompare(b.name, i18n.current().locale));
   manifests = result;
   return manifests;
 }
@@ -239,4 +270,4 @@ function getManifest(adapterId) {
   return manifests.find((m) => m.id === String(adapterId).toLowerCase()) || null;
 }
 
-module.exports = { loadRegistry, getRegistry, getManifest };
+module.exports = { loadRegistry, getRegistry, getManifest, readManifest };

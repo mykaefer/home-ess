@@ -3,12 +3,13 @@
 const { renderLayout } = require('./layout');
 const { escapeHtml, statusText } = require('./components');
 const { BEHAVIOR_MODELS } = require('../prognosis/config');
+const i18n = require('../i18n');
 const WEEKDAY_NAMES = ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'];
 
 function formatEnergy(value) {
   const number = Number(value);
   return Number.isFinite(number)
-    ? `${number.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} kWh`
+    ? `${number.toLocaleString(i18n.current().locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} kWh`
     : '— kWh';
 }
 
@@ -35,7 +36,7 @@ function statusInfo(status) {
 function formatShortEnergy(value) {
   const number = Number(value);
   return Number.isFinite(number)
-    ? `${number.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} kWh`
+    ? `${number.toLocaleString(i18n.current().locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} kWh`
     : '—';
 }
 
@@ -135,7 +136,7 @@ function renderDataBasisChart(model = {}) {
     const chosenPct = chosenValue == null ? null : Math.min(100, chosenValue / max * 100);
     const marker = !isCurrent && !isFuture && chosenPct != null
       ? `<i class="db-mark" style="bottom:${chosenPct.toFixed(1)}%"></i>` : '';
-    const fmt = (v) => (v == null ? '—' : `${v.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} kWh`);
+    const fmt = (v) => (v == null ? '—' : `${v.toLocaleString(i18n.current().locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} kWh`);
     const title = isFuture
       ? `${String(h).padStart(2, '0')} Uhr · noch offen`
       : isIncomplete
@@ -186,7 +187,7 @@ function renderHeatingDemandChart(model = {}) {
   }
   const max = Math.max(1, ...windows.map((w) => Math.max(Number(w.avgPowerW) || 0, Number(w.todayPowerW) || 0)));
   const lastIndex = Math.max(1, windows.length - 1);
-  const fmt = (value) => `${Math.round(Number(value) || 0).toLocaleString('de-DE')} W`;
+  const fmt = (value) => `${Math.round(Number(value) || 0).toLocaleString(i18n.current().locale)} W`;
   const cells = windows.map((w, index) => {
     const value = Math.max(0, Number(w.avgPowerW) || 0);
     const pct = Math.min(100, value / max * 100);
@@ -419,7 +420,7 @@ function renderPrognosis({ prognosis, message = '', error = '' } = {}) {
       if (!dataEl || !dialog) return;
       var windows = [];
       try { windows = JSON.parse(dataEl.textContent || '[]'); } catch (e) { windows = []; }
-      function fmtW(value) { return Math.round(Number(value) || 0).toLocaleString('de-DE') + ' W'; }
+      function fmtW(value) { return Math.round(Number(value) || 0).toLocaleString(document.documentElement.lang || 'de-DE') + ' W'; }
       function renderHourChart(win) {
         var hourly = win.hourlyPowerW || [];
         var today = win.todayHourlyPowerW || [];

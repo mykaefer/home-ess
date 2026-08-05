@@ -9,6 +9,7 @@
 //   category – Herkunft des Wertes (Seite), abgeleitet aus dem id-Präfix
 
 const { listPvPlants } = require('../photovoltaik/plants');
+const i18n = require('../i18n');
 const { readPhotovoltaikValues } = require('../photovoltaik/aggregation');
 const { computePvForecast } = require('../photovoltaik/forecast');
 const {
@@ -181,7 +182,7 @@ function decimalEntry(id, label, value, unit = '') {
   const rounded = value == null ? null : roundTo(value, 2);
   return {
     id, label, value: rounded,
-    display: rounded == null ? '—' : `${rounded.toLocaleString('de-DE', { maximumFractionDigits: 2 })}${unit ? ` ${unit}` : ''}`,
+    display: rounded == null ? '—' : `${rounded.toLocaleString(i18n.current().locale, { maximumFractionDigits: 2 })}${unit ? ` ${unit}` : ''}`,
   };
 }
 
@@ -702,7 +703,7 @@ async function buildCalculatedInternalValues(db, cache) {
 
   for (const entry of entries) entry.category = categoryForId(entry.id);
 
-  entries.sort((a, b) => a.label.localeCompare(b.label, 'de'));
+  entries.sort((a, b) => a.label.localeCompare(b.label, i18n.current().locale));
   return entries;
 }
 

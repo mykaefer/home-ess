@@ -54,6 +54,7 @@ test('HOME_ESS_DATA_DIR steuert alle standardmäßigen dauerhaften Pfade', () =>
       data: config.DATA_DIR,
       db: config.DB_PATH,
       identity: config.IDENTITY_DIR,
+      adapterSelection: config.ADAPTER_SELECTION_FILE,
     }));
   `], {
     cwd: ROOT,
@@ -69,6 +70,7 @@ test('HOME_ESS_DATA_DIR steuert alle standardmäßigen dauerhaften Pfade', () =>
     data: dataDir,
     db: path.join(dataDir, 'app.db'),
     identity: path.join(dataDir, 'identity'),
+    adapterSelection: path.join(dataDir, 'adapter-selection.json'),
   });
 });
 
@@ -79,6 +81,31 @@ test('Installer richtet den ausgelagerten systemd-Self-Updater ein', () => {
   assert.match(script, /UPDATE_HELPER_DIR="\/usr\/local\/lib\/\$\{APP_NAME\}"/);
   assert.match(script, /UPDATE_HELPER_FILE="\$\{UPDATE_HELPER_DIR\}\/self-update\.js"/);
   assert.match(script, /systemctl enable --now "\$\{APP_NAME\}-update\.path"/);
+});
+
+test('Adapterverzeichnis bleibt gezielt uploadfähig und Self-Updates erhalten Fremdadapter', () => {
+  const script = fs.readFileSync(path.join(ROOT, 'install.sh'), 'utf8');
+  const updater = fs.readFileSync(path.join(ROOT, 'updater', 'self-update.js'), 'utf8');
+  assert.match(script, /install -d -m 2775 -o root -g "\$\{APP_GROUP\}" "\$\{INSTALL_DIR\}\/adapter"/);
+  assert.match(script, /ReadWritePaths=\$\{DATA_DIR\} \$\{INSTALL_DIR\}\/adapter/);
+  assert.match(script, /reconcile_adapter_selection/);
+  assert.match(script, /backup_adapter_directory/);
+  assert.match(script, /RESTORE_ALL_ADAPTERS/);
+  assert.match(script, /--all\) RESTORE_ALL_ADAPTERS=1/);
+  assert.match(updater, /adapterSelection\.reconcileUpdate/);
+  assert.match(updater, /ADAPTER_SELECTION_FILE/);
+});
+
+test('Installer akzeptiert ausschließlich den ausdrücklichen Schalter --all', () => {
+  const accepted = execFileSync('bash', ['-c', 'source ./install.sh; parse_arguments --all; printf %s "$RESTORE_ALL_ADAPTERS"'], {
+    cwd: ROOT, encoding: 'utf8',
+  });
+  assert.equal(accepted, '1');
+  const rejected = spawnSync('bash', ['-c', 'source ./install.sh; parse_arguments --alles'], {
+    cwd: ROOT, encoding: 'utf8',
+  });
+  assert.notEqual(rejected.status, 0);
+  assert.match(rejected.stderr, /Unbekannte Option/);
 });
 
 test('Optionale Installer-Guards behandeln „nichts zu tun“ als Erfolg', () => {

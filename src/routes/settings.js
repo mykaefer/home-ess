@@ -11,6 +11,8 @@ const renderSettings = require('../views/settings');
 const timeHandler = require('../time-handler');
 const updateSettings = require('../update/settings');
 const updateService = require('../update/service');
+const i18n = require('../i18n');
+const adapterHost = require('../adapters/host');
 
 // Query-Parameter (?tab=) auf einen gültigen Tab abbilden. Der alte
 // /remote-access-Link leitet mit ?tab=remote-access hierher.
@@ -43,6 +45,8 @@ function settingsRoutes(db) {
       enabledKeys,
       updateConfig,
       updateStatus: updateService.getStatus(),
+      languages: i18n.listLanguages(),
+      currentLanguage: i18n.current(),
       ...extra,
     }));
   }
@@ -53,6 +57,31 @@ function settingsRoutes(db) {
 
   router.get('/settings/time.json', requireAuth, (_req, res) => {
     res.json(timeHandler.snapshot());
+  });
+
+  // --- Sprache -------------------------------------------------------------
+  router.post('/settings/language', requireAuth, async (req, res, next) => {
+    try {
+      await i18n.select(req.body.language);
+      // Manifesttexte, Navigation, State-Kataloge und adaptereigene Ansichten
+      // müssen denselben Sprachstand verwenden.
+      adapterHost.reloadRegistry();
+      await adapterHost.reloadAllForLanguage();
+      return sendSettings(res, { activeTab: 'allgemein', languageMessage: i18n.t('language.applied') });
+    } catch (error) {
+      return sendSettings(res, { activeTab: 'allgemein', languageError: error.message }).catch(next);
+    }
+  });
+
+  router.post('/settings/language/upload', requireAuth, async (req, res) => {
+    try {
+      const filename = String(req.body && req.body.filename || '');
+      const document = req.body && req.body.language;
+      const installed = i18n.install(filename, document);
+      return res.json({ ok: true, installed: installed.code, languages: i18n.listLanguages() });
+    } catch (error) {
+      return res.status(400).json({ error: error.message || i18n.t('language.invalid') });
+    }
   });
 
   // --- Module (früher eigener Menüpunkt, jetzt Tab „Module") ---------------
@@ -150,6 +179,7 @@ function settingsRoutes(db) {
         return sendSettings(res, { mqtt: req.body, mqttMessage: 'Fehler beim Speichern.' }).catch(next);
       }
       timeHandler.configure(cfg);
+      i18n.setTimezone(cfg.timezone);
       loadAllStateDefinitions(db)
         .then((definitions) => {
           mqttClient.setStateDefinitions(definitions);

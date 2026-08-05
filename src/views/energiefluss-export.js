@@ -10,6 +10,7 @@
 // (schwarzer Hintergrund, helle Schrift).
 
 const { escapeHtml } = require('./components');
+const i18n = require('../i18n');
 
 let pkgVersion = '—';
 try {
@@ -98,8 +99,9 @@ function renderEnergieflussExport({ data = {}, theme = 'light', slug = '' } = {}
     window.addEventListener('homeess:mqtt', refresh);
     setInterval(refresh, 5000);`;
 
-  return `<!DOCTYPE html>
-<html lang="de">
+  const language = i18n.current();
+  const html = `<!DOCTYPE html>
+<html lang="${escapeHtml(language.code)}" dir="${escapeHtml(language.direction)}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -118,6 +120,7 @@ ${script}
   </script>
 </body>
 </html>`;
+  return i18n.localizeText(html);
 }
 
 module.exports = renderEnergieflussExport;

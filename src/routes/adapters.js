@@ -21,6 +21,10 @@ const { renderLayout } = require('../views/layout');
 const adapterSecrets = require('../adapters/secrets');
 const adapterData = require('../adapters/data-store');
 const adapterNavigation = require('../adapters/navigation');
+const adapterPackages = require('../adapters/package-installer');
+const adapterSelection = require('../adapters/selection-policy');
+const config = require('../config');
+const i18n = require('../i18n');
 
 function streamUpload(req, maxBytes) {
   return new Promise((resolve, reject) => {
@@ -46,7 +50,8 @@ function streamUpload(req, maxBytes) {
       bytes += chunk.length;
       if (bytes > maxBytes) {
         fail(Object.assign(new Error('Upload ist zu groß.'), { status: 413 }));
-        req.destroy();
+        req.unpipe(out);
+        req.resume();
       }
     });
     req.on('aborted', () => fail(new Error('Upload wurde abgebrochen.')));
@@ -82,6 +87,7 @@ async function suggestPort(start) {
 
 function adapterRoutes(db) {
   const router = express.Router();
+  const deletingAdapters = new Set();
   const refreshNavigation = () => adapterNavigation.refresh(db).catch(() => {});
 
   async function sendOverview(res, { message = '', error = '' } = {}) {
@@ -227,6 +233,107 @@ function adapterRoutes(db) {
     sendOverview(res).catch(() => res.status(500).send('Fehler beim Laden der Adapter.'));
   });
 
+  // Adaptercode darf ausschließlich als geprüftes ZIP-Paket in die Registry
+  // gelangen. Die Paketlogik entpackt zunächst außerhalb von /adapter, prüft
+  // Struktur, Manifest, Einstiegscode und Archivpfade und installiert erst
+  // danach. Diese codewirksame Aktion bleibt Administratoren vorbehalten.
+  router.post('/adapter/upload', requireAuth, async (req, res) => {
+    let upload = null;
+    try {
+      if (!req.access || !req.access.isAdmin) {
+        req.resume();
+        return res.status(403).json({ error: 'Nur Administratoren dürfen Adapter installieren.' });
+      }
+      const contentType = String(req.headers['content-type'] || '').split(';')[0].toLowerCase();
+      if (!['application/zip', 'application/x-zip-compressed', 'application/octet-stream'].includes(contentType)) {
+        req.resume();
+        return res.status(415).json({ error: 'Adapterpakete müssen als ZIP-Datei hochgeladen werden.' });
+      }
+      const filename = String(req.headers['x-upload-filename'] || '').trim();
+      if (!filename || !/\.zip$/i.test(filename) || filename.length > 255) {
+        req.resume();
+        return res.status(422).json({ error: 'Bitte eine ZIP-Datei mit gültigem Dateinamen auswählen.' });
+      }
+      upload = await streamUpload(req, adapterPackages.MAX_ARCHIVE_BYTES);
+      const installed = adapterPackages.installAdapterPackage(upload.file);
+      try {
+        adapterSelection.markInstalled(config.ADAPTER_SELECTION_FILE, installed.id);
+      } catch (selectionError) {
+        fs.rmSync(installed.dir, { recursive: true, force: true });
+        throw selectionError;
+      }
+      host.reloadRegistry();
+      await refreshNavigation();
+      return res.status(201).set('Cache-Control', 'no-store').json({
+        ok: true,
+        adapter: { id: installed.id, name: installed.name, prefix: installed.prefix, version: installed.version },
+        message: `Adapter „${installed.name}“ wurde geprüft und installiert.`,
+      });
+    } catch (error) {
+      const status = Number(error && error.status) || 500;
+      const message = status >= 500
+        ? 'Adapterpaket konnte nicht sicher installiert werden.'
+        : (error && error.message ? error.message : 'Adapterpaket ist ungültig.');
+      return res.status(status).set('Cache-Control', 'no-store').json({
+        error: message, code: error && error.code ? error.code : 'ADAPTER_UPLOAD_FAILED',
+      });
+    } finally {
+      if (upload && upload.dir) fs.rmSync(upload.dir, { recursive: true, force: true });
+    }
+  });
+
+  // Adaptercode wird nur nach einer zweiten, serverseitig geprüften Bestätigung
+  // entfernt. Bestehende Instanzen müssen vorher einzeln gelöscht werden, damit
+  // weder laufende Prozesse noch Konfigurationen oder States verwaisen.
+  router.post('/adapter/:adapterId/delete', requireAuth, async (req, res) => {
+    let deleteLocked = false;
+    try {
+      if (!req.access || !req.access.isAdmin) {
+        return res.status(403).json({ error: 'Nur Administratoren dürfen Adapter löschen.' });
+      }
+      const adapterId = String(req.params.adapterId || '').trim().toLowerCase();
+      const confirmation = String(req.body && req.body.confirmation || '').trim().toLowerCase();
+      if (!adapterId || confirmation !== adapterId) {
+        return res.status(422).json({ error: 'Die eingegebene Adapter-ID stimmt nicht überein.' });
+      }
+      if (deletingAdapters.has(adapterId)) {
+        return res.status(409).json({ error: 'Dieser Adapter wird bereits gelöscht.' });
+      }
+      deletingAdapters.add(adapterId);
+      deleteLocked = true;
+      const instances = await instancesRepo.listInstancesForAdapter(db, adapterId);
+      if (instances.length) {
+        return res.status(409).json({
+          error: `Der Adapter besitzt noch ${instances.length} Instanz${instances.length === 1 ? '' : 'en'}. Bitte zuerst alle Instanzen löschen.`,
+        });
+      }
+      adapterSelection.markRemoved(config.ADAPTER_SELECTION_FILE, adapterId);
+      let removed;
+      try {
+        removed = adapterPackages.removeAdapterPackage(adapterId);
+      } catch (deleteError) {
+        try { adapterSelection.markInstalled(config.ADAPTER_SELECTION_FILE, adapterId); } catch (_) { /* Originalfehler behalten */ }
+        throw deleteError;
+      }
+      host.reloadRegistry();
+      await refreshNavigation();
+      return res.status(200).set('Cache-Control', 'no-store').json({
+        ok: true,
+        message: `Adapter „${removed.name}“ wurde dauerhaft gelöscht.`,
+      });
+    } catch (error) {
+      const status = Number(error && error.status) || 500;
+      return res.status(status).set('Cache-Control', 'no-store').json({
+        error: status >= 500
+          ? 'Adapter konnte nicht sicher gelöscht werden.'
+          : (error && error.message ? error.message : 'Adapter konnte nicht gelöscht werden.'),
+        code: error && error.code ? error.code : 'ADAPTER_DELETE_FAILED',
+      });
+    } finally {
+      if (deleteLocked) deletingAdapters.delete(String(req.params.adapterId || '').trim().toLowerCase());
+    }
+  });
+
   // Live-Status (aktiv + Verbindung) je Instanz für die Adapter-Seite.
   router.get('/adapter/status.json', requireAuth, async (req, res) => {
     try {
@@ -241,9 +348,11 @@ function adapterRoutes(db) {
 
   // Neue Instanz eines Adapters anlegen.
   router.post('/adapter/:adapterId/instances', requireAuth, (req, res) => {
-    const manifest = registry.getManifest(req.params.adapterId);
+    const adapterId = String(req.params.adapterId || '').trim().toLowerCase();
+    const manifest = registry.getManifest(adapterId);
     const name = String(req.body.name || '').trim();
     if (!manifest) return res.status(404).send('Unbekannter Adapter.');
+    if (deletingAdapters.has(adapterId)) return res.status(409).send('Dieser Adapter wird gerade gelöscht.');
     if (!name) return sendOverview(res, { error: 'Bitte einen Namen angeben.' });
     instancesRepo
       .createInstance(db, manifest.id, name)
@@ -387,7 +496,7 @@ function adapterRoutes(db) {
     };
     return (Array.isArray(stored) ? stored : []).map((device) => ({ ...device,
       channels: (device.channels || []).map((channel) => ({ ...channel, states: (channel.states || []).map(stateFor) })),
-    })).sort((a, b) => String(a.customName || a.name || a.address).localeCompare(String(b.customName || b.name || b.address), 'de'));
+    })).sort((a, b) => String(a.customName || a.name || a.address).localeCompare(String(b.customName || b.name || b.address), i18n.current().locale));
   }
 
   router.get('/adapter/instance/:id/devices', requireAuth, async (req, res) => {
@@ -459,6 +568,7 @@ function adapterRoutes(db) {
           canWrite: !!(req.access && req.access.canWrite),
           isAdmin: !!(req.access && req.access.isAdmin),
         },
+        language: i18n.current(),
       });
       const status = Math.max(100, Math.min(599, Number(response && response.status) || 200));
       if (response && response.redirect) return res.redirect(status >= 300 && status < 400 ? status : 303, String(response.redirect));
@@ -678,8 +788,8 @@ function adapterRoutes(db) {
     }
     return metaRows.map((device) => ({
       ...device,
-      values: (byTopic.get(String(device.topic || '')) || []).sort((a, b) => a.address.localeCompare(b.address, 'de')),
-    })).sort((a, b) => String(a.customName || a.friendlyName || a.topic || '').localeCompare(String(b.customName || b.friendlyName || b.topic || ''), 'de'));
+      values: (byTopic.get(String(device.topic || '')) || []).sort((a, b) => a.address.localeCompare(b.address, i18n.current().locale)),
+    })).sort((a, b) => String(a.customName || a.friendlyName || a.topic || '').localeCompare(String(b.customName || b.friendlyName || b.topic || ''), i18n.current().locale));
   }
 
   router.get('/adapter/instance/:id/tasmota-devices', requireAuth, async (req, res) => {

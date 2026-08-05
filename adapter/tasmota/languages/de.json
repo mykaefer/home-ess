@@ -1,0 +1,25 @@
+{
+  "code": "de",
+  "name": "Deutsch",
+  "locale": "de-DE",
+  "messages": {
+    "description": "Stellt einen lokalen MQTT-Endpunkt für Tasmota-Geräte bereit, erkennt deren Werte automatisch und führt registrierte Geräte mit Online-/Offline-Erkennung.",
+    "range": "Erlaubter IP-Bereich",
+    "username": "Benutzername",
+    "password": "Kennwort",
+    "online": "Online",
+    "offline": "Offline",
+    "general": "Allgemein",
+    "devices": "Geräte",
+    "switching": "Schalten",
+    "energy": "Energie",
+    "values": "Werte",
+    "energy_total": "Energie gesamt",
+    "energy_today": "Energie heute",
+    "energy_yesterday": "Energie gestern",
+    "current_power": "Aktuelle Leistung"
+  },
+  "aliases": {
+    "Stellt einen lokalen MQTT-Endpunkt fuer Tasmota-Geraete bereit, erkennt deren Werte automatisch und fuehrt registrierte Geraete mit Online-/Offline-Erkennung.": "description"
+  }
+}

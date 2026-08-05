@@ -2,10 +2,11 @@
 
 const { renderLayout } = require('./layout');
 const { escapeHtml, statusText } = require('./components');
+const i18n = require('../i18n');
 
 function formatDate(ts) {
   if (!Number.isFinite(ts) || ts <= 0) return '—';
-  return new Date(ts).toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'medium', timeZone: 'UTC' });
+  return new Date(ts).toLocaleString(i18n.current().locale, { dateStyle: 'medium', timeStyle: 'medium', timeZone: 'UTC' });
 }
 
 function formatInterval(ms) {

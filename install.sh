@@ -16,9 +16,12 @@ readonly UPDATE_HELPER_DIR="/usr/local/lib/${APP_NAME}"
 readonly UPDATE_HELPER_FILE="${UPDATE_HELPER_DIR}/self-update.js"
 readonly LEGACY_SERVICE_FILE="/etc/systemd/system/server.service"
 readonly LEGACY_DATA_DIR="${INSTALL_DIR}/data"
+readonly ADAPTER_SELECTION_FILE="${DATA_DIR}/adapter-selection.json"
 readonly MIN_NODE_MAJOR=20
 readonly MIN_NODE_MINOR=17
 INSTALL_MODE="install"
+RESTORE_ALL_ADAPTERS=0
+ADAPTER_BACKUP_DIR=""
 
 info() {
   printf '\n\033[1;34m[homeESS]\033[0m %s\n' "$*"
@@ -36,10 +39,21 @@ on_error() {
   printf '\n\033[1;31m[homeESS] Installation in Zeile %s fehlgeschlagen (Code %s).\033[0m\n' \
     "${line_number}" "${exit_code}" >&2
   printf '[homeESS] Fehlgeschlagener Befehl: %s\n' "${failed_command}" >&2
+  restore_adapter_backup
   exit "${exit_code}"
 }
 
 trap 'on_error "${LINENO}" "${BASH_COMMAND}"' ERR
+
+parse_arguments() {
+  local argument
+  for argument in "$@"; do
+    case "${argument}" in
+      --all) RESTORE_ALL_ADAPTERS=1 ;;
+      *) fail "Unbekannte Option: ${argument}. Unterstützt wird ausschließlich --all."
+    esac
+  done
+}
 
 require_root() {
   if [[ ${EUID} -ne 0 ]]; then
@@ -175,8 +189,41 @@ stop_service_for_update() {
 clone_application() {
   info "Lade homeESS von GitHub"
   GIT_TERMINAL_PROMPT=0 git clone --depth 1 --branch main "${REPOSITORY_URL}" "${INSTALL_DIR}"
+  reconcile_adapter_selection
   rm -rf "${INSTALL_DIR}/test"
   set_application_permissions
+}
+
+backup_adapter_directory() {
+  ADAPTER_BACKUP_DIR="$(mktemp -d /opt/.home-ess-adapters.XXXXXXXX)"
+  if [[ -d ${INSTALL_DIR}/adapter && ! -L ${INSTALL_DIR}/adapter ]]; then
+    mv -- "${INSTALL_DIR}/adapter" "${ADAPTER_BACKUP_DIR}/adapter"
+  else
+    install -d -m 0755 "${ADAPTER_BACKUP_DIR}/adapter"
+  fi
+}
+
+restore_adapter_backup() {
+  [[ -n ${ADAPTER_BACKUP_DIR} && -d ${ADAPTER_BACKUP_DIR}/adapter && -d ${INSTALL_DIR} ]] || return 0
+  rm -rf -- "${INSTALL_DIR}/adapter"
+  mv -- "${ADAPTER_BACKUP_DIR}/adapter" "${INSTALL_DIR}/adapter"
+  rmdir -- "${ADAPTER_BACKUP_DIR}" 2>/dev/null || true
+  ADAPTER_BACKUP_DIR=""
+}
+
+cleanup_adapter_backup() {
+  [[ -n ${ADAPTER_BACKUP_DIR} && -d ${ADAPTER_BACKUP_DIR} ]] || return 0
+  rm -rf -- "${ADAPTER_BACKUP_DIR}"
+  ADAPTER_BACKUP_DIR=""
+}
+
+reconcile_adapter_selection() {
+  local previous="-"
+  if [[ -n ${ADAPTER_BACKUP_DIR} ]]; then
+    previous="${ADAPTER_BACKUP_DIR}/adapter"
+  fi
+  /usr/bin/node "${INSTALL_DIR}/src/adapters/selection-policy.js" \
+    reconcile "${previous}" "${INSTALL_DIR}/adapter" "${ADAPTER_SELECTION_FILE}" "${RESTORE_ALL_ADAPTERS}"
 }
 
 # Anwendungscode gehört root und ist nur lesbar. Ein vorhandener alter
@@ -185,6 +232,9 @@ clone_application() {
 set_application_permissions() {
   find "${INSTALL_DIR}" -path "${LEGACY_DATA_DIR}" -prune -o -exec chown root:root {} +
   find "${INSTALL_DIR}" -path "${LEGACY_DATA_DIR}" -prune -o -exec chmod u=rwX,go=rX {} +
+  # Nur die Wurzel darf der Webprozess um neue, zuvor geprüfte Adapterordner
+  # ergänzen. Mitgelieferter Anwendungscode bleibt root-owned und read-only.
+  install -d -m 2775 -o root -g "${APP_GROUP}" "${INSTALL_DIR}/adapter"
 }
 
 update_application() {
@@ -201,8 +251,10 @@ update_application() {
   fi
 
   GIT_TERMINAL_PROMPT=0 git fetch --depth 1 origin main
+  backup_adapter_directory
   git checkout -B main FETCH_HEAD
   git reset --hard FETCH_HEAD
+  reconcile_adapter_selection
   rm -rf "${INSTALL_DIR}/test"
   set_application_permissions
 }
@@ -296,7 +348,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
-ReadWritePaths=${DATA_DIR}
+ReadWritePaths=${DATA_DIR} ${INSTALL_DIR}/adapter
 
 [Install]
 WantedBy=multi-user.target
@@ -336,6 +388,7 @@ verify_installation() {
 }
 
 main() {
+  parse_arguments "$@"
   require_root
   check_platform
   check_installation_target
@@ -350,6 +403,7 @@ main() {
   install_self_updater
   install_systemd_service
   verify_installation
+  cleanup_adapter_backup
 }
 
 # Bei `curl ... | bash` ist BASH_SOURCE leer bzw. nicht gesetzt. Der Fallback

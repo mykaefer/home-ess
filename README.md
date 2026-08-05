@@ -1,654 +1,79 @@
 # homeESS
 
-Basis für ein **Energy Storage System**. Der Server abonniert MQTT-Topics eines
-ioBroker-Brokers und soll daraus ableiten, wie Lasten zu schalten sind.
-Bedienung über ein Web-Dashboard mit vorgeschaltetem Login.
+[Hier klicken für die deutsche Fassung.](README_de.md)
 
-> Architektur & Entwickler-Einstieg: siehe [PROJECT_CONTEXT.md](PROJECT_CONTEXT.md).
-> ioBroker-MQTT-Regelwerk: siehe [MQTT.md](MQTT.md).
-> Neue Verbraucher ans Lastmanagement anbinden: siehe [LEVEL_HANDLING.md](LEVEL_HANDLING.md).
+homeESS is a self-hosted energy management server for photovoltaic systems,
+batteries and controllable electrical loads. It reads device values through
+MQTT or isolated adapters, calculates the current energy state and controls
+loads through a responsive web interface.
 
-## Features (aktuell)
+The server is built with Node.js and SQLite and is intended to run continuously
+on small, energy-efficient Linux systems. A detailed product overview is
+available in [FEATURES.md](FEATURES.md).
 
-- 📱 **Mobile Ansicht** — parallel zur Desktop-Ansicht eine vollwertige
-  Smartphone-Darstellung (≤ 768px): kompakter Header, untere Tab-Bar mit
-  Menü-Sheet statt Seitenleiste, Dialoge als Bottom-Sheets und pro Seite eine
-  eigene, touchtaugliche Anordnung (kein bloßes Zusammenquetschen der Kacheln).
-  Der Zoomfaktor ist auf 100 % fixiert (kein Pinch-/Doppeltipp-Zoom), damit das
-  Layout auf allen Geräten 1:1 bleibt.
-- 🔐 **Login** mit Nutzerauswahl, Rollen (`Lesen`, `Bedienen`, `Schreiben`) und
-  „Angemeldet bleiben" (persistentes Cookie). Der Erstnutzer ist Administrator
-  und hat dauerhaft alle Rechte.
-- 🖥️ **Dashboard** — mehrere Dashboard-Tabs und frei konfigurierbare **Widgets**
-  in drei Sorten: **Wert-Kachel** (Live-Wert aus dem zentralen Wertekatalog,
-  Größen S/M/L und optionale Wertfarbe), **Schalter-Kachel** (Ein/Aus-Kachel für
-  Geräte und Schaltgruppen) und **Info-Kachel** (System-Infos wie homeESS-/Node-
-  Version, Plattform, CPU-/RAM-Auslastung als Fortschrittsbalken u. a. — Felder
-  per Häkchen wählbar). **Gruppen** mit Titel und Breite (voll/halb/viertel),
-  Anordnung per **Drag & Drop** im Bearbeitungsmodus; Widgets per Drag in
-  Gruppen verschiebbar, Widgets/Gruppen/Tabs bearbeit- und löschbar.
-- ⚡ **Stromverbrauch** — KPI-Kacheln: Eigenverbrauch, Netzbezug, Heute,
-  Woche, Jahr (inkl. Vorjahr), konfigurierbare MQTT-Topics je Phase. Der Button
-  **„Wert abgleichen"** (oben rechts) setzt zum Tagesstart wahlweise die Wochen-,
-  Jahres- oder **Vorjahressumme** (Netzbezug + Einspeisung) sowie das **Minimum/
-  Maximum** von Netzbezug bzw. Eigenverbrauch (Wert + Datum). Wird ein Zähler-Topic
-  gewechselt (z. B. Zählertausch), gilt der erste neue Rohwert als Ist-Stand und
-  wird nicht als Zählersprung gezählt. Die Eigenverbrauchsenergie wird als
-  `PV + Netzbezug − Einspeisung − Batterieladung + Batterieentladung` berechnet;
-  damit bleibt insbesondere der nächtliche Hausverbrauch aus dem Akku sichtbar.
-  Die aktuelle Eigenverbrauchsleistung kommt dagegen direkt aus den
-  Wechselrichter-Topics und wird nur um verbraucherseitig einspeisende
-  PV-Anlagen ergänzt — ohne Batterieeinfluss oder Glättung.
-  Optional lassen sich unter „Zähler-Rohdaten" drei Topics für einen **echten
-  Eigenverbrauchszähler** (L1–L3) hinterlegen. Liefert er Werte, gilt sein
-  Tageszuwachs plus verbraucherseitige PV als tatsächlicher Eigenverbrauch statt
-  der Bilanz (die Jahres-/Wochensummen bleiben weiterhin bilanzbasiert).
-- ☀️ **Photovoltaik** — PV-Anlagenverwaltung mit MQTT-Topics und Metadaten
-  (Zelltyp, **Konverter-/Reglertyp**); je Anlage **aktuelle Leistung groß,
-  Idealwert (Clear-Sky-Modell) klein**. Idealwert berücksichtigt Zelltyp- und
-  **Konverter-Wirkungsgrad** (temperaturabhängig); Sonnenstand via echter
-  **Ortssonnenzeit** (Längengrad, Zeitzone inkl. Sommerzeit, Zeitgleichung).
-  **Direkte-Sonne-Erkennung** je Anlage und globales **Himmelssymbol in der
-  Titelzeile** (☀️/☁️/🌙). Ertrag heute/Woche/Jahr inkl. Vorjahr; Button
-  **„Wert abgleichen"** (oben rechts) für Wochen-/Jahres-/Vorjahressumme und
-  Minimum/Maximum (Wert + Datum). Das **Ertrags-Topic** ist ein kumulativer
-  **Rohzähler** (wie alle Zählertopics): nur seine Zuwächse werden intern gezählt,
-  „Ertrag heute" ist der Fortschritt seit Tagesbeginn — ein Rohwert wird nie als
-  Tagesertrag übernommen, und ein Topic-Wechsel führt zu keinem Sprung. Je Anlage
-  ist die **Einheit** des Zählers (**Wh/kWh**) einstellbar.
-  - **Sonnenreferenz-Cutoff** je Anlage (getrennt morgens/abends, Default 10 %):
-    nur Anlagen, auf die die Sonne brauchbar scheint (Idealwert ≥ Anteil der
-    kWp-Spitze), zählen für Sonnenintensität und ☀️/☁️ — verhindert falsche
-    Sonnenwerte einer groß dimensionierten, off-axis stehenden Anlage.
-  - **PV-Prognose** (Open-Meteo, kostenlos & ohne API-Key): erwarteter Tagesertrag
-    für **Heute + 3 Tage**; die Heute-Karte zeigt zusätzlich *bis jetzt* und
-    *noch erwartet*. Nutzt dasselbe Clear-Sky-Modell wie der Live-Idealwert.
-  - **Selbstkalibrierung** (je Anlage aktivierbar): tageszeit-abhängiger
-    Kalibrierfaktor je **15-Minuten-Fenster**, der den gemessenen Schnitt der
-    letzten 15 Minuten mit der von Open-Meteo gelieferten Strahlung desselben
-    Fensters vergleicht und sich sanft nachzieht (in **beide Richtungen**) — erkennt
-    u. a. Verschattungen und fließt in Idealwert und Prognose ein. Kalibriert wird
-    je Anlage nur bei brauchbarem Sonnenstand (Sonnenreferenz-Cutoff morgens/abends);
-    Randzeiten erben den nächstgelegenen Faktor. **„Kalibrierung löschen"** im
-    Bearbeiten-Dialog setzt eine Anlage zurück.
-- 🔋 **Batterie** — Das zentrale Element der Plattform.
-  - Konfigurierbare MQTT-Topics für SoC, Leistung, Spannung, Temperatur.
-  - KPI-Kacheln (nur wenn Topic konfiguriert), SoC-Balken mit Farbwechsel
-    (grün ≥ 50 %, dunkelgelb 20–49 %, rot < 20 %), Leistungsanzeige mit
-    Richtungsindikator (Laden/Entladen/Bereit).
-  - **Batterie-Ladeanzeige in der Titelzeile**: Icon in Batterieform mit
-    Füllstand und Prozentzahl, erscheint automatisch sobald SoC-Daten
-    vorliegen, live aktualisiert via SSE.
-  - Mindest-SoC mit MQTT-Ziel-Topic und 5-%-Schieberegler sowie Batterietyp,
-    Lade- und Entladewirkungsgrad,
-    Zellzahl, Kapazität in Ah und manuell anpassbaren unteren/oberen Spannungsgrenzen.
-    Zusätzlich ein optionales **Remote-Topic** für den Mindest-SoC: Änderungen
-    werden dorthin gespiegelt, und eine externe Änderung des Topics zieht die
-    Einstellung mit (bidirektional).
-- 🔌 **Messen + Schalten** (Menü unter Batterie) — Seite für schaltbare/messbare
-  Geräte.
-  - Frei anlegbare **Gruppen** als einklappbare Abschnitte über die volle
-    Seitenbreite (Standard zugeklappt, Auf/Zu-Zustand wird im Browser gemerkt),
-    fest alphanumerisch sortiert. **Geräte** sind einzeilige Zeilen über die
-    volle Breite, per Drag & Drop frei anordbar und zwischen Gruppen
-    verschiebbar; gruppenlose Geräte stehen am Ende unter den Gruppen.
-  - **Mehrschichtige Gruppen:** Über die Drag-Fläche am Gruppenkopf lassen sich
-    Gruppen – wie Verzeichnisse – beliebig tief ineinander schieben
-    (Untergruppen stehen eingerückt und klappen mit der Elterngruppe zu; Zyklen
-    werden abgewiesen). Prioritäten werden **nicht** vererbt. Der Titel einer
-    Gruppe mit Untergruppen zeigt verkürzt **„Ebene/Gesamt W"** (eigene Ebene /
-    Gesamtleistung inkl. Untergruppen).
-  - Die Gruppenoption **„Zählergruppe"** macht die eigenen Geräte zu Zählern des
-    ganzen Zweigs: Der Gesamtverbrauch ist dann **fix** aus diesen Zählern und
-    eine Fußzeile weist die **„Sonstige Verbraucher dieser Gruppe"** aus
-    (Zählerleistung − verrechnete Untergruppen). Mit gesetztem Verrechnungs-Haken
-    wirkt die Zählergruppe als **Sperrschicht** (trägt den vollen Zweig bei,
-    Untergruppen nicht mehr zusätzlich).
-  - Je Gerät bis zu fünf MQTT-Topics: **Schalten, Remote, Status, Leistung, Zähler**
-    (mindestens Schalten, Leistung oder Zähler). Ohne Status-Topic gilt das
-    Schalt-Topic (sonst die Leistung) als Ist-Stand. Ist nur ein Zähler gesetzt,
-    wird die Leistung aus dem Zählerfortschritt abgeleitet und fällt nach über
-    10 Minuten ohne Fortschritt auf 0 W. Der angezeigte Zählerstand ist ein
-    **interner Zähler**, der nur die Deltas des Zähler-Topics fortschreibt —
-    Geräte-Neuanlage oder ein Topic-Wechsel lassen ihn nicht auf den Rohwert
-    des Topics springen.
-  - Geräte **ohne Leistungs- und Zähler-Topic** können eine **Nennleistung**
-    (Feld nahe den Zähler-Topics, W/kW) bekommen: Dann werden Leistung und
-    Energie **virtuell** aus Nennleistung × Schaltzustand berechnet (an =
-    Nennleistung, aus = 0) und wie bei echten Zählern zu Tag/Jahr integriert.
-    Ein Leistungs- oder Zähler-Topic hat Vorrang; ohne Nennleistung gibt es keine
-    Messung. Beim Umstellen bleibt der bisherige interne Zählerstand erhalten.
-  - Das optionale **Remote-Topic** wird bidirektional mit dem Schaltzustand
-    synchronisiert: Eine Remote-Änderung schaltet das Gerät, eine Schaltung des
-    Geräts aktualisiert das Remote-Topic. Wird ein Einschaltwunsch durch
-    Betriebslevel oder Lastabwurf gesperrt, werden beide Topics auf `AUS`
-    zurückgesetzt.
-  - Alle Geräte mit Schalt-Topic laufen über das **Betriebslevel-Gate** und werden
-    unterhalb ihrer Priorität ausgeschaltet; Einschalten ist dann auch manuell nicht
-    erlaubt. **„Immer an"** schaltet bei erneuter Freigabe automatisch wieder ein.
-    Ohne diese Option bleibt das Gerät aus, bis es über den Kachel-Schalter manuell
-    eingeschaltet wird. Priorität je Gerät oder – per Häkchen – von der Gruppe.
-  - Optionaler **Lastabwurf über Grid-Control**: Geräte können je Phase `L1`,
-    `L2`, `L3` oder als **Drehstrom** markiert werden. Bei hoher
-    Wechselrichterlast wirft homeESS pro Phase zuerst die **niedrigste Priorität**
-    ab, wartet **10 Sekunden** auf stabile Messwerte und eskaliert erst dann zur
-    nächsten Prioritätsstufe. Grundlage ist je Phase die separat hinterlegte
-    **Maximallast Lastabwurf**; abgeworfen wird ab **80 %** davon, freigegeben
-    erst unter **50 %** davon. Die Freigabe läuft in umgekehrter Reihenfolge mit
-    **60 Sekunden** Abstand bereits vor der ersten und zwischen allen weiteren
-    Freigabestufen; nur Geräte mit **„Immer an"** schalten danach automatisch
-    wieder ein. Auf der Kachel wird ein aktiver Abwurf als
-    **„Lastabwurf · Priorität N"** angezeigt.
-  - Die Werte der gesetzten Topics stehen im Wertekatalog (Kategorie **Geräte**);
-    die Gruppen bilden **Verbrauchssummen** und zeigen sie in der Titelzeile.
-    Pro Gruppe legt die standardmäßig aktivierte Option **„Verbrauchssumme mit
-    Gesamtverbrauch verrechnen“** fest, ob ihre Leistung bei der Berechnung von
-    **„Sonstige Verbraucher“** vom Eigenverbrauch abgezogen wird.
-  - Aus dem internen Gerätezähler wird pro Gruppe zusätzlich der **Verbrauch
-    heute, dieses Jahr und im Vorjahr** gebildet und im Wertekatalog bereit-
-    gestellt (`verbrauchssumme.<id>.verbrauchHeute` / `.verbrauchJahr` /
-    `.verbrauchVorjahr`) – baum-konsistent wie die Leistung (Zählergruppe = eigene
-    Zähler, sonst additiv eigene Geräte + Untergruppen).
-  - Unterseite **Energiefluss** (klappt im Menü unter Messen + Schalten aus):
-    ein vollständig **animiertes SVG-Flussdiagramm**. Eingangsseitig bündeln sich
-    die PV-Anlagen zu einem Gesamtzweig, dazu **Netzbezug** (bei Einspeisung
-    negativ) und die **Batterie** als neutrale Stabstelle; zentraler Knoten ist
-    der **Eigenverbrauch**; ausgangsseitig verzweigt der Fluss auf die
-    (verschachtelten) Gruppen und den **„Sonstige Verbraucher"-Rest** (global und
-    hinter jeder Zählergruppe), sodass das Bild in sich geschlossen ist.
-    Strichbreite und Fließgeschwindigkeit folgen der Leistung, die Richtung dem
-    Vorzeichen. Farben aus den Systemfarben; je Gruppe eine **frei wählbare
-    Farbe** (Stift-Button → Colorpicker), Pfade zu den Gruppen in Gruppenfarbe.
-    Durch Priorität oder Lastabwurf abgeschaltete Gruppen werden ausgegraut;
-    Gruppen, der **„Sonstige"-Rest** sowie PV/Netz/Eigenverbrauch weisen
-    **Verbrauch heute und dieses Jahr** aus. Unter dem Diagramm lassen sich
-    benannte **Exporte** anlegen: öffentlich abrufbare Live-Ansichten mit Theme
-    **hell** oder **dunkel** unter einer aus dem Namen gebildeten URL
-    (`/energiefluss/export/<slug>`). Die Export-Ansicht zeigt nur das Diagramm,
-    skaliert den ganzen Baum auf die Viewport-Größe (bei Platzmangel fallen
-    zuerst die Zählersummen weg) und trägt Legende und Wasserzeichen an den
-    Viewport-Rändern.
-  - Unterseite **Schaltgruppen** (klappt im Menü unter Messen + Schalten aus):
-    zwei unabhängig scrollbare Spalten — links die Schaltgruppen (Name,
-    optionales **Remote-Topic**, Häkchen **„Gruppe schaltet als Einheit"**),
-    rechts schmaler alle noch nicht zugeordneten Geräte, die per **Drag & Drop**
-    in eine Gruppe gezogen (bzw. wieder gelöst) werden. Eine Gruppe gilt als
-    **eingeschaltet, sobald ein Gerät an ist**, und erst als aus, wenn alle
-    Geräte aus sind; „als Einheit" zieht jede Ein-/Ausschaltflanke eines Geräts
-    auf alle übrigen. Einschalten der Gruppe (Schalter, Remote-Topic
-    oder State) schaltet **alle Geräte ein**, Ausschalten **alle aus** — je
-    Gerät weiterhin durch die Priorität gegatet. Optional schaltet ein
-    **Gruppentimer** nach einer konfigurierbaren Laufzeit in Minuten wieder alle
-    Geräte aus; vorzeitiges Ausschalten beendet den Timer. Die Schaltzustände stehen als
-    beschreibbare States (`schaltgruppe://gruppen/<id>`) unter der Kategorie
-    **Schaltgruppen** in der States-Liste und damit automatisch im Wertekatalog
-    und State-Picker zur Weiterverarbeitung bereit.
-- 📈 **Prognose** — Energiebilanz für heute plus drei Tage direkt unterhalb der
-  Batterie im Menü. Kombiniert PV-Wetterprognose, nutzbare Batterieladung und ein
-  selbstlernendes Verbrauchsmodell (bereinigter Tagesverlauf, gewichteter 28-Tage-Mittelwert,
-  persönliches Stundenprofil und Tageskalibrierung). Netzbedarf, Überschuss,
-  Batterie-Endstand, heutiger Autark-Status und die autarken Tage des laufenden
-  Jahres stehen auch im Wertekatalog bereit. Der Jahreszähler kann bidirektional
-  mit einem optionalen MQTT-Topic abgeglichen werden. Beim Jahreswechsel wird er
-  nach „Autarke Tage Vorjahr“ übernommen; auch dieser Stand besitzt optional ein
-  eigenes bidirektionales Abgleich-Topic.
-  Die Versorgungsampel bewertet vorrangig den prognostizierten SoC beim ersten
-  ab dem Folgetag sichtbaren Ladebeginn. Bei Dunkelflaute wird über weitere
-  Open-Meteo-Prognosetage kumuliert. Ein erwartetes Erreichen des Mindest-SoC
-  wird mit Tag und Uhrzeit ausgewiesen; Tagesend-SoC bleibt als Zusatzwert sichtbar.
-  Für jeden Wochentag wird eine eigene Verbrauchskurve gelernt. Grundlage ist
-  der bereits zentral um Batterieladung und -entladung bereinigte Eigenverbrauch.
-  Wallbox, Poolpumpen
-  und funktionszugeordnete Messen-+-Schalten-Geräte (Licht, Waschen, Warmwasser,
-  Heizung / Klima, Kochen) werden ebenfalls aus dem reinen Hausbedarf entfernt und
-  anschließend separat eingeplant — Heizung / Klima als **mittlere Leistung (W)
-  je 1-°C-Außentemperaturfenster und Tagesstunde** (unterer Sammelbereich
-  **< -20 °C**, oberer **> 50 °C**), die übrigen Funktionen je Wochentag. Je
-  Fenster wird für **jede der 24 Tagesstunden** die mittlere Leistung über bis zu
-  **30 Messtage** vorgehalten, weil der Heiz-/Kühlbedarf je Tageszeit variiert
-  (Kühlen v. a. abends, Heizen morgens zum Aufheizen stärker als abends). Ein
-  Fenster wird nur an Tagen belegt, an denen diese Außentemperatur real auftrat,
-  sodass die Sommer- die Winterkurve nicht überschreibt. Der Heizungs-/Klimabedarf
-  wird **je Prognosestunde** aus der stundengenauen Fensterleistung nach der
-  prognostizierten Außentemperatur zu erwartetem Verbrauch errechnet
-  (`kWh = W/1000 × Stunden`, nicht im Tagesdurchschnitt; noch ungelernte Stunden
-  fallen auf das Fenstermittel zurück). Auf der Prognoseseite erscheint unter der
-  Datenbasis ein **Balkendiagramm über die Temperaturfenster** (Balken = Mittel
-  über alle 24 Stunden, Markierungslinie = heutiger Wert); ein **Klick auf einen
-  Balken** öffnet die **24-Stunden-Kurve** dieses Fensters. Im Stundenprofil der
-  Tagesprognosen sitzt der erwartete Heiz-/Kühlbedarf zusätzlich als **gestapelter
-  Balken** über der Grundlast (die Grundlastberechnung selbst bleibt unberührt).
-  E-Auto-Ladung wird ausschließlich aus dem aktuellen Fahrzeugbedarf
-  (Fahrzeug-SoC) und der gewählten Ladestrategie geplant; historische
-  Ladezeiten erzeugen keine Lastprognose.
-  Ungelernte Wochentage übernehmen ausschließlich die Lernkurve des jüngsten
-  abgeschlossenen Tages (Vortag) als Vorlage; die Tageskalibrierung passt sie an
-  den laufenden Verlauf an, und der abgeschlossene Tag wird wieder Vorlage für den
-  nächsten. Je Prognosetag zeigt ein 24-h-Balkendiagramm das erwartete
-  Stundenprofil; bereits gelernte Stunden des laufenden Tages erscheinen in
-  abweichender Farbe samt Soll-Marke, sodass Abweichungen sofort sichtbar sind.
-  Damit die Lern-Datenbasis robust bleibt, verrechnet die Bilanz-Lernung auch
-  kleine Rückwärtsbewegungen des kumulierten Werts (Sägezahn beim Akku-Laden),
-  statt nur Aufwärtsdeltas zu übernehmen. Zusätzlich wird der bilanzierte
-  Eigenverbrauch je Stunde gegen eine **Selbstzählung** aus der
-  Eigenverbrauch-Leistung geprüft; weicht die Bilanz stärker ab als die in den
-  Modellparametern einstellbaren Schwellen (**maximale Abweichung** in Prozent,
-  Standard 25 %, und **Mindest-Abweichung** in kWh, Standard 0,2), fließt
-  die Selbstzählung als Ersatzwert ein — echte Verbrauchsspitzen bleiben aber
-  erhalten. Ein Diagramm **„Datenbasis der
-  Prognose"** stellt beide Serien je Stunde nebeneinander und macht Abweichungen
-  früh sichtbar.
-  Oben rechts lässt sich ein Verhaltensmodell aktivieren: **Netzparallelbetrieb**
-  bewertet ausschließlich die Versorgung bis zum nächsten Ladebeginn und nutzt
-  danach das Netz als Reserve; **Autarkbetrieb** bewertet mehrere Prognosetage
-  und reduziert Verbraucher deutlich früher bis hin zu vorbeugendem Level 1.
-  Die Prognose verwaltet alle
-  Betriebslevel 1–5; im Netzparallelbetrieb greift Level 1 erst bei tatsächlich
-  unterschrittenem Mindest-SoC und auch ohne
-  aktiviertes Verhaltensmodell. Im Autarkbetrieb gilt der Akku erst über 98 %
-  als voll und Überschuss aktiviert dann Level 5. Im Netzparallelbetrieb stammt
-  Level 4 bedeutet dort, dass der Bedarf bis zum nächsten Ladebeginn sicher
-  gedeckt ist. Die Ampel ist direkt zugeordnet: Grün setzt Level 4, Gelb Level 3
-  und Rot Level 2; Level 1 greift erst unter Mindest-SoC. Die
-  Voll-Schwelle stammt aus der oberen Grid-Control-SoC-Schwelle, bei deaktiviertem
-  Grid-Control werden 90 % verwendet. Das aktivierte Modell setzt den globalen
-  Betriebslevel direkt, wird bei MQTT-Änderungen neu bewertet und spätestens
-  alle 30 Sekunden unabhängig vom Verbrauchssampling ausgeführt.
-- 🔌 **Grid-Control** (optionales Modul): schaltet Netz und optional
-  Überschusseinspeisung nach getrennten unteren/oberen SoC- und
-  Spannungsfenstern mit kleiner lokaler Hysterese sowie nach einer
-  Wechselrichter-Temperaturwarnung. Schutzwarnungen und fünf Grid-Zustände sind
-  per MQTT/Output-Katalog verfügbar. Eine dreiphasige, konfigurierbare
-  Netzfrequenz-Überwachung verriegelt bereits beim Ausfall einer Phase den
-  **Notstrombetrieb**, bis auf allen drei Phasen wieder Frequenz erkannt wird.
-  Grid-Control schaltet nur diesen Notstromzustand ein und aus und verändert
-  selbst kein Betriebslevel. Das globale
-  Betriebslevel 1–5 erscheint als rot-grüne Balkenanzeige in der Titelzeile.
-  Eine dreiphasige Wechselrichterlast-Hysterese nutzt die vorhandenen
-  Eigenverbrauchsleistungen L1–L3, schaltet bei Überlast einer Phase zu und
-  erst unter allen drei Rückschaltschwellen wieder ab. Die Verriegelung hält das
-  Netz zugeschaltet, bis alle Phasen unter die Rückschaltschwelle fallen — auch
-  wenn der ursprüngliche Grund wegfällt. Als **Warnung** gilt die Last nur, wenn
-  sie der alleinige Schaltgrund ist: Bei ohnehin zugeschaltetem Netz kompensiert
-  das öffentliche Netz die Überlast, und die Meldung „Wechselrichterlast zu hoch"
-  entfällt. Der zusätzliche
-  phasenbezogene **Lastabwurf** arbeitet davon getrennt mit eigener
-  **Maximallast Lastabwurf** je Phase.
-  Der globale Katalogwert **Autark** startet jeden Tag auf `true`, sofern keine
-  Mindest-SoC-Netzschaltung aktiv ist, und bleibt nach einer solchen Schaltung
-  für den restlichen Tag auf `false`. Die obere SoC-Grenze schaltet das Netz nur
-  zu, wenn **Überschusseinspeisung aktiviert** ist.
-  - **Verifizierte Schaltung:** Jeder Schaltbefehl wird gegen die tatsächliche
-    Broker-Rückmeldung geprüft und bei Abweichung selbstheilend wiederholt; je
-    Befehls-Topic ein Badge „bestätigt"/„nicht bestätigt!" plus Verbindungsanzeige.
-  - **Ist-Übernahme nach Neustart:** Erst Ist-Werte kennen, dann steuern. Ohne
-    bekannte Broker-Rückmeldung des Schützes geht kein Aus-Befehl raus; meldet
-    der Broker das Netz als eingeschaltet, halten Messwerte im Hystereseband und
-    unvollständige Messgrößen das Netz an, statt es kurz aus- und wieder
-    einzuschalten. Die Ausschaltverzögerung der Lastschaltung gilt auch über
-    Neustarts (persistiert).
-  - **Protokoll:** scrollbares Audit-Log unten — nur Schwellen-Übertritte mit
-    Aktionen (gelb) und kritische Zustände (rot), einzeilig mit Zeitstempel und
-    Werten; paginiert, Seite 1 live, ab Seite 2 statisch.
-- 🏊 **Poolsteuerung** (optionales Modul, aktivierbar unter `/module`):
-  - Solarpumpe und Filterpumpe mit je Status-/Steuerungs-Topic, Priorität und
-    **Lastabwurf-Phase** (`L1`, `L2`, `L3` oder `Drehstrom`).
-  - **Drei Modus-Buttons** je Pumpe: An / Aus / Automatik.
-  - Solarautomatik: sonnenbasiert, 2-Min-Mindesthaltedauer, Maximaltemperatur
-    mit Probezyklus (Filterpumpe optional). Probeläufe starten nur bei direkter
-    Sonneneinstrahlung; eine laufende Probe läuft bei Beschattung zu Ende; der
-    Pausenzähler läuft bei Beschattung weiter — nach Sonnenrückkehr startet
-    sofort eine neue Probe wenn die Pausenzeit abgelaufen ist.
-  - Filterautomatik: bis zu 3 Zeitfenster, Follow-Solar, Akku-Override
-    (liest Batterie-SoC aus dem zentralen Cache).
-  - KPI-Kacheln für Wassertemperatur, Pumpen, pH, Chlor (je nach Konfiguration).
-  - Beide Pumpen sind als **Verbraucher am Betriebslevel-Handler** angemeldet: im
-    Automatik-Modus schalten sie nur ein, wenn das Betriebslevel ihre Priorität
-    freigibt, und schalten bei Levelabfall sofort ab. Hand An/Aus übersteuert das
-    Level bewusst.
-  - Ist **Grid-Control** mit Wechselrichterlast aktiv, nehmen beide Pumpen am
-    **stufenweisen Lastabwurf** teil: erst niedrigste Priorität je Phase, dann
-    nach **10 Sekunden** Stabilisierung die nächste Stufe; Freigabe umgekehrt mit
-    **60 Sekunden** Abstand.
-  - Ein Energiemodell lernt die Pumpenleistung aus realen Schaltvorgängen, zieht
-    tatsächliche Laufzeiten aus dem gelernten Hausbedarf ab und plant sie separat:
-    Solar aus den erwarteten PV-Stunden, Filter aus Zeitfenstern, Follow-Solar und
-    Akku-Override. Maximaltemperatur und Probeläufe werden nicht vorausgesagt,
-    rückwirkend aber vollständig bereinigt.
-- 🚗 **Wallbox** (optionales Modul, aktivierbar unter `/module`):
-  - Mehrere Wallboxen einzeln anlegbar (wie die PV-Anlagen). Je Box ein
-    Pflicht-**Steuer-Topic** (reiner Aktor: homeESS schaltet die Wallbox darüber),
-    optional ein bidirektionales **Steuerung-Sync-Topic** (an/aus-Schalter: homeESS
-    spiegelt den Zustand darauf, externe Änderungen gelten als Bedienbefehl), sowie
-    optional Status, Leistung (W/kW), fortlaufender Zähler (Wh/kWh), Soll-Leistung,
-    „Fahrzeug angesteckt" und Fahrzeug-SoC (%); zusätzlich Maximalleistung und
-    Fahrzeug-Akkugröße.
-    Wird dieselbe physische Wallbox zusätzlich unter **Messen + Schalten** zur
-    Leistungserfassung angelegt, dort keine Schalt-/Remote-Topics auf dieselben
-    Wallbox-Steuer- oder Sync-Topics legen. Für diese Doppelabbildung nur Mess-
-    bzw. Zähler-Topics verwenden, sonst kann Messen + Schalten die Wallbox-
-    Automatik mit eigenen Aus-Befehlen übersteuern.
-  - **Verbrauchszählung** je Box für Tag/Woche/Monat/Jahr inkl. Vorjahr; ohne
-    Zähler-Topic aus der Leistung abgeleitet. Fehlt das SoC-Topic, wird der
-    Ladezustand aus der seit Einstecken geladenen Energie geschätzt.
-  - **Drei Lademodi** (Privat / Beruflich / Immer voll) mit je eigener Priorität:
-    Privat lädt bis zum Mindest-Ladestand, darüber nur prognostizierten, vom
-    Hausakku nicht mehr speicherbaren PV-Überschuss; Beruflich stellt an
-    gewählten Arbeitstagen bis 06:00 Uhr den **Mindest-Ladestand Beruflich**
-    bereit (rechtzeitiger Start aus Fahrzeug-SoC, Akkugröße und Ladeleistung
-    berechnet; darüber nur Überschuss wie Privat). Fällt der Ladestand an einem
-    Arbeitstag darunter, wird sofort nachgeladen; vor einem freien Folgetag gilt
-    ab einer einstellbaren Uhrzeit nur noch die Privatregel. Immer voll lässt
-    das Ladegerät aktiviert. Mit
-    Soll-Leistungs-Topic wird vorsichtig gegen den Live-Überschuss moduliert;
-    ohne Sollwert startet die Box erst bei vollständig gedeckter Ladeleistung.
-    Optionaler **Modus-Sync** über ein eigenes Topic – nur für den Ladeplan
-    (1 = Privat, 2 = Beruflich, 3 = Immer voll), bidirektional gehalten. Jede Box
-    besitzt zusätzlich eine **Lastabwurf-Phase** (`L1`, `L2`, `L3` oder `Drehstrom`).
-  - Als **Verbraucher am Betriebslevel-Handler** angemeldet (Priorität des aktiven
-    Modus): Einschalten nur nach Freigabe, Zwangsabschaltung bei Levelabfall.
-  - Bei aktiver Grid-Control-Wechselrichterlast nimmt die Wallbox ebenfalls am
-    **stufenweisen Lastabwurf** teil und wird phasenabhängig gemeinsam mit den
-    anderen Lastabwurf-Verbrauchern priorisiert abgeworfen bzw. später wieder
-    freigegeben.
-  - **Sonderfälle**: hängt der Ladestart trotz Befehl unter der Leerlaufschwelle, wird
-    nach einer konfigurierbaren Vorgabezeit kurz aus-/eingeschaltet; **externes
-    Einschalten am Steuerung-Sync-Topic** löst eine einmalige Volladung bis zum
-    Leistungsabfall aus; **externes Ausschalten** hält bis zum Folgetag mit
-    vollständiger PV-Deckung und ausreichender Hausakku-Reserve an. Schaltet die
-    Automatik selbst, bleibt die Steuerung auf **Automatik** (eigene Spiegel-Writes
-    gelten nie als Bedienung); nur ein direkt beobachteter, nicht selbst ausgelöster
-    Wechsel am Sync-Topic zählt – Neustart, Adapter-Reconnect oder Topic-Refresh
-    ändern den Schaltmodus nicht (neustart-resistent in der DB). Das
-    „angesteckt"-Signal dient ausschließlich der Ladeüberwachung (Neustart-Schleife)
-    und sperrt weder Ladefreigabe noch Planung — manche Fahrzeuge erkennen den
-    Stecker erst nach der Freigabe.
-  - Die Prognose führt je Wallbox getrennte Tages- und Stundenstatistiken nach
-    Wochentag. Gemessene Ladeenergie wird aus dem allgemeinen Hausverbrauch
-    herausgerechnet und anschließend als eigener Wallboxbedarf eingeplant. Der
-    Vorausplan nutzt dabei denselben aktiven Lademodus wie die Automatik sowie
-    Fahrzeug-SoC, Akkugröße, Mindestladung und Arbeitstage. Pflichtladungen werden
-    fest über alle sichtbaren Tage fortgeführt; mehrere flexible Wallboxen teilen
-    sich nur den nach dem Hausakku verbleibenden PV-Überschuss nach Priorität,
-    statt ihn mehrfach zu verplanen. Ein unveränderliches gecachtes Basismodell
-    wird dabei für jede Prognose mit dem aktuellen Akku-/Fahrzeugzustand neu geplant.
-- ⚖️ **Betriebslevel / Lastmanagement** — ein zentraler Handler setzt registrierte
-  Verbraucher nach **Priorität** (= Betriebslevel, ab dem sie laufen dürfen) gegen das
-  prognosegeführte Betriebslevel durch. Erste Verbraucher: Filter-/Solarpumpe, Wallbox.
-  Anleitung für neue Verbraucher: siehe [LEVEL_HANDLING.md](LEVEL_HANDLING.md).
-- 📤 **Output** — beliebige berechnete Werte an ioBroker-Ziel-Topics zurückgeben;
-  geschlossene Regelschleife mit aktivem Readback im 30-Sekunden-Fenster. Jeder
-  Output wird zu einem **zufälligen Zeitpunkt** innerhalb des Fensters geprüft
-  (statt alle gleichzeitig) und entlastet so den Broker; bereits bestätigte Werte
-  werden nur erneut abgefragt, wenn ihr Ist-Wert älter als ein Prüffenster ist.
-  Fehlende oder abweichende Bestätigungen werden erneut geschrieben und je Output
-  angezeigt. Nicht rücklesbare Command-Topics sind als Ziel bewusst ausgeschlossen.
-  Werte werden über den zentralen **Wertekatalog** gewählt — eine durchsuchbare,
-  nach Herkunft (Photovoltaik, Stromverbrauch, Batterie, Prognose, …) geordnete
-  und einklappbare Liste mit Ist-Werten; darin auch **statistische Jahreswerte**
-  (gestern, Durchschnitt, Minimum/Maximum inkl. Datum, Jahres-/Vorjahressumme) und
-  automatisch alle **Adapter-States**. Angelegte Outputs erscheinen als dichte,
-  kategorisierte Liste, deren Auf-/Zu-Zustand pro Kategorie gemerkt wird.
-- 🧩 **Module** — Tab in den **Einstellungen** zum Aktivieren/Deaktivieren
-  optionaler Module; aktive Module erscheinen automatisch im Menü.
-- 🔌 **Adapter** — austauschbare Geräte-Anbindungen (z. B. Modbus) als eigene
-  Verzeichnisse unter `/adapter/`, **ohne Eingriff in den Quellcode**. Pro Adapter
-  mehrere benannte Instanzen anlegen/aktivieren; jede läuft isoliert als eigener
-  Kindprozess. Werte werden über `prefix://instanz/adresse` geroutet (Topics ohne
-  Schema laufen weiter über den MQTT-Broker). Regelwerk: [ADAPTER.md](ADAPTER.md),
-  Vorlage: `adapter/demo`. Mitgeliefert: **Modbus-TCP-Adapter** (`adapter/modbus`)
-  mit Register-Verwaltung und **Presets** (Vorlagen zum Anlegen der Live-States,
-  inkl. Upload; Format: `adapter/modbus/PRESET.md`). Die Übersichtsseite blendet
-  standardmäßig Adapter ohne **aktive Instanz** aus; oben rechts lässt sich das
-  per Schalter umstellen. Zusammenhängende Register gleicher Unit-ID,
-  Registerart und Pollrate werden blockweise gelesen und als gemeinsamer
-  State-Batch verteilt; Pollintervalle und State-Adressen bleiben gleich.
-  Der mitgelieferte **HM-RPC-Adapter 1.1.2** registriert eine vollständige
-  XML-RPC-Logikschicht bei der CCU (`listDevices`, `newDevices`, `event`,
-  `system.multicall`) und übernimmt Geräteänderungen unmittelbar als Push-Events.
-  Ein optionaler, gleichmäßig verteilter CCU-Cache-Refresh bleibt als
-  adaptereigene Absicherung verfügbar und erzeugt keine Funkabfragen.
-- 🗂️ **States** — eigenständige Hauptseite und zentrale Wertquelle: interne
-  homeESS-Werte stehen unter **System**, daneben die von Adaptern gemeldeten
-  Werte (Instanz → Kategorie → State), jeweils mit Live-Wert. Dashboard und
-  Output wählen aus diesem gemeinsamen Bestand. Technisch adressierbare
-  Systemwerte (`system://homeess/...`), Adapter- und Schaltgruppen-States lassen
-  sich zusätzlich hinter Topic-Feldern per Auswahldialog übernehmen.
-- 🌤️ **Sonnenintensität** (% des Clear-Sky-Ideals, auf 100 % gedeckelt):
-  aktuell sowie 10-Minuten-/Tages-/Vortagsmittel. Nur Anlagen oberhalb ihres
-  größenrelativen Sonnenreferenz-Cutoffs fließen ein.
-- ⚙️ **Einstellungen** mit Tabs: **Allgemein** (Standort & Zeit, MQTT-Broker),
-  **Benutzerverwaltung** (Rollen und sichtbare Seiten), **Module** und
-  **Fernzugriff**.
-- 📡 MQTT-Verbindungs-Manager mit Reconnect-Handling, Wert-Cache und **Publish**
-  (nach den Regeln aus [MQTT.md](MQTT.md)); Live-Updates per SSE (`/live/events`).
-- 📲 **Fernzugriff** (Tab **Fernzugriff** in den Einstellungen; der alte Pfad
-  `/remote-access` leitet dorthin weiter) — **dauerhafte Kopplung und
-  Relay-Tunnel** mit essrelay: ein angemeldeter Admin fordert eine
-  Pairing-Session an, zeigt den **QR-Code** an, prüft vor der Bestätigung den
-  **Gerätefingerprint**, **bestätigt** den Kopplungswunsch (mit Ed25519-
-  **Instanz-Proof**) und homeESS richtet daraufhin automatisch eine **dauerhafte
-  Identität** ein (**Provisioning**, Status **`paired`**). Danach verbindet sich
-  homeESS als authentifizierte **Origin-WebSocket**-Instanz mit dem Relay und
-  beantwortet Tunnel-Requests der App gegen den lokalen homeESS-Server. Damit ist
-  Fernzugriff ohne eigenes VPN, Portfreigabe oder DynDNS möglich; ein
-  Nutzeraccount ist nicht erforderlich. Die App ist im Google Play Store unter
-  <https://play.google.com/store/apps/details?id=de.mykaefer.homeess>
-  verfügbar; für die Internet-Nutzung ist die **homeESS Remote Lizenz** über den
-  Play Store erforderlich. App und Relay-Server sind ein eigenständiges Add-on
-  und nicht Teil des AGPLv3-lizenzierten homeESS-Servers. Der Browser spricht nie
-  direkt mit dem Relay (`Browser → homeESS → essrelay`); Origin-Token und private
-  Schlüssel bleiben ausschließlich serverseitig.
-  Details zum homeESS-Server: [ARCHITECTURE.md](ARCHITECTURE.md),
-  [SECURITY.md](SECURITY.md), [THREAT_MODEL.md](THREAT_MODEL.md). Die
-  App-/Relay-Schnittstelle ist Teil des eigenständigen proprietären Add-ons.
-- 🚀 **systemd-Service** — startet automatisch beim Systemboot.
+## Hardware requirements
 
-Alle Seiten werden **dynamisch** serverseitig gerendert — es gibt keine
-statischen HTML-Seiten.
+| Resource | Minimum | Recommended |
+|---|---:|---:|
+| CPU | 1 x86 or ARM core | 2 cores |
+| Memory | 512 MB RAM | 1 GB RAM |
+| Storage | 4 GB | 8 GB SSD or eMMC |
+| Network | Wi-Fi | Wired Ethernet |
 
-## Hardware-Empfehlungen
+Tested deployment targets include Raspberry Pi 4/5, small x86 mini PCs and
+virtual machines or LXC containers. A minimal Debian installation is sufficient.
 
-homeESS ist schlank (Node.js + SQLite + MQTT-Client); jede aktive Adapter-Instanz
-läuft als eigener Prozess. Es genügt bescheidene Hardware für den Dauerbetrieb:
+## Software requirements
 
-| Ressource | Minimum | Empfohlen |
-| --------- | ------- | --------- |
-| CPU       | 1 Kern (x86/ARM) | **2 Kerne** — Hauptprozess ist single-threaded, Adapter laufen als eigene Prozesse |
-| RAM       | 512 MB  | **1 GB** |
-| Speicher  | 4 GB    | **8 GB SSD/eMMC** — die SQLite-DB bleibt klein; SD-Karten leiden an Dauerschreibzyklen |
-| Netzwerk  | WLAN    | **kabelgebundenes Ethernet** für eine stabile MQTT-Verbindung |
+- Debian, Ubuntu, Raspberry Pi OS or another Debian-based distribution
+- `systemd` and `apt`
+- Node.js 20.17 or newer; the installer adds a suitable Node.js version when required
+- An MQTT broker such as ioBroker is optional for the initial start
 
-Bewährte Plattformen: **Raspberry Pi 4/5** (ab 2 GB), ein **Mini-PC** (z. B.
-Intel N100/NUC) oder eine **kleine VM / LXC-Container** (z. B. unter Proxmox
-genügen 2 vCPU + 1 GB RAM). Voraussetzung ist ein Debian-basiertes System mit
-`systemd` und `apt` (siehe Installation).
+## Installation
 
-## Voraussetzungen
+On a minimal system, install `curl` and `sudo` first:
 
-- Debian/Ubuntu/Raspberry Pi OS mit `systemd` und `apt` (für die Installation).
-- Node.js ≥ 20.17 (wird vom Setup-Skript bei Bedarf automatisch installiert).
-- Ein erreichbarer MQTT-Broker (z. B. ioBroker) — optional zum Start.
+```bash
+apt update
+apt install -y curl sudo
+```
 
-## Installation & Start
-
-### Schnellstart auf frischem Debian
-
-Von der leeren Maschine bis zur laufenden Instanz:
-
-1. **Debian installieren** — eine minimale Server-Variante (ohne Desktop) reicht.
-   Danach als `root` anmelden oder mit `su -` zu root wechseln.
-2. **curl und sudo bereitstellen** (auf einer Minimalinstallation oft nicht dabei):
-
-   ```bash
-   apt update
-   apt install -y curl sudo
-   ```
-
-3. **homeESS installieren** (ein Befehl):
-
-   ```bash
-   curl -fsSL https://raw.githubusercontent.com/mykaefer/home-ess/main/install.sh | sudo bash
-   ```
-
-   > Als `root` kannst du `sudo` weglassen; mit einem normalen Benutzer muss dieser
-   > in der `sudo`-Gruppe sein (`usermod -aG sudo <benutzer>`, danach neu anmelden).
-
-Danach ist die Weboberfläche unter `http://<host-ip>:3000` erreichbar
-(Standard-Login: **`admin`**).
-
-### Automatische Installation (Debian/Ubuntu/Raspberry Pi OS)
-
-Auf einem bereits vorbereiteten System genügt der reine Installationsbefehl:
+Install homeESS with one command:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mykaefer/home-ess/main/install.sh | sudo bash
 ```
 
-Das Skript installiert die System- und Node.js-Abhängigkeiten, klont homeESS
-nach `/opt/home-ess`, legt eine neue Datenbank unter
-`/var/lib/home-ess/app.db` an und aktiviert den systemd-Dienst. Zusätzlich
-richtet es den privilegierten Self-Update-Helper samt systemd-Dateiwächter ein.
+The installer places the application in `/opt/home-ess`, stores persistent data
+in `/var/lib/home-ess`, installs the `home-ess.service` systemd unit and starts
+the web interface on port `3000`.
 
-Ein erneuter Aufruf desselben Befehls aktualisiert eine bestehende Git-
-Installation unter `/opt/home-ess`: der Dienst wird gestoppt, der Code aus
-`main` aktualisiert, die Produktionsabhängigkeiten werden neu installiert und
-der Dienst wird wieder gestartet. Daten unter `/var/lib/home-ess` bleiben
-erhalten, insbesondere Datenbank und Fernzugriff-Identity-Store.
+Open `http://<server-ip>:3000` and sign in with the initial account
+`admin` / `admin`. Change this password immediately after the first login.
 
-Existiert `/opt/home-ess`, ist aber kein Git-Checkout, bricht das Skript ab,
-damit eine manuell verwaltete Installation nicht überschrieben wird.
+### Updating an existing installation
 
-### Self-Update
-
-homeESS fragt im konfigurierten Intervall (stündlich, täglich, wöchentlich oder
-monatlich; Standard täglich) das neueste stabile Release im GitHub-Repository
-`mykaefer/home-ess` ab. Ist dessen Version neuer, erscheint für
-Administratoren oben links neben den aktuellen Leistungswerten eine hellgrüne
-Olive. Nach Klick und ausdrücklicher Bestätigung wird das Release vorbereitet
-und homeESS für den eigentlichen Wechsel kurz neu gestartet. Der Fortschritt
-bleibt im Browser sichtbar; nach erfolgreichem Start folgt automatisch das
-Dashboard.
-
-Unter **Einstellungen → Allgemeine Einstellungen → homeESS-Updates** werden
-installierte und verfügbare Version sowie die letzte Prüfung angezeigt. Dort
-kann die Prüfung manuell ausgelöst, ein verfügbares Update sofort gestartet
-oder die automatische Installation aktiviert werden. Die Automatik ist
-standardmäßig ausgeschaltet und verwendet ein tägliches Wartungsfenster in der
-konfigurierten homeESS-Zeitzone; Zeiträume über Mitternacht werden unterstützt.
-
-Die Webanwendung selbst erhält dabei keine root-Rechte. Sie legt nur eine eng
-validierte Updateanforderung im Datenverzeichnis ab. `home-ess-update.path`
-startet daraufhin den kurzlebigen `home-ess-update.service`, der ausschließlich
-das fest eingebaute öffentliche Repository verwendet, vor dem Umschalten die
-Releaseversion prüft und bei einem fehlgeschlagenen Start die bisherige
-Installation wiederherstellt. Ein zusätzlicher HTTP-Port wird nicht geöffnet.
-
-### Manuelle Installation
+Run the same command again. Application code and installed official adapters
+are updated while the database, identities, uploaded adapters and the explicit
+adapter selection remain intact:
 
 ```bash
-npm ci
-npm start          # startet auf http://localhost:3000
+curl -fsSL https://raw.githubusercontent.com/mykaefer/home-ess/main/install.sh | sudo bash
 ```
 
-Entwicklung mit Auto-Reload:
+Adapters deliberately removed in the web interface stay removed. To explicitly
+restore every official adapter from the repository, use `--all`:
 
 ```bash
-npm run dev        # node --watch
+curl -fsSL https://raw.githubusercontent.com/mykaefer/home-ess/main/install.sh | sudo bash -s -- --all
 ```
 
-### Erster Login
+The built-in update function follows the stored adapter selection and never
+performs the `--all` operation.
 
-Standard-Passwort beim ersten Start: **`admin`**.
-Nach dem Login unter **Einstellungen → Neues Passwort** ändern.
+## License
 
-### Konfiguration über Umgebungsvariablen
-
-| Variable                 | Default                        | Beschreibung                                                                 |
-| ------------------------ | ------------------------------ | ---------------------------------------------------------------------------- |
-| `PORT`                   | `3000`                         | HTTP-Port                                                                    |
-| `HOME_ESS_DB`            | `./data/app.db`                | Pfad zur SQLite-Datenbank                                                    |
-| `ESS_RELAY_BASE_URL`     | `https://essrelay.mykaefer.net`| Basis-URL des essrelay für den Fernzugriff/das Pairing. Nur absolute `https://`-URL, ohne Zugangsdaten/Query/Fragment. Wird serverseitig festgelegt und beim Start streng validiert (SSRF-Schutz); nie aus einem Browser-Request übernommen. |
-| `HOME_ESS_INSTANCE_NAME` | `homeESS`                      | Instanzname, den homeESS beim Erstellen einer Pairing-Session an den Relay meldet. |
-| `HOME_ESS_IDENTITY_DIR`  | `<data>/identity`              | Verzeichnis der dauerhaften Ed25519-Instanzidentität (privater Schlüssel + Metadaten). Muss dem Servicebenutzer gehören, nicht weltlesbar (0700/0600). Z. B. `/var/lib/home-ess/identity`. |
-| `ESS_RELAY_WS_URL`       | aus Basis-URL abgeleitet       | WebSocket-URL des Origin-Endpunkts am Relay (`wss://…`). Nur setzen, wenn der Relay den Endpunkt unter anderem Pfad/Host anbietet. |
-| `ESS_RELAY_CONNECTION_DISABLED` | *(leer)*                | `1` schaltet den Origin-WebSocket-Autostart ab (nur Identität/Pairing, keine Verbindung). |
-
-Eine Vorlage aller Variablen liegt in [.env.example](.env.example).
-
-## Service-Verwaltung
-
-Der Server läuft als systemd-Service und startet automatisch beim Systemboot.
-
-```bash
-systemctl status home-ess      # Status prüfen
-systemctl restart home-ess     # Neustart (z. B. nach Updates)
-journalctl -u home-ess -f      # Live-Log
-```
-
-## Projektstruktur (Kurzform)
-
-```
-server.js          Einstiegspunkt
-src/
-  config.js        Konstanten
-  db.js            SQLite (Schema, Seed, Migration)
-  app.js           Express-App + periodische Jobs
-  modules/         Modul-Registry (optionale Features)
-  state-bus.js     Gemeinsamer Wert-Cache + Event-Bus (Broker und Adapter)
-  adapters/        Adapter-Schnittstelle: Registry, Instanzen-CRUD, Prefix-Router,
-                   Host/Supervisor (fork je Instanz), Runtime-Shim, States-Aggregat
-  auth/            Passwort-Hashing, Sessions, Login-Routen
-  mqtt/            Topic-Helfer (inkl. prefix://-Schema), Config, Verbindungs-Manager
-                   (inkl. publish, Ad-hoc-Subscriptions, Adapter-Routing), State-Defs
-  stromverbrauch/  Topic-Konfiguration + Aggregation
-  photovoltaik/    PV-Anlagen, Clear-Sky-Modell, Konvertertypen, Sonnenintensität,
-                   Prognose (forecast.js), Selbstkalibrierung (calibration.js)
-  wetter/          Open-Meteo-Abruf (Strahlungsprognose) + In-Memory-Cache
-  batterie/        Topic-Konfiguration + State-Definitionen + Cache-Reader
-  prognosis/       Verbrauchslernen, Batterie-Simulation + Modellkonfiguration
-  pool/            Pool-Config + Pump-Automation und separates Energiemodell
-  grid-control/    Schaltlogik + verifizierte Regelschleife + Audit-Log (optional)
-  wallbox/         Wallbox-CRUD (boxes.js), Zähler/SoC-Aggregation, Lademodus-
-                   Planer (planner.js), Steuerschleife (automation.js) (optional)
-  messen-schalten/ Geräte-/Gruppen-CRUD, Live-Aggregation (Leistung aus Zähler),
-                   Level-Gate-Steuerschleife (Seite „Messen + Schalten")
-  operating-state.js  Globaler Zustand (Betriebslevel, Notstrom, Autark-Latch)
-  operating-level/    Betriebslevel-Handler / Lastmanagement (handler.js)
-  states/          Zentrales States-Repository, Systemwert-Provider und
-                   hierarchischer Katalog für System- und Adapterwerte
-  output/          Kompatibilitätszugriff, Output-CRUD und Publish-Engine
-  dashboard/       Widget- und Gruppen-CRUD
-  routes/          Eine Datei je Seite/Feature
-  views/           Dynamische HTML-Renderer (je Seite eine Datei),
-                   value-catalog.js = zentrale Wertekatalog-Routine
-                   (Output- und Dashboard-Dialoge),
-                   state-picker.js = Auswahldialog für Adapter-States
-public/styles.css  Statisches Asset (CSS)
-adapter/           Adapter-Verzeichnis (je Adapter ein Unterordner mit
-                   adapter.json + index.js); enthält den Demo-Referenzadapter
-```
-
-## Daten
-
-SQLite unter `data/app.db` (gitignored). Wichtige Tabellen:
-`users`, `mqtt_config`, `sessions`,
-`stromverbrauch_config`/`_aggregation`/`_counter_state`,
-`pv_plants`/`pv_aggregation`/`pv_summary_aggregation`/`pv_calibration_buckets`,
-`sun_intensity_samples`,
-`batterie_config`, `battery_daily_state`, `prognosis_config`, `prognosis_daily_consumption`,
-`prognosis_hourly_consumption`,
-`modules`, `pool_config`, `grid_control_config`, `operating_state`,
-`grid_control_log`, `wallboxes`/`wallbox_counter_state`/`wallbox_summary_state`,
-`outputs`, `dashboard_groups`, `dashboard_widgets`.
-
-Passwörter werden als scrypt-Hash gespeichert.
-
-## Lizenz
-
-GNU Affero General Public License v3.0 (`AGPL-3.0-only`) – siehe
-[LICENSE](LICENSE).
-
-Die Android-App, die homeESS Remote Lizenz und der essrelay-Server sind ein
-eigenständiges Add-on und nicht Bestandteil dieses AGPLv3-lizenzierten
-homeESS-Servers.
+The homeESS server is licensed under GNU Affero General Public License v3.0
+(`AGPL-3.0-only`). The Android app, the homeESS Remote license and the essrelay
+service are a separate proprietary add-on.

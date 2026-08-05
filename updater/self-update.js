@@ -15,6 +15,7 @@ const DATA_DIR = process.env.HOME_ESS_DATA_DIR || '/var/lib/home-ess';
 const UPDATE_DIR = path.join(DATA_DIR, 'update');
 const REQUEST_FILE = path.join(UPDATE_DIR, 'request.json');
 const STATUS_FILE = path.join(UPDATE_DIR, 'status.json');
+const ADAPTER_SELECTION_FILE = path.join(DATA_DIR, 'adapter-selection.json');
 const REPOSITORY_URL = 'https://github.com/mykaefer/home-ess.git';
 const RELEASE_API = 'https://api.github.com/repos/mykaefer/home-ess/releases/latest';
 const INSTALLED_HELPER = '/usr/local/lib/home-ess/self-update.js';
@@ -181,6 +182,20 @@ async function main() {
     oldInstallationMoved = true;
     fs.renameSync(stageDir, APP_DIR);
     stageDir = null;
+    // Offizielle Adapter werden aus dem neuen Release aktualisiert, eigene
+    // Adapter aus dem Altbestand ergänzt und bewusst entfernte IDs anhand der
+    // dauerhaften Auswahl weiterhin ausgelassen.
+    const oldAdapters = path.join(BACKUP_DIR, 'adapter');
+    const nextAdapters = path.join(APP_DIR, 'adapter');
+    const adapterSelection = require(path.join(APP_DIR, 'src', 'adapters', 'selection-policy'));
+    const adapterResult = adapterSelection.reconcileUpdate({
+      previousAdapterDir: oldAdapters,
+      nextAdapterDir: nextAdapters,
+      selectionFile: ADAPTER_SELECTION_FILE,
+    });
+    report('switching', `${adapterResult.preserved} eigene Adapter übernommen; ${adapterResult.removed} bewusst entfernte Adapter bleiben entfernt.`);
+    await command('/usr/bin/chown', ['root:homeess', nextAdapters]);
+    await command('/usr/bin/chmod', ['2775', nextAdapters]);
     report('restarting', `Version ${requestedVersion} ist installiert. homeESS wird neu gestartet.`);
     await command('/usr/bin/systemctl', ['start', 'home-ess.service']);
     if (!(await waitForVersion(requestedVersion))) throw new Error('Der neue Server wurde nicht rechtzeitig betriebsbereit.');
