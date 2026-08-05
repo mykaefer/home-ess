@@ -3,6 +3,21 @@
 Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [1.4.1] — 2026-08-05
+
+### Behoben
+
+- **Self-Update scheiterte beim Installieren der Abhängigkeiten.** Der
+  privilegierte Update-Helper läuft als gehärteter systemd-Dienst mit
+  `ProtectHome=true`; `/root` ist darin leer und schreibgeschützt. npm konnte
+  seinen Standardcache `$HOME/.npm` deshalb weder anlegen noch beschreiben und
+  brach mit `ENOENT` (Status 254) ab — sichtbar als „`/usr/bin/npm` wurde mit
+  Code 254 beendet" nach der Meldung „Produktionsabhängigkeiten werden im neuen
+  Release installiert". Helper und Service-Unit legen HOME und den npm-Cache
+  jetzt ausdrücklich in das beschreibbare Updateverzeichnis
+  (`<data>/update`). Der Cache bleibt dort erhalten und beschleunigt spätere
+  Updates, ohne je in der Installation zu landen.
+
 ## [1.4.0] — 2026-08-05
 
 ### Hinzugefügt

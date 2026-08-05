@@ -159,6 +159,24 @@ test('Privilegierter Helper ist syntaktisch gültig und verwendet nur das feste 
   assert.doesNotMatch(helper, /body\.(?:url|repository|repo)/);
 });
 
+// ProtectHome=true blendet /root aus; ohne beschreibbares HOME und ohne
+// ausdrücklichen Cache bricht `npm ci` mit ENOENT (Status 254) ab.
+test('Abhängigkeitsinstallation läuft mit beschreibbarem HOME und eigenem npm-Cache', () => {
+  const helper = fs.readFileSync(path.join(__dirname, '..', 'updater', 'self-update.js'), 'utf8');
+  assert.match(helper, /function npmEnvironment\(\)/);
+  assert.match(helper, /HOME: UPDATE_DIR/);
+  assert.match(helper, /npm_config_cache: cache/);
+  assert.match(helper, /path\.join\(UPDATE_DIR, 'npm-cache'\)/);
+  assert.match(helper, /\/usr\/bin\/npm',\s*\['ci', '--omit=dev', '--no-audit', '--no-fund'\],\s*\{ cwd: stageDir, env: npmEnvironment\(\) \}/);
+
+  const unit = fs.readFileSync(path.join(__dirname, '..', 'updater', 'home-ess-update.service'), 'utf8');
+  assert.match(unit, /^Environment=HOME=\/var\/lib\/home-ess\/update$/m);
+  assert.match(unit, /^ProtectHome=true$/m);
+  // Das HOME des Dienstes muss innerhalb der beschreibbaren Pfade liegen.
+  const writable = (/^ReadWritePaths=(.+)$/m.exec(unit) || [])[1].split(/\s+/);
+  assert.ok(writable.some((entry) => '/var/lib/home-ess/update'.startsWith(entry)));
+});
+
 test('Update-HTTP-Routen trennen Healthcheck, Adminrecht und Bestätigung', async () => {
   let requested = null;
   const fakeService = {
