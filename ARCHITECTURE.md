@@ -23,19 +23,36 @@ und keinen parallelen Scheduler. Definitionen und Laufzeitstatus liegen in
 organisatorische Ablage in `automation_condition_folders` folgt demselben
 Verzeichnisprinzip wie die Custom States und hat keinen Einfluss auf die
 Auswertung. Über die Oberfläche sortierbar sind ausschließlich Verzeichnisse und
-Bedingungen; Trigger, Wenns und Danns behalten ihre Anlagereihenfolge. Die Engine bindet
+Bedingungen; Trigger, Wenns, Danns und der Sonst-Zweig behalten ihre
+Anlagereihenfolge. Die Engine bindet
 Trigger und Wenn-Prüfungen über die bestehenden Ad-hoc-Routen an den gemeinsamen
 `state-bus`; dadurch funktionieren MQTT-, Adapter-, System- und Custom-States
 über dieselbe Grenze. Zeittrigger verwenden ausschließlich die zentrale
 homeESS-Uhr aus `time-handler.js`.
 
-Jeder Trigger einer aktiven Automation kann ihre Auswertung starten. Danach
-müssen alle Wenn-Prüfungen erfüllt sein; erst dann werden alle Dann-Aktionen in
-der gespeicherten Reihenfolge über `mqtt/client.publish()` ausgegeben. Die
+Jeder Trigger einer aktiven Automation kann ihre Auswertung starten. Ist die
+Wenn-Prüfung eingeschaltet (`automation_conditions.when_enabled`), müssen alle
+Wenn-Zeilen erfüllt sein; erst dann werden alle Dann-Aktionen in der
+gespeicherten Reihenfolge über `mqtt/client.publish()` ausgegeben. Trifft eine
+Prüfung nicht zu, läuft stattdessen der Sonst-Zweig (`kind = 'else'`, je
+Bedingung höchstens einer). Ist die Prüfung abgeschaltet, laufen die
+Dann-Aktionen bedingungslos. Liefert ein beteiligter State noch gar keinen Wert,
+bleibt die Auswertung bewusst folgenlos — weder Dann noch Sonst. Die
 Bus-Änderungserkennung, eine bedingungsbezogene Laufzeitsperre und eine harte
 Ausführungsgrenze pro Minute verhindern unmittelbare Wiederholungs-,
 Rückkopplungs- und Automationsschleifen. Berechnete
 `system://`-States bleiben schreibgeschützt.
+
+Vergleichswerte und die Operanden der Aktionen sind bewusst zweideutig: Ein
+Eintrag mit gültigem Schema-Präfix (`prefix://instanz/adresse`) wird als
+Topic-Verweis gelesen und zur Auswertung aus dem Bus geholt — mit eigenem
+Ad-hoc-Abo je Feld, das keine Auswertung auslöst —, alles andere bleibt ein
+fester Wert. `src/conditions/values.js` hält diese Regeln samt numerischer
+Prüfung an einer Stelle; die Dialoge im Browser bekommen Muster und Wortlisten
+von dort, damit Client- und Serverprüfung nicht auseinanderlaufen. Mathematische
+Vergleiche und die Rechenfunktionen der Aktionen (Grundrechenarten, Rest,
+Minimum, Maximum, optionale Rundung) verlangen auf beiden Seiten Zahlen;
+boolesche Zustände zählen dabei als numerisch.
 
 ## Internationalisierung und Sprachdateien
 

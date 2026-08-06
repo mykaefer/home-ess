@@ -2,8 +2,11 @@
 
 const { renderLayout } = require('./layout');
 const { escapeHtml, statusText } = require('./components');
+const values = require('../conditions/values');
 
-const KIND_LABELS = { trigger: 'Trigger', when: 'Wenn', then: 'Dann' };
+const KIND_LABELS = { trigger: 'Trigger', when: 'Wenn', then: 'Dann', else: 'Sonst' };
+const NUMERIC_HINT = 'Wert muss bei mathematischen Operatoren numerisch sein';
+const VALUE_HINT = 'Fester Wert oder Topic';
 
 // Trigger, Wenns und Danns haben keine wirksame Reihenfolge: alle Wenns werden
 // gemeinsam geprüft, alle Danns gemeinsam ausgeführt. Die Zeilen sind deshalb
@@ -20,11 +23,14 @@ function itemRow(item, onlyItem) {
                 </div>`;
 }
 
+// Nur Trigger und Dann sind unverzichtbar; Wenn und Sonst dürfen bis auf null
+// schrumpfen und werden dann gar nicht erst angezeigt.
 function itemSection(condition, kind, items) {
+  const required = kind === 'trigger' || kind === 'then';
   return `              <section class="condition-section condition-section--${kind}">
                 <div class="condition-section-head"><span>${KIND_LABELS[kind]}</span><span class="condition-section-count">${items.length}</span></div>
                 <div class="condition-item-zone">
-${items.map((item) => itemRow(item, items.length === 1)).join('\n')}
+${items.map((item) => itemRow(item, required && items.length === 1)).join('\n')}
                 </div>
               </section>`;
 }
@@ -42,7 +48,7 @@ function conditionGroup(condition) {
               <span class="widget-drag ms-group-drag condition-drag" title="Bedingung sortieren" aria-hidden="true">⠿</span>
               <span class="ms-group-title">${escapeHtml(condition.name)}</span>
               <span class="condition-enabled ${condition.enabled ? 'is-enabled' : 'is-disabled'}">${condition.enabled ? 'Aktiv' : 'Inaktiv'}</span>
-              <span class="ms-group-count" title="Trigger / Wenn / Dann">${condition.triggers.length} / ${condition.whens.length} / ${condition.thens.length}</span>
+              <span class="ms-group-count" title="Trigger / Wenn / Dann / Sonst">${condition.triggers.length} / ${condition.whenEnabled ? condition.whens.length : '—'} / ${condition.thens.length} / ${(condition.elses || []).length}</span>
               ${conditionStatus(condition)}
               <div class="widget-group-actions">
                 <button type="button" class="widget-icon-btn" title="Bedingung bearbeiten" onclick="event.stopPropagation(); openConditionEdit(${condition.id})">✎</button>
@@ -51,9 +57,8 @@ function conditionGroup(condition) {
             </div>
             <div class="ms-group-body condition-body">
 ${itemSection(condition, 'trigger', condition.triggers)}
-${itemSection(condition, 'when', condition.whens)}
-${itemSection(condition, 'then', condition.thens)}
-              <button type="button" class="condition-add-row" title="Trigger, Wenn oder Dann hinzufügen" aria-label="Element hinzufügen" onclick="openConditionItemDialog('add', ${condition.id})"><span aria-hidden="true">+</span></button>
+${condition.whenEnabled ? `${itemSection(condition, 'when', condition.whens)}\n` : ''}${itemSection(condition, 'then', condition.thens)}
+${(condition.elses || []).length ? `${itemSection(condition, 'else', condition.elses)}\n` : ''}              <button type="button" class="condition-add-row" title="Trigger, Wenn, Dann oder Sonst hinzufügen" aria-label="Element hinzufügen" onclick="openConditionItemDialog('add', ${condition.id})"><span aria-hidden="true">+</span></button>
             </div>
           </div>`;
 }
@@ -97,13 +102,39 @@ function weekdayFields(prefix) {
   </div>`;
 }
 
-function topicField(id, name, label, writable = false) {
-  return `<label class="field-block condition-topic-field"><span>${label}</span><input id="${id}" name="${name}" data-state-picker${writable ? ' data-state-picker-writable' : ''} autocomplete="off" placeholder="State auswählen…"></label>`;
+function topicField(id, name, label, writable = false, extraClass = '') {
+  return `<label class="field-block condition-topic-field${extraClass ? ` ${extraClass}` : ''}"><span>${label}</span><input id="${id}" name="${name}" data-state-picker${writable ? ' data-state-picker-writable' : ''} autocomplete="off" placeholder="State auswählen…"></label>`;
+}
+
+// Vergleichs- und Zielwerte nehmen wahlweise einen festen Wert oder ein Topic
+// auf. Der Hinweis steht über dem Feld, den Auswahl-Button hängt der globale
+// State-Picker automatisch dahinter. Der rote Text darunter erscheint, sobald
+// ein fester Wert bei einer mathematischen Verwendung nicht numerisch ist.
+function valueField(id, name, label, extraClass = '') {
+  return `<label class="field-block condition-value-field${extraClass ? ` ${extraClass}` : ''}"><span id="${id}Label">${label}</span><span class="field-hint">${VALUE_HINT}</span><input id="${id}" name="${name}" data-condition-value data-state-picker autocomplete="off" placeholder="Wert oder Topic"><span class="error-text condition-value-error" id="${id}Error" hidden>${NUMERIC_HINT}</span></label>`;
+}
+
+function operationOptions() {
+  return '<option value="set">Wert direkt setzen</option><option value="add">Addieren (+)</option><option value="sub">Subtrahieren (−)</option><option value="mul">Multiplizieren (×)</option><option value="div">Dividieren (÷)</option><option value="mod">Rest der Division</option><option value="min">Kleineren Wert nehmen</option><option value="max">Größeren Wert nehmen</option>';
+}
+
+// Dann und Sonst sind derselbe Aktionsbaustein: Ziel, Rechenfunktion, ein oder
+// zwei Werte und optionale Rundung.
+function actionFields(id, name, cssPrefix) {
+  return `${topicField(`${id}Topic`, `${name}Topic`, 'Ziel-State', true)}
+      <label class="field-block"><span>Funktion</span><select id="${id}Operation" name="${name}Operation" onchange="syncConditionDialogs()">${operationOptions()}</select></label>
+      ${valueField(`${id}Value`, `${name}Value`, 'Zielwert')}
+      ${valueField(`${id}Value2`, `${name}Value2`, 'Zweiter Wert', `${cssPrefix}-second`)}
+      <label class="field-block"><span>Runden auf Nachkommastellen</span><input id="${id}Round" name="${name}Round" type="number" min="0" max="${values.MAX_ROUND_DIGITS}" placeholder="ohne Rundung" data-no-state-picker></label>`;
+}
+
+function sectionToggle(id, name, label, checked) {
+  return `<label class="remember-row condition-section-toggle"><input type="hidden" name="${name}" value="0"><input id="${id}" type="checkbox" name="${name}" value="1"${checked ? ' checked' : ''} onchange="syncConditionDialogs()"><span>${label}</span></label>`;
 }
 
 function createDialog(folders) {
   return `<dialog id="conditionCreateDialog" class="value-dialog condition-dialog"><form action="/conditions" method="POST" class="dialog-form">
-    <div class="dialog-hero"><div><h3>Bedingung hinzufügen</h3><p class="muted">Die Mindestausstattung aus Trigger, Wenn und Dann wird gemeinsam angelegt.</p></div></div>
+    <div class="dialog-hero"><div><h3>Bedingung hinzufügen</h3><p class="muted">Trigger und Dann gehören immer dazu; Wenn und Sonst lassen sich per Haken zuschalten.</p></div></div>
     <p id="conditionCreateError" class="error-text" hidden></p>
     <div class="dialog-section"><div class="dialog-grid dialog-grid--two">
       <label class="field-block"><span>Name</span><input id="conditionCreateName" name="name" required maxlength="120"></label>
@@ -119,14 +150,16 @@ function createDialog(folders) {
       <div class="create-trigger-topic">${topicField('createTriggerTopic', 'triggerTopic', 'Trigger-State')}</div>
       <label class="field-block create-trigger-event"><span>Exakter Ereigniswert</span><input id="createTriggerValue" name="triggerValue"></label>
     </div></div>
-    <div class="dialog-section"><div class="dialog-section-head"><h4>Wenn</h4></div><div class="dialog-grid dialog-grid--two">
+    <div class="dialog-section"><div class="dialog-section-head condition-dialog-head"><h4>Wenn</h4>${sectionToggle('createWhenEnabled', 'whenEnabled', 'Wenn-Prüfung verwenden', true)}</div><div class="dialog-grid dialog-grid--two create-when-fields">
       <input type="hidden" name="whenType" value="state">${topicField('createWhenTopic', 'whenTopic', 'Prüf-State')}
-      <label class="field-block"><span>Vergleich</span><select id="createWhenOperator" name="whenOperator" onchange="syncWhenValue('create')">${operatorOptions()}</select></label>
-      <label class="field-block" id="createWhenValueField"><span>Vergleichswert</span><input id="createWhenValue" name="whenValue"></label>
+      <label class="field-block"><span>Vergleich</span><select id="createWhenOperator" name="whenOperator" onchange="syncConditionDialogs()">${operatorOptions()}</select></label>
+      ${valueField('createWhenValue', 'whenValue', 'Vergleichswert', 'create-when-value')}
     </div></div>
     <div class="dialog-section"><div class="dialog-section-head"><h4>Dann</h4></div><div class="dialog-grid dialog-grid--two">
-      <input type="hidden" name="thenType" value="write">${topicField('createThenTopic', 'thenTopic', 'Ziel-State', true)}
-      <label class="field-block"><span>Zielwert</span><input id="createThenValue" name="thenValue"></label>
+      <input type="hidden" name="thenType" value="write">${actionFields('createThen', 'then', 'create-then')}
+    </div></div>
+    <div class="dialog-section" id="createElseSection"><div class="dialog-section-head condition-dialog-head"><h4>Sonst</h4>${sectionToggle('createElseEnabled', 'elseEnabled', 'Sonst-Zweig anlegen', false)}</div><p class="muted condition-section-hint">Der Sonst-Zweig läuft, wenn die Wenn-Prüfung nicht zutrifft. Je Bedingung ist er einmal möglich.</p><div class="dialog-grid dialog-grid--two create-else-fields">
+      <input type="hidden" name="elseType" value="write">${actionFields('createElse', 'else', 'create-else')}
     </div></div>
     <div class="button-row"><button type="submit">Bedingung anlegen</button><button type="button" class="secondary-button" onclick="document.getElementById('conditionCreateDialog').close()">Abbrechen</button></div>
   </form></dialog>`;
@@ -138,12 +171,13 @@ function operatorOptions() {
 
 function editDialog(folders) {
   return `<dialog id="conditionEditDialog" class="value-dialog"><form id="conditionEditForm" method="POST" class="dialog-form">
-    <div class="dialog-hero"><div><h3>Bedingung bearbeiten</h3><p class="muted">Name, Verzeichnis und Aktivzustand können jederzeit geändert werden.</p></div></div>
+    <div class="dialog-hero"><div><h3>Bedingung bearbeiten</h3><p class="muted">Name, Verzeichnis, Aktivzustand und die Wenn-Prüfung können jederzeit geändert werden.</p></div></div>
     <p id="conditionEditError" class="error-text" hidden></p>
     <div class="dialog-section"><div class="dialog-grid dialog-grid--two">
       <label class="field-block"><span>Name</span><input id="conditionEditName" name="name" required maxlength="120"></label>
       <label class="field-block"><span>Verzeichnis</span><select id="conditionEditFolder" name="folderId">${folderOptions(folders)}</select></label>
       <label class="remember-row remember-row--boxed"><input id="conditionEditEnabled" type="checkbox" name="enabled" value="1"><span>Bedingung aktiv</span></label>
+      <label class="remember-row remember-row--boxed"><input type="hidden" name="whenEnabled" value="0"><input id="conditionEditWhenEnabled" type="checkbox" name="whenEnabled" value="1"><span>Wenn-Prüfung verwenden</span></label>
     </div></div>
     <div class="button-row"><button type="submit">Speichern</button><button type="button" class="secondary-button" onclick="document.getElementById('conditionEditDialog').close()">Abbrechen</button></div>
   </form></dialog>`;
@@ -163,10 +197,10 @@ function folderDialog(folders) {
 
 function itemDialog() {
   return `<dialog id="conditionItemDialog" class="value-dialog condition-dialog"><form id="conditionItemForm" method="POST" class="dialog-form">
-    <div class="dialog-hero"><div><h3 id="conditionItemTitle">Element hinzufügen</h3><p class="muted">Trigger starten die Auswertung, alle Wenns werden gemeinsam geprüft, danach laufen alle Danns.</p></div></div>
+    <div class="dialog-hero"><div><h3 id="conditionItemTitle">Element hinzufügen</h3><p class="muted">Trigger starten die Auswertung, alle Wenns werden gemeinsam geprüft, danach laufen alle Danns – oder der Sonst-Zweig.</p></div></div>
     <p id="conditionItemError" class="error-text" hidden></p>
     <div class="dialog-section"><div class="dialog-grid dialog-grid--two">
-      <label class="field-block"><span>Bereich</span><select id="conditionItemKind" name="kind" onchange="syncConditionItemFields()"><option value="trigger">Trigger</option><option value="when">Wenn</option><option value="then">Dann</option></select></label>
+      <label class="field-block"><span>Bereich</span><select id="conditionItemKind" name="kind" onchange="syncConditionItemFields()"><option value="trigger">Trigger</option><option value="when">Wenn</option><option value="then">Dann</option><option value="else">Sonst</option></select></label>
       <label class="field-block"><span>Art</span><select id="conditionItemType" name="type" onchange="syncConditionItemFields()"></select></label>
       <label class="field-block condition-item-time"><span>Zeitmodus</span><select id="conditionItemMode" name="mode" onchange="syncConditionItemFields()"><option value="interval">Intervall</option><option value="schedule">Fester Wochenzeitpunkt</option></select></label>
       <label class="field-block condition-item-interval"><span>Alle</span><span class="condition-inline-fields"><input id="conditionItemIntervalAmount" name="intervalAmount" type="number" min="1" max="10000" value="5"><select id="conditionItemIntervalUnit" name="intervalUnit"><option value="minutes">Minuten</option><option value="hours">Stunden</option><option value="days">Tage</option></select></span></label>
@@ -174,7 +208,11 @@ function itemDialog() {
       <div class="field-block condition-item-schedule"><span>Wochentage</span>${weekdayFields('conditionItem')}</div>
       <div class="condition-item-topic">${topicField('conditionItemTopic', 'topic', 'State')}</div>
       <label class="field-block condition-item-operator"><span>Vergleich</span><select id="conditionItemOperator" name="operator" onchange="syncConditionItemFields()">${operatorOptions()}</select></label>
-      <label class="field-block condition-item-value"><span id="conditionItemValueLabel">Wert</span><input id="conditionItemValue" name="value"></label>
+      <label class="field-block condition-item-event"><span>Exakter Ereigniswert</span><input id="conditionItemEventValue" name="value" data-no-state-picker></label>
+      <label class="field-block condition-item-operation"><span>Funktion</span><select id="conditionItemOperation" name="operation" onchange="syncConditionItemFields()">${operationOptions()}</select></label>
+      ${valueField('conditionItemValue', 'value', 'Wert', 'condition-item-value')}
+      ${valueField('conditionItemValue2', 'value2', 'Zweiter Wert', 'condition-item-second')}
+      <label class="field-block condition-item-round"><span>Runden auf Nachkommastellen</span><input id="conditionItemRound" name="round" type="number" min="0" max="${values.MAX_ROUND_DIGITS}" placeholder="ohne Rundung" data-no-state-picker></label>
     </div></div>
     <div class="button-row"><button type="submit">Speichern</button><button type="button" class="secondary-button" onclick="document.getElementById('conditionItemDialog').close()">Abbrechen</button></div>
   </form></dialog>`;
@@ -216,18 +254,75 @@ ${rootFolders.map(folderGroup).join('\n')}
     var conditionFolderDialogMode = 'add';
     function findCondition(id) { return conditionData.find(function (entry) { return entry.id === Number(id); }); }
     function findConditionFolder(id) { return conditionFolders.find(function (entry) { return entry.id === Number(id); }); }
-    function allConditionItems(condition) { return condition ? condition.triggers.concat(condition.whens, condition.thens) : []; }
+    function allConditionItems(condition) { return condition ? condition.triggers.concat(condition.whens, condition.thens, condition.elses || []) : []; }
     function findConditionItem(conditionId, itemId) { return allConditionItems(findCondition(conditionId)).find(function (item) { return item.id === Number(itemId); }); }
     function conditionOpenMap() { try { return JSON.parse(localStorage.getItem(CONDITION_OPEN_KEY) || '{}') || {}; } catch (_) { return {}; } }
     function saveConditionOpen() { var map = {}; document.querySelectorAll('[data-condition-key]').forEach(function (group) { map[group.dataset.conditionKey] = group.classList.contains('is-open'); }); try { localStorage.setItem(CONDITION_OPEN_KEY, JSON.stringify(map)); } catch (_) {} }
     function restoreConditionOpen() { var map = conditionOpenMap(); document.querySelectorAll('[data-condition-key]').forEach(function (group) { var open = map[group.dataset.conditionKey] === true; group.classList.toggle('is-open', open); var head = group.querySelector(':scope > .condition-head, :scope > .condition-folder-head'); if (head) head.setAttribute('aria-expanded', open ? 'true' : 'false'); }); }
     function toggleCondition(head) { var group = head.parentNode; var open = group.classList.toggle('is-open'); head.setAttribute('aria-expanded', open ? 'true' : 'false'); saveConditionOpen(); }
-    function showNodes(selector, show) { document.querySelectorAll(selector).forEach(function (node) { node.hidden = !show; }); }
-    function syncWhenValue(prefix) { var op = document.getElementById(prefix + 'WhenOperator').value; document.getElementById(prefix + 'WhenValueField').hidden = op === 'truthy' || op === 'falsy'; }
+    // Ausgeblendete Felder werden zusätzlich deaktiviert: so sendet das Formular
+    // nur die Angaben des tatsächlich gewählten Bereichs.
+    function showNodes(selector, show) { document.querySelectorAll(selector).forEach(function (node) { node.hidden = !show; if (node.matches('input, select, textarea')) node.disabled = !show; node.querySelectorAll('input, select, textarea').forEach(function (field) { field.disabled = !show; }); }); }
+    var CONDITION_TOPIC_RE = new RegExp(${JSON.stringify(values.TOPIC_PATTERN)}, 'i');
+    var CONDITION_BOOLEAN_WORDS = ${JSON.stringify(values.TRUE_WORDS.concat(values.FALSE_WORDS))};
+    var CONDITION_MATH_OPERATORS = ${JSON.stringify(values.MATH_OPERATORS)};
+    function conditionValueOf(id) { var node = document.getElementById(id); return node ? node.value : ''; }
+    function conditionIsTopic(raw) { return CONDITION_TOPIC_RE.test(String(raw == null ? '' : raw).trim()); }
+    function conditionIsNumeric(raw) { var text = String(raw == null ? '' : raw).trim().toLowerCase(); if (!text) return false; if (CONDITION_BOOLEAN_WORDS.indexOf(text) !== -1) return true; return isFinite(Number(text.replace(',', '.'))); }
+    function conditionFieldVisible(node) { for (var cursor = node; cursor && cursor.nodeType === 1; cursor = cursor.parentNode) { if (cursor.hidden) return false; } return true; }
+    function conditionActionNumeric(prefix) { return conditionValueOf(prefix + 'Operation') !== 'set' || String(conditionValueOf(prefix + 'Round')).trim() !== ''; }
+    function conditionItemNumeric() { var kind = conditionValueOf('conditionItemKind'); if (kind === 'when') return CONDITION_MATH_OPERATORS.indexOf(conditionValueOf('conditionItemOperator')) !== -1; if (kind === 'then' || kind === 'else') return conditionActionNumeric('conditionItem'); return false; }
+    var CONDITION_VALUE_FIELDS = [
+      ['createWhenValue', function () { return CONDITION_MATH_OPERATORS.indexOf(conditionValueOf('createWhenOperator')) !== -1; }],
+      ['createThenValue', function () { return conditionActionNumeric('createThen'); }],
+      ['createThenValue2', function () { return true; }],
+      ['createElseValue', function () { return conditionActionNumeric('createElse'); }],
+      ['createElseValue2', function () { return true; }],
+      ['conditionItemValue', conditionItemNumeric],
+      ['conditionItemValue2', function () { return true; }]
+    ];
+    // Ein fest eingetragener Wert muss numerisch sein, sobald damit gerechnet
+    // oder mathematisch verglichen wird. Topic-Verweise prüft erst die Engine
+    // mit dem tatsächlichen Wert des Ziel-States.
+    function syncConditionValidity() {
+      var forms = [], valid = [];
+      CONDITION_VALUE_FIELDS.forEach(function (entry) {
+        var input = document.getElementById(entry[0]);
+        if (!input) return;
+        var raw = String(input.value || '').trim();
+        var bad = raw !== '' && conditionFieldVisible(input) && entry[1]() && !conditionIsTopic(raw) && !conditionIsNumeric(raw);
+        var hint = document.getElementById(entry[0] + 'Error');
+        if (hint) hint.hidden = !bad;
+        input.classList.toggle('is-invalid', bad);
+        var index = forms.indexOf(input.form);
+        if (index === -1) { forms.push(input.form); valid.push(true); index = forms.length - 1; }
+        if (bad) valid[index] = false;
+      });
+      forms.forEach(function (form, index) {
+        if (!form) return;
+        form.querySelectorAll('button[type="submit"]').forEach(function (button) { button.disabled = !valid[index]; });
+      });
+    }
+    // Wenn und Sonst sind im Anlegen-Dialog zuschaltbar und bleiben sonst
+    // ausgeblendet; ohne Wenn-Prüfung gibt es keinen Sonst-Zweig.
+    function syncConditionDialogs() {
+      var whenBox = document.getElementById('createWhenEnabled');
+      var elseBox = document.getElementById('createElseEnabled');
+      var when = whenBox.checked;
+      if (!when) elseBox.checked = false;
+      elseBox.disabled = !when;
+      document.getElementById('createElseSection').hidden = !when;
+      showNodes('.create-when-fields', when);
+      showNodes('.create-when-value', when && ['truthy', 'falsy'].indexOf(conditionValueOf('createWhenOperator')) === -1);
+      showNodes('.create-else-fields', when && elseBox.checked);
+      showNodes('.create-then-second', conditionValueOf('createThenOperation') !== 'set');
+      showNodes('.create-else-second', when && elseBox.checked && conditionValueOf('createElseOperation') !== 'set');
+      syncConditionValidity();
+    }
     function syncCreateTrigger() { var type = document.getElementById('createTriggerType').value; var mode = document.getElementById('createTriggerMode').value; showNodes('.create-trigger-time', type === 'time'); showNodes('.create-trigger-interval', type === 'time' && mode === 'interval'); showNodes('.create-trigger-schedule', type === 'time' && mode === 'schedule'); showNodes('.create-trigger-topic', type === 'change' || type === 'event'); showNodes('.create-trigger-event', type === 'event'); }
     function conditionSelectHasValue(select, value) { if (!select) return false; for (var i = 0; i < select.options.length; i++) if (select.options[i].value === String(value)) return true; return false; }
-    function openConditionCreate(folderId) { var select = document.getElementById('conditionCreateFolder'); select.value = folderId != null && conditionSelectHasValue(select, folderId) ? String(folderId) : ''; document.getElementById('conditionCreateDialog').showModal(); syncCreateTrigger(); syncWhenValue('create'); }
-    function openConditionEdit(id) { var condition = findCondition(id); var form = document.getElementById('conditionEditForm'); form.action = '/conditions/' + id; document.getElementById('conditionEditName').value = condition.name; var folderSelect = document.getElementById('conditionEditFolder'); folderSelect.value = condition.folderId == null ? '' : String(condition.folderId); document.getElementById('conditionEditEnabled').checked = condition.enabled; document.getElementById('conditionEditDialog').showModal(); }
+    function openConditionCreate(folderId) { var select = document.getElementById('conditionCreateFolder'); select.value = folderId != null && conditionSelectHasValue(select, folderId) ? String(folderId) : ''; document.getElementById('conditionCreateDialog').showModal(); syncCreateTrigger(); syncConditionDialogs(); }
+    function openConditionEdit(id) { var condition = findCondition(id); var form = document.getElementById('conditionEditForm'); form.action = '/conditions/' + id; document.getElementById('conditionEditName').value = condition.name; var folderSelect = document.getElementById('conditionEditFolder'); folderSelect.value = condition.folderId == null ? '' : String(condition.folderId); document.getElementById('conditionEditEnabled').checked = condition.enabled; document.getElementById('conditionEditWhenEnabled').checked = condition.whenEnabled !== false; document.getElementById('conditionEditDialog').showModal(); }
     function openConditionDelete(id) { document.getElementById('conditionDeleteForm').action = '/conditions/' + id + '/delete'; document.getElementById('conditionDeleteDialog').showModal(); }
     function openConditionItemDelete(conditionId, itemId) { document.getElementById('conditionItemDeleteForm').action = '/conditions/' + conditionId + '/items/' + itemId + '/delete'; document.getElementById('conditionItemDeleteDialog').showModal(); }
     function conditionFolderIsDescendant(candidateId, ancestorId) { var cursor = findConditionFolder(candidateId); var seen = {}; while (cursor && cursor.parentId != null && !seen[cursor.id]) { if (cursor.parentId === Number(ancestorId)) return true; seen[cursor.id] = true; cursor = findConditionFolder(cursor.parentId); } return false; }
@@ -243,12 +338,69 @@ ${rootFolders.map(folderGroup).join('\n')}
     }
     function openConditionFolderDelete(id) { var folder = findConditionFolder(id); document.getElementById('conditionFolderDeleteForm').action = '/conditions/folder/' + id + '/delete'; document.querySelector('#conditionFolderDeleteDialog h3').textContent = folder ? '„' + folder.name + '“ entfernen' : 'Verzeichnis entfernen'; document.getElementById('conditionFolderDeleteDialog').showModal(); }
     function itemTypes(kind) { return kind === 'trigger' ? [['time','Zeitliche Wiederholung'],['change','Wertänderung'],['event','Exaktes Ereignis']] : kind === 'when' ? [['state','State vergleichen']] : [['write','State schreiben']]; }
+    // Der Sonst-Zweig ist einmalig und braucht eine aktive Wenn-Prüfung.
+    function syncConditionItemKindOptions(condition, item) {
+      var option = document.getElementById('conditionItemKind').querySelector('option[value="else"]');
+      if (!option) return;
+      var noWhen = !!condition && condition.whenEnabled === false;
+      var taken = !!condition && (condition.elses || []).length > 0;
+      var blocked = !item && (noWhen || taken);
+      option.disabled = blocked;
+      option.textContent = !blocked ? 'Sonst' : (noWhen ? 'Sonst (braucht eine Wenn-Prüfung)' : 'Sonst (bereits vorhanden)');
+    }
     function fillItemTypes(kind, selected) { var select = document.getElementById('conditionItemType'); select.innerHTML = ''; itemTypes(kind).forEach(function (entry) { var option = document.createElement('option'); option.value = entry[0]; option.textContent = entry[1]; select.appendChild(option); }); if (selected) select.value = selected; }
-    function syncConditionItemFields() { var kind = document.getElementById('conditionItemKind').value; var type = document.getElementById('conditionItemType').value; var mode = document.getElementById('conditionItemMode').value; showNodes('.condition-item-time', kind === 'trigger' && type === 'time'); showNodes('.condition-item-interval', kind === 'trigger' && type === 'time' && mode === 'interval'); showNodes('.condition-item-schedule', kind === 'trigger' && type === 'time' && mode === 'schedule'); showNodes('.condition-item-topic', !(kind === 'trigger' && type === 'time')); showNodes('.condition-item-operator', kind === 'when'); var topic=document.getElementById('conditionItemTopic');if(kind==='then')topic.setAttribute('data-state-picker-writable','');else topic.removeAttribute('data-state-picker-writable'); var op = document.getElementById('conditionItemOperator').value; var needsValue = kind === 'then' || (kind === 'trigger' && type === 'event') || (kind === 'when' && op !== 'truthy' && op !== 'falsy'); showNodes('.condition-item-value', needsValue); document.getElementById('conditionItemValueLabel').textContent = kind === 'then' ? 'Zielwert' : kind === 'trigger' ? 'Exakter Ereigniswert' : 'Vergleichswert'; }
+    function syncConditionItemFields() {
+      var kind = document.getElementById('conditionItemKind').value;
+      var type = document.getElementById('conditionItemType').value;
+      var mode = document.getElementById('conditionItemMode').value;
+      var op = document.getElementById('conditionItemOperator').value;
+      var action = kind === 'then' || kind === 'else';
+      showNodes('.condition-item-time', kind === 'trigger' && type === 'time');
+      showNodes('.condition-item-interval', kind === 'trigger' && type === 'time' && mode === 'interval');
+      showNodes('.condition-item-schedule', kind === 'trigger' && type === 'time' && mode === 'schedule');
+      showNodes('.condition-item-topic', !(kind === 'trigger' && type === 'time'));
+      showNodes('.condition-item-operator', kind === 'when');
+      showNodes('.condition-item-event', kind === 'trigger' && type === 'event');
+      showNodes('.condition-item-operation', action);
+      showNodes('.condition-item-round', action);
+      showNodes('.condition-item-value', action || (kind === 'when' && op !== 'truthy' && op !== 'falsy'));
+      showNodes('.condition-item-second', action && conditionValueOf('conditionItemOperation') !== 'set');
+      var topic = document.getElementById('conditionItemTopic');
+      if (action) topic.setAttribute('data-state-picker-writable', ''); else topic.removeAttribute('data-state-picker-writable');
+      document.getElementById('conditionItemValueLabel').textContent = action ? 'Zielwert' : 'Vergleichswert';
+      syncConditionValidity();
+    }
     function valueArray(values) { return Array.isArray(values) ? values.map(String) : values == null || values === '' ? [] : String(values).split(','); }
     function setWeekdayGroup(id, values) { var wanted=valueArray(values); document.querySelectorAll('#'+id+' input').forEach(function (input) { input.checked = wanted.includes(input.value); }); }
-    function openConditionItemDialog(mode, conditionId, itemId) { var item = mode === 'edit' ? findConditionItem(conditionId, itemId) : null; var kind = item ? item.kind : 'trigger'; var kindSelect = document.getElementById('conditionItemKind'); kindSelect.value = kind; kindSelect.disabled = !!item; fillItemTypes(kind, item && item.type); document.getElementById('conditionItemTitle').textContent = item ? KIND_LABELS_JS[kind] + ' bearbeiten' : 'Element hinzufügen'; var form = document.getElementById('conditionItemForm'); form.action = item ? '/conditions/' + conditionId + '/items/' + itemId : '/conditions/' + conditionId + '/items'; var c = item ? item.config : {}; document.getElementById('conditionItemMode').value = c.mode || 'interval'; document.getElementById('conditionItemIntervalAmount').value = c.intervalAmount || 5; document.getElementById('conditionItemIntervalUnit').value = c.intervalUnit || 'minutes'; document.getElementById('conditionItemTime').value = c.time || '08:00'; setWeekdayGroup('conditionItemWeekdays',c.weekdays || [0,1,2,3,4,5,6]); document.getElementById('conditionItemTopic').value = c.topic || ''; document.getElementById('conditionItemOperator').value = c.operator || 'eq'; document.getElementById('conditionItemValue').value = c.value == null ? '' : c.value; syncConditionItemFields(); document.getElementById('conditionItemDialog').showModal(); }
-    var KIND_LABELS_JS = { trigger: 'Trigger', when: 'Wenn', then: 'Dann' };
+    function openConditionItemDialog(mode, conditionId, itemId) {
+      var item = mode === 'edit' ? findConditionItem(conditionId, itemId) : null;
+      var kind = item ? item.kind : 'trigger';
+      var kindSelect = document.getElementById('conditionItemKind');
+      syncConditionItemKindOptions(findCondition(conditionId), item);
+      kindSelect.value = kind; kindSelect.disabled = !!item;
+      fillItemTypes(kind, item && item.type);
+      document.getElementById('conditionItemTitle').textContent = item ? KIND_LABELS_JS[kind] + ' bearbeiten' : 'Element hinzufügen';
+      var form = document.getElementById('conditionItemForm');
+      form.action = item ? '/conditions/' + conditionId + '/items/' + itemId : '/conditions/' + conditionId + '/items';
+      var c = item ? item.config : {};
+      document.getElementById('conditionItemMode').value = c.mode || 'interval';
+      document.getElementById('conditionItemIntervalAmount').value = c.intervalAmount || 5;
+      document.getElementById('conditionItemIntervalUnit').value = c.intervalUnit || 'minutes';
+      document.getElementById('conditionItemTime').value = c.time || '08:00';
+      setWeekdayGroup('conditionItemWeekdays', c.weekdays || [0,1,2,3,4,5,6]);
+      document.getElementById('conditionItemTopic').value = c.topic || '';
+      document.getElementById('conditionItemOperator').value = c.operator || 'eq';
+      document.getElementById('conditionItemOperation').value = c.operation || 'set';
+      document.getElementById('conditionItemRound').value = c.round == null ? '' : c.round;
+      // Ereigniswert und Vergleichs-/Zielwert teilen sich den Feldnamen; gesendet
+      // wird nur das sichtbare Feld.
+      document.getElementById('conditionItemEventValue').value = c.value == null ? '' : c.value;
+      document.getElementById('conditionItemValue').value = c.value == null ? '' : c.value;
+      document.getElementById('conditionItemValue2').value = c.value2 == null ? '' : c.value2;
+      syncConditionItemFields();
+      document.getElementById('conditionItemDialog').showModal();
+    }
+    var KIND_LABELS_JS = { trigger: 'Trigger', when: 'Wenn', then: 'Dann', else: 'Sonst' };
     document.getElementById('conditionItemKind').addEventListener('change', function () { fillItemTypes(this.value); syncConditionItemFields(); });
     document.getElementById('conditionItemForm').addEventListener('submit', function () { document.getElementById('conditionItemKind').disabled = false; });
     function directChildren(zone, selector) { return Array.prototype.filter.call(zone.children, function (node) { return node.matches(selector); }); }
@@ -335,9 +487,82 @@ ${rootFolders.map(folderGroup).join('\n')}
     document.querySelectorAll('.condition-folder-zone').forEach(setupConditionFolderZone);
     document.querySelectorAll('.condition-group').forEach(setupConditionGroup);
     document.querySelectorAll('.condition-folder').forEach(setupConditionFolder);
-    restoreConditionOpen(); window.addEventListener('pageshow',restoreConditionOpen); syncCreateTrigger(); syncWhenValue('create'); fillItemTypes('trigger'); syncConditionItemFields();
+    document.querySelectorAll('[data-condition-value]').forEach(function (input) { input.addEventListener('input', syncConditionValidity); input.addEventListener('change', syncConditionValidity); });
+    document.querySelectorAll('#createThenRound, #createElseRound, #conditionItemRound').forEach(function (input) { input.addEventListener('input', syncConditionValidity); });
+    restoreConditionOpen(); window.addEventListener('pageshow',restoreConditionOpen); syncCreateTrigger(); syncConditionDialogs(); fillItemTypes('trigger'); syncConditionItemFields();
     document.querySelectorAll('[data-condition-time]').forEach(function (node) { var at=Number(node.dataset.conditionTime); if(at) node.textContent='Zuletzt '+new Date(at).toLocaleString(); });
-    if (conditionInitialDialog) { var v=conditionInitialDialog.values||{}; if(conditionInitialDialog.kind==='condition-create'){openConditionCreate(v.folderId);document.getElementById('conditionCreateName').value=v.name||'';document.getElementById('conditionCreateEnabled').checked=String(v.enabled)==='1';document.getElementById('createTriggerType').value=v.triggerType||'time';document.getElementById('createTriggerMode').value=v.triggerMode||'interval';document.getElementById('createTriggerIntervalAmount').value=v.triggerIntervalAmount||5;document.getElementById('createTriggerIntervalUnit').value=v.triggerIntervalUnit||'minutes';document.getElementById('createTriggerTime').value=v.triggerTime||'08:00';setWeekdayGroup('triggerWeekdays',v.triggerWeekdays||[0,1,2,3,4,5,6]);document.getElementById('createTriggerTopic').value=v.triggerTopic||'';document.getElementById('createTriggerValue').value=v.triggerValue||'';document.getElementById('createWhenTopic').value=v.whenTopic||'';document.getElementById('createWhenOperator').value=v.whenOperator||'eq';document.getElementById('createWhenValue').value=v.whenValue||'';document.getElementById('createThenTopic').value=v.thenTopic||'';document.getElementById('createThenValue').value=v.thenValue||'';syncCreateTrigger();syncWhenValue('create');} else if(conditionInitialDialog.kind==='condition-edit'){openConditionEdit(conditionInitialDialog.conditionId);document.getElementById('conditionEditName').value=v.name||'';if(conditionSelectHasValue(document.getElementById('conditionEditFolder'),v.folderId==null?'':v.folderId))document.getElementById('conditionEditFolder').value=v.folderId==null?'':String(v.folderId);document.getElementById('conditionEditEnabled').checked=String(v.enabled)==='1';} else if(conditionInitialDialog.kind==='folder-add'||conditionInitialDialog.kind==='folder-edit'){openConditionFolderDialog(conditionInitialDialog.kind==='folder-edit'?'edit':'add',conditionInitialDialog.folderId);document.getElementById('conditionFolderName').value=v.name||'';if(conditionSelectHasValue(document.getElementById('conditionFolderParent'),v.parentId==null?'':v.parentId))document.getElementById('conditionFolderParent').value=v.parentId==null?'':String(v.parentId);} else {openConditionItemDialog(conditionInitialDialog.kind==='item-edit'?'edit':'add',conditionInitialDialog.conditionId,conditionInitialDialog.itemId);var kind=v.kind||document.getElementById('conditionItemKind').value;document.getElementById('conditionItemKind').value=kind;fillItemTypes(kind,v.type);document.getElementById('conditionItemMode').value=v.mode||'interval';document.getElementById('conditionItemIntervalAmount').value=v.intervalAmount||5;document.getElementById('conditionItemIntervalUnit').value=v.intervalUnit||'minutes';document.getElementById('conditionItemTime').value=v.time||'08:00';setWeekdayGroup('conditionItemWeekdays',v.weekdays||[0,1,2,3,4,5,6]);document.getElementById('conditionItemTopic').value=v.topic||'';document.getElementById('conditionItemValue').value=v.value||'';document.getElementById('conditionItemOperator').value=v.operator||'eq';syncConditionItemFields();} var errorId=conditionInitialDialog.kind==='condition-create'?'conditionCreateError':conditionInitialDialog.kind==='condition-edit'?'conditionEditError':conditionInitialDialog.kind==='folder-add'||conditionInitialDialog.kind==='folder-edit'?'conditionFolderError':'conditionItemError';var err=document.getElementById(errorId);if(err){err.textContent=conditionInitialDialog.error||'';err.hidden=!err.textContent;} }
+    // Nach einem abgelehnten Formular wird der Dialog mit den zuletzt
+    // eingegebenen Werten erneut geöffnet.
+    function conditionSetValue(id, value, fallback) { var node = document.getElementById(id); if (node) node.value = value == null || value === '' ? (fallback == null ? '' : fallback) : value; }
+    function conditionSetChecked(id, value, fallback) {
+      var node = document.getElementById(id);
+      if (!node) return;
+      var raw = Array.isArray(value) ? (value.length ? value[value.length - 1] : null) : value;
+      node.checked = raw == null ? !!fallback : ['1', 'true', 'on'].indexOf(String(raw)) !== -1;
+    }
+    function restoreConditionAction(prefix, key, v) {
+      conditionSetValue(prefix + 'Topic', v[key + 'Topic']);
+      conditionSetValue(prefix + 'Operation', v[key + 'Operation'], 'set');
+      conditionSetValue(prefix + 'Value', v[key + 'Value']);
+      conditionSetValue(prefix + 'Value2', v[key + 'Value2']);
+      conditionSetValue(prefix + 'Round', v[key + 'Round']);
+    }
+    if (conditionInitialDialog) {
+      var v = conditionInitialDialog.values || {};
+      var dialogKind = conditionInitialDialog.kind;
+      if (dialogKind === 'condition-create') {
+        openConditionCreate(v.folderId);
+        conditionSetValue('conditionCreateName', v.name);
+        conditionSetChecked('conditionCreateEnabled', v.enabled, false);
+        conditionSetChecked('createWhenEnabled', v.whenEnabled, true);
+        conditionSetChecked('createElseEnabled', v.elseEnabled, false);
+        conditionSetValue('createTriggerType', v.triggerType, 'time');
+        conditionSetValue('createTriggerMode', v.triggerMode, 'interval');
+        conditionSetValue('createTriggerIntervalAmount', v.triggerIntervalAmount, 5);
+        conditionSetValue('createTriggerIntervalUnit', v.triggerIntervalUnit, 'minutes');
+        conditionSetValue('createTriggerTime', v.triggerTime, '08:00');
+        setWeekdayGroup('triggerWeekdays', v.triggerWeekdays || [0,1,2,3,4,5,6]);
+        conditionSetValue('createTriggerTopic', v.triggerTopic);
+        conditionSetValue('createTriggerValue', v.triggerValue);
+        conditionSetValue('createWhenTopic', v.whenTopic);
+        conditionSetValue('createWhenOperator', v.whenOperator, 'eq');
+        conditionSetValue('createWhenValue', v.whenValue);
+        restoreConditionAction('createThen', 'then', v);
+        restoreConditionAction('createElse', 'else', v);
+        syncCreateTrigger(); syncConditionDialogs();
+      } else if (dialogKind === 'condition-edit') {
+        openConditionEdit(conditionInitialDialog.conditionId);
+        conditionSetValue('conditionEditName', v.name);
+        if (conditionSelectHasValue(document.getElementById('conditionEditFolder'), v.folderId == null ? '' : v.folderId)) document.getElementById('conditionEditFolder').value = v.folderId == null ? '' : String(v.folderId);
+        conditionSetChecked('conditionEditEnabled', v.enabled, false);
+        conditionSetChecked('conditionEditWhenEnabled', v.whenEnabled, true);
+      } else if (dialogKind === 'folder-add' || dialogKind === 'folder-edit') {
+        openConditionFolderDialog(dialogKind === 'folder-edit' ? 'edit' : 'add', conditionInitialDialog.folderId);
+        conditionSetValue('conditionFolderName', v.name);
+        if (conditionSelectHasValue(document.getElementById('conditionFolderParent'), v.parentId == null ? '' : v.parentId)) document.getElementById('conditionFolderParent').value = v.parentId == null ? '' : String(v.parentId);
+      } else {
+        openConditionItemDialog(dialogKind === 'item-edit' ? 'edit' : 'add', conditionInitialDialog.conditionId, conditionInitialDialog.itemId);
+        var kind = v.kind || document.getElementById('conditionItemKind').value;
+        document.getElementById('conditionItemKind').value = kind;
+        fillItemTypes(kind, v.type);
+        conditionSetValue('conditionItemMode', v.mode, 'interval');
+        conditionSetValue('conditionItemIntervalAmount', v.intervalAmount, 5);
+        conditionSetValue('conditionItemIntervalUnit', v.intervalUnit, 'minutes');
+        conditionSetValue('conditionItemTime', v.time, '08:00');
+        setWeekdayGroup('conditionItemWeekdays', v.weekdays || [0,1,2,3,4,5,6]);
+        conditionSetValue('conditionItemTopic', v.topic);
+        conditionSetValue('conditionItemOperator', v.operator, 'eq');
+        conditionSetValue('conditionItemOperation', v.operation, 'set');
+        conditionSetValue('conditionItemRound', v.round);
+        conditionSetValue('conditionItemEventValue', v.value);
+        conditionSetValue('conditionItemValue', v.value);
+        conditionSetValue('conditionItemValue2', v.value2);
+        syncConditionItemFields();
+      }
+      var errorId = dialogKind === 'condition-create' ? 'conditionCreateError' : dialogKind === 'condition-edit' ? 'conditionEditError' : dialogKind === 'folder-add' || dialogKind === 'folder-edit' ? 'conditionFolderError' : 'conditionItemError';
+      var err = document.getElementById(errorId);
+      if (err) { err.textContent = conditionInitialDialog.error || ''; err.hidden = !err.textContent; }
+    }
   `;
   return renderLayout({ title: 'Bedingungen', activePath: '/conditions', body, script });
 }

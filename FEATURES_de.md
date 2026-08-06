@@ -84,7 +84,11 @@ eigenständige Desktop- und Mobilansichten.
 - Persistente Bedingungen kombinieren beliebig viele Trigger, Prüfungen und
   geordnete Aktionen. Sie reagieren auf Intervalle, Wochenzeitpläne,
   Wertänderungen oder exakte State-Ereignisse, vergleichen typisierte Werte und
-  schreiben Aktionen über die zentrale State-Grenze. Die responsive Verwaltung
+  schreiben Aktionen über die zentrale State-Grenze. Die Wenn-Prüfung ist
+  abschaltbar, ein Sonst-Zweig fängt den nicht erfüllten Fall ab, und
+  Vergleichs- wie Zielwerte nehmen wahlweise einen festen Wert oder ein Topic
+  auf. Aktionen rechnen mit beiden Werten (Grundrechenarten, Rest, kleinerer
+  oder größerer Wert) und runden auf Wunsch. Die responsive Verwaltung
   verwendet dasselbe ausklappbare Gruppenraster wie Messen + Schalten und
   Custom States, inklusive verschachtelbarer Verzeichnisse, in die sich
   Bedingungen per Drag&Drop einsortieren lassen.

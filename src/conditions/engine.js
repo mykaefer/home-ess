@@ -4,6 +4,7 @@ const bus = require('../state-bus');
 const mqttClient = require('../mqtt/client');
 const timeHandler = require('../time-handler');
 const repository = require('./repository');
+const values = require('./values');
 
 const TICK_MS = 1000;
 const EXECUTION_WINDOW_MS = 60000;
@@ -26,7 +27,31 @@ let pendingTimer = null;
 let armTimer = null;
 const armedTriggers = new Set();
 
-function cacheKey(item) { return `condition:${item.conditionId}:item:${item.id}`; }
+// Das Element selbst hat den Basisschlüssel; Vergleichs- und Zielwerte, die auf
+// ein Topic verweisen, bekommen je Feld einen eigenen Abo-Schlüssel.
+function cacheKey(item, slot) { return `condition:${item.conditionId}:item:${item.id}${slot ? `:${slot}` : ''}`; }
+
+// Felder, deren Inhalt wahlweise ein fester Wert oder ein Topic-Verweis ist.
+function valueSlots(item) {
+  if (item.kind === 'when') return ['truthy', 'falsy'].includes(item.config.operator) ? [] : ['value'];
+  if (item.kind === 'then' || item.kind === 'else') {
+    return (item.config.operation || 'set') === 'set' ? ['value'] : ['value', 'value2'];
+  }
+  return [];
+}
+
+function referencedSlots(item) {
+  return valueSlots(item).filter((slot) => values.isTopicReference(item.config[slot]));
+}
+
+// Feste Eingaben werden wie bisher als Literal gelesen; Topic-Verweise liefern
+// den zuletzt bekannten Wert des Ziel-States.
+function operandValue(item, slot) {
+  const raw = item.config[slot];
+  if (!values.isTopicReference(raw)) return { known: true, value: literal(raw), topic: null };
+  const entry = bus.getCache().get(cacheKey(item, slot));
+  return { known: !!entry, value: entry ? entry.value : null, topic: String(raw).trim() };
+}
 
 function literal(value) {
   const text = String(value == null ? '' : value).trim();
@@ -81,6 +106,61 @@ function cachedValue(item) {
   return entry ? { known: true, value: entry.value } : { known: false, value: null };
 }
 
+// Ergebnis einer Wenn-Zeile: erfüllt, nicht erfüllt oder „unbekannt“, wenn ein
+// beteiligter State noch keinen Wert geliefert hat. Unbekannt führt bewusst
+// weder in den Dann- noch in den Sonst-Zweig.
+function checkWhen(item) {
+  const current = cachedValue(item);
+  if (!current.known) return { known: false, topic: item.config.topic };
+  const operator = item.config.operator;
+  if (['truthy', 'falsy'].includes(operator)) return { known: true, passed: compare(current.value, operator) };
+  const expected = operandValue(item, 'value');
+  if (!expected.known) return { known: false, topic: expected.topic };
+  // Ein nicht numerischer Wert ist bei größer/kleiner ein Konfigurations- oder
+  // Datenfehler und darf nicht stillschweigend als „nicht erfüllt“ durchgehen.
+  if (values.isMathOperator(operator)) {
+    let source = null;
+    if (values.toNumber(current.value) == null) source = item.config.topic;
+    else if (values.toNumber(expected.value) == null) source = expected.topic || item.config.value;
+    if (source) throw new Error(`Wert muss bei mathematischen Operatoren numerisch sein: ${source}`);
+  }
+  return { known: true, passed: compare(current.value, operator, expected.value) };
+}
+
+// Zu schreibender Wert einer Dann-/Sonst-Aktion: fester Wert, Topic-Wert oder
+// das Ergebnis der gewählten Rechenfunktion, optional gerundet.
+function actionValue(item) {
+  const config = item.config;
+  const operation = config.operation || 'set';
+  const round = config.round == null ? null : Number(config.round);
+  const first = operandValue(item, 'value');
+  if (!first.known) throw new Error(`Kein Wert für ${first.topic} verfügbar.`);
+  if (operation === 'set') {
+    if (round == null) return first.value;
+    const number = values.toNumber(first.value);
+    if (number == null) throw new Error(`Wert muss zum Runden numerisch sein: ${first.topic || config.value}`);
+    return values.roundTo(number, round);
+  }
+  const second = operandValue(item, 'value2');
+  if (!second.known) throw new Error(`Kein Wert für ${second.topic} verfügbar.`);
+  const left = values.toNumber(first.value);
+  const right = values.toNumber(second.value);
+  if (left == null) throw new Error(`Wert muss bei mathematischen Operatoren numerisch sein: ${first.topic || config.value}`);
+  if (right == null) throw new Error(`Wert muss bei mathematischen Operatoren numerisch sein: ${second.topic || config.value2}`);
+  return values.roundTo(values.applyOperation(operation, left, right), round);
+}
+
+function runActions(items) {
+  for (const item of items) {
+    const value = actionValue(item);
+    if (!mqttClient.publish(item.config.topic, value)) throw new Error(`Ziel-State ${item.config.topic} konnte nicht geschrieben werden.`);
+  }
+}
+
+function actionSummary(prefix, count) {
+  return `${prefix}: ${count} Aktion${count === 1 ? '' : 'en'}`;
+}
+
 async function evaluateCondition(condition, trigger = null) {
   if (!database || !condition || !condition.enabled || running.has(condition.id)) return false;
   const now = Date.now();
@@ -97,20 +177,35 @@ async function evaluateCondition(condition, trigger = null) {
   executionHistory.set(condition.id, recent);
   running.add(condition.id);
   try {
-    for (const item of condition.whens) {
-      const current = cachedValue(item);
-      if (!current.known || !compare(current.value, item.config.operator, literal(item.config.value))) {
-        const result = current.known ? `Nicht ausgeführt: ${item.description}` : `Nicht ausgeführt: kein Wert für ${item.config.topic}`;
+    // Ohne aktive Wenn-Prüfung läuft der Dann-Zweig bedingungslos.
+    const checks = condition.whenEnabled === false ? [] : condition.whens;
+    let failed = null;
+    for (const item of checks) {
+      const outcome = checkWhen(item);
+      if (!outcome.known) {
+        const result = `Nicht ausgeführt: kein Wert für ${outcome.topic}`;
         await repository.markTriggered(database, condition.id, result, '', now);
         condition.lastTriggeredAt = now; condition.lastResult = result; condition.lastError = '';
         return false;
       }
+      if (!outcome.passed) { failed = item; break; }
     }
-    for (const item of condition.thens) {
-      const value = literal(item.config.value);
-      if (!mqttClient.publish(item.config.topic, value)) throw new Error(`Ziel-State ${item.config.topic} konnte nicht geschrieben werden.`);
+    if (failed) {
+      const elses = condition.elses || [];
+      if (!elses.length) {
+        const result = `Nicht ausgeführt: ${failed.description}`;
+        await repository.markTriggered(database, condition.id, result, '', now);
+        condition.lastTriggeredAt = now; condition.lastResult = result; condition.lastError = '';
+        return false;
+      }
+      runActions(elses);
+      const result = actionSummary('Sonst ausgeführt', elses.length);
+      await repository.markTriggered(database, condition.id, result, '', now);
+      condition.lastTriggeredAt = now; condition.lastResult = result; condition.lastError = '';
+      return true;
     }
-    const result = `Ausgeführt: ${condition.thens.length} Aktion${condition.thens.length === 1 ? '' : 'en'}`;
+    runActions(condition.thens);
+    const result = actionSummary('Ausgeführt', condition.thens.length);
     await repository.markTriggered(database, condition.id, result, '', now);
     condition.lastTriggeredAt = now; condition.lastResult = result; condition.lastError = '';
     return true;
@@ -210,6 +305,15 @@ async function reload() {
         const remembered = intervalBaselines.get(trigger.id);
         if (!trigger.lastFiredAt && (!remembered || remembered.signature !== signature)) {
           intervalBaselines.set(trigger.id, { at: loadedAt, signature });
+        }
+      }
+      // Vergleichs- und Zielwerte dürfen selbst auf ein Topic verweisen; diese
+      // Quellen werden mitgelesen, lösen aber keine Auswertung aus.
+      for (const item of [...condition.whens, ...condition.thens, ...(condition.elses || [])]) {
+        for (const slot of referencedSlots(item)) {
+          const key = cacheKey(item, slot);
+          mqttClient.subscribeAdHoc(String(item.config[slot]).trim(), key);
+          subscriptions.add(key);
         }
       }
       for (const item of [...condition.triggers, ...condition.whens]) {

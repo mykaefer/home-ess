@@ -29,11 +29,12 @@ async function freshDb() {
     ON automation_condition_folders (IFNULL(parent_id, -1), name COLLATE NOCASE)`);
   await run(db, `CREATE TABLE automation_conditions (
     id INTEGER PRIMARY KEY AUTOINCREMENT, folder_id INTEGER, name TEXT NOT NULL COLLATE NOCASE UNIQUE,
-    enabled INTEGER NOT NULL DEFAULT 1, position INTEGER NOT NULL DEFAULT 0,
+    enabled INTEGER NOT NULL DEFAULT 1, when_enabled INTEGER NOT NULL DEFAULT 1, position INTEGER NOT NULL DEFAULT 0,
     last_triggered_at INTEGER, last_result TEXT NOT NULL DEFAULT '', last_error TEXT NOT NULL DEFAULT '')`);
   await run(db, `CREATE TABLE automation_condition_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT, condition_id INTEGER NOT NULL,
-    kind TEXT NOT NULL, type TEXT NOT NULL, config_json TEXT NOT NULL DEFAULT '{}',
+    kind TEXT NOT NULL CHECK (kind IN ('trigger', 'when', 'then', 'else')), type TEXT NOT NULL,
+    config_json TEXT NOT NULL DEFAULT '{}',
     position INTEGER NOT NULL DEFAULT 0, last_fired_at INTEGER)`);
   return db;
 }
@@ -234,6 +235,204 @@ test('Ausführungsschutz begrenzt versehentliche Automationsschleifen', async ()
   }
 });
 
+test('Vergleichs- und Zielwerte fordern bei mathematischer Verwendung Zahlen, erlauben aber Topics', () => {
+  assert.equal(repository.normalizeItemInput('when', {
+    type: 'state', topic: 'custom://Temperatur', operator: 'gt', value: 'custom://Sollwert',
+  }).config.value, 'custom://Sollwert');
+  assert.equal(repository.normalizeItemInput('when', {
+    type: 'state', topic: 'custom://Schalter', operator: 'eq', value: 'Standby',
+  }).config.value, 'Standby');
+  assert.throws(() => repository.normalizeItemInput('when', {
+    type: 'state', topic: 'custom://Temperatur', operator: 'lte', value: 'warm',
+  }), /numerisch/);
+  // Boolesche Darstellungen gelten als numerisch.
+  assert.equal(repository.normalizeItemInput('when', {
+    type: 'state', topic: 'custom://Freigabe', operator: 'gte', value: 'ein',
+  }).config.value, 'ein');
+  assert.deepEqual(repository.normalizeItemInput('then', {
+    type: 'write', topic: 'custom://Ziel', operation: 'add', value: 'custom://Basis', value2: '2,5', round: '1',
+  }).config, { topic: 'custom://Ziel', operation: 'add', value: 'custom://Basis', value2: '2,5', round: 1 });
+  assert.throws(() => repository.normalizeItemInput('then', {
+    type: 'write', topic: 'custom://Ziel', operation: 'mul', value: 'zwei', value2: '3',
+  }), /numerisch/);
+  assert.throws(() => repository.normalizeItemInput('then', {
+    type: 'write', topic: 'custom://Ziel', operation: 'add', value: '1', value2: '2', round: '9',
+  }), /Nachkommastellen/);
+  // Ohne Rundung darf ein direkt gesetzter Wert Text sein, mit Rundung nicht.
+  assert.equal(repository.normalizeItemInput('then', {
+    type: 'write', topic: 'custom://Ziel', operation: 'set', value: 'Standby',
+  }).config.value, 'Standby');
+  assert.throws(() => repository.normalizeItemInput('then', {
+    type: 'write', topic: 'custom://Ziel', operation: 'set', value: 'Standby', round: '2',
+  }), /numerisch/);
+  assert.throws(() => repository.normalizeItemInput('else', {
+    type: 'write', topic: 'custom://Ziel', operation: 'wurzel', value: '1', value2: '2',
+  }), /Rechenfunktion/);
+  const described = repository.describeItem({
+    kind: 'then', type: 'write',
+    config: { topic: 'custom://Ziel', operation: 'div', value: 'custom://Quelle', value2: '3', round: 2 },
+  });
+  assert.match(described, /custom:\/\/Ziel auf custom:\/\/Quelle ÷ 3 setzen, gerundet auf 2 Nachkommastellen/);
+});
+
+test('Wenn-Vergleiche lesen ihren Vergleichswert auf Wunsch aus einem Topic', async () => {
+  const db = await freshDb();
+  const input = validInput('Schwelle');
+  input.whenTopic = 'custom://Temperatur';
+  input.whenOperator = 'gt';
+  input.whenValue = 'custom://Sollwert';
+  await repository.createCondition(db, input);
+  const writes = [];
+  const originalPublish = mqttClient.publish;
+  mqttClient.publish = (topic, value) => { writes.push({ topic, value }); return true; };
+  try {
+    await engine.init(db);
+    adapterRouter.ingestTopic('custom://Sollwert', 21);
+    adapterRouter.ingestTopic('custom://Temperatur', 20);
+    adapterRouter.ingestTopic('custom://Kino', 0);
+    adapterRouter.ingestTopic('custom://Kino', 1);
+    await wait();
+    assert.equal(writes.length, 0, 'unter dem Sollwert bleibt die Aktion aus');
+    adapterRouter.ingestTopic('custom://Temperatur', 22);
+    adapterRouter.ingestTopic('custom://Kino', 0);
+    adapterRouter.ingestTopic('custom://Kino', 1);
+    await wait();
+    assert.deepEqual(writes, [{ topic: 'custom://Licht', value: 20 }]);
+  } finally {
+    engine.stop(); mqttClient.publish = originalPublish; await close(db);
+  }
+});
+
+test('Dann-Aktionen rechnen mit festen Werten und Topic-Werten und runden auf Wunsch', async () => {
+  const db = await freshDb();
+  const condition = await repository.createCondition(db, {
+    ...validInput('Rechnen'),
+    thenTopic: 'custom://Summe', thenOperation: 'add', thenValue: 'custom://Bezug', thenValue2: '1000', thenRound: '1',
+  });
+  await repository.addItem(db, condition.id, {
+    kind: 'then', type: 'write', topic: 'custom://Anteil',
+    operation: 'div', value: 'custom://Bezug', value2: '3', round: '2',
+  });
+  const writes = [];
+  const originalPublish = mqttClient.publish;
+  mqttClient.publish = (topic, value) => { writes.push({ topic, value }); return true; };
+  try {
+    await engine.init(db);
+    adapterRouter.ingestTopic('custom://Freigabe', true);
+    adapterRouter.ingestTopic('custom://Bezug', 1234.567);
+    adapterRouter.ingestTopic('custom://Kino', 0);
+    adapterRouter.ingestTopic('custom://Kino', 1);
+    await wait();
+    assert.deepEqual(writes, [
+      { topic: 'custom://Summe', value: 2234.6 },
+      { topic: 'custom://Anteil', value: 411.52 },
+    ]);
+  } finally {
+    engine.stop(); mqttClient.publish = originalPublish; await close(db);
+  }
+});
+
+test('Ohne Wenn-Prüfung läuft der Dann-Zweig bedingungslos', async () => {
+  const db = await freshDb();
+  const input = validInput('Bedingungslos');
+  input.whenEnabled = '0';
+  delete input.whenTopic; delete input.whenOperator; delete input.whenValue;
+  const condition = await repository.createCondition(db, input);
+  assert.deepEqual([condition.whenEnabled, condition.whens.length], [false, 0]);
+  const writes = [];
+  const originalPublish = mqttClient.publish;
+  mqttClient.publish = (topic, value) => { writes.push({ topic, value }); return true; };
+  try {
+    await engine.init(db);
+    adapterRouter.ingestTopic('custom://Kino', 0);
+    adapterRouter.ingestTopic('custom://Kino', 1);
+    await wait();
+    assert.deepEqual(writes, [{ topic: 'custom://Licht', value: 20 }]);
+  } finally {
+    engine.stop(); mqttClient.publish = originalPublish; await close(db);
+  }
+});
+
+test('Der Sonst-Zweig läuft bei nicht erfüllter Prüfung und bleibt einmalig', async () => {
+  const db = await freshDb();
+  const condition = await repository.createCondition(db, {
+    ...validInput('Sonstzweig'), elseEnabled: '1',
+    elseType: 'write', elseTopic: 'custom://Notlicht', elseOperation: 'set', elseValue: '5',
+  });
+  assert.equal(condition.elses.length, 1);
+  await assert.rejects(() => repository.addItem(db, condition.id, {
+    kind: 'else', type: 'write', topic: 'custom://Zweites', value: '1',
+  }), /nur ein Sonst-Zweig/);
+  await assert.rejects(
+    () => repository.updateCondition(db, condition.id, { name: 'Sonstzweig', enabled: '1', whenEnabled: '0' }),
+    /nicht deaktiviert/,
+  );
+  const writes = [];
+  const originalPublish = mqttClient.publish;
+  mqttClient.publish = (topic, value) => { writes.push({ topic, value }); return true; };
+  try {
+    await engine.init(db);
+    adapterRouter.ingestTopic('custom://Freigabe', false);
+    adapterRouter.ingestTopic('custom://Kino', 0);
+    adapterRouter.ingestTopic('custom://Kino', 1);
+    await wait();
+    assert.deepEqual(writes, [{ topic: 'custom://Notlicht', value: 5 }]);
+    assert.match((await repository.listConditions(db))[0].lastResult, /Sonst ausgeführt/);
+    adapterRouter.ingestTopic('custom://Freigabe', true);
+    adapterRouter.ingestTopic('custom://Kino', 0);
+    adapterRouter.ingestTopic('custom://Kino', 1);
+    await wait();
+    assert.deepEqual(writes[1], { topic: 'custom://Licht', value: 20 });
+  } finally {
+    engine.stop(); mqttClient.publish = originalPublish; await close(db);
+  }
+});
+
+test('Wenn-Prüfung und Wenn-Elemente bleiben gekoppelt, ein Sonst-Zweig braucht die Prüfung', async () => {
+  const db = await freshDb();
+  const condition = await repository.createCondition(db, validInput('Kopplung'));
+  await repository.deleteItem(db, condition.id, condition.whens[0].id);
+  const withoutWhen = await repository.getCondition(db, condition.id);
+  assert.deepEqual([withoutWhen.whenEnabled, withoutWhen.whens.length], [false, 0]);
+  await assert.rejects(() => repository.addItem(db, condition.id, {
+    kind: 'else', type: 'write', topic: 'custom://Notlicht', value: '1',
+  }), /aktive Wenn-Prüfung/);
+  await repository.addItem(db, condition.id, {
+    kind: 'when', type: 'state', topic: 'custom://Freigabe', operator: 'truthy',
+  });
+  assert.equal((await repository.getCondition(db, condition.id)).whenEnabled, true);
+  await assert.rejects(() => repository.createCondition(db, {
+    ...validInput('Sonst ohne Wenn'), whenEnabled: '0', elseEnabled: '1',
+    elseType: 'write', elseTopic: 'custom://Notlicht', elseValue: '1',
+  }), /aktive Wenn-Prüfung/);
+  await close(db);
+});
+
+test('Rechenwerte und Zielwerte melden fehlende oder untaugliche Topic-Werte als Fehler', async () => {
+  const db = await freshDb();
+  await repository.createCondition(db, {
+    ...validInput('Textwert'),
+    thenTopic: 'custom://Summe', thenOperation: 'mul', thenValue: 'custom://Modus', thenValue2: '2',
+  });
+  const originalPublish = mqttClient.publish;
+  let writes = 0;
+  mqttClient.publish = () => { writes += 1; return true; };
+  try {
+    await engine.init(db);
+    adapterRouter.ingestTopic('custom://Freigabe', true);
+    adapterRouter.ingestTopic('custom://Modus', 'Sommer');
+    adapterRouter.ingestTopic('custom://Kino', 0);
+    adapterRouter.ingestTopic('custom://Kino', 1);
+    await wait();
+    assert.equal(writes, 0);
+    const stored = (await repository.listConditions(db))[0];
+    assert.equal(stored.lastResult, 'Fehler');
+    assert.match(stored.lastError, /numerisch/);
+  } finally {
+    engine.stop(); mqttClient.publish = originalPublish; await close(db);
+  }
+});
+
 test('Bedingungsseite folgt dem Gruppenraster und bietet Pluszeile, Dialoge und mobile Bedienung', async () => {
   const db = await freshDb();
   await repository.createCondition(db, validInput());
@@ -256,6 +455,43 @@ test('Bedingungsseite folgt dem Gruppenraster und bietet Pluszeile, Dialoge und 
   const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'styles.css'), 'utf8');
   assert.match(css, /\.condition-item \{\s*display: grid;\s*grid-template-columns: 68px minmax\(0, 1fr\) 60px;/);
   assert.match(css, /\.access-read \.main-content \.condition-add-row/);
+  await close(db);
+});
+
+test('Dialoge bieten Wenn-Schalter, Sonst-Bereich, Rechenfunktionen und Wertprüfung', async () => {
+  const db = await freshDb();
+  const condition = await repository.createCondition(db, {
+    ...validInput('Vollausbau'), elseEnabled: '1',
+    thenOperation: 'add', thenValue: 'custom://Bezug', thenValue2: '100', thenRound: '1',
+    elseType: 'write', elseTopic: 'custom://Notlicht', elseOperation: 'set', elseValue: '5',
+  });
+  const html = renderConditions(await repository.conditionTree(db));
+  // Vier Bereiche mit eigener Kennzeichnung.
+  assert.match(html, /class="condition-kind condition-kind--else">Sonst</);
+  assert.match(html, /class="condition-section condition-section--else"/);
+  assert.match(html, /<option value="else">Sonst<\/option>/);
+  // Wenn und Sonst sind im Anlegen-Dialog zuschaltbar.
+  assert.match(html, /id="createWhenEnabled" type="checkbox" name="whenEnabled"/);
+  assert.match(html, /id="createElseEnabled" type="checkbox" name="elseEnabled"/);
+  assert.match(html, /id="conditionEditWhenEnabled" type="checkbox" name="whenEnabled"/);
+  // Vergleichs- und Zielwerte nehmen Werte oder Topics auf: Hinweis, Picker und
+  // roter Hinweistext gehören zu jedem dieser Felder.
+  for (const id of ['createWhenValue', 'createThenValue', 'createThenValue2', 'createElseValue', 'conditionItemValue']) {
+    assert.match(html, new RegExp(`id="${id}" name="[a-zA-Z0-9]+" data-condition-value data-state-picker`));
+    assert.match(html, new RegExp(`id="${id}Error" hidden>Wert muss bei mathematischen Operatoren numerisch sein<`));
+  }
+  assert.equal((html.match(/class="field-hint">Fester Wert oder Topic</g) || []).length, 7);
+  assert.match(html, /<option value="mul">Multiplizieren \(×\)<\/option>/);
+  assert.match(html, /id="conditionItemRound" name="round" type="number" min="0" max="6"/);
+  assert.match(html, /custom:\/\/Licht auf custom:\/\/Bezug \+ 100 setzen, gerundet auf 1 Nachkommastellen/);
+  const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
+  for (const script of scripts) assert.doesNotThrow(() => new Function(script[1]));
+  assert.match(html, /function syncConditionValidity\(\)/);
+  assert.match(html, /button\[type="submit"\]/);
+  const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'styles.css'), 'utf8');
+  assert.match(css, /\.condition-kind--else \{/);
+  assert.match(css, /\.dialog-grid\[hidden\] \{ display: none !important; \}/);
+  assert.equal(condition.elses[0].description, 'custom://Notlicht auf 5 setzen');
   await close(db);
 });
 
