@@ -81,7 +81,10 @@ desktop and mobile layouts.
 - Persistent conditions combine any number of triggers, checks and ordered
   actions. They react to intervals, weekly schedules, value changes or exact
   state events, evaluate typed state comparisons and write actions through the
-  central state boundary. The responsive editor uses the same expandable group
+  central state boundary. The if check can be switched off, an else branch
+  covers the unmet case, and comparison and target values accept either a fixed
+  value or a topic. Actions compute from both values (basic arithmetic,
+  remainder, smaller or larger value) and round on request. The responsive editor uses the same expandable group
   layout as Measuring + Switching and Custom States, including nested folders
   that conditions can be dragged into.
 - Administrators can upload validated ZIP packages. Archive structure, paths,

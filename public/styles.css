@@ -3564,6 +3564,7 @@ body.dash-editing .widget-group {
 .condition-kind--trigger { color: #155e75; background: #cffafe; }
 .condition-kind--when { color: #854d0e; background: #fef3c7; }
 .condition-kind--then { color: #166534; background: #dcfce7; }
+.condition-kind--else { color: #7c2d12; background: #ffedd5; }
 .condition-item-description { min-width: 0; overflow-wrap: anywhere; color: var(--color-text); }
 .condition-item .widget-actions { justify-self: end; }
 .condition-item .widget-icon-btn:disabled { opacity: .3; cursor: not-allowed; }
@@ -3606,6 +3607,28 @@ body.dash-editing .widget-group {
 .condition-weekdays input:checked + span { border-color: var(--color-action); background: var(--color-action-tint); color: var(--color-action-hover); font-weight: 700; }
 .condition-weekdays input:focus-visible + span { outline: 2px solid var(--color-action); outline-offset: 2px; }
 .condition-dialog { width: min(760px, calc(100vw - 24px)); }
+/* Wenn- und Sonst-Bereich lassen sich im Anlegen-Dialog zuschalten; ihr Raster
+   muss das hidden-Attribut gegen display:grid durchsetzen. */
+.dialog-grid[hidden] { display: none !important; }
+.condition-dialog-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+.condition-dialog-head h4 { margin: 0; }
+.condition-section-toggle { font-size: 13px; font-weight: 600; }
+.condition-section-hint { margin: 0 0 12px; font-size: 12px; }
+/* Wert- und Zielfelder nehmen wahlweise einen festen Wert oder ein Topic auf. */
+.field-hint { font-size: 11px; font-weight: 500; color: var(--color-text-soft); }
+.condition-value-error {
+    margin: 0;
+    text-align: left;
+    font-size: 11px;
+    font-weight: 600;
+}
+.condition-value-field input.is-invalid { border-color: #c82333; background: #fff5f5; }
 
 @media (max-width: 768px) {
     .condition-runtime { display: none; }

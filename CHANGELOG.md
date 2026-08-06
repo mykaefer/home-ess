@@ -3,6 +3,41 @@
 Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [1.4.2] — 2026-08-06
+
+### Hinzugefügt
+
+- **Vergleichs- und Zielwerte dürfen selbst auf ein Topic verweisen.** Das
+  Wertfeld einer Wenn-Prüfung und die Werte einer Dann-/Sonst-Aktion nehmen
+  weiterhin feste Zahlen und Texte auf; beginnt die Eingabe dagegen mit einem
+  gültigen Präfix (`prefix://instanz/adresse`, z. B. `hdp://…`), wird zur
+  Laufzeit der Wert dieses Ziel-States verwendet. Hinter jedem dieser Felder
+  sitzt ein State-Picker, darüber der Hinweis auf beide Eingabearten.
+- **Numerische Prüfung für mathematische Verwendung.** Bei den Vergleichen
+  größer/kleiner und bei jeder Rechenfunktion muss ein fest eingetragener Wert
+  numerisch sein — sonst erscheint unter dem Feld „Wert muss bei mathematischen
+  Operatoren numerisch sein“ und Anlegen bzw. Speichern bleibt gesperrt. Für
+  Topic-Verweise gilt dieselbe Anforderung, geprüft mit dem tatsächlichen Wert
+  des States; boolesche Zustände zählen dabei als numerisch, gleich ob sie als
+  `true`/`false` oder als Ein/Aus geführt werden.
+- **Rechenfunktionen in Dann- und Sonst-Aktionen.** Statt nur einen festen Wert
+  zu schreiben, verrechnen Aktionen jetzt zwei Werte (Addition, Subtraktion,
+  Multiplikation, Division, Rest, kleinerer bzw. größerer Wert) und runden das
+  Ergebnis auf Wunsch auf bis zu sechs Nachkommastellen. Beide Operanden können
+  fest eingetragen sein oder aus einem Topic stammen.
+- **Sonst-Zweig als vierter Bereich.** Trifft die Wenn-Prüfung nicht zu, läuft
+  der Sonst-Zweig. Er ist je Bedingung einmal möglich, im Anlegen-Dialog per
+  Haken zuschaltbar und bleibt bis dahin ausgeblendet.
+
+### Geändert
+
+- **Die Wenn-Prüfung ist optional.** Ein Haken im Anlegen- und im
+  Bearbeiten-Dialog schaltet sie ab; die Dann-Aktionen laufen dann bei jedem
+  Trigger bedingungslos. Der ausgeschaltete Bereich bleibt im Dialog
+  ausgeblendet, damit er ihn nicht überlädt. Prüfung und Wenn-Elemente bleiben
+  gekoppelt: Das letzte Wenn zu entfernen schaltet die Prüfung ab, ein neues
+  Wenn schaltet sie wieder ein. Unverzichtbar bleiben nur Trigger und Dann.
+
 ## [1.4.1] — 2026-08-05
 
 ### Behoben

@@ -706,8 +706,10 @@ function openDatabase() {
          ON custom_states (IFNULL(folder_id, -1), name COLLATE NOCASE)`
     );
     // Frei kombinierbare Automationen. Eine Bedingung besteht aus mindestens
-    // einem Trigger, einer Wenn-Prüfung und einer Dann-Aktion. Die Konfiguration
-    // der typabhängigen Elemente bleibt als validiertes JSON erweiterbar.
+    // einem Trigger und einer Dann-Aktion; die Wenn-Prüfung ist über
+    // `when_enabled` abschaltbar und der Sonst-Zweig (kind `else`) optional.
+    // Die Konfiguration der typabhängigen Elemente bleibt als validiertes JSON
+    // erweiterbar.
     // Verzeichnisse ordnen die Bedingungen genauso wie bei Custom States rein
     // organisatorisch; sie haben keinen Einfluss auf die Auswertung.
     db.run(
@@ -729,6 +731,7 @@ function openDatabase() {
         folder_id INTEGER,
         name TEXT NOT NULL COLLATE NOCASE UNIQUE,
         enabled INTEGER NOT NULL DEFAULT 1,
+        when_enabled INTEGER NOT NULL DEFAULT 1,
         position INTEGER NOT NULL DEFAULT 0,
         last_triggered_at INTEGER,
         last_result TEXT NOT NULL DEFAULT '',
@@ -740,7 +743,7 @@ function openDatabase() {
       `CREATE TABLE IF NOT EXISTS automation_condition_items (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         condition_id INTEGER NOT NULL,
-        kind TEXT NOT NULL CHECK (kind IN ('trigger', 'when', 'then')),
+        kind TEXT NOT NULL CHECK (kind IN ('trigger', 'when', 'then', 'else')),
         type TEXT NOT NULL,
         config_json TEXT NOT NULL DEFAULT '{}',
         position INTEGER NOT NULL DEFAULT 0,
@@ -798,6 +801,7 @@ function openDatabase() {
     migrateMessSchaltActors(db);
     migrateMessSchaltTemperaturePower(db);
     migrateConditionFolders(db);
+    migrateConditionElseKind(db);
   });
 
   return db;
@@ -810,6 +814,39 @@ function migrateConditionFolders(db) {
     if (err || !Array.isArray(rows) || rows.length === 0) return;
     const existing = new Set(rows.map((row) => row.name));
     if (!existing.has('folder_id')) db.run('ALTER TABLE automation_conditions ADD COLUMN folder_id INTEGER');
+    // Bestandsautomationen behalten ihre Wenn-Prüfung; abschalten kann sie erst
+    // der Betreiber im Bearbeiten-Dialog.
+    if (!existing.has('when_enabled')) db.run('ALTER TABLE automation_conditions ADD COLUMN when_enabled INTEGER NOT NULL DEFAULT 1');
+  });
+}
+
+// Der Sonst-Zweig kam nach den ersten Bedingungen dazu. Die Elementtabelle
+// begrenzt `kind` per CHECK; SQLite kann eine solche Regel nicht ändern, die
+// Tabelle wird deshalb einmalig mit erweitertem CHECK neu aufgebaut.
+function migrateConditionElseKind(db) {
+  db.get("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'automation_condition_items'", (err, row) => {
+    if (err || !row || !row.sql || row.sql.includes("'else'")) return;
+    db.serialize(() => {
+      db.run(
+        `CREATE TABLE IF NOT EXISTS automation_condition_items_next (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          condition_id INTEGER NOT NULL,
+          kind TEXT NOT NULL CHECK (kind IN ('trigger', 'when', 'then', 'else')),
+          type TEXT NOT NULL,
+          config_json TEXT NOT NULL DEFAULT '{}',
+          position INTEGER NOT NULL DEFAULT 0,
+          last_fired_at INTEGER,
+          FOREIGN KEY (condition_id) REFERENCES automation_conditions(id) ON DELETE CASCADE
+        )`
+      );
+      db.run(
+        `INSERT INTO automation_condition_items_next (id, condition_id, kind, type, config_json, position, last_fired_at)
+           SELECT id, condition_id, kind, type, config_json, position, last_fired_at FROM automation_condition_items`
+      );
+      db.run('DROP TABLE automation_condition_items');
+      db.run('ALTER TABLE automation_condition_items_next RENAME TO automation_condition_items');
+      db.run('CREATE INDEX IF NOT EXISTS idx_automation_items_condition_kind ON automation_condition_items (condition_id, kind, position, id)');
+    });
   });
 }
 
