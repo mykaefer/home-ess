@@ -15,7 +15,7 @@ const auth = require('../adapter/hdp/auth');
 const { HdpClient, validateManifestInfo } = require('../adapter/hdp/client');
 const {
   RuntimeConnection, connectionErrorMessage, RECONNECT_DELAYS,
-  validSensorMessage, validFingerprintMessage,
+  validSensorMessage,
 } = require('../adapter/hdp/runtime');
 const { LegacyRuntimeAdapter, runtimePayload } = require('../adapter/hdp/legacy-runtime');
 const { encodeTimeline } = require('../adapter/hdp/timeline');
@@ -124,37 +124,6 @@ function binaryConfig(revision = 7) {
       { pin: 5, direction: 'input', input_type: 'button' },
       { pin: 12, direction: 'output' },
     ],
-  };
-}
-
-function fingerprintManifest() {
-  const result = binaryManifest('fingerprint-event-v1');
-  result.device_types = [...result.device_types, 'fingerprint_reader'];
-  Object.assign(result.features, {
-    fingerprint_recognition: true, fingerprint_enrollment: true,
-  });
-  Object.assign(result.hardware_capabilities, {
-    fingerprint_uart_baud: 57600,
-    fingerprint_wakeup_optional: true,
-    fingerprint_led_effects: ['breathing', 'flashing', 'on', 'off', 'gradual_on', 'gradual_off'],
-    fingerprint_led_colors: ['red', 'blue', 'purple'],
-  });
-  result.limits.maximum_fingerprint_templates = 256;
-  return result;
-}
-
-function fingerprintConfig(revision = 8) {
-  return {
-    revision, device_type: 'fingerprint_reader',
-    uart: { rx_pin: 13, tx_pin: 15 }, wakeup_pin: 12,
-    led: {
-      idle: { effect: 'breathing', color: 'blue', speed: 96, count: 0 },
-      scanning: { effect: 'on', color: 'blue', speed: 0, count: 0 },
-      success: { effect: 'flashing', color: 'blue', speed: 32, count: 2 },
-      failure: { effect: 'flashing', color: 'red', speed: 32, count: 2 },
-      enrolling: { effect: 'breathing', color: 'purple', speed: 64, count: 0 },
-    },
-    pins: [{ pin: 4, direction: 'input', input_type: 'button' }],
   };
 }
 
@@ -438,69 +407,6 @@ test('binary-io-v1 Manifest, Pinkonfiguration und Adapteraktionen sind strikt ge
   assert.equal(helpers.binaryEventTarget({ action: 'toggle' }, 'on', true), false);
   assert.equal(helpers.binaryEventTarget({ action: 'set', set_value: 'scene-a' }, null, true), 'scene-a');
   assert.equal(helpers.binaryEventTarget({ action: 'counter', counter_step: 2 }, 7, true), 9);
-});
-
-test('fingerprint-event-v1 validiert R503-Hardware, LED-Szenen und Ereignisse', () => {
-  const manifest = fingerprintManifest();
-  assert.equal(validateManifestInfo(manifest), manifest);
-  assert.deepEqual(validation.validateHardwareConfig(fingerprintConfig(), manifest), fingerprintConfig());
-  assert.throws(() => validation.validateHardwareConfig({
-    ...fingerprintConfig(), uart: { rx_pin: 16, tx_pin: 15 },
-  }, manifest), /GPIO 16/);
-  assert.throws(() => validation.validateHardwareConfig({
-    ...fingerprintConfig(), pins: [{ pin: 13, direction: 'output' }],
-  }, manifest), /überlappt/);
-  assert.throws(() => validation.validateHardwareConfig({
-    ...fingerprintConfig(), led: {
-      ...fingerprintConfig().led,
-      success: { effect: 'rainbow', color: 'blue', speed: 32, count: 2 },
-    },
-  }, manifest), /LED-Effekt/);
-
-  const envelope = (type, payload) => ({ type, payload });
-  assert.equal(validFingerprintMessage(envelope('fingerprint.status', {
-    config_revision: 8, reply_to: null, online: true, enrolling: false,
-    capacity: 200, template_count: 2, occupied_slots: [1, 7], last_error: null,
-  })), true);
-  assert.equal(validFingerprintMessage(envelope('fingerprint.match', {
-    config_revision: 8, event_sequence: 1, occurred_at_uptime_milliseconds: 100,
-    template_id: 7, confidence: 143,
-  })), true);
-  assert.equal(validFingerprintMessage(envelope('fingerprint.command.accepted', {
-    reply_to: 'adapter-1', action: 'enroll', template_id: 7,
-  })), true);
-  assert.equal(validFingerprintMessage(envelope('fingerprint.status', {
-    config_revision: 8, reply_to: null, online: true, enrolling: false,
-    capacity: 2, template_count: 2, occupied_slots: [1, 1], last_error: null,
-  })), false);
-
-  const helpers = createHdpAdapter._test;
-  assert.equal(helpers.deviceTypeOf({ hardwareConfig: fingerprintConfig() }), 'fingerprint_reader');
-  assert.ok(helpers.supportedDeviceTypes(manifest).includes('fingerprint_reader'));
-  const timeout = helpers.fingerprintReadiness({
-    hardwareConfig: {
-      ...fingerprintConfig(), uart: { rx_pin: 2, tx_pin: 4 }, wakeup_pin: 13,
-    },
-    fingerprintStatus: { online: false, last_error: 'uart_timeout' },
-  });
-  assert.equal(timeout.ready, false);
-  assert.match(timeout.message, /R503 antwortet nicht über UART/);
-  assert.match(timeout.message, /R503 TX → ESP GPIO 2/);
-  assert.match(timeout.message, /R503 RX → ESP GPIO 4/);
-  assert.deepEqual(timeout.details, {
-    module_online: false, last_error: 'uart_timeout',
-    rx_pin: 2, tx_pin: 4, wakeup_pin: 13,
-  });
-  assert.equal(helpers.fingerprintReadiness({
-    hardwareConfig: fingerprintConfig(),
-    fingerprintStatus: { online: true, last_error: null },
-  }).ready, true);
-  assert.deepEqual(helpers.normalizeFingerprintBindings({ fingerprint: {
-    7: { name: 'Daumen', topic: 'mqtt://main/door', action: 'counter', counter_step: -1 },
-    bad: { topic: 'ignored' },
-  } }), {
-    7: { name: 'Daumen', topic: 'mqtt://main/door', action: 'counter', set_value: true, counter_step: -1 },
-  });
 });
 
 test('OutputClient beginnt mit Replace und verwendet danach einen bestätigten Patch', async () => {
@@ -2288,15 +2194,9 @@ test('Geräteverwaltung schaltet Seite und Hardwaredialog exklusiv auf den Gerä
     start() {} stop() {} refresh() {}
   }
   class FakeConnection extends EventEmitter {
-    constructor() { super(); this.ready = false; }
     start() { FakeConnection.last = this; }
     stop() {} sendState() { return false; } updateDevice() {}
-    async request(type, payload) {
-      FakeConnection.requests.push({ type, payload });
-      return { type: 'fingerprint.command.accepted', payload: { action: 'enroll' } };
-    }
   }
-  FakeConnection.requests = [];
   // Firmware 0.4.0: boot-dispatch-v1, Profil folgt erst nach dem Neustart.
   let deviceManifest = binaryManifest('pixel-timeline-v1');
   let remoteConfig = outputConfig();
@@ -2480,103 +2380,6 @@ test('Geräteverwaltung schaltet Seite und Hardwaredialog exklusiv auf den Gerä
   assert.match(binaryPanel(upgraded.body), /<option value="2">GPIO 2 · Boot-Pin</);
   assert.equal((upgraded.body.match(/hdp-binary-pin-row/g) || []).length, 11);
   assert.match(upgraded.body, /hdp-pin-legend/);
-
-  // Fingerprint: Wakeup ist eine echte GPIO-Auswahl. Die drei reservierten
-  // Leitungen sind bereits im initialen HTML aus der freien Pinliste entfernt;
-  // das Browser-Skript hält die Listen bei jeder Änderung synchron.
-  deviceManifest = fingerprintManifest();
-  remoteConfig = fingerprintConfig();
-  FakeDiscovery.last.emit('updated', {
-    deviceId: DEVICE_ID, address: '127.0.0.1', hostname: 'badge.local',
-    apiPort: 80, wsPort: 81, otaPort: 8080, protocolVersion: '1.0-draft',
-    runtimeProfile: 'fingerprint-event-v1', runtimeCompatible: true,
-    firmwareVersion: '0.6.3', platform: 'esp8266', pairingState: 'paired',
-    bindingId: null, pairable: false, hardwareConfigPresent: true,
-    configRevision: remoteConfig.revision, online: true,
-  });
-  await settle();
-  FakeConnection.last.ready = true;
-  FakeConnection.last.emit('online');
-  FakeConnection.last.emit('fingerprint', {
-    type: 'fingerprint.status',
-    payload: {
-      config_revision: remoteConfig.revision,
-      online: false, enrolling: false, capacity: 0, template_count: 0,
-      occupied_slots: [], last_error: 'uart_timeout',
-    },
-  });
-  const fingerprint = await pageFor();
-  assert.match(fingerprint.body,
-    /<select id="hdp-fingerprint-wakeup-pin" name="fingerprint_wakeup_pin"/);
-  assert.match(fingerprint.body, /<option value="">Nicht angeschlossen<\/option>/);
-  assert.doesNotMatch(fingerprint.body,
-    /name="fingerprint_wakeup_pin"[^>]*type="number"/);
-  assert.equal((fingerprint.body.match(/data-hdp-fingerprint-pin-row=/g) || []).length, 11);
-  for (const reserved of [12, 13, 15]) {
-    assert.match(fingerprint.body,
-      new RegExp(`data-hdp-fingerprint-pin-row="${reserved}" hidden`));
-  }
-  assert.match(fingerprint.body, /data-hdp-fingerprint-pin-row="4">/);
-  assert.match(fingerprint.body, /name="fingerprint_binary_enabled_4" value="1" checked/);
-  assert.match(fingerprint.script, /function hdpSyncFingerprintPins/);
-  assert.match(fingerprint.script, /usedByOtherRole/);
-  assert.match(fingerprint.script, /usedByBinary/);
-  assert.match(fingerprint.body, /R503 TX → ESP GPIO 13/);
-  assert.match(fingerprint.body, /R503 RX → ESP GPIO 15/);
-  assert.match(fingerprint.body, /<button disabled>Anlernen starten<\/button>/);
-  assert.match(fingerprint.body, /R503 antwortet nicht über UART/);
-  const rejectedEnrollment = await adapter.handleManagementRequest({
-    method: 'POST', path: `/api/devices/${DEVICE_ID}/fingerprints/enroll`,
-    basePath: '/adapter/instance/1/manage', access: { canWrite: true },
-    body: { template_id: '0', name: 'Testfinger', topic: 'door/open', action: 'toggle' },
-  });
-  assert.equal(rejectedEnrollment.status, 409);
-  assert.equal(rejectedEnrollment.json.code, 'FINGERPRINT_OPERATION_REJECTED');
-  assert.equal(rejectedEnrollment.json.details.last_error, 'uart_timeout');
-  assert.match(rejectedEnrollment.json.error, /R503 TX → ESP GPIO 13/);
-
-  FakeConnection.last.emit('fingerprint', {
-    type: 'fingerprint.status',
-    payload: {
-      config_revision: remoteConfig.revision,
-      online: true, enrolling: false, capacity: 200, template_count: 0,
-      occupied_slots: [], last_error: null,
-    },
-  });
-  const readyFingerprint = await pageFor();
-  assert.match(readyFingerprint.body, /<button >Anlernen starten<\/button>/);
-  const acceptedEnrollment = await adapter.handleManagementRequest({
-    method: 'POST', path: `/api/devices/${DEVICE_ID}/fingerprints/enroll`,
-    basePath: '/adapter/instance/1/manage', access: { canWrite: true },
-    body: { template_id: '0', name: 'Testfinger', topic: 'door/open', action: 'toggle' },
-  });
-  assert.equal(acceptedEnrollment.status, 303);
-  assert.ok(FakeConnection.requests.some((request) =>
-    request.type === 'fingerprint.enroll.begin' && request.payload.template_id === 0));
-
-  const savedFingerprint = await adapter.handleManagementRequest({
-    method: 'POST', path: `/api/devices/${DEVICE_ID}/config`,
-    basePath: '/adapter/instance/1/manage', access: { canWrite: true },
-    body: {
-      revision: remoteConfig.revision, device_type: 'fingerprint_reader',
-      fingerprint_rx_pin: '13', fingerprint_tx_pin: '15', fingerprint_wakeup_pin: '12',
-      fingerprint_binary_enabled_4: '1', fingerprint_binary_direction_4: 'input',
-      fingerprint_binary_input_type_4: 'button',
-    },
-  });
-  assert.equal(savedFingerprint.status, 303);
-  assert.deepEqual(remoteConfig.pins,
-    [{ pin: 4, direction: 'input', input_type: 'button' }]);
-  const collision = await adapter.handleManagementRequest({
-    method: 'POST', path: `/api/devices/${DEVICE_ID}/config`,
-    basePath: '/adapter/instance/1/manage', access: { canWrite: true },
-    body: {
-      revision: remoteConfig.revision, device_type: 'fingerprint_reader',
-      fingerprint_rx_pin: '13', fingerprint_tx_pin: '15', fingerprint_wakeup_pin: '',
-      fingerprint_binary_enabled_13: '1', fingerprint_binary_direction_13: 'output',
-    },
-  });
-  assert.equal(collision.status, 422);
   adapter.stop();
 
   // Ein opaque-id-v1-Gerät bietet Binary-I/O gar nicht erst an.

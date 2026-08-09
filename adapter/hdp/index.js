@@ -10,7 +10,9 @@ const {
 } = require('./renderer');
 const {
   finite, bounded, scale, interpolateColor, colorStops, validateHardwareConfig,
-  validateDeviceId, RUNTIME_PROFILE, BINARY_RUNTIME_PROFILE,
+  validateDeviceId, RUNTIME_PROFILE, BINARY_RUNTIME_PROFILE, SENSOR_RUNTIME_PROFILE,
+  FINGERPRINT_RUNTIME_PROFILE, SENSOR_TYPES,
+  FINGERPRINT_LED_SCENES, FINGERPRINT_LED_EFFECTS, FINGERPRINT_LED_COLORS,
   ARGB_OPERATORS, ARGB_OPERATOR_LABELS, validateArgbCondition, argbConditionActive,
   argbOutputPinRoles, argbOutputPins,
 } = require('./validation');
@@ -78,6 +80,10 @@ function defaultBindings() {
     display: { fractional_pixel: true },
     binary: {},
     argb: {},
+    fingerprint: {},
+    // { "<sensor_id>": { "<messgröße>": { topic } } } — je Messwert ein
+    // Ziel-State, in den bei jeder Messung geschrieben wird.
+    sensor: {},
   };
 }
 
@@ -119,6 +125,18 @@ function mergeBindings(value) {
       : {},
     argb: input.argb && typeof input.argb === 'object'
       ? Object.fromEntries(Object.entries(input.argb).map(([index, binding]) => [index, { ...(binding || {}) }]))
+      : {},
+    fingerprint: input.fingerprint && typeof input.fingerprint === 'object'
+      ? Object.fromEntries(Object.entries(input.fingerprint).map(([id, binding]) => [id, { ...(binding || {}) }]))
+      : {},
+    // Zwei Ebenen tief: Sensor, dann Messgröße.
+    sensor: input.sensor && typeof input.sensor === 'object'
+      ? Object.fromEntries(Object.entries(input.sensor).map(([sensorId, measurements]) => [
+        sensorId,
+        measurements && typeof measurements === 'object'
+          ? Object.fromEntries(Object.entries(measurements).map(([key, binding]) => [key, { ...(binding || {}) }]))
+          : {},
+      ]))
       : {},
   };
 }
@@ -163,6 +181,30 @@ function binaryEventTarget(binding, currentValue, eventState) {
     return current + Number(binding.counter_step);
   }
   throw new Error('Unbekannte Binary-Eingangsaktion.');
+}
+
+function normalizeFingerprintBinding(source) {
+  const current = source && typeof source === 'object' ? source : {};
+  return {
+    name: String(current.name || '').trim().slice(0, 100),
+    topic: String(current.topic || '').trim(),
+    action: ['toggle', 'set', 'counter'].includes(current.action) ? current.action : 'toggle',
+    set_value: Object.prototype.hasOwnProperty.call(current, 'set_value') ? current.set_value : true,
+    counter_step: Number.isFinite(Number(current.counter_step)) ? Number(current.counter_step) : 1,
+  };
+}
+
+function normalizeFingerprintBindings(bindings) {
+  const source = bindings && bindings.fingerprint && typeof bindings.fingerprint === 'object'
+    ? bindings.fingerprint : {};
+  const result = {};
+  for (const [id, binding] of Object.entries(source)) {
+    const templateId = Number(id);
+    if (Number.isInteger(templateId) && templateId >= 0 && templateId < 256) {
+      result[String(templateId)] = normalizeFingerprintBinding(binding);
+    }
+  }
+  return result;
 }
 
 // <input type="color"> liefert und erwartet #rrggbb; intern rechnet hDP mit
@@ -248,6 +290,7 @@ function normalizeDeviceBindings(device, hardwareConfig) {
   device.bindings.argb = normalizeArgbBindings(
     device.bindings, argbPixelCount({ hardwareConfig }),
   );
+  device.bindings.fingerprint = normalizeFingerprintBindings(device.bindings);
 }
 
 function validateDimmingSwitch(bindings) {
@@ -295,6 +338,7 @@ function sanitizeDevice(device) {
   delete copy.binaryOutputRunning;
   delete copy.argbValues;
   delete copy.argbStates;
+  delete copy.fingerprintTopicValues;
   delete copy.rawDimmingSwitch;
   return copy;
 }
@@ -421,11 +465,15 @@ function requestedDeviceName(input, fallback = '') {
     .trim().slice(0, 100);
 }
 
-const DEVICE_TYPES = Object.freeze(['percentage_indicator', 'argb_output', 'binary_io']);
+const DEVICE_TYPES = Object.freeze([
+  'percentage_indicator', 'argb_output', 'binary_io', 'sensors', 'fingerprint_reader',
+]);
 const DEVICE_TYPE_LABELS = Object.freeze({
   percentage_indicator: 'Prozentanzeige',
   argb_output: 'ARGB-Ausgang',
   binary_io: 'Binary-I/O',
+  sensors: 'Sensoren',
+  fingerprint_reader: 'Fingerabdrucksensor',
 });
 // Prozentanzeige und ARGB-Ausgang teilen sich Hardwareprofil und Laufzeit-
 // profil; sie unterscheiden sich ausschließlich darin, wie homeESS die Pixel
@@ -435,6 +483,20 @@ const CHANNEL_LABELS = Object.freeze({
   stable: 'Stabil', beta: 'Beta', development: 'Entwicklung',
 });
 const DEFAULT_BINARY_PIN_SLOTS = 5;
+const SENSOR_I2C_TYPES = Object.freeze(['bme280', 'sht30', 'sht31', 'bh1750', 'ina219', 'vl53l0x']);
+const SENSOR_GPIO_TYPES = Object.freeze(['dht11', 'dht22', 'ds18b20', 'hx711']);
+const SENSOR_CALIBRATION_TYPES = Object.freeze(['hx711', 'analog']);
+
+function sensorUiFields(sensorType) {
+  if (!SENSOR_TYPES.includes(sensorType)) return [];
+  const fields = ['identity', 'interval'];
+  if (SENSOR_I2C_TYPES.includes(sensorType)) fields.push('i2c');
+  if (SENSOR_GPIO_TYPES.includes(sensorType)) fields.push('data_gpio');
+  if (sensorType === 'hx711') fields.push('clock_gpio');
+  if (sensorType === 'analog') fields.push('adc');
+  if (SENSOR_CALIBRATION_TYPES.includes(sensorType)) fields.push('calibration');
+  return fields;
+}
 
 // Der Gerätetyp ist exklusiv — ein Gerät ist Prozentanzeige, ARGB-Ausgang oder
 // Binary-I/O, niemals mehreres. Maßgeblich ist die persistierte Hardware-
@@ -449,11 +511,15 @@ function deviceTypeOf(device) {
     // Erkennungsmerkmal, seit auch der ARGB-Ausgang Binary-Rollen führt.
     if (config.device_type === 'binary_io') return 'binary_io';
     if (config.device_type === 'argb_output') return 'argb_output';
+    if (config.device_type === 'sensors') return 'sensors';
+    if (config.device_type === 'fingerprint_reader') return 'fingerprint_reader';
     if (typeof config.device_type === 'string' && config.device_type) return 'percentage_indicator';
     if (Array.isArray(config.pins)) return 'binary_io';
   }
   return device && device.runtimeProfile === BINARY_RUNTIME_PROFILE
-    ? 'binary_io' : 'percentage_indicator';
+    ? 'binary_io' : device && device.runtimeProfile === SENSOR_RUNTIME_PROFILE
+      ? 'sensors' : device && device.runtimeProfile === FINGERPRINT_RUNTIME_PROFILE
+        ? 'fingerprint_reader' : 'percentage_indicator';
 }
 
 function isBinaryDevice(device) {
@@ -464,12 +530,75 @@ function isArgbDevice(device) {
   return deviceTypeOf(device) === 'argb_output';
 }
 
+function isSensorDevice(device) {
+  return deviceTypeOf(device) === 'sensors';
+}
+
+function isFingerprintDevice(device) {
+  return deviceTypeOf(device) === 'fingerprint_reader';
+}
+
+const FINGERPRINT_ERROR_LABELS = Object.freeze({
+  initializing: 'Der R503 wird noch initialisiert.',
+  not_initialized: 'Die R503-Schnittstelle wurde noch nicht initialisiert.',
+  uart_timeout: 'Der R503 antwortet nicht über UART.',
+  empty_response: 'Der R503 hat eine leere Antwort gesendet.',
+  password_verification_failed: 'Der R503 hat die Passwortprüfung abgelehnt.',
+  parameter_read_failed: 'Die R503-Geräteparameter konnten nicht gelesen werden.',
+  index_read_failed: 'Der Vorlagenspeicher des R503 konnte nicht gelesen werden.',
+});
+
+function fingerprintWiring(device) {
+  const config = device && device.hardwareConfig;
+  const uart = config && config.uart;
+  if (!uart || !Number.isInteger(uart.rx_pin) || !Number.isInteger(uart.tx_pin)) return '';
+  const wakeup = Number.isInteger(config.wakeup_pin)
+    ? `; R503 Wakeup → ESP GPIO ${config.wakeup_pin}` : '';
+  return `R503 TX → ESP GPIO ${uart.rx_pin}; R503 RX → ESP GPIO ${uart.tx_pin}${wakeup}`;
+}
+
+function fingerprintReadiness(device) {
+  const status = device && device.fingerprintStatus;
+  const wiring = fingerprintWiring(device);
+  const rawError = status && typeof status.last_error === 'string'
+    ? status.last_error.trim() : '';
+  const details = {
+    module_online: !!(status && status.online === true),
+    last_error: rawError || null,
+  };
+  const uart = device && device.hardwareConfig && device.hardwareConfig.uart;
+  if (uart) {
+    details.rx_pin = uart.rx_pin;
+    details.tx_pin = uart.tx_pin;
+  }
+  if (device && device.hardwareConfig
+      && Number.isInteger(device.hardwareConfig.wakeup_pin)) {
+    details.wakeup_pin = device.hardwareConfig.wakeup_pin;
+  }
+  if (status && status.online === true) {
+    return { ready: true, message: '', wiring, details };
+  }
+  const reason = rawError
+    ? (FINGERPRINT_ERROR_LABELS[rawError] || `Der R503 ist nicht bereit (${rawError}).`)
+    : 'Der Adapter hat noch keinen bereiten R503-Status empfangen.';
+  const check = rawError === 'uart_timeout'
+    ? ' Versorgung, gemeinsame Masse und die gekreuzten TX/RX-Leitungen prüfen.' : '';
+  return {
+    ready: false,
+    message: `${reason}${check}${wiring ? ` Verdrahtung: ${wiring}.` : ''}`,
+    wiring,
+    details,
+  };
+}
+
 // Beide Typen belegen GPIOs als Binary-Ein- und -Ausgänge und teilen sich
 // deshalb die gesamte Binary-Verarbeitung: Bindungen, Abonnements, Ereignisse,
 // Ausgangswünsche und States. Für die Seitenauswahl bleibt `isBinaryDevice`
 // maßgeblich — nur `binary_io` ist ein reines Binary-Gerät.
 function hasBinaryIo(device) {
-  return isBinaryDevice(device) || isArgbDevice(device);
+  return isBinaryDevice(device) || isArgbDevice(device)
+    || ((isSensorDevice(device) || isFingerprintDevice(device)) && device.hardwareConfig
+      && Array.isArray(device.hardwareConfig.pins) && device.hardwareConfig.pins.length > 0);
 }
 
 // Die Zahl der ansteuerbaren LEDs steht ausschließlich in der Hardware-
@@ -573,6 +702,42 @@ function stateValue(value) {
   return value == null ? '' : value;
 }
 
+const SENSOR_VALUE_META = Object.freeze({
+  temperature_millicelsius: ['Temperatur', '°C', 0.001],
+  humidity_millipercent: ['Luftfeuchtigkeit', '%', 0.001],
+  pressure_pascal: ['Luftdruck', 'hPa', 0.01],
+  illuminance_millilux: ['Beleuchtungsstärke', 'lx', 0.001],
+  bus_voltage_microvolts: ['Busspannung', 'V', 0.000001],
+  shunt_voltage_microvolts: ['Shuntspannung', 'mV', 0.001],
+  current_microamps: ['Strom', 'A', 0.000001],
+  power_microwatts: ['Leistung', 'W', 0.000001],
+  raw: ['Messwert', '', 1],
+  distance_millimeters: ['Entfernung', 'mm', 1],
+});
+
+function applySensorSample(device, sample) {
+  if (!sample || !sample.sensor_id) return;
+  device.sensorSamples = device.sensorSamples || {};
+  const calibration = device.sensorCalibration && device.sensorCalibration[sample.sensor_id]
+    ? device.sensorCalibration[sample.sensor_id] : {};
+  const values = {};
+  for (const [key, raw] of Object.entries(sample.values || {})) {
+    const meta = SENSOR_VALUE_META[key];
+    if (!meta) continue;
+    let value = Number(raw) * meta[2];
+    if (key === 'raw') {
+      value = value * Number(calibration.scale == null ? 1 : calibration.scale)
+        + Number(calibration.offset == null ? 0 : calibration.offset);
+    }
+    values[key] = value;
+  }
+  device.sensorSamples[sample.sensor_id] = {
+    sensor_type: sample.sensor_type, sequence: sample.sample_sequence,
+    captured_at_uptime_milliseconds: sample.captured_at_uptime_milliseconds,
+    status: sample.status, error: sample.error, values,
+  };
+}
+
 // States-Baum, State-Picker und Geräteseite leiten sich aus demselben,
 // gerätetypspezifischen Schema ab. So können keine Laufzeitwerte mehr in der
 // allgemeinen Statusgruppe oder bei einem unpassenden Gerätetyp verbleiben.
@@ -670,6 +835,39 @@ function deviceStateChannels(device) {
         states: pinStates,
       });
     }
+  }
+  if (type === 'sensors') {
+    for (const sensor of (device.hardwareConfig && Array.isArray(device.hardwareConfig.sensors)
+      ? device.hardwareConfig.sensors : [])) {
+      const sample = device.sensorSamples && device.sensorSamples[sensor.sensor_id];
+      const sensorStates = [
+        state(`sensors/${sensor.sensor_id}/status`, 'Status', sample ? sample.status : 'not_sampled'),
+        state(`sensors/${sensor.sensor_id}/error`, 'Fehler', sample && sample.error),
+        state(`sensors/${sensor.sensor_id}/sequence`, 'Messfolge', sample && sample.sequence),
+      ];
+      for (const [key, value] of Object.entries(sample && sample.values ? sample.values : {})) {
+        const meta = SENSOR_VALUE_META[key];
+        if (meta) sensorStates.push(state(`sensors/${sensor.sensor_id}/${key}`, meta[0], value, meta[1]));
+      }
+      channels.push({
+        address: `sensor-${sensor.sensor_id}`,
+        name: `${sensor.sensor_id} (${sensor.sensor_type})`, states: sensorStates,
+      });
+    }
+  }
+  if (type === 'fingerprint_reader') {
+    const fingerprint = device.fingerprintStatus || {};
+    const last = device.lastFingerprint || {};
+    channels.push({ address: 'fingerprint', name: 'Fingerabdrucksensor', states: [
+      state('fingerprint/module-online', 'R503 bereit', fingerprint.online),
+      state('fingerprint/enrolling', 'Anlernen aktiv', fingerprint.enrolling),
+      state('fingerprint/template-count', 'Gespeicherte Vorlagen', fingerprint.count),
+      state('fingerprint/capacity', 'Vorlagenkapazität', fingerprint.capacity),
+      state('fingerprint/last-template-id', 'Zuletzt erkannte Vorlagen-ID', last.template_id),
+      state('fingerprint/last-confidence', 'Letzte Konfidenz', last.confidence),
+      state('fingerprint/last-unknown', 'Letzte Erkennung unbekannt', !!last.unknown),
+      state('fingerprint/last-error', 'R503-Fehler', fingerprint.last_error),
+    ] });
   }
   return channels;
 }
@@ -793,6 +991,22 @@ function createHdpAdapter(host, dependencies = {}) {
     return device.client;
   }
 
+  function requireFingerprintReady(device) {
+    if (!isFingerprintDevice(device) || !device.connection || !device.connection.ready) {
+      throw Object.assign(new Error('Fingerabdrucksensor ist nicht verbunden.'), {
+        code: 'DEVICE_OFFLINE', status: 503,
+      });
+    }
+    const readiness = fingerprintReadiness(device);
+    if (!readiness.ready) {
+      throw Object.assign(new Error(readiness.message), {
+        code: 'FINGERPRINT_OPERATION_REJECTED', status: 409,
+        details: readiness.details,
+      });
+    }
+    return readiness;
+  }
+
   function stopSubscriptions(device) {
     for (const unsubscribe of device.unsubscribers || []) {
       try { unsubscribe(); } catch (_) { /* idempotent */ }
@@ -904,6 +1118,128 @@ function createHdpAdapter(host, dependencies = {}) {
     }
   }
 
+  // Schreibt die umgerechneten Messwerte in die verknüpften States. Nur was
+  // eine Zuordnung hat, wird geschrieben; alles übrige bleibt im
+  // Zustandskatalog des Adapters sichtbar.
+  async function writeSensorBindings(device, sensorId) {
+    const measurements = (device.bindings.sensor || {})[sensorId];
+    const sample = device.sensorSamples && device.sensorSamples[sensorId];
+    if (!measurements || !sample || !sample.values) return;
+    for (const [key, binding] of Object.entries(measurements)) {
+      if (!binding || !binding.topic) continue;
+      const value = sample.values[key];
+      if (value == null || !Number.isFinite(Number(value))) continue;
+      await host.writeState(binding.topic, Number(value));
+    }
+  }
+
+  function handleSensorMessage(device, message) {
+    const payload = message.payload;
+    if (payload.config_revision !== device.configRevision) {
+      host.warn(`hDP ${device.deviceId}: Sensornachricht für Revision ${payload.config_revision} ignoriert.`);
+      return;
+    }
+    const touched = [];
+    if (message.type === 'sensor.sample') {
+      applySensorSample(device, payload);
+      if (payload.sensor_id) touched.push(payload.sensor_id);
+    }
+    if (message.type === 'sensor.status') {
+      for (const sample of payload.samples) {
+        applySensorSample(device, sample);
+        if (sample.sensor_id) touched.push(sample.sensor_id);
+      }
+    }
+    // Ein fehlgeschlagener Zustandsschreibvorgang darf die Messwertanzeige
+    // nicht mitreißen — sie ist bereits aktualisiert.
+    for (const sensorId of touched) {
+      writeSensorBindings(device, sensorId)
+        .catch((error) => setError(device, error, `Sensor ${sensorId}`));
+    }
+    publishCatalog();
+    publishDevice(device);
+  }
+
+  async function applyFingerprintMatch(device, payload) {
+    const key = String(payload.template_id);
+    const binding = device.bindings.fingerprint && device.bindings.fingerprint[key];
+    device.lastFingerprint = {
+      template_id: payload.template_id, confidence: payload.confidence,
+      occurred_at_uptime_milliseconds: payload.occurred_at_uptime_milliseconds,
+      received_at: new Date().toISOString(),
+    };
+    publishDevice(device);
+    if (!binding || !binding.topic) return;
+    device.fingerprintTopicValues = device.fingerprintTopicValues || {};
+    if (['toggle', 'counter'].includes(binding.action)
+        && !Object.prototype.hasOwnProperty.call(device.fingerprintTopicValues, key)) {
+      throw new Error(`Finger ${payload.template_id}: Topic-Zustand ist noch unbekannt.`);
+    }
+    const target = binaryEventTarget(binding, device.fingerprintTopicValues[key], true);
+    await host.writeState(binding.topic, target);
+    device.fingerprintTopicValues[key] = target;
+  }
+
+  function handleFingerprintMessage(device, message) {
+    const payload = message.payload;
+    if (message.type === 'fingerprint.command.accepted') return;
+    if (payload.config_revision !== device.configRevision) {
+      host.warn(`hDP ${device.deviceId}: Fingerabdrucknachricht für Revision ${payload.config_revision} ignoriert.`);
+      return;
+    }
+    if (message.type === 'fingerprint.status') {
+      device.fingerprintStatus = {
+        online: payload.online, enrolling: payload.enrolling, capacity: payload.capacity,
+        count: payload.template_count, occupied: payload.occupied_slots, last_error: payload.last_error,
+      };
+      if (/^\[FINGERPRINT_OPERATION_REJECTED\]/.test(String(device.lastError || ''))) {
+        device.lastError = '';
+      }
+      if (device.pendingFingerprintBinding && !payload.enrolling) {
+        device.pendingFingerprintBinding = null;
+        persist();
+      }
+    } else if (message.type === 'fingerprint.match') {
+      applyFingerprintMatch(device, payload)
+        .catch((error) => setError(device, error, `Finger ${payload.template_id}`));
+    } else if (message.type === 'fingerprint.unknown') {
+      device.lastFingerprint = { unknown: true, received_at: new Date().toISOString() };
+    } else if (message.type === 'fingerprint.enroll.status') {
+      device.fingerprintStatus = {
+        ...(device.fingerprintStatus || {}),
+        enrolling: !['complete', 'cancelled', 'enrollment', 'runtime'].includes(payload.stage)
+          && !payload.error,
+      };
+      device.fingerprintEnrollment = {
+        stage: payload.stage, template_id: payload.template_id,
+        error: payload.error, updated_at: new Date().toISOString(),
+      };
+      if (payload.stage === 'complete' && Number.isInteger(payload.template_id)) {
+        const key = String(payload.template_id);
+        device.bindings.fingerprint[key] = normalizeFingerprintBinding(
+          device.pendingFingerprintBinding || {},
+        );
+        device.pendingFingerprintBinding = null;
+        subscribeSources(device);
+        persist();
+      } else if (['cancelled', 'enrollment'].includes(payload.stage) || payload.error) {
+        device.pendingFingerprintBinding = null;
+        persist();
+      }
+      if (payload.stage === 'runtime' && payload.error) {
+        device.fingerprintStatus = {
+          ...(device.fingerprintStatus || {}), online: false, last_error: payload.error,
+        };
+      }
+    } else if (message.type === 'fingerprint.template.deleted') {
+      delete device.bindings.fingerprint[String(payload.template_id)];
+      subscribeSources(device);
+      persist();
+    }
+    publishCatalog();
+    publishDevice(device);
+  }
+
   function subscribeBinarySources(device) {
     device.binaryTopicValues = device.binaryTopicValues || {};
     for (const pin of (device.hardwareConfig && Array.isArray(device.hardwareConfig.pins)
@@ -921,6 +1257,17 @@ function createHdpAdapter(host, dependencies = {}) {
             setError(device, error, `Binary-Ausgang GPIO ${pin.pin}`);
           }
         }
+      });
+      device.unsubscribers.push(unsubscribe);
+    }
+  }
+
+  function subscribeFingerprintSources(device) {
+    device.fingerprintTopicValues = device.fingerprintTopicValues || {};
+    for (const [key, binding] of Object.entries(device.bindings.fingerprint || {})) {
+      if (!binding.topic) continue;
+      const unsubscribe = host.subscribeState(binding.topic, (value) => {
+        device.fingerprintTopicValues[key] = value;
       });
       device.unsubscribers.push(unsubscribe);
     }
@@ -1039,7 +1386,7 @@ function createHdpAdapter(host, dependencies = {}) {
 
   function applyRuntime(device) {
     try {
-      if (isBinaryDevice(device)) {
+      if (isBinaryDevice(device) || isSensorDevice(device) || isFingerprintDevice(device)) {
         publishDevice(device);
         return;
       }
@@ -1090,6 +1437,15 @@ function createHdpAdapter(host, dependencies = {}) {
   function subscribeSources(device) {
     stopSubscriptions(device);
     device.unsubscribers = [];
+    if (isSensorDevice(device)) {
+      if (hasBinaryIo(device)) subscribeBinarySources(device);
+      return;
+    }
+    if (isFingerprintDevice(device)) {
+      subscribeFingerprintSources(device);
+      if (hasBinaryIo(device)) subscribeBinarySources(device);
+      return;
+    }
     if (isBinaryDevice(device)) {
       subscribeBinarySources(device);
       return;
@@ -1188,8 +1544,24 @@ function createHdpAdapter(host, dependencies = {}) {
       device.lastConnectedAt = new Date().toISOString();
       publishDevice(device);
       persist();
+      // Das persistierte Manifest ist nur ein Startwert für die Offline-
+      // Anzeige. Nach jeder neu aufgebauten Gerätesitzung wird es direkt vom
+      // Gerät erneuert. So bleiben neu hinzugekommene Fähigkeiten auch dann
+      // nicht in einem alten Cache hängen, wenn die Firmwareversionsmeldung
+      // bereits vor einem Adapterupdate gespeichert wurde.
+      refreshManifest(device)
+        .then(() => publishCatalog())
+        .catch((error) => setError(device, error, 'Manifestabgleich'));
       if (device.outputClient) device.outputClient.sessionStarted();
       if (hasBinaryIo(device)) applyBinaryOutputs(device);
+      if (isSensorDevice(device)) {
+        connection.request('sensor.status.get', {}, 5000)
+          .catch((error) => setError(device, error, 'Sensorstatus'));
+      }
+      if (isFingerprintDevice(device)) {
+        connection.request('fingerprint.status.get', {}, 5000)
+          .catch((error) => setError(device, error, 'Fingerabdruckstatus'));
+      }
       applyRuntime(device);
       // Ein zurückgekehrtes Gerät sofort prüfen, statt bis zum nächsten Takt zu
       // warten — sonst wäre „Update nach Wiederkehr nachholen“ eine Minute
@@ -1260,6 +1632,8 @@ function createHdpAdapter(host, dependencies = {}) {
       applyRuntime(device);
     });
     connection.on('binary', (message) => handleBinaryMessage(device, message));
+    connection.on('sensor', (message) => handleSensorMessage(device, message));
+    connection.on('fingerprint', (message) => handleFingerprintMessage(device, message));
     connection.on('deviceError', (payload) => {
       const rejectedTextFrame = payload.code === 'INVALID_REQUEST'
         && /UTF-8 text messages up to 1024 bytes/i.test(payload.message || '');
@@ -1348,7 +1722,7 @@ function createHdpAdapter(host, dependencies = {}) {
         instanceId: identity.instanceId, bindingKey: local.bindingKey,
       });
       if (found.runtimeMismatch) {
-        local.lastError = `[UNSUPPORTED_RUNTIME_PROFILE] Gerät meldet ${found.runtimeProfile}; unterstützt werden pixel-timeline-v1 und binary-io-v1.`;
+        local.lastError = `[UNSUPPORTED_RUNTIME_PROFILE] Gerät meldet ${found.runtimeProfile}; unterstützt werden pixel-timeline-v1, binary-io-v1, sensor-reading-v1 und fingerprint-event-v1.`;
         if (local.connection) local.connection.stop();
         publishDevice(local);
         persist();
@@ -1473,7 +1847,7 @@ function createHdpAdapter(host, dependencies = {}) {
     const found = discovered.get(deviceId);
     if (!found) throw new Error('Gerät wurde nicht per mDNS gefunden.');
     if (found.runtimeMismatch) {
-      throw Object.assign(new Error(`Runtime-Profil ${found.runtimeProfile} ist inkompatibel; unterstützt werden pixel-timeline-v1 und binary-io-v1.`), {
+      throw Object.assign(new Error(`Runtime-Profil ${found.runtimeProfile} ist inkompatibel; unterstützt werden pixel-timeline-v1, binary-io-v1, sensor-reading-v1 und fingerprint-event-v1.`), {
         code: 'UNSUPPORTED_RUNTIME_PROFILE', status: 426,
       });
     }
@@ -1690,18 +2064,51 @@ function createHdpAdapter(host, dependencies = {}) {
     return validateDimmingSwitch(bindings);
   }
 
+  function validateFingerprintBindings(device, input) {
+    const bindings = mergeBindings(input);
+    const source = input && input.fingerprint && typeof input.fingerprint === 'object'
+      ? input.fingerprint : {};
+    for (const [id, current] of Object.entries(source)) {
+      const templateId = Number(id);
+      if (!Number.isInteger(templateId) || templateId < 0 || templateId >= 256) {
+        throw new Error(`Finger-ID ${id} ist ungültig.`);
+      }
+      if (!current || typeof current !== 'object' || Array.isArray(current)) {
+        throw new Error(`Finger ${id}: Zuordnung ist ungültig.`);
+      }
+      if (!['toggle', 'set', 'counter'].includes(current.action || 'toggle')) {
+        throw new Error(`Finger ${id}: unbekannte Aktion.`);
+      }
+      if (current.action === 'set'
+          && (typeof current.set_value === 'undefined'
+            || (current.set_value !== null && typeof current.set_value === 'object'))) {
+        throw new Error(`Finger ${id}: Setzwert muss ein skalarer JSON-Wert sein.`);
+      }
+      if (current.action === 'counter'
+          && (!Number.isFinite(Number(current.counter_step)) || Number(current.counter_step) === 0)) {
+        throw new Error(`Finger ${id}: Counter-Schritt muss numerisch und ungleich null sein.`);
+      }
+    }
+    bindings.fingerprint = normalizeFingerprintBindings({ fingerprint: source });
+    bindings.binary = validateBinaryBindings(device, input).binary;
+    return bindings;
+  }
+
   function saveBindings(deviceId, input) {
     const device = requirePaired(deviceId);
     const previousBindings = device.bindings;
-    const nextBindings = isBinaryDevice(device)
+    const nextBindings = isBinaryDevice(device) || isSensorDevice(device)
       ? validateBinaryBindings(device, input.bindings || input)
+      : isFingerprintDevice(device)
+        ? validateFingerprintBindings(device, input.bindings || input)
       : isArgbDevice(device)
         ? validateArgbBindings(device, input.bindings || input)
         : validateBindings(input.bindings || input);
-    if (!isBinaryDevice(device) && !isArgbDevice(device)) {
+    if (!isBinaryDevice(device) && !isArgbDevice(device) && !isSensorDevice(device)
+        && !isFingerprintDevice(device)) {
       resetChangedIndicatorState(device, previousBindings, nextBindings);
     }
-    if (!isBinaryDevice(device)
+    if (!isBinaryDevice(device) && !isSensorDevice(device)
         && previousBindings.dimming_switch.topic !== nextBindings.dimming_switch.topic) {
       device.rawDimmingSwitch = undefined;
     }
@@ -2096,6 +2503,99 @@ function createHdpAdapter(host, dependencies = {}) {
         { code: 'UNSUPPORTED_DEVICE_TYPE', status: 422 },
       );
     }
+    if (requestedType === 'fingerprint_reader') {
+      const defaults = {
+        idle: ['breathing', 'blue', 96, 0], scanning: ['on', 'blue', 0, 0],
+        success: ['flashing', 'blue', 32, 2], failure: ['flashing', 'red', 32, 2],
+        enrolling: ['breathing', 'purple', 64, 0],
+      };
+      const led = Object.fromEntries(FINGERPRINT_LED_SCENES.map((scene) => {
+        const standard = defaults[scene];
+        return [scene, {
+          effect: FINGERPRINT_LED_EFFECTS.includes(body[`fingerprint_led_effect_${scene}`])
+            ? body[`fingerprint_led_effect_${scene}`] : standard[0],
+          color: FINGERPRINT_LED_COLORS.includes(body[`fingerprint_led_color_${scene}`])
+            ? body[`fingerprint_led_color_${scene}`] : standard[1],
+          speed: number(body[`fingerprint_led_speed_${scene}`], standard[2]),
+          count: number(body[`fingerprint_led_count_${scene}`], standard[3]),
+        }];
+      }));
+      const pins = [];
+      const capabilities = (existing.manifest && existing.manifest.hardware_capabilities) || {};
+      const availablePins = Array.isArray(capabilities.binary_pins)
+        ? capabilities.binary_pins : [];
+      for (const gpio of availablePins) {
+        if (!body[`fingerprint_binary_enabled_${gpio}`]) continue;
+        const direction = body[`fingerprint_binary_direction_${gpio}`] === 'output'
+          ? 'output' : 'input';
+        pins.push({
+          pin: gpio, direction,
+          ...(direction === 'input' ? {
+            input_type: body[`fingerprint_binary_input_type_${gpio}`] === 'button'
+              ? 'button' : 'switch',
+          } : {}),
+        });
+      }
+      const wakeup = String(body.fingerprint_wakeup_pin == null
+        ? '' : body.fingerprint_wakeup_pin).trim();
+      return validateHardwareConfig({
+        revision: number(body.revision, existing.configRevision || 0),
+        device_type: 'fingerprint_reader',
+        uart: {
+          rx_pin: number(body.fingerprint_rx_pin, 13),
+          tx_pin: number(body.fingerprint_tx_pin, 15),
+        },
+        wakeup_pin: wakeup ? number(wakeup, null) : null,
+        led, pins,
+      }, existing.manifest);
+    }
+    if (requestedType === 'sensors') {
+      const sensors = [];
+      const maximum = existing.manifest && existing.manifest.limits
+        ? existing.manifest.limits.maximum_sensors : 8;
+      for (let index = 0; index < maximum; index += 1) {
+        const sensorType = String(body[`sensor_type_${index}`] || '').trim();
+        if (!sensorType) continue;
+        const sensor = {
+          sensor_id: String(body[`sensor_id_${index}`] || `sensor${index + 1}`).trim(),
+          sensor_type: sensorType,
+          sample_interval_milliseconds: number(body[`sensor_interval_${index}`],
+            sensorType === 'dht22' ? 2000 : sensorType === 'dht11' ? 1000 : 5000),
+        };
+        if (['bme280', 'sht30', 'sht31', 'bh1750', 'ina219', 'vl53l0x'].includes(sensorType)) {
+          const defaultAddress = {
+            bme280: 0x76, sht30: 0x44, sht31: 0x44, bh1750: 0x23,
+            ina219: 0x40, vl53l0x: 0x29,
+          }[sensorType];
+          sensor.sda_pin = number(body[`sensor_sda_${index}`], 4);
+          sensor.scl_pin = number(body[`sensor_scl_${index}`], 5);
+          sensor.address = number(body[`sensor_address_${index}`], defaultAddress);
+        } else if (sensorType === 'hx711') {
+          sensor.data_pin = number(body[`sensor_pin_${index}`], 12);
+          sensor.clock_pin = number(body[`sensor_aux_pin_${index}`], 13);
+        } else if (sensorType !== 'analog') {
+          sensor.pin = number(body[`sensor_pin_${index}`], 4);
+        }
+        sensors.push(sensor);
+      }
+      const pins = [];
+      const slots = binaryPinSlots(existing.manifest);
+      for (let index = 0; index < slots; index += 1) {
+        const rawPin = body[`binary_pin_${index}`];
+        if (rawPin == null || String(rawPin).trim() === '') continue;
+        const direction = body[`binary_direction_${index}`] === 'output' ? 'output' : 'input';
+        pins.push({
+          pin: number(rawPin, -1), direction,
+          ...(direction === 'input' ? {
+            input_type: body[`binary_input_type_${index}`] === 'button' ? 'button' : 'switch',
+          } : {}),
+        });
+      }
+      return validateHardwareConfig({
+        revision: number(body.revision, existing.configRevision || 0),
+        device_type: 'sensors', sensors, pins,
+      }, existing.manifest);
+    }
     if (requestedType === 'binary_io') {
       const pins = [];
       const slots = binaryPinSlots(existing.manifest);
@@ -2205,8 +2705,46 @@ function createHdpAdapter(host, dependencies = {}) {
   }
 
   function bindingsFromForm(body, device) {
+    if (device && isSensorDevice(device)) {
+      // Die Sensoren kommen indiziert aus dem Formular, damit ihre Kennungen
+      // nicht in Feldnamen zerlegt werden müssen; die Kennung selbst reist in
+      // einem verborgenen Feld mit und entscheidet über die Zuordnung.
+      const sensors = device.hardwareConfig && Array.isArray(device.hardwareConfig.sensors)
+        ? device.hardwareConfig.sensors : [];
+      const sensor = {};
+      sensors.forEach((entry, index) => {
+        const id = String(body[`sensor_id_${index}`] || entry.sensor_id || '').trim();
+        if (!id) return;
+        const measurements = {};
+        for (const key of sensorMeasurementKeys(device, entry)) {
+          const topic = String(body[`sensor_topic_${index}_${key}`] || '').trim();
+          if (topic) measurements[key] = { topic };
+        }
+        if (Object.keys(measurements).length) sensor[id] = measurements;
+      });
+      return validateBinaryBindings(device, { sensor, binary: binaryFromForm(body, device) });
+    }
     if (device && isBinaryDevice(device)) {
       return validateBinaryBindings(device, { binary: binaryFromForm(body, device) });
+    }
+    if (device && isFingerprintDevice(device)) {
+      const fingerprint = { ...(device.bindings.fingerprint || {}) };
+      for (const key of Object.keys(fingerprint)) {
+        let setValue = true;
+        const raw = String(body[`fingerprint_set_value_${key}`] == null
+          ? 'true' : body[`fingerprint_set_value_${key}`]);
+        try { setValue = JSON.parse(raw); } catch (_) { setValue = raw; }
+        fingerprint[key] = {
+          name: String(body[`fingerprint_name_${key}`] || '').trim(),
+          topic: String(body[`fingerprint_topic_${key}`] || '').trim(),
+          action: String(body[`fingerprint_action_${key}`] || 'toggle'),
+          set_value: setValue,
+          counter_step: number(body[`fingerprint_counter_step_${key}`], 1),
+        };
+      }
+      return validateFingerprintBindings(device, {
+        fingerprint, binary: binaryFromForm(body, device),
+      });
     }
     if (device && isArgbDevice(device)) {
       const argb = {};
@@ -2345,6 +2883,45 @@ function createHdpAdapter(host, dependencies = {}) {
           <option value="switch"${current.input_type !== 'button' ? ' selected' : ''}>Schalter</option>
           <option value="button"${current.input_type === 'button' ? ' selected' : ''}>Taster</option>
         </select></label>
+      </div>`;
+    }).join('');
+  }
+
+  // Beim Fingerprint-Leser ist jeder noch freie GPIO eine konkrete Ressource.
+  // Deshalb gibt es keine austauschbaren Slots mit sich wiederholenden
+  // Pin-Dropdowns: pro physischem freien GPIO genau eine aktivierbare Zeile.
+  // UART und Wakeup werden serverseitig initial ausgeblendet und nach jeder
+  // Auswahländerung im Browser erneut abgeglichen.
+  function fingerprintBinaryPinRows(device, hardwareConfig) {
+    const capabilities = (device.manifest && device.manifest.hardware_capabilities) || {};
+    const allowed = Array.isArray(capabilities.binary_pins) ? capabilities.binary_pins : [];
+    const configured = hardwareConfig && Array.isArray(hardwareConfig.pins)
+      ? hardwareConfig.pins : [];
+    const uart = hardwareConfig && hardwareConfig.uart && typeof hardwareConfig.uart === 'object'
+      ? hardwareConfig.uart : {};
+    const reserved = new Set([
+      Number(uart.rx_pin == null ? 13 : uart.rx_pin),
+      Number(uart.tx_pin == null ? 15 : uart.tx_pin),
+      ...(hardwareConfig && hardwareConfig.wakeup_pin != null
+        ? [Number(hardwareConfig.wakeup_pin)] : []),
+    ]);
+    return allowed.map((gpio) => {
+      const current = configured.find((entry) => Number(entry.pin) === Number(gpio));
+      const enabled = Boolean(current);
+      const unavailable = reserved.has(Number(gpio));
+      const disabled = unavailable ? ' disabled' : '';
+      const controlsDisabled = unavailable || !enabled ? ' disabled' : '';
+      const note = binaryPinNote(device, gpio).replace(/^ · /, '');
+      return `<div class="hdp-form-grid hdp-fingerprint-pin-row" data-hdp-fingerprint-pin-row="${gpio}"${unavailable ? ' hidden' : ''}>
+        <label class="field hdp-toggle-row"><input type="checkbox" name="fingerprint_binary_enabled_${gpio}" value="1"${enabled ? ' checked' : ''}${disabled}> GPIO ${gpio} verwenden</label>
+        <label class="field">Richtung<select name="fingerprint_binary_direction_${gpio}"${controlsDisabled}>
+          <option value="input"${!current || current.direction !== 'output' ? ' selected' : ''}>Eingang</option>
+          <option value="output"${current && current.direction === 'output' ? ' selected' : ''}>Ausgang</option>
+        </select></label>
+        <label class="field">Eingangstyp<select name="fingerprint_binary_input_type_${gpio}"${controlsDisabled || (current && current.direction === 'output') ? ' disabled' : ''}>
+          <option value="switch"${!current || current.input_type !== 'button' ? ' selected' : ''}>Schalter</option>
+          <option value="button"${current && current.input_type === 'button' ? ' selected' : ''}>Taster</option>
+        </select>${note ? `<span class="form-hint muted">${esc(note)}</span>` : ''}</label>
       </div>`;
     }).join('');
   }
@@ -2746,6 +3323,73 @@ hdp-flash.exe --channel development</code></pre>
       </div></section>`;
     const binarySection = available.includes('binary_io') ? `
       <section class="dialog-section" data-hdp-type-panel="binary_io"><div class="dialog-section-head"><h4>Binary-Pins</h4><p class="muted">Eingänge sind aktiv-low und werden 30 ms entprellt. Ausgänge starten und enden offline immer inaktiv.</p>${binaryPinLegend(device)}</div>${binaryPinRows(device, hw)}</section>` : '';
+    const sensorSection = available.includes('sensors') ? (() => {
+      const configured = Array.isArray(hw.sensors) ? hw.sensors : [];
+      const maximum = device.manifest && device.manifest.limits
+        ? device.manifest.limits.maximum_sensors : 8;
+      const rows = Array.from({ length: maximum }, (_, index) => {
+        const sensor = configured[index] || {};
+        const calibration = device.sensorCalibration && device.sensorCalibration[sensor.sensor_id]
+          ? device.sensorCalibration[sensor.sensor_id] : {};
+        const typeOptions = [''].concat(SENSOR_TYPES).map((type) =>
+          `<option value="${esc(type)}"${sensor.sensor_type === type ? ' selected' : ''}>${esc(type || '— nicht belegt —')}</option>`).join('');
+        const address = sensor.address == null ? '' : `0x${Number(sensor.address).toString(16)}`;
+        return `<fieldset class="settings-card" data-hdp-sensor-row><legend>Sensor ${index + 1}</legend><div class="dialog-grid dialog-grid--three">
+          <label class="field-block">Typ<select id="hdp-sensor-type-${index}" name="sensor_type_${index}" data-hdp-sensor-type>${typeOptions}</select></label>
+          <label class="field-block" data-hdp-sensor-types="${SENSOR_TYPES.join(' ')}">Sensor-ID<input name="sensor_id_${index}" maxlength="16" value="${esc(sensor.sensor_id || '')}"></label>
+          <label class="field-block" data-hdp-sensor-types="${SENSOR_TYPES.join(' ')}">Messintervall (ms)<input type="number" min="100" name="sensor_interval_${index}" value="${esc(sensor.sample_interval_milliseconds || 5000)}"></label>
+          <label class="field-block" data-hdp-sensor-types="${SENSOR_GPIO_TYPES.join(' ')}">Daten-GPIO<input type="number" name="sensor_pin_${index}" value="${esc(sensor.pin == null ? sensor.data_pin == null ? '' : sensor.data_pin : sensor.pin)}" placeholder="4"></label>
+          <label class="field-block" data-hdp-sensor-types="hx711">Takt-GPIO<input type="number" name="sensor_aux_pin_${index}" value="${esc(sensor.clock_pin == null ? '' : sensor.clock_pin)}" placeholder="13"></label>
+          <label class="field-block" data-hdp-sensor-types="${SENSOR_I2C_TYPES.join(' ')}">I²C SDA<input type="number" name="sensor_sda_${index}" value="${esc(sensor.sda_pin == null ? '' : sensor.sda_pin)}" placeholder="4"></label>
+          <label class="field-block" data-hdp-sensor-types="${SENSOR_I2C_TYPES.join(' ')}">I²C SCL<input type="number" name="sensor_scl_${index}" value="${esc(sensor.scl_pin == null ? '' : sensor.scl_pin)}" placeholder="5"></label>
+          <label class="field-block" data-hdp-sensor-types="${SENSOR_I2C_TYPES.join(' ')}">I²C-Adresse<input name="sensor_address_${index}" value="${esc(address)}" placeholder="0x76"></label>
+          <div class="field-block" data-hdp-sensor-types="analog"><span>ADC-Eingang</span><strong>A0</strong></div>
+          <label class="field-block" data-hdp-sensor-types="${SENSOR_CALIBRATION_TYPES.join(' ')}">Rohwert-Faktor<input type="number" step="any" name="sensor_scale_${index}" value="${esc(calibration.scale == null ? 1 : calibration.scale)}"></label>
+          <label class="field-block" data-hdp-sensor-types="${SENSOR_CALIBRATION_TYPES.join(' ')}">Rohwert-Offset<input type="number" step="any" name="sensor_offset_${index}" value="${esc(calibration.offset == null ? 0 : calibration.offset)}"></label>
+        </div></fieldset>`;
+      }).join('');
+      return `<section class="dialog-section" data-hdp-type-panel="sensors"><div class="dialog-section-head"><h4>Sensoren</h4><p class="muted">I²C-Sensoren teilen SDA/SCL. Faktor und Offset werden nur auf Rohwerte von HX711 und A0 im Adapter angewendet.</p></div>${rows}</section>
+        <section class="dialog-section" data-hdp-type-panel="sensors"><div class="dialog-section-head"><h4>Freie Binary-Pins</h4><p class="muted">Nur GPIOs eintragen, die von keinem Sensorbus belegt sind.</p>${binaryPinLegend(device)}</div>${binaryPinRows(device, hw)}</section>`;
+    })() : '';
+    const fingerprintSection = available.includes('fingerprint_reader') ? (() => {
+      const fingerprintUart = hw.uart && typeof hw.uart === 'object' ? hw.uart : {};
+      const fingerprintPins = device.manifest && device.manifest.hardware_capabilities
+        && Array.isArray(device.manifest.hardware_capabilities.binary_pins)
+        ? device.manifest.hardware_capabilities.binary_pins : [];
+      const fingerprintRxPins = fingerprintPins.filter((gpio) => Number(gpio) !== 16);
+      const defaults = {
+        idle: { effect: 'breathing', color: 'blue', speed: 96, count: 0 },
+        scanning: { effect: 'on', color: 'blue', speed: 0, count: 0 },
+        success: { effect: 'flashing', color: 'blue', speed: 32, count: 2 },
+        failure: { effect: 'flashing', color: 'red', speed: 32, count: 2 },
+        enrolling: { effect: 'breathing', color: 'purple', speed: 64, count: 0 },
+      };
+      const sceneLabels = {
+        idle: 'Bereit', scanning: 'Finger wird gelesen', success: 'Erkannt',
+        failure: 'Nicht erkannt', enrolling: 'Anlernen',
+      };
+      const led = hw.led && typeof hw.led === 'object' ? hw.led : {};
+      const ledRows = FINGERPRINT_LED_SCENES.map((scene) => {
+        const value = { ...defaults[scene], ...(led[scene] || {}) };
+        const effectOptions = FINGERPRINT_LED_EFFECTS.map((effect) =>
+          `<option value="${effect}"${value.effect === effect ? ' selected' : ''}>${esc(effect)}</option>`).join('');
+        const colorOptions = FINGERPRINT_LED_COLORS.map((color) =>
+          `<option value="${color}"${value.color === color ? ' selected' : ''}>${esc(color)}</option>`).join('');
+        return `<fieldset class="settings-card"><legend>${esc(sceneLabels[scene])}</legend><div class="dialog-grid dialog-grid--four">
+          <label class="field-block">Effekt<select name="fingerprint_led_effect_${scene}">${effectOptions}</select></label>
+          <label class="field-block">Farbe<select name="fingerprint_led_color_${scene}">${colorOptions}</select></label>
+          <label class="field-block">Geschwindigkeit<input type="number" min="0" max="255" name="fingerprint_led_speed_${scene}" value="${esc(value.speed)}"></label>
+          <label class="field-block">Wiederholungen<input type="number" min="0" max="255" name="fingerprint_led_count_${scene}" value="${esc(value.count)}"></label>
+        </div></fieldset>`;
+      }).join('');
+      return `<section class="dialog-section" data-hdp-type-panel="fingerprint_reader"><div class="dialog-section-head"><h4>R503 UART</h4><p class="muted">3,3-V-TTL, fest mit 57600 Baud. RX bezeichnet den ESP-Eingang und wird mit TX des R503 verbunden.</p></div><div class="dialog-grid dialog-grid--three">
+        <label class="field-block">ESP RX-GPIO<select id="hdp-fingerprint-rx-pin" name="fingerprint_rx_pin" data-hdp-fingerprint-role="rx">${gpioOptions(device, fingerprintUart.rx_pin == null ? 13 : fingerprintUart.rx_pin, fingerprintRxPins)}</select></label>
+        <label class="field-block">ESP TX-GPIO<select id="hdp-fingerprint-tx-pin" name="fingerprint_tx_pin" data-hdp-fingerprint-role="tx">${gpioOptions(device, fingerprintUart.tx_pin == null ? 15 : fingerprintUart.tx_pin, fingerprintPins)}</select></label>
+        <label class="field-block">Wakeup-GPIO (optional)<select id="hdp-fingerprint-wakeup-pin" name="fingerprint_wakeup_pin" data-hdp-fingerprint-role="wakeup"><option value="">Nicht angeschlossen</option>${gpioOptions(device, hw.wakeup_pin, fingerprintPins)}</select></label>
+      </div></section>
+      <section class="dialog-section" data-hdp-type-panel="fingerprint_reader"><div class="dialog-section-head"><h4>LED-Ring</h4><p class="muted">Geschwindigkeit und Wiederholungen sind R503-Werte von 0 bis 255.</p></div>${ledRows}</section>
+      <section class="dialog-section" data-hdp-type-panel="fingerprint_reader"><div class="dialog-section-head"><h4>Freie Binary-Pins</h4><p class="muted">Angezeigt werden ausschließlich die GPIOs, die weder UART noch Wakeup belegen. Gewünschte Pins einzeln aktivieren.</p>${binaryPinLegend(device)}</div>${fingerprintBinaryPinRows(device, hw)}</section>`;
+    })() : '';
     return `<dialog id="hdp-hardware-dialog" class="value-dialog hdp-hardware-dialog">
       <form method="post" action="/adapter/instance/INSTANCE/manage/api/devices/${encodeURIComponent(device.deviceId)}/config" class="dialog-form">
         <input type="hidden" name="revision" value="${esc(device.configRevision || 0)}">
@@ -2757,6 +3401,8 @@ hdp-flash.exe --channel development</code></pre>
         ${available.some((type) => PIXEL_DEVICE_TYPES.includes(type)) ? percentageSections : ''}
         ${available.includes('argb_output') ? argbPinRoleSection(device, currentArgbPin) : ''}
         ${binarySection}
+        ${sensorSection}
+        ${fingerprintSection}
         <div class="button-row hdp-dialog-actions"><button type="button" class="button-secondary" onclick="this.closest('dialog').close()">Abbrechen</button><button>Hardware auf Gerät speichern</button></div>
       </form>
     </dialog>`;
@@ -2765,6 +3411,66 @@ hdp-flash.exe --channel development</code></pre>
   // Eine Firmwarekarte für beide Gerätetypen. Zuvor hatte die Binary-Seite eine
   // eigene Kurzfassung, in der Build, OTA-Fähigkeit, Speicher und Signatur
   // fehlten.
+  // Die Updateeinstellungen gehören zu jedem Gerät gleichermaßen. Fehlt der
+  // Abschnitt auf einer Seite, schickt deren Formular keine update_*-Felder,
+  // und der Release-Kanal ließe sich dort weder sehen noch ändern.
+  function updateAutomationSection(device, kicker = '') {
+    const settings = device.updateSettings || defaultUpdateSettings();
+    const window = settings.maintenance_window || { enabled: false, start: '02:00', end: '04:00' };
+    return `<section class="settings-card hdp-config-card">
+      <div class="settings-card-head">${kicker ? `<span class="hdp-section-kicker">${esc(kicker)} · Updates</span>` : ''}<h2>Update-Automatik</h2><p class="settings-card-hint">Der Entwicklungskanal führt die neueste Firmware. Ein Kanal mit älterem Konfigurationsschema wird vom Gerät abgelehnt.</p></div>
+      <div class="hdp-form-grid">
+        <div class="field"><label>Updatepolitik</label><select name="update_mode">
+          <option value="manual"${settings.mode === 'manual' ? ' selected' : ''}>Manuell</option>
+          <option value="notify_only"${settings.mode === 'notify_only' ? ' selected' : ''}>Nur benachrichtigen</option>
+          <option value="automatic"${settings.mode === 'automatic' ? ' selected' : ''}>Automatisch installieren</option>
+        </select></div>
+        <div class="field"><label>Release-Kanal</label><select name="update_channel">
+          <option value="stable"${settings.channel === 'stable' ? ' selected' : ''}>Stabil</option>
+          <option value="beta"${settings.channel === 'beta' ? ' selected' : ''}>Beta</option>
+          <option value="development"${settings.channel === 'development' ? ' selected' : ''}>Entwicklung</option>
+        </select></div>
+        <div class="field"><label>Wiederholungsversuche</label><input type="number" min="0" max="10" name="update_retry_count" value="${esc(settings.retry_count)}"></div>
+        <fieldset class="hdp-time-field"><legend>Wartungsfenster</legend><label>Von<input type="time" name="maintenance_start" value="${esc(window.start)}"></label><label>Bis<input type="time" name="maintenance_end" value="${esc(window.end)}"></label></fieldset>
+      </div>
+      <div class="hdp-toggle-row">
+        <label><input type="checkbox" name="update_when_online"${settings.update_when_device_returns_online ? ' checked' : ''}> Update nach späterer Wiederkehr nachholen</label>
+        <label><input type="checkbox" name="maintenance_enabled"${window.enabled ? ' checked' : ''}> Wartungsfenster verwenden</label>
+      </div>
+    </section>`;
+  }
+
+  // Die allgemeinen Betriebsdaten sind für jeden Gerätetyp dieselben und
+  // stehen deshalb an einer Stelle. Gerätetypspezifische Kacheln kommen
+  // darunter, nicht an ihrer Stelle: Ein Sensor- oder Fingerprintgerät ist
+  // genauso ein Netzwerkgerät wie ein Binary-I/O.
+  function commonStatusCard(device, profileLabel, extraCells = '') {
+    const bytes = (value) => (Number.isFinite(Number(value))
+      ? `${Math.round(Number(value) / 1024)} KiB` : '—');
+    const uptime = (seconds) => {
+      const total = Number(seconds);
+      if (!Number.isFinite(total)) return '—';
+      const days = Math.floor(total / 86400);
+      const hours = Math.floor((total % 86400) / 3600);
+      const minutes = Math.floor((total % 3600) / 60);
+      return days ? `${days} d ${hours} h` : (hours ? `${hours} h ${minutes} min` : `${minutes} min`);
+    };
+    const firmware = device.firmwareInfo || {};
+    return `<section class="settings-card hdp-status-card">
+      <div class="settings-card-head hdp-card-head"><div><h2>Gerätestatus</h2><p class="settings-card-hint">${esc(device.address || 'Keine Netzwerkadresse')} · zuletzt verbunden ${esc(device.lastConnectedAt || '—')}</p></div><span class="status-badge ${device.online ? 'status-ok' : 'status-off'}">${device.online ? 'Online' : 'Offline'}</span></div>
+      ${device.recoveryRequired ? `<p class="error-text">Recovery erforderlich: ${esc(device.lastBoot && device.lastBoot.config_load_status)} · ${esc((device.lastBoot && device.lastBoot.config_load_diagnostic) || '')}. Automatische Konfigurationsschreibvorgänge sind gesperrt.</p>` : ''}
+      <dl class="hdp-status-grid">
+        <div><dt>Verbindung</dt><dd>${esc(device.connectionState || (device.online ? 'Verbunden' : 'offline'))}</dd><small>${esc(profileLabel)}</small></div>
+        <div><dt>WLAN</dt><dd>${esc(device.rssi == null ? '—' : `${device.rssi} dBm`)}</dd><small>hDP ${esc(device.protocolVersion || '—')}</small></div>
+        <div><dt>IP-Adresse</dt><dd>${esc(device.ipAddress || device.address || '—')}</dd><small>Versuch ${esc(device.reconnectAttempt || 0)}</small></div>
+        <div><dt>Laufzeit</dt><dd>${esc(uptime(device.uptimeSeconds))}</dd><small>${esc((device.lastBoot && device.lastBoot.reset_reason) || '—')}</small></div>
+        <div><dt>Freier Speicher</dt><dd>${esc(bytes(device.freeHeapBytes))}</dd><small>Revision ${esc(device.configRevision)}</small></div>
+        <div><dt>Firmware</dt><dd>${esc(firmware.version || device.firmwareVersion || '—')}</dd><small>${esc(firmware.channel || '—')}</small></div>
+        ${extraCells}
+      </dl>
+    </section>`;
+  }
+
   function firmwareCard(device) {
     const firmware = device.firmwareInfo || {};
     const status = device.firmwareStatus || {};
@@ -2942,11 +3648,146 @@ hdp-flash.exe --channel development</code></pre>
     </div>`;
   }
 
+  // Welche Messgrößen ein Sensortyp liefert, steht in der Firmware fest. Die
+  // Zuordnung hier vorzuhalten heißt, dass die Verknüpfung schon angelegt
+  // werden kann, bevor die erste Messung eingetroffen ist — sonst müsste man
+  // auf einen Messwert warten, um ihn verknüpfen zu dürfen.
+  const SENSOR_TYPE_MEASUREMENTS = Object.freeze({
+    dht11: ['temperature_millicelsius', 'humidity_millipercent'],
+    dht22: ['temperature_millicelsius', 'humidity_millipercent'],
+    ds18b20: ['temperature_millicelsius'],
+    bme280: ['temperature_millicelsius', 'humidity_millipercent', 'pressure_pascal'],
+    sht30: ['temperature_millicelsius', 'humidity_millipercent'],
+    sht31: ['temperature_millicelsius', 'humidity_millipercent'],
+    bh1750: ['illuminance_millilux'],
+    ina219: ['bus_voltage_microvolts', 'shunt_voltage_microvolts', 'current_microamps', 'power_microwatts'],
+    hx711: ['raw'],
+    vl53l0x: ['distance_millimeters'],
+    analog: ['raw'],
+  });
+
+  function sensorMeasurementKeys(device, sensor) {
+    const declared = SENSOR_TYPE_MEASUREMENTS[String(sensor.sensor_type)] || [];
+    const sample = device.sensorSamples && device.sensorSamples[sensor.sensor_id];
+    const measured = sample && sample.values ? Object.keys(sample.values) : [];
+    const bound = Object.keys((device.bindings.sensor || {})[sensor.sensor_id] || {});
+    return Array.from(new Set([...declared, ...measured, ...bound]));
+  }
+
+  function sensorBindingRows(device, sensors) {
+    const bindings = device.bindings.sensor || {};
+    return sensors.map((sensor, index) => {
+      const perSensor = bindings[sensor.sensor_id] || {};
+      const rows = sensorMeasurementKeys(device, sensor).map((key) => {
+        const meta = SENSOR_VALUE_META[key] || [key, ''];
+        const binding = perSensor[key] || {};
+        return `<div class="field hdp-span-full"><label>${esc(meta[0])}${meta[1] ? ` (${esc(meta[1])})` : ''}<input data-state-picker name="sensor_topic_${index}_${esc(key)}" value="${esc(binding.topic || '')}" placeholder="State auswählen"></label></div>`;
+      }).join('');
+      return `<section class="settings-card hdp-config-card">
+        <div class="settings-card-head"><span class="hdp-section-kicker">${esc(sensor.sensor_id)}</span><h2>Messwerte verknüpfen</h2><p class="settings-card-hint">${esc(sensor.sensor_type)} · alle ${esc(sensor.sample_interval_milliseconds)} ms. Jeder Messwert wird bei jeder Messung in den gewählten State geschrieben. Ohne State bleibt er ausschließlich im Zustandskatalog des Adapters.</p></div>
+        <input type="hidden" name="sensor_id_${index}" value="${esc(sensor.sensor_id)}">
+        <div class="hdp-form-grid">${rows || '<p class="settings-card-hint">Für diesen Sensortyp sind keine Messgrößen bekannt.</p>'}</div>
+      </section>`;
+    }).join('');
+  }
+
+  function renderSensorDevicePage(device) {
+    const sensors = device.hardwareConfig && Array.isArray(device.hardwareConfig.sensors)
+      ? device.hardwareConfig.sensors : [];
+    const cards = sensors.map((sensor) => {
+      const sample = device.sensorSamples && device.sensorSamples[sensor.sensor_id];
+      const values = Object.entries(sample && sample.values ? sample.values : {}).map(([key, value]) => {
+        const meta = SENSOR_VALUE_META[key] || [key, ''];
+        return `<div><dt>${esc(meta[0])}</dt><dd>${esc(value)}</dd><small>${esc(meta[1])}</small></div>`;
+      }).join('');
+      return `<section class="settings-card hdp-status-card"><div class="settings-card-head"><h2>${esc(sensor.sensor_id)}</h2><p class="settings-card-hint">${esc(sensor.sensor_type)} · alle ${esc(sensor.sample_interval_milliseconds)} ms</p></div>
+        <dl class="hdp-status-grid"><div><dt>Status</dt><dd>${esc(sample ? sample.status : 'Noch keine Messung')}</dd><small>${esc(sample && sample.error || '')}</small></div>${values}</dl></section>`;
+    }).join('');
+    const binaryPins = device.hardwareConfig && Array.isArray(device.hardwareConfig.pins)
+      ? device.hardwareConfig.pins : [];
+    return `<div class="hdp-device-page"><div class="hdp-device-head"><div>
+      <a class="hdp-back-link" href="/adapter/instance/INSTANCE/manage">← Geräteverwaltung</a>
+      <h1>${esc(device.name || device.deviceId)}</h1><p class="hdp-device-meta"><code>${esc(device.deviceId)}</code><span>Sensoren</span><span>Revision ${esc(device.configRevision)}</span></p>
+      </div><button type="button" class="button-secondary hdp-hardware-open" onclick="hdpOpenHardware()">Hardware einrichten</button></div>
+      ${device.lastError ? `<p class="error-text">${esc(device.lastError)}</p>` : ''}
+      ${commonStatusCard(device, 'sensor-reading-v1')}
+      ${cards || '<section class="settings-card"><h2>Noch keine Sensoren eingerichtet</h2></section>'}
+      <form class="hdp-settings-form" method="post" action="/adapter/instance/INSTANCE/manage/api/devices/${encodeURIComponent(device.deviceId)}/bindings">
+        ${sensors.length ? `<section class="settings-card hdp-config-card"><div class="settings-card-head"><span class="hdp-section-kicker">01 · Zuordnung</span><h2>Messwerte auf States</h2><p class="settings-card-hint">Die Umrechnung in die angegebene Einheit übernimmt der Adapter; geschrieben wird der fertige Wert.</p></div></section>
+        ${sensorBindingRows(device, sensors)}` : ''}
+        ${binaryPins.length ? `<section class="settings-card hdp-config-card"><div class="settings-card-head"><span class="hdp-section-kicker">02 · GPIOs</span><h2>Taster, Schalter und Ausgänge</h2></div></section>
+        ${binaryBindingRows(device)}` : ''}
+        ${updateAutomationSection(device, sensors.length || binaryPins.length ? '03' : '01')}
+        <div class="hdp-save-bar"><p>Messwerte und Zuordnungen werden ausschließlich in homeESS ausgewertet.</p><button>Einstellungen speichern</button></div>
+      </form>
+      ${firmwareCard(device)}
+      <section class="settings-card hdp-danger-card"><form method="post" action="/adapter/instance/INSTANCE/manage/api/devices/${encodeURIComponent(device.deviceId)}/unpair" onsubmit="return confirm('Gerät wirklich entkoppeln?');"><input type="hidden" name="confirmation" value="ENTKOPPELN"><button class="button-danger">Gerät entkoppeln</button></form></section>
+      ${hardwareDialog(device)}</div>`;
+  }
+
+  function fingerprintActionFields(id, binding) {
+    const key = String(id);
+    const action = binding.action || 'toggle';
+    return `<div class="hdp-form-grid">
+      <div class="field"><label>Name<input name="fingerprint_name_${key}" maxlength="100" value="${esc(binding.name || '')}" placeholder="z. B. rechter Zeigefinger"></label></div>
+      <div class="field hdp-span-full"><label>State<input data-state-picker name="fingerprint_topic_${key}" value="${esc(binding.topic || '')}" placeholder="State auswählen"></label></div>
+      <div class="field"><label>Aktion<select name="fingerprint_action_${key}">
+        <option value="toggle"${action === 'toggle' ? ' selected' : ''}>State umschalten</option>
+        <option value="set"${action === 'set' ? ' selected' : ''}>Bestimmten Wert schreiben</option>
+        <option value="counter"${action === 'counter' ? ' selected' : ''}>Wert hoch-/runterzählen</option>
+      </select></label></div>
+      <div class="field"><label>Setzwert (JSON)<input name="fingerprint_set_value_${key}" value="${esc(JSON.stringify(binding.set_value == null ? true : binding.set_value))}"></label></div>
+      <div class="field"><label>Zählschritt<input type="number" step="any" name="fingerprint_counter_step_${key}" value="${esc(binding.counter_step == null ? 1 : binding.counter_step)}"></label></div>
+    </div>`;
+  }
+
+  function renderFingerprintDevicePage(device) {
+    const status = device.fingerprintStatus || {};
+    const readiness = fingerprintReadiness(device);
+    const occupied = Array.from(new Set([
+      ...(Array.isArray(status.occupied) ? status.occupied : []),
+      ...Object.keys(device.bindings.fingerprint || {}).map(Number),
+    ])).filter(Number.isInteger).sort((a, b) => a - b);
+    const cards = occupied.map((id) => {
+      const binding = normalizeFingerprintBinding(device.bindings.fingerprint[String(id)] || {});
+      return `<section class="settings-card hdp-config-card"><div class="settings-card-head hdp-card-head"><div><span class="hdp-section-kicker">Vorlage ${id}</span><h2>${esc(binding.name || `Finger ${id}`)}</h2></div><button class="button-danger" formmethod="post" formaction="/adapter/instance/INSTANCE/manage/api/devices/${encodeURIComponent(device.deviceId)}/fingerprints/delete/${id}" onclick="return confirm('Fingerabdruck-Vorlage ${id} wirklich löschen?');" ${readiness.ready ? '' : 'disabled'}>Vorlage löschen</button></div>${fingerprintActionFields(id, binding)}</section>`;
+    }).join('');
+    const enrollment = device.fingerprintEnrollment || {};
+    const binaryPins = device.hardwareConfig && Array.isArray(device.hardwareConfig.pins)
+      ? device.hardwareConfig.pins : [];
+    const last = device.lastFingerprint || {};
+    return `<div class="hdp-device-page" data-hdp-fingerprint-page data-hdp-fingerprint-active="${device.pendingFingerprintBinding || status.enrolling ? 'true' : 'false'}"><div class="hdp-device-head"><div>
+      <a class="hdp-back-link" href="/adapter/instance/INSTANCE/manage">← Geräteverwaltung</a>
+      <h1>${esc(device.name || device.deviceId)}</h1><p class="hdp-device-meta"><code>${esc(device.deviceId)}</code><span>R503 Fingerabdrucksensor</span><span>Revision ${esc(device.configRevision)}</span></p>
+      </div><button type="button" class="button-secondary hdp-hardware-open" onclick="hdpOpenHardware()">Hardware einrichten</button></div>
+      ${device.lastError ? `<p class="error-text">${esc(device.lastError)}</p>` : ''}
+      ${commonStatusCard(device, 'fingerprint-event-v1')}
+      <section class="settings-card hdp-status-card"><div class="settings-card-head hdp-card-head"><div><h2>Sensorstatus</h2><p class="settings-card-hint">Vorlagen liegen ausschließlich verschlüsselt im R503-Modul; der Adapter speichert Namen und Aktionen.</p></div><span class="status-badge ${device.online && status.online ? 'status-ok' : 'status-off'}">${device.online && status.online ? 'Bereit' : 'Offline'}</span></div>
+        <dl class="hdp-status-grid"><div><dt>Belegung</dt><dd>${esc(status.count == null ? '—' : `${status.count} / ${status.capacity}`)}</dd><small>Vorlagen im Modul</small></div><div><dt>Anlernen</dt><dd>${esc(status.enrolling ? 'Läuft' : enrollment.stage || 'Bereit')}</dd><small>${esc(enrollment.error || status.last_error || '')}</small></div><div><dt>Letzte Erkennung</dt><dd>${esc(last.unknown ? 'Unbekannt' : last.template_id == null ? '—' : `Vorlage ${last.template_id}`)}</dd><small>${esc(last.confidence == null ? '' : `Konfidenz ${last.confidence}`)}</small></div></dl>
+        ${readiness.ready ? `<p class="settings-card-hint">Verdrahtung: ${esc(readiness.wiring)}</p>` : `<p class="error-text">${esc(readiness.message)}</p>`}
+      </section>
+      <section class="settings-card hdp-config-card"><div class="settings-card-head"><span class="hdp-section-kicker">01 · Lernen</span><h2>Neuen Fingerabdruck anlernen</h2><p class="settings-card-hint">Nach Start denselben Finger zweimal auflegen und jeweils wieder abheben. Erst nach erfolgreichem Speichern wird die Zuordnung angelegt.</p></div>
+        <form method="post" action="/adapter/instance/INSTANCE/manage/api/devices/${encodeURIComponent(device.deviceId)}/fingerprints/enroll"><div class="hdp-form-grid"><div class="field"><label>Vorlagen-ID<input type="number" min="0" max="255" name="template_id" placeholder="automatisch"></label></div><div class="field"><label>Name<input name="name" maxlength="100" placeholder="z. B. linker Daumen"></label></div><div class="field hdp-span-full"><label>State<input data-state-picker name="topic" placeholder="State auswählen"></label></div><div class="field"><label>Aktion<select name="action"><option value="toggle">State umschalten</option><option value="set">Bestimmten Wert schreiben</option><option value="counter">Wert hoch-/runterzählen</option></select></label></div><div class="field"><label>Setzwert (JSON)<input name="set_value" value="true"></label></div><div class="field"><label>Zählschritt<input type="number" step="any" name="counter_step" value="1"></label></div></div><div class="button-row"><button ${device.online && readiness.ready && !status.enrolling ? '' : 'disabled'}>Anlernen starten</button><button type="submit" class="button-secondary" formaction="/adapter/instance/INSTANCE/manage/api/devices/${encodeURIComponent(device.deviceId)}/fingerprints/cancel" ${status.enrolling ? '' : 'disabled'}>Abbrechen</button></div></form>
+      </section>
+      <form class="hdp-settings-form" method="post" action="/adapter/instance/INSTANCE/manage/api/devices/${encodeURIComponent(device.deviceId)}/bindings">
+        <section class="settings-card hdp-config-card"><div class="settings-card-head"><span class="hdp-section-kicker">02 · Erkennungen</span><h2>Gelernte Finger und Aktionen</h2><p class="settings-card-hint">Eine positive Erkennung wirkt einmalig wie ein Tasterdruck. Toggle und Zähler warten auf den aktuellen Statewert.</p></div></section>
+        ${cards || '<section class="settings-card"><h2>Noch kein Finger angelernt</h2></section>'}
+        ${binaryPins.length ? `<section class="settings-card hdp-config-card"><div class="settings-card-head"><h2>Freie Binary-I/O-Pins</h2></div>${binaryBindingRows(device)}</section>` : ''}
+        ${updateAutomationSection(device, '03')}
+        <div class="hdp-save-bar"><button>Zuordnungen speichern</button></div>
+      </form>
+      ${firmwareCard(device)}
+      <section class="settings-card hdp-danger-card"><form method="post" action="/adapter/instance/INSTANCE/manage/api/devices/${encodeURIComponent(device.deviceId)}/unpair" onsubmit="return confirm('Gerät wirklich entkoppeln?');"><input type="hidden" name="confirmation" value="ENTKOPPELN"><button class="button-danger">Gerät entkoppeln</button></form></section>
+      ${hardwareDialog(device)}</div>`;
+  }
+
   function renderDevicePage(device) {
     // Der konfigurierte Gerätetyp entscheidet, nicht das Runtime-Profil: Nach
     // einem Typwechsel folgt das Profil erst mit dem Geräteneustart.
     if (isBinaryDevice(device)) return renderBinaryDevicePage(device);
     if (isArgbDevice(device)) return renderArgbDevicePage(device);
+    if (isSensorDevice(device)) return renderSensorDevicePage(device);
+    if (isFingerprintDevice(device)) return renderFingerprintDevicePage(device);
     const binding = device.bindings;
     const firmware = device.firmwareInfo || {};
     const firmwareStatus = device.firmwareStatus || {};
@@ -3126,6 +3967,8 @@ hdp-flash.exe --channel development</code></pre>
               });
             });
             hdpSyncArgbInputs();
+            hdpSyncSensorFields();
+            hdpSyncFingerprintPins();
           }
           select.addEventListener('change', sync);
           sync();
@@ -3150,6 +3993,78 @@ hdp-flash.exe --channel development</code></pre>
         function hdpBindArgbDataPin() {
           var pinSelect = document.getElementById('hdp-argb-data-pin');
           if (pinSelect) pinSelect.addEventListener('change', hdpSyncArgbInputs);
+        }
+        function hdpSyncFingerprintPins() {
+          var deviceType = document.getElementById('hdp-device-type');
+          var active = !deviceType || deviceType.value === 'fingerprint_reader';
+          var roles = Array.from(document.querySelectorAll('[data-hdp-fingerprint-role]'));
+          var selected = {};
+          roles.forEach(function (field) { selected[field.getAttribute('data-hdp-fingerprint-role')] = field.value; });
+          var enabledBinary = new Set();
+          document.querySelectorAll('[data-hdp-fingerprint-pin-row]').forEach(function (row) {
+            var checkbox = row.querySelector('input[type="checkbox"]');
+            if (checkbox && checkbox.checked) enabledBinary.add(row.getAttribute('data-hdp-fingerprint-pin-row'));
+          });
+          roles.forEach(function (field) {
+            var ownRole = field.getAttribute('data-hdp-fingerprint-role');
+            field.disabled = !active;
+            Array.from(field.options).forEach(function (option) {
+              if (!option.value) { option.disabled = false; return; }
+              var usedByOtherRole = Object.keys(selected).some(function (role) {
+                return role !== ownRole && selected[role] === option.value;
+              });
+              var usedByBinary = enabledBinary.has(option.value) && selected[ownRole] !== option.value;
+              option.disabled = active && (usedByOtherRole || usedByBinary);
+            });
+          });
+          var reserved = new Set(Object.keys(selected).map(function (role) { return selected[role]; })
+            .filter(function (value) { return value !== ''; }));
+          document.querySelectorAll('[data-hdp-fingerprint-pin-row]').forEach(function (row) {
+            var gpio = row.getAttribute('data-hdp-fingerprint-pin-row');
+            var unavailable = reserved.has(gpio);
+            var checkbox = row.querySelector('input[type="checkbox"]');
+            if (unavailable && checkbox) checkbox.checked = false;
+            var enabled = active && !unavailable && checkbox && checkbox.checked;
+            var direction = row.querySelector('[name^="fingerprint_binary_direction_"]');
+            var inputType = row.querySelector('[name^="fingerprint_binary_input_type_"]');
+            row.hidden = !active || unavailable;
+            if (checkbox) checkbox.disabled = !active || unavailable;
+            if (direction) direction.disabled = !enabled;
+            if (inputType) inputType.disabled = !enabled || (direction && direction.value === 'output');
+          });
+        }
+        function hdpBindFingerprintPins() {
+          document.querySelectorAll('[data-hdp-fingerprint-role]').forEach(function (field) {
+            field.addEventListener('change', hdpSyncFingerprintPins);
+          });
+          document.querySelectorAll('[data-hdp-fingerprint-pin-row] input, [data-hdp-fingerprint-pin-row] select')
+            .forEach(function (field) { field.addEventListener('change', hdpSyncFingerprintPins); });
+          hdpSyncFingerprintPins();
+        }
+        function hdpSyncSensorFields() {
+          var deviceType = document.getElementById('hdp-device-type');
+          var sensorDeviceActive = !deviceType || deviceType.value === 'sensors';
+          document.querySelectorAll('[data-hdp-sensor-row]').forEach(function (row) {
+            var typeSelect = row.querySelector('[data-hdp-sensor-type]');
+            var sensorType = typeSelect ? typeSelect.value : '';
+            row.querySelectorAll('[data-hdp-sensor-types]').forEach(function (field) {
+              var visible = sensorDeviceActive && (field.getAttribute('data-hdp-sensor-types') || '')
+                .split(/\\s+/).indexOf(sensorType) >= 0;
+              field.hidden = !visible;
+              field.querySelectorAll('input, select, textarea').forEach(function (input) {
+                input.disabled = !visible;
+              });
+            });
+            var address = row.querySelector('[name^="sensor_address_"]');
+            var defaults = { bme280: '0x76', sht30: '0x44', sht31: '0x44', bh1750: '0x23', ina219: '0x40', vl53l0x: '0x29' };
+            if (address) address.placeholder = defaults[sensorType] || '';
+          });
+        }
+        function hdpBindSensorFields() {
+          document.querySelectorAll('[data-hdp-sensor-type]').forEach(function (select) {
+            select.addEventListener('change', hdpSyncSensorFields);
+          });
+          hdpSyncSensorFields();
         }
         function hdpUpdateColorPreview() {
           var preview = document.getElementById('hdp-color-preview');
@@ -3212,9 +4127,18 @@ hdp-flash.exe --channel development</code></pre>
           }
           window.setTimeout(tick, 1000);
         }());
+        (function hdpRefreshFingerprintEnrollment() {
+          var page = document.querySelector('[data-hdp-fingerprint-page]');
+          if (!page || page.getAttribute('data-hdp-fingerprint-active') !== 'true') return;
+          window.setTimeout(function () {
+            if (!document.hidden) location.reload();
+          }, 1500);
+        }());
         hdpBindMode('hdp-color-mode', 'data-hdp-color-panel');
         hdpBindMode('hdp-brightness-mode', 'data-hdp-brightness-panel');
         hdpBindArgbDataPin();
+        hdpBindSensorFields();
+        hdpBindFingerprintPins();
         hdpBindHardwareType();
         // Eine aus dem Verlauf wiederhergestellte Seite behält den DOM-Zustand
         // von damals — inklusive eines noch deaktivierten Knopfes. Ohne dieses
@@ -3505,27 +4429,126 @@ hdp-flash.exe --channel development</code></pre>
       if (method === 'GET' && action === 'config') return { status: 200, json: await clientFor(requirePaired(id)).config() };
       if (method === 'POST' && action === 'config') {
         const device = requirePaired(id);
+        const nextConfig = deviceFromForm(request.body, device);
         await saveHardwareConfig(id, {
           expected_revision: request.body.revision,
           device_name: request.body.device_name,
-          config: deviceFromForm(request.body, device),
+          config: nextConfig,
         });
+        if (nextConfig.device_type === 'sensors') {
+          device.sensorCalibration = {};
+          nextConfig.sensors.forEach((sensor) => {
+            const index = Array.from({ length: 32 }, (_, candidate) => candidate)
+              .find((candidate) => String(request.body[`sensor_id_${candidate}`] || '').trim() === sensor.sensor_id);
+            device.sensorCalibration[sensor.sensor_id] = {
+              scale: number(request.body[`sensor_scale_${index == null ? 0 : index}`], 1),
+              offset: number(request.body[`sensor_offset_${index == null ? 0 : index}`], 0),
+            };
+          });
+          persist();
+        }
         return { status: 303, redirect: `${managementBase}/device/${encodeURIComponent(id)}` };
       }
       if (method === 'PUT' && action === 'config') return { status: 200, json: await saveHardwareConfig(id, request.body) };
+      if (method === 'POST' && action === 'fingerprints/enroll') {
+        const device = requirePaired(id);
+        requireFingerprintReady(device);
+        const status = device.fingerprintStatus || {};
+        const capacity = Number.isInteger(status.capacity) && status.capacity > 0
+          ? status.capacity : Number(device.manifest && device.manifest.limits
+            && device.manifest.limits.maximum_fingerprint_templates) || 256;
+        const occupied = new Set(Array.isArray(status.occupied) ? status.occupied : []);
+        const requested = String(request.body.template_id == null ? '' : request.body.template_id).trim();
+        const templateId = requested ? number(requested, -1)
+          : Array.from({ length: capacity }, (_, index) => index).find((candidate) => !occupied.has(candidate));
+        if (!Number.isInteger(templateId) || templateId < 0 || templateId >= capacity
+            || occupied.has(templateId)) {
+          throw Object.assign(new Error('Vorlagen-ID ist ungültig, belegt oder der Speicher ist voll.'), {
+            code: 'FINGERPRINT_OPERATION_REJECTED', status: 409,
+          });
+        }
+        let setValue = true;
+        const raw = String(request.body.set_value == null ? 'true' : request.body.set_value);
+        try { setValue = JSON.parse(raw); } catch (_) { setValue = raw; }
+        const pendingBinding = normalizeFingerprintBinding({
+          name: request.body.name, topic: request.body.topic,
+          action: request.body.action, set_value: setValue,
+          counter_step: number(request.body.counter_step, 1),
+        });
+        await device.connection.request('fingerprint.enroll.begin', {
+          config_revision: device.configRevision, template_id: templateId,
+        }, 5000);
+        device.pendingFingerprintBinding = pendingBinding;
+        persist();
+        return { status: 303, redirect: `${managementBase}/device/${encodeURIComponent(id)}` };
+      }
+      if (method === 'POST' && action === 'fingerprints/cancel') {
+        const device = requirePaired(id);
+        requireFingerprintReady(device);
+        await device.connection.request('fingerprint.enroll.cancel', {
+          config_revision: device.configRevision,
+        }, 5000);
+        device.pendingFingerprintBinding = null;
+        persist();
+        return { status: 303, redirect: `${managementBase}/device/${encodeURIComponent(id)}` };
+      }
+      if (method === 'POST' && /^fingerprints\/delete\/\d+$/.test(action)) {
+        const device = requirePaired(id);
+        requireFingerprintReady(device);
+        const templateId = Number(action.split('/').at(-1));
+        try {
+          await device.connection.request('fingerprint.template.delete', {
+            config_revision: device.configRevision, template_id: templateId,
+          }, 5000);
+        } catch (error) {
+          // Kennt das Modul die Vorlage nicht mehr, ist das Ziel bereits
+          // erreicht. Übrig bleibt dann nur die verwaiste Zuordnung im
+          // Adapter, und genau die wird hier aufgeräumt. Jeder andere Fehler
+          // bleibt ein Fehler.
+          const orphan = error && error.code === 'FINGERPRINT_OPERATION_REJECTED'
+            && /not occupied/i.test(String(error.message || ''));
+          if (!orphan) throw error;
+          if (device.bindings.fingerprint
+              && Object.prototype.hasOwnProperty.call(device.bindings.fingerprint, String(templateId))) {
+            delete device.bindings.fingerprint[String(templateId)];
+            subscribeSources(device);
+            persist();
+          }
+        }
+        return { status: 303, redirect: `${managementBase}/device/${encodeURIComponent(id)}` };
+      }
       if ((method === 'POST' || method === 'PUT') && action === 'bindings') {
         const device = requirePaired(id);
         const input = method === 'POST' ? bindingsFromForm(request.body, device) : request.body;
+        // Nicht jede Geräteseite führt die Update-Einstellungen mit. Fehlt ein
+        // Feld im Formular, ist das keine Abwahl, sondern schlicht keine
+        // Aussage — der gespeicherte Wert bleibt dann stehen. Sonst setzte ein
+        // Klick auf "Zuordnungen speichern" den Release-Kanal auf "stable"
+        // zurück und sperrte damit jedes weitere Update.
+        const kept = (device.updateSettings || {});
+        const keptWindow = (kept.maintenance_window || {});
+        const has = (key) => Object.prototype.hasOwnProperty.call(request.body, key);
         const updateSettings = method === 'POST' ? {
-          mode: ['manual','notify_only','automatic'].includes(request.body.update_mode) ? request.body.update_mode : 'manual',
-          channel: ['stable','beta','development'].includes(request.body.update_channel) ? request.body.update_channel : 'stable',
-          retry_count: Math.max(0, Math.min(10, Math.round(number(request.body.update_retry_count, 2)))),
-          update_when_device_returns_online: bool(request.body.update_when_online),
-          maintenance_window: {
-            enabled: bool(request.body.maintenance_enabled),
-            start: String(request.body.maintenance_start || '02:00'),
-            end: String(request.body.maintenance_end || '04:00'),
-          },
+          mode: ['manual','notify_only','automatic'].includes(request.body.update_mode)
+            ? request.body.update_mode : (kept.mode || 'manual'),
+          channel: ['stable','beta','development'].includes(request.body.update_channel)
+            ? request.body.update_channel : (kept.channel || 'stable'),
+          retry_count: has('update_retry_count')
+            ? Math.max(0, Math.min(10, Math.round(number(request.body.update_retry_count, 2))))
+            : (Number.isInteger(kept.retry_count) ? kept.retry_count : 2),
+          update_when_device_returns_online: has('update_when_online')
+            ? bool(request.body.update_when_online)
+            : kept.update_when_device_returns_online === true,
+          maintenance_window: has('maintenance_start') || has('maintenance_end')
+            || has('maintenance_enabled') ? {
+              enabled: bool(request.body.maintenance_enabled),
+              start: String(request.body.maintenance_start || '02:00'),
+              end: String(request.body.maintenance_end || '04:00'),
+            } : {
+              enabled: keptWindow.enabled === true,
+              start: String(keptWindow.start || '02:00'),
+              end: String(keptWindow.end || '04:00'),
+            },
         } : request.body.updateSettings;
         saveBindings(id, { bindings: input.bindings || input, updateSettings });
         if (method === 'POST') return { status: 303, redirect: `${managementBase}/device/${encodeURIComponent(id)}` };
@@ -3691,7 +4714,10 @@ module.exports._test = {
   binaryBoolean, normalizeBinaryBindings, binaryEventTarget,
   defaultArgbBinding, normalizeArgbBindings, renderArgbFrame, argbPixelCount,
   hexColor, colorHex, argbColor,
-  deviceTypeOf, isBinaryDevice, isArgbDevice, supportedDeviceTypes, binaryPinSlots,
+  deviceTypeOf, isBinaryDevice, isArgbDevice, isSensorDevice, isFingerprintDevice,
+  normalizeFingerprintBinding, normalizeFingerprintBindings,
+  fingerprintWiring, fingerprintReadiness,
+  supportedDeviceTypes, binaryPinSlots, applySensorSample, sensorUiFields,
   insideMaintenanceWindow, otaInProgress, releaseInterruptedOta,
   reconcileOtaProgress,
   applyDeviceStatus,

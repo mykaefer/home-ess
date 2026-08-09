@@ -8,8 +8,7 @@
 
 Inhalt: [Überblick](#überblick) · [Verzeichnislayout](#verzeichnislayout) ·
 [Manifest](#das-manifest-adapterjson) · [Einstiegsdatei](#die-einstiegsdatei-indexjs) ·
-[Host-API](#die-host-api) · [Hardwaredialoge](#capability-gesteuerte-hardwaredialoge) ·
-[States & Adressen](#states--adressen) ·
+[Host-API](#die-host-api) · [States & Adressen](#states--adressen) ·
 [Topics & Routing](#topics--routing) · [Instanzen & Einstellungen](#instanzen--einstellungen) ·
 [Lebenszyklus & Isolation](#lebenszyklus--isolation) · [Checkliste](#checkliste-für-einen-neuen-adapter)
 
@@ -215,77 +214,6 @@ einer adapterspezifischen Wurzelklasse kapseln, beispielsweise `.mein-adapter`.
 restriktive temporäre Datei gestreamt; der Adapter erhält
 `request.upload={path,size,filename}`. Der Host löscht die Datei nach Abschluss.
 Andere Adapterdateien oder freie Serverpfade werden dadurch nicht veröffentlicht.
-
-## Capability-gesteuerte Hardwaredialoge
-
-Adapter mit eigener `managementPage` dürfen Geräte unterstützen, deren
-Hardwarefunktion erst zur Laufzeit gewählt oder vom Gerät gemeldet wird. Solche
-Adapter leiten den Dialog aus den tatsächlich ausgehandelten Fähigkeiten ab,
-nicht aus einer fest verdrahteten Gesamtmenge aller theoretisch unterstützten
-Optionen. Ein Protokollmanifest des Geräts kann dafür beispielsweise
-Gerätetypen, Sensortypen, zulässige Pins, Busse, Adressen und Mengenlimits
-ausweisen. Dieses Gerätemanifest ist vom homeESS-Manifest `adapter.json` getrennt
-und bleibt Bestandteil des jeweiligen Geräteprotokolls.
-
-Für capability-gesteuerte Formulare gelten folgende Regeln:
-
-- Ein Gerät hat zu einem Zeitpunkt genau eine aktive Hardwarefunktion, sofern
-  das Geräteprotokoll nicht ausdrücklich mehrere gleichzeitig erlaubt.
-- Nach Wahl eines Geräte- oder Sensortyps zeigt der Dialog ausschließlich
-  gemeinsame Felder und die für diesen Typ erforderlichen Felder. Unbelegte
-  Plätze zeigen nur die Auswahl, mit der sie aktiviert werden.
-- Nicht zutreffende Felder werden nicht nur verborgen, sondern im Formular
-  deaktiviert und nicht übertragen. Werte eines zuvor gewählten Typs dürfen
-  dadurch nicht unbemerkt in die neue Konfiguration gelangen.
-- Der Adapter validiert die resultierende Konfiguration serverseitig erneut.
-  Dazu gehören Typen und Wertebereiche ebenso wie eindeutige IDs, gemeinsame
-  Busparameter, zulässige Adressen, Pinüberschneidungen und die vom Gerät
-  gemeldeten Limits. Sichtbarkeit im Browser ist keine Sicherheits- oder
-  Gültigkeitsprüfung.
-- Belegt ein Gerätetyp GPIOs für feste Rollen wie Datenleitung, UART oder
-  Wakeup, darf die Oberfläche diese GPIOs nicht zugleich als freie Binary-I/O
-  anbieten. Rollen-Auswahlen und freie Pinliste werden bei jeder Änderung
-  gegenseitig abgeglichen; die serverseitige Kollisionsprüfung bleibt dennoch
-  zwingend.
-- Der Adapter sendet nur den aktiven, kanonischen Konfigurationszweig an das
-  Gerät. Adapterseitige Zuordnungen, Kalibrierfaktoren oder fachliche
-  Umrechnungen werden getrennt persistiert, wenn sie nicht zur elektrischen
-  Hardwarekonfiguration gehören.
-- Ändert sich die aktive Hardwarekonfiguration, aktualisiert der Adapter seinen
-  State-Katalog mit `host.setStates(...)`. Entfernte Kanäle dürfen nicht als
-  scheinbar weiterhin verfügbare States stehen bleiben.
-
-Zeitkritische elektrische Protokolle werden grundsätzlich dort ausgewertet, wo
-das verlässliche Timing verfügbar ist. Bei Mikrocontrollern bedeutet das in der
-Regel: Initialisierung, Buszugriff, CRC und Datenblattumrechnung laufen auf dem
-Gerät; der Adapter erhält versionierte Pakete mit Status und normierten oder
-ausdrücklich als roh gekennzeichneten Messwerten. Eine Übertragung einzelner
-Pegelwechsel zur nachträglichen Auswertung im JavaScript-Adapter ist nur dann
-zulässig, wenn das Gerät die Flanken hardwaregestützt erfasst, mit Zeitstempeln
-versieht und als begrenztes, vollständig definiertes Paket überträgt. Netzwerk-
-und JavaScript-Timing selbst sind keine belastbare Zeitbasis für Sensorbusse.
-
-Der hDP-Adapter ist die Referenz für dieses Muster: Seine Universal-Firmware
-meldet Fähigkeiten und wertet Sensorbusse lokal aus, während homeESS
-Geräteauswahl, freie Binary-I/O-Pins, State-Veröffentlichung und fachliche
-Rohwertkalibrierung übernimmt. Die konkreten hDP-Paket- und Sensortypen bleiben
-im hDP-Protokolldokument beschrieben und werden nicht Teil dieser allgemeinen
-Adapter-API.
-
-Dasselbe Zuständigkeitsmodell gilt für lokale Identifikationsmodule: Zeitkritische
-Erfassung, Merkmalsextraktion, Vergleich und Vorlagenspeicherung laufen im Modul
-beziehungsweise in der Gerätefirmware. Der Adapter darf einen ausdrücklichen
-Lern- und Löschworkflow anbieten und erhält danach nur eine Vorlagen-ID samt
-Qualitätswert. Namen, State-Zuordnungen und Aktionen wie Setzen, Umschalten oder
-Zählen bleiben adapterseitig. Biometrische Rohbilder oder Merkmalsdaten dürfen
-nicht als normale Adaptereinstellungen persistiert oder über den State-Katalog
-veröffentlicht werden.
-Lern-, Lösch- und Erkennungsaktionen dürfen in der Verwaltung erst angeboten
-werden, wenn das Identifikationsmodul selbst betriebsbereit gemeldet ist. Ein
-verbundener Mikrocontroller allein genügt nicht. Modulfehler werden mit ihrer
-konkreten Ursache und der aktuell erwarteten Schnittstellenbelegung angezeigt;
-die serverseitige Aktionsprüfung bleibt auch bei deaktivierter Schaltfläche
-verpflichtend.
 
 ## Die Einstiegsdatei (`index.js`)
 
@@ -513,9 +441,6 @@ ihre eigenen Oberflächen einbauen.
 7. Bei komplexer Verwaltung `managementPage` deklarieren und
    `handleManagementRequest` implementieren; Secrets ausschließlich über den
    Secret-Store und Quellen über `subscribeState` anbinden.
-8. Bei capability-gesteuerter Hardware nur relevante Felder anzeigen und
-   übertragen, die kanonische Konfiguration serverseitig validieren und den
-   State-Katalog nach Hardwareänderungen vollständig erneuern.
 
 Als vollständiges, lauffähiges Beispiel dient der mitgelieferte
 **Demo-Adapter** unter [`/adapter/demo/`](adapter/demo/).
