@@ -477,24 +477,6 @@ test('fingerprint-event-v1 validiert R503-Hardware, LED-Szenen und Ereignisse', 
   const helpers = createHdpAdapter._test;
   assert.equal(helpers.deviceTypeOf({ hardwareConfig: fingerprintConfig() }), 'fingerprint_reader');
   assert.ok(helpers.supportedDeviceTypes(manifest).includes('fingerprint_reader'));
-  const timeout = helpers.fingerprintReadiness({
-    hardwareConfig: {
-      ...fingerprintConfig(), uart: { rx_pin: 2, tx_pin: 4 }, wakeup_pin: 13,
-    },
-    fingerprintStatus: { online: false, last_error: 'uart_timeout' },
-  });
-  assert.equal(timeout.ready, false);
-  assert.match(timeout.message, /R503 antwortet nicht über UART/);
-  assert.match(timeout.message, /R503 TX → ESP GPIO 2/);
-  assert.match(timeout.message, /R503 RX → ESP GPIO 4/);
-  assert.deepEqual(timeout.details, {
-    module_online: false, last_error: 'uart_timeout',
-    rx_pin: 2, tx_pin: 4, wakeup_pin: 13,
-  });
-  assert.equal(helpers.fingerprintReadiness({
-    hardwareConfig: fingerprintConfig(),
-    fingerprintStatus: { online: true, last_error: null },
-  }).ready, true);
   assert.deepEqual(helpers.normalizeFingerprintBindings({ fingerprint: {
     7: { name: 'Daumen', topic: 'mqtt://main/door', action: 'counter', counter_step: -1 },
     bad: { topic: 'ignored' },
@@ -2288,15 +2270,9 @@ test('Geräteverwaltung schaltet Seite und Hardwaredialog exklusiv auf den Gerä
     start() {} stop() {} refresh() {}
   }
   class FakeConnection extends EventEmitter {
-    constructor() { super(); this.ready = false; }
     start() { FakeConnection.last = this; }
     stop() {} sendState() { return false; } updateDevice() {}
-    async request(type, payload) {
-      FakeConnection.requests.push({ type, payload });
-      return { type: 'fingerprint.command.accepted', payload: { action: 'enroll' } };
-    }
   }
-  FakeConnection.requests = [];
   // Firmware 0.4.0: boot-dispatch-v1, Profil folgt erst nach dem Neustart.
   let deviceManifest = binaryManifest('pixel-timeline-v1');
   let remoteConfig = outputConfig();
@@ -2495,16 +2471,6 @@ test('Geräteverwaltung schaltet Seite und Hardwaredialog exklusiv auf den Gerä
     configRevision: remoteConfig.revision, online: true,
   });
   await settle();
-  FakeConnection.last.ready = true;
-  FakeConnection.last.emit('online');
-  FakeConnection.last.emit('fingerprint', {
-    type: 'fingerprint.status',
-    payload: {
-      config_revision: remoteConfig.revision,
-      online: false, enrolling: false, capacity: 0, template_count: 0,
-      occupied_slots: [], last_error: 'uart_timeout',
-    },
-  });
   const fingerprint = await pageFor();
   assert.match(fingerprint.body,
     /<select id="hdp-fingerprint-wakeup-pin" name="fingerprint_wakeup_pin"/);
@@ -2521,38 +2487,6 @@ test('Geräteverwaltung schaltet Seite und Hardwaredialog exklusiv auf den Gerä
   assert.match(fingerprint.script, /function hdpSyncFingerprintPins/);
   assert.match(fingerprint.script, /usedByOtherRole/);
   assert.match(fingerprint.script, /usedByBinary/);
-  assert.match(fingerprint.body, /R503 TX → ESP GPIO 13/);
-  assert.match(fingerprint.body, /R503 RX → ESP GPIO 15/);
-  assert.match(fingerprint.body, /<button disabled>Anlernen starten<\/button>/);
-  assert.match(fingerprint.body, /R503 antwortet nicht über UART/);
-  const rejectedEnrollment = await adapter.handleManagementRequest({
-    method: 'POST', path: `/api/devices/${DEVICE_ID}/fingerprints/enroll`,
-    basePath: '/adapter/instance/1/manage', access: { canWrite: true },
-    body: { template_id: '0', name: 'Testfinger', topic: 'door/open', action: 'toggle' },
-  });
-  assert.equal(rejectedEnrollment.status, 409);
-  assert.equal(rejectedEnrollment.json.code, 'FINGERPRINT_OPERATION_REJECTED');
-  assert.equal(rejectedEnrollment.json.details.last_error, 'uart_timeout');
-  assert.match(rejectedEnrollment.json.error, /R503 TX → ESP GPIO 13/);
-
-  FakeConnection.last.emit('fingerprint', {
-    type: 'fingerprint.status',
-    payload: {
-      config_revision: remoteConfig.revision,
-      online: true, enrolling: false, capacity: 200, template_count: 0,
-      occupied_slots: [], last_error: null,
-    },
-  });
-  const readyFingerprint = await pageFor();
-  assert.match(readyFingerprint.body, /<button >Anlernen starten<\/button>/);
-  const acceptedEnrollment = await adapter.handleManagementRequest({
-    method: 'POST', path: `/api/devices/${DEVICE_ID}/fingerprints/enroll`,
-    basePath: '/adapter/instance/1/manage', access: { canWrite: true },
-    body: { template_id: '0', name: 'Testfinger', topic: 'door/open', action: 'toggle' },
-  });
-  assert.equal(acceptedEnrollment.status, 303);
-  assert.ok(FakeConnection.requests.some((request) =>
-    request.type === 'fingerprint.enroll.begin' && request.payload.template_id === 0));
 
   const savedFingerprint = await adapter.handleManagementRequest({
     method: 'POST', path: `/api/devices/${DEVICE_ID}/config`,

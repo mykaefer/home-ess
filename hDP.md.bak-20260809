@@ -60,19 +60,15 @@ Der exakte Protokollbezeichner lautet:
 ```
 
 Adapter und Gerät MÜSSEN diesen Wert unverändert in mDNS, `/device`, `/manifest`,
-Pairing und WebSocket verwenden. Dieser Draft definiert vier Laufzeitprofile:
+Pairing und WebSocket verwenden. Dieser Draft definiert zwei Laufzeitprofile:
 
 ```text
 pixel-timeline-v1
 binary-io-v1
-sensor-reading-v1
-fingerprint-event-v1
 ```
 
 `percentage_indicator` und `argb_output` verwenden `pixel-timeline-v1`;
-`binary_io` verwendet `binary-io-v1`, `sensors` verwendet
-`sensor-reading-v1`, `fingerprint_reader` verwendet `fingerprint-event-v1`.
-Mehrere Gerätetypen DÜRFEN sich ein
+`binary_io` verwendet `binary-io-v1`. Mehrere Gerätetypen DÜRFEN sich ein
 Laufzeitprofil teilen: Das Profil beschreibt ausschließlich die Ausgabeschicht
 des Geräts, nicht die Bedeutung, die der Adapter den Bildern gibt. Das aktive
 Profil wird in mDNS, `/device`, `/manifest` und im WebSocket-Hello ausgetauscht
@@ -1162,91 +1158,6 @@ Das Gerät DARF keine weitere anwendungsspezifische Interpolation hinzufügen.
 Zeitliche Zwischenwerte müssen vom Adapter als Frame oder Timelineereignis
 vollständig vorgegeben werden.
 
-### 12.8 Sensorkonfiguration
-
-Der Gerätetyp `sensors` enthält ein bis acht Einträge in `sensors` und darf
-zusätzlich freie GPIOs in `pins` als Binary-I/O konfigurieren. Sensorbusse und
-Binary-Pins DÜRFEN sich nicht überschneiden. Alle I²C-Sensoren MÜSSEN dasselbe
-SDA/SCL-Paar verwenden und auf diesem Bus eindeutige Adressen besitzen.
-
-```json
-{
-  "revision": 7,
-  "device_type": "sensors",
-  "sensors": [
-    {
-      "sensor_id": "climate",
-      "sensor_type": "bme280",
-      "sample_interval_milliseconds": 5000,
-      "sda_pin": 4,
-      "scl_pin": 5,
-      "address": 118
-    },
-    {
-      "sensor_id": "weight",
-      "sensor_type": "hx711",
-      "sample_interval_milliseconds": 500,
-      "data_pin": 12,
-      "clock_pin": 13
-    }
-  ],
-  "pins": [
-    { "pin": 14, "direction": "input", "input_type": "button" }
-  ]
-}
-```
-
-Unterstützte `sensor_type`-Werte sind `dht11`, `dht22`, `ds18b20`, `bme280`,
-`sht30`, `sht31`, `bh1750`, `ina219`, `hx711`, `vl53l0x` und `analog`.
-Ein-Pin-Sensoren verwenden `pin`, HX711 verwendet `data_pin` und `clock_pin`,
-I²C-Sensoren verwenden `sda_pin`, `scl_pin` und `address`. `analog` belegt den
-separaten ADC A0 und besitzt deshalb kein GPIO-Feld. Das D1-mini-Manifest meldet
-für A0 eine Auflösung von 10 Bit und wegen des Board-Spannungsteilers einen
-maximalen Eingang von 3200 mV; die Firmware überträgt dennoch bewusst nur den
-unskalierten Wert 0 bis 1023.
-
-### 12.9 R503-Fingerabdruckleser
-
-`fingerprint_reader` verbindet genau einen R503 über 3,3-V-TTL-UART mit fest
-57600 Baud. `rx_pin` bezeichnet den Empfangspin des ESP8266 und wird mit TX des
-R503 verbunden; `tx_pin` entsprechend mit RX. `wakeup_pin` ist optional und bei
-nicht angeschlossener Wakeup-Leitung `null`. UART, Wakeup und freie Binary-Pins
-dürfen sich nicht überschneiden; GPIO 16 ist als UART-RX unzulässig.
-Die Standardbelegung RX GPIO 13 / TX GPIO 15 nutzt den umgelegten nativen
-ESP8266-UART und ist wegen des fehlenden Interruptpuffers zu bevorzugen. Andere
-zulässige Pinpaare bleiben über den begrenzt gepufferten Software-UART
-verfügbar. Während der native UART dem R503 zugeordnet ist, bleibt die serielle
-Diagnoseausgabe deaktiviert und darf keine Bytes in das Sensorprotokoll senden.
-Lernen und Löschen sind erst zulässig, nachdem `fingerprint.status` sowohl
-`online: true` als auch eine erfolgreich gelesene Kapazität gemeldet hat. Bei
-`online: false` bleibt die Bedienung gesperrt und der Adapter MUSS
-`last_error` sichtbar machen. Insbesondere bedeutet `uart_timeout`, dass auf
-der konfigurierten Kreuzverbindung R503-TX nach ESP-RX und R503-RX nach ESP-TX
-keine gültige Antwort eingegangen ist.
-
-```json
-{
-  "revision": 8,
-  "device_type": "fingerprint_reader",
-  "uart": { "rx_pin": 13, "tx_pin": 15 },
-  "wakeup_pin": 12,
-  "led": {
-    "idle": { "effect": "breathing", "color": "blue", "speed": 96, "count": 0 },
-    "scanning": { "effect": "on", "color": "blue", "speed": 0, "count": 0 },
-    "success": { "effect": "flashing", "color": "blue", "speed": 32, "count": 2 },
-    "failure": { "effect": "flashing", "color": "red", "speed": 32, "count": 2 },
-    "enrolling": { "effect": "breathing", "color": "purple", "speed": 64, "count": 0 }
-  },
-  "pins": [{ "pin": 4, "direction": "input", "input_type": "button" }]
-}
-```
-
-Die fünf LED-Szenen sind Pflicht. Zulässige Effekte sind `breathing`,
-`flashing`, `on`, `off`, `gradual_on` und `gradual_off`; Farben sind `red`,
-`blue` und `purple`. `speed` und `count` sind `uint8`. Vorlagen und biometrische
-Merkmale verbleiben im R503. Das Gerät überträgt keine Fingerbilder oder
-Merkmalsdaten und wertet keine homeESS-State-Aktion aus.
-
 ## 13. Entkopplung, Neustart und Factory Reset
 
 ### 13.1 `POST /api/v1/unpair`
@@ -2223,68 +2134,6 @@ einzelner Request zugeordnet werden kann.
 | `UNSUPPORTED_MESSAGE_TYPE` | Verbindung offen lassen |
 | `HEARTBEAT_TIMEOUT` oder `SESSION_REPLACED` | Verbindung schließen |
 
-### 14.18 Sensorwerte
-
-`sensor-reading-v1` sendet jede abgeschlossene Messung als `sensor.sample`.
-Physikalische Werte werden als Festkomma-Integer übertragen; benutzerdefinierte
-Skalierung und Kalibrierung gehören in den Adapter.
-
-```json
-{
-  "type": "sensor.sample",
-  "message_id": "device-42",
-  "sequence": 42,
-  "payload": {
-    "config_revision": 7,
-    "sensor_id": "climate",
-    "sensor_type": "bme280",
-    "sample_sequence": 18,
-    "captured_at_uptime_milliseconds": 928401,
-    "status": "ok",
-    "error": null,
-    "values": {
-      "temperature_millicelsius": 22430,
-      "humidity_millipercent": 48720,
-      "pressure_pascal": 100842
-    }
-  }
-}
-```
-
-Erlaubte Messwertschlüssel sind `temperature_millicelsius`,
-`humidity_millipercent`, `pressure_pascal`, `illuminance_millilux`,
-`bus_voltage_microvolts`, `shunt_voltage_microvolts`, `current_microamps`,
-`power_microwatts`, `distance_millimeters` und `raw`.
-
-`sensor.status.get` besitzt ein leeres Payloadobjekt. Das Gerät antwortet mit
-`sensor.status`; dessen `samples`-Array enthält den zuletzt abgeschlossenen
-Stand jedes konfigurierten Sensors. Anschließend fordert es für alle Sensoren
-eine neue Messung an. Eine fehlgeschlagene Messung wird mit `status=error`,
-einem stabilen `error`-Bezeichner und leerem `values`-Objekt gemeldet.
-
-### 14.19 Fingerabdruckereignisse und Vorlagenverwaltung
-
-`fingerprint-event-v1` scannt nicht blockierend. Ein aufgelegter Finger darf bis
-zum Abheben höchstens ein `fingerprint.match` oder `fingerprint.unknown`
-auslösen. Eine positive Erkennung enthält `config_revision`, fortlaufende
-`event_sequence`, `occurred_at_uptime_milliseconds`, `template_id` und
-`confidence`. Der Adapter entscheidet allein, welcher State dadurch gesetzt,
-umgeschaltet oder um einen Schritt verändert wird.
-
-Der Adapter startet das Lernen mit `fingerprint.enroll.begin` und den Feldern
-`config_revision` und `template_id`. Das Gerät meldet den Zweifach-Aufnahmeablauf
-als `fingerprint.enroll.status`; die stabilen Stufen sind `place_finger`,
-`remove_finger`, `place_finger_again`, `complete`, `cancelled` und `enrollment`.
-`fingerprint.enroll.cancel` bricht ab. `fingerprint.template.delete` löscht genau
-eine `template_id`. Jeder angenommene Befehl wird mit
-`fingerprint.command.accepted` und `reply_to` bestätigt.
-
-`fingerprint.status.get` hat ein leeres Payloadobjekt. `fingerprint.status`
-enthält `online`, `enrolling`, `capacity`, `template_count`, das eindeutige
-Array `occupied_slots` und `last_error`. Eine Inventur nach Sitzungsaufbau sowie
-nach Lernen oder Löschen verhindert, dass der Adapter Vorlagenbelegungen erfindet.
-Die Vorlagen-ID ist eine lokale Referenz und kein biometrisches Datum.
-
 ## 15. Firmware-Update per OTA
 
 ### 15.1 Metadaten
@@ -2553,8 +2402,6 @@ der Status `completed` meldet.
 | `BINARY_PIN_NOT_FOUND` | WS | GPIO gehört nicht zur aktiven Binary-Konfiguration |
 | `BINARY_PIN_DIRECTION_MISMATCH` | WS | mutierender Befehl adressiert keinen Ausgang |
 | `BINARY_CONFIG_REVISION_MISMATCH` | WS | Befehl bezieht sich nicht auf die aktive Binary-Konfigurationsrevision |
-| `FINGERPRINT_CONFIG_REVISION_MISMATCH` | WS | Befehl bezieht sich nicht auf die aktive Fingerabdruckkonfigurationsrevision |
-| `FINGERPRINT_OPERATION_REJECTED` | WS | Lernen, Abbruch oder Löschen ist im aktuellen Modulzustand nicht zulässig; `message` benennt Modul- oder Vorlagenursache, `details.template_id` die betroffene Vorlage, soweit vorhanden |
 | `TIMELINE_UPLOAD_IN_PROGRESS` | WS | ein anderer Staging-Upload ist in derselben Sitzung aktiv |
 | `TIMELINE_NOT_FOUND` | WS | referenzierte Timeline ist nicht committed |
 | `TIMELINE_OFFSET_MISMATCH` | WS | Chunkoffset weicht von `details.expected_offset` ab |

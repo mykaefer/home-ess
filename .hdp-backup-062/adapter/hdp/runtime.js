@@ -99,46 +99,6 @@ function validSensorMessage(message) {
   return false;
 }
 
-function validFingerprintMessage(message) {
-  const payload = message && message.payload;
-  if (!payload) return false;
-  if (message.type === 'fingerprint.command.accepted') {
-    return typeof payload.reply_to === 'string'
-      && ['enroll', 'cancel', 'delete'].includes(payload.action)
-      && (payload.template_id === undefined
-        || (Number.isInteger(payload.template_id) && payload.template_id >= 0 && payload.template_id < 256));
-  }
-  if (!uint32(payload.config_revision)) return false;
-  if (message.type === 'fingerprint.status') {
-    return (payload.reply_to === null || typeof payload.reply_to === 'string')
-      && typeof payload.online === 'boolean' && typeof payload.enrolling === 'boolean'
-      && Number.isInteger(payload.capacity) && payload.capacity >= 0 && payload.capacity <= 256
-      && Number.isInteger(payload.template_count) && payload.template_count >= 0
-      && payload.template_count <= payload.capacity
-      && Array.isArray(payload.occupied_slots)
-      && new Set(payload.occupied_slots).size === payload.occupied_slots.length
-      && payload.occupied_slots.every((id) => Number.isInteger(id) && id >= 0 && id < payload.capacity)
-      && (payload.last_error === null || typeof payload.last_error === 'string');
-  }
-  if (!uint32(payload.event_sequence) || payload.event_sequence < 1
-      || !uint32(payload.occurred_at_uptime_milliseconds)) return false;
-  if (message.type === 'fingerprint.match') {
-    return Number.isInteger(payload.template_id) && payload.template_id >= 0 && payload.template_id < 256
-      && Number.isInteger(payload.confidence) && payload.confidence >= 0 && payload.confidence <= 0xffff;
-  }
-  if (message.type === 'fingerprint.unknown') return true;
-  if (message.type === 'fingerprint.template.deleted') {
-    return Number.isInteger(payload.template_id) && payload.template_id >= 0 && payload.template_id < 256;
-  }
-  if (message.type === 'fingerprint.enroll.status') {
-    return typeof payload.stage === 'string'
-      && (payload.template_id === null
-        || (Number.isInteger(payload.template_id) && payload.template_id >= 0 && payload.template_id < 256))
-      && (payload.error === null || typeof payload.error === 'string');
-  }
-  return false;
-}
-
 class RuntimeConnection extends EventEmitter {
   constructor(options) {
     super();
@@ -342,10 +302,6 @@ class RuntimeConnection extends EventEmitter {
       this.protocolFailure('INVALID_REQUEST', 'Ungültige Sensornachricht.');
       return;
     }
-    if (message.type.startsWith('fingerprint.') && !validFingerprintMessage(message)) {
-      this.protocolFailure('INVALID_REQUEST', 'Ungültige Fingerabdrucknachricht.');
-      return;
-    }
     const replyTo = message.payload && message.payload.reply_to;
     if (typeof replyTo === 'string' && message.type !== 'error') {
       const pending = this.pendingRequests.get(replyTo);
@@ -461,8 +417,6 @@ class RuntimeConnection extends EventEmitter {
       this.emit('binary', message);
     } else if (message.type.startsWith('sensor.')) {
       this.emit('sensor', message);
-    } else if (message.type.startsWith('fingerprint.')) {
-      this.emit('fingerprint', message);
     } else {
       this.emit('warning', Object.assign(new Error(`Nicht unterstützter Nachrichtentyp ${message.type}.`), {
         code: 'UNSUPPORTED_MESSAGE_TYPE',
@@ -559,6 +513,6 @@ class RuntimeConnection extends EventEmitter {
 module.exports = {
   MAX_MESSAGE_BYTES, HELLO_TIMEOUT_MS, HEARTBEAT_MS, HEARTBEAT_TIMEOUT_MS,
   RECONNECT_DELAYS, connectionErrorMessage, validEnvelope, validBinaryMessage,
-  validSensorSample, validSensorMessage, validFingerprintMessage,
+  validSensorSample, validSensorMessage,
   RuntimeConnection,
 };

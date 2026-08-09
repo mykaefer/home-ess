@@ -31,7 +31,6 @@ const ERROR_CODES = new Set([
   'SEQUENCE_ERROR', 'SESSION_HELLO_TIMEOUT', 'HEARTBEAT_TIMEOUT', 'SESSION_REPLACED', 'DEVICE_BUSY',
   'BINARY_PIN_NOT_FOUND', 'BINARY_PIN_DIRECTION_MISMATCH',
   'BINARY_CONFIG_REVISION_MISMATCH',
-  'FINGERPRINT_CONFIG_REVISION_MISMATCH', 'FINGERPRINT_OPERATION_REJECTED',
   'FACTORY_RESET_NOT_ALLOWED', 'INTERNAL_ERROR', 'OTA_AUTH_REQUIRED', 'OTA_ALREADY_RUNNING',
   'OTA_INVALID_METADATA', 'OTA_FIRMWARE_NAME_MISMATCH', 'OTA_PLATFORM_MISMATCH',
   'OTA_BOARD_MISMATCH', 'OTA_VARIANT_MISMATCH', 'OTA_PROTOCOL_INCOMPATIBLE',
@@ -314,25 +313,6 @@ function validateManifestInfo(data) {
         throw new HdpError('Gerätemanifest enthält keinen vollständigen Sensorvertrag.', {
           code: 'INVALID_REQUEST', status: 502,
         });
-      }
-      if (data.device_types.includes('fingerprint_reader')) {
-        const effects = data.hardware_capabilities.fingerprint_led_effects;
-        const colors = data.hardware_capabilities.fingerprint_led_colors;
-        if (data.features.fingerprint_recognition !== true
-            || data.features.fingerprint_enrollment !== true
-            || data.hardware_capabilities.fingerprint_uart_baud !== 57600
-            || typeof data.hardware_capabilities.fingerprint_wakeup_optional !== 'boolean'
-            || !Array.isArray(effects) || !effects.length
-            || effects.some((value) => !['breathing', 'flashing', 'on', 'off', 'gradual_on', 'gradual_off'].includes(value))
-            || !Array.isArray(colors) || !colors.length
-            || colors.some((value) => !['red', 'blue', 'purple'].includes(value))
-            || !Number.isInteger(data.limits.maximum_fingerprint_templates)
-            || data.limits.maximum_fingerprint_templates < 1
-            || data.limits.maximum_fingerprint_templates > 256) {
-          throw new HdpError('Gerätemanifest enthält keinen vollständigen Fingerabdruckvertrag.', {
-            code: 'INVALID_REQUEST', status: 502,
-          });
-        }
       }
       const binaryPins = data.hardware_capabilities.binary_pins;
       if (!binaryPins.length || binaryPins.length > data.limits.maximum_binary_pins

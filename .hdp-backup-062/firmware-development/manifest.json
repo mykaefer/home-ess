@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "release": {
+    "firmware_name": "hdp-firmware",
+    "version": "0.6.1",
+    "channel": "development",
+    "published_at": "2026-08-09T05:24:54Z",
+    "build_id": "20260809-052454",
+    "protocol_min": "1.0-draft",
+    "protocol_max": "1.0-draft",
+    "config_schema_version": 4
+  },
+  "artifacts": [
+    {
+      "platform": "esp8266",
+      "board": "d1_mini",
+      "variant": "generic",
+      "filename": "hdp-firmware-0.6.1-esp8266-d1-mini-generic.bin",
+      "size_bytes": 503280,
+      "sha256": "756b00e0ccf4d74b3a55732b806b9cc68fb2e905ef161bfd81a5a20bec87c4c8",
+      "signature": null
+    }
+  ]
+}

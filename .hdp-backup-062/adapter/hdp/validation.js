@@ -7,11 +7,9 @@ const PROTOCOL_VERSION = '1.0-draft';
 const PIXEL_RUNTIME_PROFILE = 'pixel-timeline-v1';
 const BINARY_RUNTIME_PROFILE = 'binary-io-v1';
 const SENSOR_RUNTIME_PROFILE = 'sensor-reading-v1';
-const FINGERPRINT_RUNTIME_PROFILE = 'fingerprint-event-v1';
 const RUNTIME_PROFILE = PIXEL_RUNTIME_PROFILE;
 const RUNTIME_PROFILES = Object.freeze([
   PIXEL_RUNTIME_PROFILE, BINARY_RUNTIME_PROFILE, SENSOR_RUNTIME_PROFILE,
-  FINGERPRINT_RUNTIME_PROFILE,
 ]);
 
 function supportedRuntimeProfile(value) {
@@ -176,9 +174,6 @@ function strictInteger(value, min, max, label) {
 
 function validateHardwareConfig(input, capabilities = {}) {
   const config = input && typeof input === 'object' ? input : {};
-  if (config.device_type === 'fingerprint_reader' || config.uart) {
-    return validateFingerprintConfig(config, capabilities);
-  }
   if (config.device_type === 'sensors' || Array.isArray(config.sensors)) {
     return validateSensorConfig(config, capabilities);
   }
@@ -252,79 +247,6 @@ const SENSOR_TYPES = Object.freeze([
   'ina219', 'hx711', 'vl53l0x', 'analog',
 ]);
 const I2C_SENSOR_TYPES = new Set(['bme280', 'sht30', 'sht31', 'bh1750', 'ina219', 'vl53l0x']);
-const FINGERPRINT_LED_SCENES = Object.freeze(['idle', 'scanning', 'success', 'failure', 'enrolling']);
-const FINGERPRINT_LED_EFFECTS = Object.freeze([
-  'breathing', 'flashing', 'on', 'off', 'gradual_on', 'gradual_off',
-]);
-const FINGERPRINT_LED_COLORS = Object.freeze(['red', 'blue', 'purple']);
-
-function validateFingerprintConfig(input, capabilities = {}) {
-  const config = input && typeof input === 'object' ? input : {};
-  const manifest = capabilities.manifest || capabilities;
-  const hardware = manifest.hardware_capabilities || capabilities;
-  if (config.device_type !== 'fingerprint_reader') {
-    throw new Error('Fingerabdruckkonfiguration benötigt device_type fingerprint_reader.');
-  }
-  const allowedPins = Array.isArray(hardware.binary_pins) ? hardware.binary_pins : [];
-  const uart = config.uart;
-  if (!uart || typeof uart !== 'object' || Array.isArray(uart)) {
-    throw new Error('UART-Konfiguration des Fingerabdrucksensors fehlt.');
-  }
-  const pin = (value, label) => {
-    const parsed = strictInteger(value, 0, 255, label);
-    if (!allowedPins.includes(parsed)) throw new Error(`${label} wird vom Gerät nicht unterstützt.`);
-    return parsed;
-  };
-  const rxPin = pin(uart.rx_pin, 'UART-RX-GPIO');
-  const txPin = pin(uart.tx_pin, 'UART-TX-GPIO');
-  if (rxPin === txPin) throw new Error('UART-RX und UART-TX müssen verschieden sein.');
-  if (rxPin === 16) throw new Error('GPIO 16 unterstützt den benötigten UART-Empfang nicht.');
-  let wakeupPin = null;
-  if (config.wakeup_pin !== null && config.wakeup_pin !== undefined
-      && String(config.wakeup_pin) !== '') {
-    wakeupPin = pin(config.wakeup_pin, 'Wakeup-GPIO');
-    if ([rxPin, txPin].includes(wakeupPin)) throw new Error('Wakeup-GPIO darf UART-RX/TX nicht überlappen.');
-  }
-  const supportedEffects = Array.isArray(hardware.fingerprint_led_effects)
-    ? hardware.fingerprint_led_effects : FINGERPRINT_LED_EFFECTS;
-  const supportedColors = Array.isArray(hardware.fingerprint_led_colors)
-    ? hardware.fingerprint_led_colors : FINGERPRINT_LED_COLORS;
-  const sourceLed = config.led && typeof config.led === 'object' ? config.led : {};
-  const led = {};
-  for (const scene of FINGERPRINT_LED_SCENES) {
-    const source = sourceLed[scene];
-    if (!source || typeof source !== 'object' || Array.isArray(source)) {
-      throw new Error(`LED-Verhalten für ${scene} fehlt.`);
-    }
-    if (!FINGERPRINT_LED_EFFECTS.includes(source.effect) || !supportedEffects.includes(source.effect)) {
-      throw new Error(`LED-Effekt für ${scene} wird nicht unterstützt.`);
-    }
-    if (!FINGERPRINT_LED_COLORS.includes(source.color) || !supportedColors.includes(source.color)) {
-      throw new Error(`LED-Farbe für ${scene} wird nicht unterstützt.`);
-    }
-    led[scene] = {
-      effect: source.effect, color: source.color,
-      speed: strictInteger(source.speed, 0, 255, `LED-Geschwindigkeit ${scene}`),
-      count: strictInteger(source.count, 0, 255, `LED-Wiederholungen ${scene}`),
-    };
-  }
-  const pins = Array.isArray(config.pins) ? config.pins : [];
-  const binary = pins.length
-    ? validateBinaryConfig({ device_type: 'binary_io', pins }, manifest).pins : [];
-  const reserved = new Set([rxPin, txPin, ...(wakeupPin === null ? [] : [wakeupPin])]);
-  if (binary.some((entry) => reserved.has(entry.pin))) {
-    throw new Error('Binary-GPIO überlappt UART oder Wakeup des Fingerabdrucksensors.');
-  }
-  const result = {
-    device_type: 'fingerprint_reader',
-    uart: { rx_pin: rxPin, tx_pin: txPin }, wakeup_pin: wakeupPin, led,
-    pins: binary,
-  };
-  if (Object.prototype.hasOwnProperty.call(config, 'revision')) {
-    result.revision = strictInteger(config.revision, 0, 0xffffffff, 'Revision');
-  }
-  return result;
-}
 
 function validateSensorConfig(input, capabilities = {}) {
   const config = input && typeof input === 'object' ? input : {};
@@ -665,14 +587,13 @@ function validateOutputConfig(input, capabilities = {}) {
 
 module.exports = {
   PROTOCOL_VERSION, RUNTIME_PROFILE, PIXEL_RUNTIME_PROFILE, BINARY_RUNTIME_PROFILE,
-  SENSOR_RUNTIME_PROFILE, FINGERPRINT_RUNTIME_PROFILE,
+  SENSOR_RUNTIME_PROFILE,
   RUNTIME_PROFILES, supportedRuntimeProfile,
   clamp, finite, strictFinite, bounded, integer, strictInteger,
   validateDeviceId, validateInstanceId, validatePort, validateProtocol,
   compatibleProtocol, parseSemVer, compareSemVer, color, colorStops, scale,
   interpolateColor, validateHardwareConfig, validateOutputConfig, validateBinaryConfig,
-  validateSensorConfig, SENSOR_TYPES, validateFingerprintConfig,
-  FINGERPRINT_LED_SCENES, FINGERPRINT_LED_EFFECTS, FINGERPRINT_LED_COLORS,
+  validateSensorConfig, SENSOR_TYPES,
   validateOpaqueId,
   ARGB_OPERATORS, ARGB_OPERATOR_LABELS,
   numericValue, comparableText, validateArgbCondition, argbConditionActive,
