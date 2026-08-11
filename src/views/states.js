@@ -5,10 +5,16 @@ const { escapeHtml } = require('./components');
 
 // Zentrale States-Seite: berechnete Systemwerte und von Adaptern gemeldete
 // States in einem gemeinsamen Baum mit aktuellem Wert.
-function renderStates({ tree = [] } = {}) {
-  const blocks = tree.length
+// Nur der Baum selbst – die Seite lädt ihn bei Strukturänderungen nach, ohne
+// dass der Nutzer neu laden muss.
+function renderStatesTree(tree = []) {
+  return tree.length
     ? tree.map(renderInstanceBlock).join('\n')
     : '<div class="info-card"><p class="muted">Noch keine States vorhanden.</p></div>';
+}
+
+function renderStates({ tree = [] } = {}) {
+  const blocks = renderStatesTree(tree);
 
   const body = `        <h1>States</h1>
         <p class="muted" style="margin-bottom:16px;">Zentrale Übersicht aller internen Systemwerte, Custom States und Adapter-States. Eigene les- und schreibbare Werte lassen sich unter <a href="/states/custom">Custom States</a> verwalten.</p>
@@ -17,18 +23,53 @@ ${blocks}
         </div>`;
 
   const script = `
+    function statesApplyValues(values) {
+      var nodes = document.querySelectorAll('[data-state-value]');
+      for (var i = 0; i < nodes.length; i++) {
+        var topic = nodes[i].getAttribute('data-state-value');
+        if (Object.prototype.hasOwnProperty.call(values, topic)) {
+          nodes[i].textContent = values[topic];
+        }
+      }
+    }
+    // Kommen States dazu oder fallen welche weg (z. B. Broker-Clients, die
+    // Topics anlegen, oder die Idle-Bereinigung), stimmt der gerenderte Baum
+    // nicht mehr mit den gelieferten Werten überein.
+    function statesStructureChanged(values) {
+      var nodes = document.querySelectorAll('[data-state-value]');
+      var known = {};
+      for (var i = 0; i < nodes.length; i++) known[nodes[i].getAttribute('data-state-value')] = true;
+      var count = 0;
+      for (var topic in values) {
+        if (!Object.prototype.hasOwnProperty.call(values, topic)) continue;
+        count += 1;
+        if (!known[topic]) return true;
+      }
+      return count !== nodes.length;
+    }
+    var statesTreeLoading = false;
+    function statesReloadTree(values) {
+      if (statesTreeLoading) return;
+      statesTreeLoading = true;
+      fetch('/states/tree.json', { headers: { Accept: 'application/json' } })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (data) {
+          var container = document.querySelector('.states-tree');
+          if (!data || typeof data.html !== 'string' || !container) return;
+          container.innerHTML = data.html;
+          statesRestoreExpansion();
+          if (values) statesApplyValues(values);
+        })
+        .catch(function () {})
+        .then(function () { statesTreeLoading = false; });
+    }
     function statesRefresh() {
       fetch('/states/data.json', { headers: { Accept: 'application/json' } })
         .then(function (r) { return r.ok ? r.json() : null; })
         .then(function (data) {
           if (!data || !data.values) return;
-          var nodes = document.querySelectorAll('[data-state-value]');
-          for (var i = 0; i < nodes.length; i++) {
-            var topic = nodes[i].getAttribute('data-state-value');
-            if (Object.prototype.hasOwnProperty.call(data.values, topic)) {
-              nodes[i].textContent = data.values[topic];
-            }
-          }
+          if (statesStructureChanged(data.values)) statesReloadTree(data.values);
+          else statesApplyValues(data.values);
         })
         .catch(function () {});
     }
@@ -75,9 +116,11 @@ ${blocks}
 function renderInstanceBlock(inst) {
   const statusClass = inst.enabled ? (inst.running ? 'module-status--on' : 'module-status--off') : 'module-status--off';
   const statusLabel = !inst.enabled ? 'Inaktiv' : inst.running ? 'Läuft' : 'Startet…';
+  const instanceKey = `${inst.prefix}://${inst.instanceName}`;
   const cats = inst.categories.length
-    ? inst.categories.map((cat) => renderCategory(cat, 0, `${inst.prefix}://${inst.instanceName}`, '')).join('\n')
+    ? inst.categories.map((cat) => renderCategory(cat, 0, instanceKey, '')).join('\n')
     : '          <p class="muted" style="margin:6px 0;">Dieser Adapter hat noch keine States gemeldet.</p>';
+  const stateCount = inst.categories.reduce((sum, cat) => sum + (cat.stateCount == null ? cat.states.length : cat.stateCount), 0);
 
   // System und virtuelle Blöcke haben keinen
   // Adapter-Prozess: sprechender Name statt prefix://instanz, kein Status-Badge.
@@ -86,11 +129,17 @@ function renderInstanceBlock(inst) {
     : `${escapeHtml(inst.prefix)}://${escapeHtml(inst.instanceName)}`;
   const status = inst.virtual ? '' : `
               <span class="module-status ${statusClass}">${statusLabel}</span>`;
-  return `          <div class="states-inst">
-            <div class="states-inst-head">
+  // Die Prefix-Gruppe ist genauso auf- und zuklappbar wie ihre Kategorien und
+  // merkt sich den Zustand unter demselben Schlüssel.
+  return `          <div class="states-inst" data-tree-key="${escapeHtml(instanceKey)}">
+            <button type="button" class="states-inst-head" onclick="statesToggle(this)">
+              <span class="states-inst-caret">▸</span>
               <span class="states-inst-name">${title}</span>${status}
-            </div>
+              <span class="states-inst-count">${stateCount}</span>
+            </button>
+            <div class="states-inst-body">
 ${cats}
+            </div>
           </div>`;
 }
 
@@ -120,3 +169,4 @@ ${children}
 }
 
 module.exports = renderStates;
+module.exports.renderStatesTree = renderStatesTree;

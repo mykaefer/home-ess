@@ -3329,11 +3329,35 @@ body.dash-editing .widget-group {
     display: flex;
     align-items: center;
     gap: 10px;
+    width: 100%;
     padding: 10px 14px;
     background: #f1f5f9;
-    border-bottom: 1px solid #e5e7eb;
+    border: none;
+    border-bottom: 1px solid transparent;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
 }
-.states-inst-name { font-weight: 700; font-family: monospace; color: #1f2937; }
+.states-inst-head:hover { background: #e2e8f0; }
+.states-inst.is-open > .states-inst-head { border-bottom-color: #e5e7eb; }
+.states-inst-caret {
+    display: inline-block;
+    transition: transform 0.15s ease;
+    color: #64748b;
+    font-size: 12px;
+}
+.states-inst.is-open > .states-inst-head .states-inst-caret { transform: rotate(90deg); }
+.states-inst-name { flex: 1; font-weight: 700; font-family: monospace; color: #1f2937; }
+.states-inst-count {
+    background: #dbe2ec;
+    color: #475569;
+    border-radius: 999px;
+    padding: 0 8px;
+    font-size: 11px;
+    font-weight: 600;
+}
+.states-inst-body { display: none; flex-direction: column; }
+.states-inst.is-open > .states-inst-body { display: flex; }
 
 /* Custom States verwendet bewusst dasselbe Gruppen-/Zeilenraster wie
    „Messen + Schalten“: dunkle Verzeichnisköpfe, weiße Wertezeilen und echte

@@ -1,0 +1,109 @@
+/* MQTT-Broker-Verwaltung. Alle Regeln bleiben unter der adapterspezifischen
+   Wurzelklasse .mqttbroker gekapselt und werden nur auf dieser Seite geladen. */
+.mqttbroker {
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.mqttbroker h1 {
+    margin: 0 0 16px;
+}
+
+.mqttbroker h2 {
+    margin: 28px 0 10px;
+    font-size: 16px;
+}
+
+.mqttbroker-status {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 24px;
+    padding: 14px 16px;
+    border: 1px solid var(--color-border, #e5e7eb);
+    border-radius: 10px;
+    background: var(--color-surface, #fff);
+    font-size: 14px;
+}
+
+.mqttbroker-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+}
+
+.mqttbroker-table th,
+.mqttbroker-table td {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--color-border, #e5e7eb);
+    text-align: left;
+    vertical-align: middle;
+}
+
+.mqttbroker-table thead th {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #6b7280;
+}
+
+.mqttbroker-table code {
+    font-size: 13px;
+    word-break: break-all;
+}
+
+.mqttbroker-actions {
+    width: 1%;
+    white-space: nowrap;
+    text-align: right;
+}
+
+.mqttbroker-button {
+    padding: 6px 12px;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    background: var(--color-action, #39705f);
+    color: #fff;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.mqttbroker-button:hover {
+    background: var(--color-action-hover, #2c594b);
+}
+
+.mqttbroker-button--danger {
+    background: #b91c1c;
+}
+
+.mqttbroker-button--danger:hover {
+    background: #991b1b;
+}
+
+.mqttbroker-empty {
+    color: #6b7280;
+}
+
+.mqttbroker-hint {
+    margin: 8px 0 0;
+    color: #6b7280;
+    font-size: 13px;
+}
+
+@media (prefers-color-scheme: dark) {
+    .mqttbroker-status {
+        border-color: #334155;
+        background: #111827;
+    }
+
+    .mqttbroker-table th,
+    .mqttbroker-table td {
+        border-bottom-color: #334155;
+    }
+
+    .mqttbroker-table thead th,
+    .mqttbroker-empty,
+    .mqttbroker-hint {
+        color: #94a3b8;
+    }
+}

@@ -155,3 +155,45 @@ test('Host-API schreibt Adapterwerte zentral über die MQTT-/Router-Schreibgrenz
     mqttClient.publish = originalPublish;
   }
 });
+
+test('Host liefert Adaptern den vollständigen State-Katalog samt Schreibrechten', async (t) => {
+  const db = await database();
+  t.after(() => new Promise((resolve) => db.close(resolve)));
+  registry.loadRegistry();
+  const id = await instances.createInstance(db, 'managed', 'katalog');
+  host._setForkImpl(() => {
+    const child = new EventEmitter();
+    child.send = () => {};
+    child.kill = () => child.emit('exit', 0);
+    return child;
+  });
+  await host.initAdapters(db);
+
+  const sent = [];
+  const entry = {
+    instance: await instances.getInstance(db, id),
+    manifest: registry.getManifest('managed'),
+    child: { send: (message) => sent.push(message) },
+    subscriptions: new Map(),
+    status: {},
+  };
+  host._handleMessage(entry, {
+    type: 'states',
+    list: [{ address: 'werte/soc', name: 'SoC', category: 'Werte', unit: '%', writable: true }],
+  });
+  await new Promise((resolve) => setTimeout(resolve, 300));
+
+  host._handleMessage(entry, { type: 'host-call', requestId: 'list-1', method: 'states.list' });
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  const reply = sent.find((message) => message.requestId === 'list-1');
+  assert.ok(reply && Array.isArray(reply.result), 'states.list liefert eine Liste');
+  const adapterState = reply.result.find((state) => state.topic === 'managed://katalog/werte/soc');
+  assert.ok(adapterState, 'der gemeldete Adapter-State ist enthalten');
+  assert.equal(adapterState.writable, true);
+  assert.equal(adapterState.name, 'katalog – SoC');
+  // Berechnete Systemwerte sind lesbare Quellen, aber keine Schreibziele.
+  const systemState = reply.result.find((state) => String(state.topic).startsWith('system://homeess/'));
+  assert.ok(systemState, 'Systemwerte gehören zum Katalog');
+  assert.equal(systemState.writable, false);
+  await host.stopInstance(id);
+});

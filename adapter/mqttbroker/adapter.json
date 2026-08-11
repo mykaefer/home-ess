@@ -1,0 +1,29 @@
+{
+  "id": "mqttbroker",
+  "name": "MQTT-Broker",
+  "prefix": "mqttbroker",
+  "version": "1.0.0",
+  "description": "Stellt einen eigenständigen MQTT-Broker (Server) für beliebige MQTT-Clients bereit. Angemeldete Geräte legen ihre States selbst unter mqttbroker://<instanz>/<topic> an; nicht mehr aktualisierte States werden nach einer einstellbaren Idle-Haltezeit automatisch entfernt. Optional wird der gesamte homeESS-States-Baum schreibrechtstreu unter states/ eingeblendet.",
+  "copyright": "Copyright (C) 2026 Kevin Käfer",
+  "multiInstance": true,
+  "main": "index.js",
+  "managementPage": {
+    "label": "Broker",
+    "stylesheet": "management.css"
+  },
+  "settings": [
+    { "key": "port", "label": "Port", "type": "number", "default": 1883, "hint": "TCP-Port des Brokers. Muss frei sein; ein bereits laufender Broker (z. B. der Tasmota-Adapter) belegt 1883." },
+    { "key": "bindAddress", "label": "Netzwerkadresse", "type": "text", "default": "0.0.0.0", "hint": "Auf welcher Adresse gelauscht wird. 127.0.0.1 beschränkt den Broker auf den Server selbst." },
+    { "key": "allowAnonymous", "label": "Anmeldung ohne Zugangsdaten erlauben", "type": "checkbox", "default": true, "hint": "Ausschalten, sobald Benutzername und Kennwort gesetzt sind." },
+    { "key": "username", "label": "Benutzername", "type": "text", "default": "" },
+    { "key": "password", "label": "Kennwort", "type": "password", "default": "" },
+    { "key": "ipRange", "label": "Erlaubter IP-Bereich", "type": "text", "default": "", "hint": "Optional. IPv4, CIDR oder Bereich, z. B. 192.168.178.0/24 oder 192.168.178.10-192.168.178.50. Leer = keine Einschränkung." },
+    { "key": "idleMinutes", "label": "Idle-Haltezeit (Minuten)", "type": "number", "default": 1440, "hint": "States, die so lange nicht mehr aktualisiert wurden, werden automatisch entfernt. 0 = nie entfernen." },
+    { "key": "maxStates", "label": "Maximale Anzahl Geräte-States", "type": "number", "default": 500, "hint": "Obergrenze für selbst angelegte States. Weitere Topics werden verworfen." },
+    { "key": "maxClients", "label": "Maximale Anzahl Clients", "type": "number", "default": 32 },
+    { "key": "jsonPayload", "label": "JSON-Nutzlast auswerten", "type": "checkbox", "default": true, "hint": "Erkennt ioBroker-artige Nutzlasten wie {\"val\":21.5} und übernimmt daraus den Wert." },
+    { "key": "systemAccess", "label": "Systemweiten State-Zugriff gewähren", "type": "checkbox", "default": false, "hint": "Blendet den gesamten homeESS-States-Baum unter states/ ein (states/hdp/…, states/system/…). Der eigene Prefix mqttbroker:// bleibt ausgespart. Es gelten die bei den States hinterlegten Schreibrechte; neue States können dort nicht angelegt werden." },
+    { "key": "maxSystemStates", "label": "Maximal gespiegelte System-States", "type": "number", "default": 1000, "hint": "Obergrenze für gleichzeitig abonnierte States des Systembaums." },
+    { "key": "catalogRefreshSeconds", "label": "Katalogabgleich (Sekunden)", "type": "number", "default": 60, "hint": "Wie oft der Systembaum auf neue oder entfernte States geprüft wird." }
+  ]
+}

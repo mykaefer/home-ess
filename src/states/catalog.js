@@ -1,5 +1,6 @@
 'use strict';
 
+const { compareNodes, compareCatalogItems, compareStates } = require('./sort');
 const registry = require('../adapters/registry');
 const instancesRepo = require('../adapters/instances');
 const {
@@ -117,7 +118,7 @@ function orderRootNodes(nodes) {
   return nodes.sort((a, b) => {
     const left = order.has(a.name) ? order.get(a.name) : 1;
     const right = order.has(b.name) ? order.get(b.name) : 1;
-    return left - right || a.name.localeCompare(b.name, 'de');
+    return left - right || compareNodes(a, b);
   });
 }
 
@@ -162,11 +163,11 @@ function nodeViews(nodes, parentPath, isRoot = false) {
     path: parentPath ? `${parentPath} / ${node.name}` : node.name,
     count: node.count,
   }));
-  return isRoot ? orderRootNodes(result) : result.sort((a, b) => a.name.localeCompare(b.name, 'de'));
+  return isRoot ? orderRootNodes(result) : result.sort(compareNodes);
 }
 
 function pageItems(items, offset) {
-  const sorted = [...items].sort((a, b) => String(a.label).localeCompare(String(b.label), 'de'));
+  const sorted = [...items].sort(compareCatalogItems);
   const page = sorted.slice(offset, offset + PAGE_SIZE);
   return {
     items: page.map(({ id, label, display, category }) => ({ id, label, display, category })),
@@ -239,25 +240,25 @@ async function adapterLevel(db, cache, instance, path, offset) {
     name,
     path: `${path} / ${name}`,
     count,
-  })).sort((a, b) => a.name.localeCompare(b.name, 'de'));
+  })).sort(compareNodes);
 
   let rows = [];
   let nextOffset = null;
   if (directCategories.length) {
     const placeholders = directCategories.map(() => '?').join(', ');
-    rows = await dbAll(
+    // Sortiert wird in JavaScript: SQLite kennt keine alphanumerische
+    // Kollation, sonst stünde „Kanal10" vor „Kanal2" und die Reihenfolge
+    // spränge zwischen den Seiten.
+    const all = await dbAll(
       db,
       `SELECT address, name, category, unit, last_value
          FROM adapter_states
-        WHERE instance_id = ? AND category IN (${placeholders})
-        ORDER BY name COLLATE NOCASE, address
-        LIMIT ? OFFSET ?`,
-      [instance.id, ...directCategories, PAGE_SIZE + 1, offset]
+        WHERE instance_id = ? AND category IN (${placeholders})`,
+      [instance.id, ...directCategories]
     );
-    if (rows.length > PAGE_SIZE) {
-      rows = rows.slice(0, PAGE_SIZE);
-      nextOffset = offset + PAGE_SIZE;
-    }
+    all.sort(compareStates);
+    rows = all.slice(offset, offset + PAGE_SIZE);
+    if (all.length > offset + PAGE_SIZE) nextOffset = offset + PAGE_SIZE;
   }
   const items = rows.map((row) => {
     const id = buildSchemeTopic(adapterPrefix(instance), instance.name, row.address);
@@ -362,7 +363,7 @@ async function searchCatalog(db, cache, rawQuery = '') {
     `${entry.category} ${entry.label} ${entry.id}`.toLocaleLowerCase('de').includes(normalized)
   );
   const combined = [...localMatches, ...adapterResult.items]
-    .sort((a, b) => String(a.label).localeCompare(String(b.label), 'de'));
+    .sort(compareCatalogItems);
   const truncated = adapterResult.truncated || combined.length > PAGE_SIZE;
   return {
     query,
