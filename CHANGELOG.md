@@ -3,6 +3,44 @@
 Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [1.4.4] — 2026-08-11
+
+### Hinzugefügt
+
+- **Host-API `host.listStates(limit?)`.** Adapter können den
+  quellenübergreifenden State-Katalog lesen: Systemwerte, Custom States und alle
+  Adapter-Instanzen als flache Liste aus `topic`, `name`, `category`, `unit`,
+  `value`, `writable` und `sourceType`. Berechnete Systemwerte tragen dabei ihr
+  kanonisches `system://`-Topic, sodass jeder Eintrag unmittelbar adressierbar
+  ist. Gedacht für Adapter, die States weiterreichen oder spiegeln; die Werte
+  selbst kommen weiterhin ereignisgetrieben über `host.subscribeState()`.
+  Bestehende Adapter sind davon unberührt.
+
+- **Selbstaktualisierender States-Baum.** Die States-Seite lud bisher im
+  15-Sekunden-Takt nur die Werte; neu hinzugekommene oder entfernte States
+  wurden erst nach einem manuellen Neuladen sichtbar. Weicht die Struktur von
+  den gelieferten Werten ab, holt die Seite den Baum jetzt selbst über
+  `/states/tree.json` nach und stellt den Auf-/Zuklappzustand wieder her.
+
+### Geändert
+
+- **Alphanumerische Sortierung im gesamten States-Katalog.** States,
+  Kategorien, Katalogeinträge und die Prefix-Gruppen selbst werden einheitlich
+  aufsteigend sortiert; Zahlenanteile zählen dabei als Zahl (`Kanal2` vor
+  `Kanal10`), Groß- und Kleinschreibung spielt keine Rolle. Die Reihenfolge
+  bleibt auch über Seitengrenzen des Katalogs hinweg gleich. Der System-Block
+  behält wie im Wertekatalog seinen festen Platz an der Spitze.
+- **Einklappbare Prefix-Gruppen auf der States-Seite.** Jede Gruppe
+  (`hdp://…`, `mqttbroker://…`, `custom://` …) lässt sich wie ihre Kategorien
+  auf- und zuklappen, zeigt die Anzahl ihrer States und merkt sich den Zustand
+  über Seitenaufrufe hinweg.
+- [ADAPTER.md](ADAPTER.md) beschreibt die neue Methode sowie die bislang nicht
+  dokumentierten `host.writeState()` und `host.getDataDirectory()` und ergänzt
+  die Regeln für Adapter, die den States-Baum weiterreichen: eigener Prefix
+  bleibt ausgespart, hinterlegte Schreibrechte gelten unverändert, im
+  gespiegelten Baum entstehen keine neuen States, und abonniert wird
+  bedarfsgetrieben und mengenbegrenzt.
+
 ## [1.4.3] — 2026-08-09
 
 ### Hinzugefügt

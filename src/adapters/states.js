@@ -6,6 +6,7 @@
 // die States-Seite und der Picker auch bei gestopptem Adapter Namen anzeigen.
 
 const bus = require('../state-bus');
+const { compareNodes, sortStates } = require('../states/sort');
 const registry = require('./registry');
 const instancesRepo = require('./instances');
 const host = require('./host');
@@ -41,10 +42,10 @@ function categoryParts(value) {
 }
 
 function categoryList(root) {
-  return Array.from(root.values()).sort((a, b) => a.name.localeCompare(b.name, 'de')).map((node) => {
+  return Array.from(root.values()).sort(compareNodes).map((node) => {
     const children = categoryList(node._children);
     const stateCount = node.states.length + children.reduce((sum, child) => sum + child.stateCount, 0);
-    return { name: node.name, states: node.states, children, stateCount };
+    return { name: node.name, states: sortStates(node.states), children, stateCount };
   });
 }
 

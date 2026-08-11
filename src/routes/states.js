@@ -104,6 +104,18 @@ function statesRoutes(db) {
     }
   });
 
+  // Nur der States-Baum als HTML-Fragment. Die offene Seite lädt ihn nach,
+  // sobald sich die Struktur geändert hat (neue oder entfernte States), ohne
+  // dass der Benutzer die Seite neu laden muss.
+  router.get('/states/tree.json', requireAuth, async (req, res) => {
+    try {
+      const tree = await buildStatesTree(db, mqttClient.getCache());
+      res.json({ html: renderStates.renderStatesTree(tree) });
+    } catch (_) {
+      res.status(500).json({ html: '' });
+    }
+  });
+
   // Live-Werte als { topic: display } für die clientseitige Aktualisierung.
   router.get('/states/data.json', requireAuth, async (req, res) => {
     try {

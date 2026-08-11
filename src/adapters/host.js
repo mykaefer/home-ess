@@ -71,6 +71,30 @@ async function handleHostCall(entry, msg) {
       await instancesRepo.updateSettingKey(db, entry.instance.id, String(msg.key), msg.value);
       entry.instance.settings = { ...(entry.instance.settings || {}), [String(msg.key)]: msg.value };
       reply.result = true;
+    } else if (msg.method === 'states.list') {
+      // Vollständiger, quellenübergreifender State-Katalog (System, Custom, alle
+      // Adapter-Instanzen). Nur Metadaten inklusive Schreibbarkeit – Werte laufen
+      // weiterhin über subscribeState. Lazy require: states/repository lädt
+      // seinerseits adapters/states und damit diese Datei.
+      if (!db) throw new Error('States sind noch nicht verfügbar.');
+      const { listAllStates } = require('../states/repository');
+      const { topicForId } = require('../states/system-topics');
+      const values = await listAllStates(db, require('../mqtt/client').getCache());
+      const limit = Math.max(1, Math.min(50000, Number(msg.limit) || 20000));
+      // Berechnete Systemwerte tragen intern ihre fachliche Kurz-ID; nach außen
+      // ist ausschließlich das kanonische system://-Topic adressierbar.
+      const canonical = (entry) => (/^[a-z][a-z0-9_-]*:\/\//i.test(String(entry.id))
+        ? String(entry.id)
+        : topicForId(entry.id));
+      reply.result = values.slice(0, limit).map((entry) => ({
+        topic: canonical(entry),
+        name: entry.label == null ? String(entry.id) : String(entry.label),
+        category: entry.category == null ? '' : String(entry.category),
+        unit: entry.unit == null ? '' : String(entry.unit),
+        value: entry.value === undefined ? null : entry.value,
+        writable: !!entry.writable,
+        sourceType: entry.sourceType || 'adapter',
+      }));
     } else if (msg.method === 'state.write') {
       const topic = String(msg.topic || '').trim();
       if (!topic) throw new Error('Schreibziel fehlt.');

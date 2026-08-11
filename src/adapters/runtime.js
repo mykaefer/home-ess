@@ -137,6 +137,14 @@ function buildHost() {
         send({ type: 'unsubscribe', subscriptionId });
       };
     },
+    // Den gesamten homeESS-State-Katalog lesen (System, Custom, alle Adapter-
+    // Instanzen) als flache Liste aus Metadaten:
+    //   { topic, name, category, unit, value, writable, sourceType }
+    // Für Adapter, die States systemweit spiegeln oder weiterreichen. Werte
+    // kommen weiterhin ereignisgetrieben über subscribeState().
+    listStates(limit) {
+      return hostCall('states.list', limit == null ? {} : { limit: Number(limit) });
+    },
     // Einen Wert gezielt in eine homeESS-Datenquelle schreiben. Die Parent-
     // Laufzeit übernimmt MQTT-, Adapter- und Schreibschutzregeln zentral.
     writeState(topic, value) {

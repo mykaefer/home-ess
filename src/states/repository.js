@@ -6,6 +6,7 @@
 // nicht mehr wissen, aus welcher Quelle ein State stammt.
 
 const bus = require('../state-bus');
+const { compareNodes, compareCatalogItems, compareText, sortStates } = require('./sort');
 const {
   buildStatesTree: buildAdapterStatesTree,
   categoryParts,
@@ -22,15 +23,15 @@ function categoryList(root, isRoot = false) {
   const order = new Map(VALUE_CATEGORIES.map((name, index) => [name, index]));
   return Array.from(root.values())
     .sort((a, b) => {
-      if (!isRoot) return a.name.localeCompare(b.name, 'de');
+      if (!isRoot) return compareNodes(a, b);
       const left = order.has(a.name) ? order.get(a.name) : VALUE_CATEGORIES.length;
       const right = order.has(b.name) ? order.get(b.name) : VALUE_CATEGORIES.length;
-      return left - right || a.name.localeCompare(b.name, 'de');
+      return left - right || compareNodes(a, b);
     })
     .map((node) => {
       const children = categoryList(node._children);
       const stateCount = node.states.length + children.reduce((sum, child) => sum + child.stateCount, 0);
-      return { name: node.name, states: node.states, children, stateCount };
+      return { name: node.name, states: sortStates(node.states), children, stateCount };
     });
 }
 
@@ -123,7 +124,22 @@ async function buildStatesTree(db, cache = bus.getCache()) {
       ...systemCategories(system),
       ...virtual.flatMap((block) => block.categories || []),
     ]),
-  }, custom, ...physical];
+  }, ...sortBlocks([custom, ...physical])];
+}
+
+// Anzeigetitel eines Blocks – zugleich sein Sortierschlüssel. Der System-Block
+// behält seinen festen Platz an der Spitze (wie im Wertekatalog), alle übrigen
+// Prefix-Gruppen stehen alphanumerisch aufsteigend darunter.
+function blockSortKey(block) {
+  if (!block) return '';
+  if (block.custom) return 'custom://';
+  if (block.virtual) return String(block.adapterName || block.instanceName || '');
+  return `${block.prefix}://${block.instanceName}`;
+}
+
+function sortBlocks(blocks) {
+  return (blocks || []).filter(Boolean)
+    .sort((left, right) => compareText(blockSortKey(left), blockSortKey(right)));
 }
 
 function entriesFromBlocks(blocks) {
@@ -174,7 +190,7 @@ async function listAllStates(db, cache = bus.getCache()) {
     })),
     ...entriesFromBlocks(decorateAdapterBlocks(adapters)),
     ...custom,
-  ].sort((a, b) => String(a.label).localeCompare(String(b.label), 'de')));
+  ].sort(compareCatalogItems));
   snapshotInFlight = { db, cache, promise };
   try {
     const values = await promise;

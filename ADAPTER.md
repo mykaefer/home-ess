@@ -343,6 +343,9 @@ Das an die Factory übergebene `host`-Objekt:
 | `host.setStorage(key, value)` | Persistiert dynamische Instanzmetadaten unter `settings[key]` (z. B. erkannte Geräte). Der Schlüssel wird atomar in die vorhandenen Einstellungen gemergt und bleibt beim Speichern anderer Formularfelder erhalten. |
 | `await host.persistStorage(key, value)` | Wie `setStorage`, bestätigt aber erst nach erfolgreichem SQLite-Commit. Für Protokollschritte, die nachweislich erst nach dauerhafter lokaler Speicherung beginnen dürfen. Bestehende Adapter verwenden unverändert `setStorage`. |
 | `host.subscribeState(topic, listener)` | Abonniert ereignisgesteuert eine MQTT- oder `prefix://`-Datenquelle und liefert eine idempotente Abmeldefunktion. Ein vorhandener Retained-Wert wird sofort zugestellt. |
+| `await host.writeState(topic, value)` | Schreibt einen Wert in eine beliebige homeESS-Datenquelle (MQTT-Topic oder `prefix://`-State). MQTT-, Adapter- und Schreibschutzregeln setzt der Host zentral durch; nicht beschreibbare Ziele werden abgewiesen. |
+| `await host.listStates(limit?)` | Liefert den **quellenübergreifenden State-Katalog** als flache Liste `{ topic, name, category, unit, value, writable, sourceType }` — Systemwerte, Custom States und alle Adapter-Instanzen mit ihrem kanonischen Topic. Für Adapter, die States weiterreichen oder spiegeln. Werte selbst kommen weiterhin über `subscribeState`. |
+| `await host.getDataDirectory()` | Instanzeigenes Datenverzeichnis (0700) für Nutzdaten, die zu groß für die Instanz-Einstellungen sind. |
 | `host.getInstanceIdentity()` | Liefert die dauerhafte öffentliche homeESS-Instanz-ID und deren Fingerprint, niemals den privaten Schlüssel. |
 | `host.getSecret(key)` | Liest ein Secret aus dem restriktiven, instanzgebundenen Secret-Store. |
 | `host.setSecret(key, value)` | Schreibt ein Secret mit 0600/0700-Rechten außerhalb der normalen Adaptereinstellungen. |
@@ -419,6 +422,23 @@ bleiben vollständig abwärtskompatibel.
 - Werte aus demselben Geräte-Read möglichst gemeinsam mit `host.publishStates()`
   melden. Das ändert weder Topics noch Einzelwerte, vermeidet aber unnötigen
   Regelungs-Fan-out. `publishState()` bleibt für Einzelwerte vollständig gültig.
+
+### Adapter, die den States-Baum weiterreichen
+
+Manche Adapter stellen homeESS-States nach außen bereit (z. B. der
+MQTT-Broker-Adapter unter `states/`). Dafür gilt:
+
+- Der Katalog kommt aus `host.listStates()`, die Werte aus `host.subscribeState()`
+  und Schreibvorgänge ausschließlich aus `host.writeState()`.
+- **Der eigene Prefix wird ausgelassen.** Sonst spiegelt der Adapter seine
+  eigenen Werte zurück in sich selbst — eine Endlosschleife.
+- **Die Schreibrechte der States gelten unverändert.** Nur States mit
+  `writable: true` dürfen geschrieben werden; alles andere wird verworfen und
+  protokolliert.
+- **Im gespiegelten Baum entstehen keine neuen States.** Ein Schreib- oder
+  Publish-Versuch auf ein unbekanntes Ziel wird verworfen, nicht angelegt.
+- Abonniert wird bedarfsgetrieben und mengenbegrenzt: Ein Katalog mit tausenden
+  States darf nicht ungefragt vollständig abonniert werden.
 
 ## Topics & Routing
 
