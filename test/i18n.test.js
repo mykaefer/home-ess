@@ -31,9 +31,23 @@ test('Layout und Login übernehmen die systemweite Sprache', async () => {
   await i18n.select('de');
 });
 
-test('Adapterkataloge folgen der Systemwahl und behalten Schlüsselzugriff', async () => {
+test('Adapterkataloge folgen der Systemwahl und behalten Schlüsselzugriff', async (t) => {
+  // Eigener Adapter im Temp-Verzeichnis: mitgelieferte Adapter darf der
+  // Betreiber jederzeit entfernen, der Test darf davon nicht abhängen.
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'homeess-i18n-adapter-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(dir, 'languages'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'languages', 'de.json'), JSON.stringify({
+    code: 'de', name: 'Deutsch', locale: 'de-DE', messages: { temperature: 'Temperatur' },
+  }));
+  fs.writeFileSync(path.join(dir, 'languages', 'en.json'), JSON.stringify({
+    code: 'en', name: 'English', locale: 'en-GB', messages: { temperature: 'Temperature' },
+  }));
+
   await i18n.select('en');
-  const translations = i18n.adapterTranslations(path.join(__dirname, '..', 'adapter', 'demo'));
+  const translations = i18n.adapterTranslations(dir);
   assert.equal(translations.Temperatur, 'Temperature');
   assert.equal(translations['@temperature'], 'Temperature');
   await i18n.select('de');

@@ -197,3 +197,44 @@ test('Host liefert Adaptern den vollständigen State-Katalog samt Schreibrechten
   assert.equal(systemState.writable, false);
   await host.stopInstance(id);
 });
+
+test('Das Zugriffsobjekt führt canRead – die Verwaltungsbrücke hängt daran', () => {
+  const { accessForUser, fullAccess } = require('../src/auth/access');
+  // Ohne canRead bekäme jede Adapter-Verwaltungsseite „Keine Berechtigung.",
+  // weil die Brücke in routes/adapters.js genau dieses Feld durchreicht.
+  assert.equal(fullAccess().canRead, true);
+  assert.equal(accessForUser({ id: 1, name: 'Admin', is_admin: 1 }).canRead, true);
+  const reader = accessForUser({ id: 2, name: 'Lesen', role: 'read' });
+  assert.deepEqual(
+    { canRead: reader.canRead, canOperate: reader.canOperate, canWrite: reader.canWrite },
+    { canRead: true, canOperate: false, canWrite: false }
+  );
+  const operator = accessForUser({ id: 3, name: 'Bedienen', role: 'operate' });
+  assert.deepEqual(
+    { canRead: operator.canRead, canOperate: operator.canOperate, canWrite: operator.canWrite },
+    { canRead: true, canOperate: true, canWrite: false }
+  );
+});
+
+test('Eine gestoppte Instanz meldet verständlich statt „nicht verfügbar"', async (t) => {
+  const db = await database();
+  t.after(() => new Promise((resolve) => db.close(resolve)));
+  registry.loadRegistry();
+  const id = await instances.createInstance(db, 'managed', 'gestoppt');
+  host._setForkImpl(() => {
+    const child = new EventEmitter();
+    child.send = () => {};
+    child.kill = () => child.emit('exit', 0);
+    return child;
+  });
+  await host.initAdapters(db);
+  // Die Instanz wurde nie aktiviert – es gibt keinen Prozess, der antworten könnte.
+  await assert.rejects(
+    () => host.managementRequest(id, { method: 'GET', path: '/' }),
+    (error) => {
+      assert.match(error.message, /nicht aktiv/);
+      assert.equal(error.status, 409);
+      return true;
+    }
+  );
+});

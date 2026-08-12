@@ -1,0 +1,177 @@
+{
+  "id": "influxdb",
+  "name": "InfluxDB",
+  "prefix": "influxdb",
+  "version": "1.0.0",
+  "description": "Schreibt die Werte ausgewählter States als Historie in eine InfluxDB 1.x. Die Auswahl erfolgt je State über den Eigenschaften-Dialog auf der States-Seite. Eine lokale Datenbank lässt sich über die Ersteinrichtung anlegen; ebenso kann eine bereits vorhandene Installation auf diesem oder einem anderen Server eingebunden werden.",
+  "copyright": "Copyright (C) 2026 Kevin Käfer",
+  "multiInstance": true,
+  "main": "index.js",
+  "managementPage": {
+    "label": "Datenbank",
+    "stylesheet": "management.css"
+  },
+  "stateOptions": {
+    "label": "InfluxDB",
+    "hint": "Historie dieses States in dieser Datenbank. Ohne Alias wird das Topic als Name der Messreihe verwendet.",
+    "enabledField": "enabled",
+    "fields": [
+      {
+        "key": "enabled",
+        "label": "Werte in dieser InfluxDB speichern",
+        "type": "checkbox",
+        "default": false
+      },
+      {
+        "key": "alias",
+        "label": "DB-Alias (Messreihe)",
+        "type": "text",
+        "default": "",
+        "hint": "Name der Messreihe. Leer = aus dem Topic abgeleitet."
+      },
+      {
+        "key": "mode",
+        "label": "Speichern",
+        "type": "select",
+        "default": "change",
+        "options": [
+          {
+            "value": "change",
+            "label": "Bei Wertänderung"
+          },
+          {
+            "value": "interval",
+            "label": "In festen Abständen"
+          }
+        ]
+      },
+      {
+        "key": "intervalSeconds",
+        "label": "Abstand (Sekunden)",
+        "type": "number",
+        "default": 60,
+        "hint": "Nur bei festen Abständen. Es wird der zuletzt bekannte Wert geschrieben."
+      },
+      {
+        "key": "debounceSeconds",
+        "label": "Entprellzeit (Sekunden)",
+        "type": "number",
+        "default": 5,
+        "hint": "Mindestabstand zwischen zwei Schreibvorgängen dieses States. 0 = keine Entprellung."
+      },
+      {
+        "key": "retentionDays",
+        "label": "Keepalive (Tage)",
+        "type": "select",
+        "default": "730",
+        "hint": "Aufbewahrungsdauer in der Datenbank.",
+        "options": [
+          {
+            "value": "730",
+            "label": "730 Tage"
+          },
+          {
+            "value": "365",
+            "label": "365 Tage"
+          },
+          {
+            "value": "90",
+            "label": "90 Tage"
+          },
+          {
+            "value": "30",
+            "label": "30 Tage"
+          },
+          {
+            "value": "7",
+            "label": "7 Tage"
+          },
+          {
+            "value": "0",
+            "label": "unbegrenzt"
+          }
+        ]
+      }
+    ]
+  },
+  "settings": [
+    {
+      "key": "protocol",
+      "label": "Protokoll",
+      "type": "select",
+      "default": "http",
+      "options": [
+        "http",
+        "https"
+      ]
+    },
+    {
+      "key": "host",
+      "label": "Server",
+      "type": "text",
+      "default": "127.0.0.1",
+      "hint": "127.0.0.1 für eine lokale Datenbank, sonst Adresse des InfluxDB-Servers. Ist auf diesem Server noch keine InfluxDB installiert, führt die Unterseite „Datenbank\" durch die Ersteinrichtung."
+    },
+    {
+      "key": "port",
+      "label": "Port",
+      "type": "number",
+      "default": 8086
+    },
+    {
+      "key": "database",
+      "label": "Datenbank",
+      "type": "text",
+      "default": "homeess",
+      "hint": "Name der Datenbank. Sie wird bei der Ersteinrichtung angelegt; eine bereits vorhandene wird weiterverwendet."
+    },
+    {
+      "key": "username",
+      "label": "Benutzername",
+      "type": "text",
+      "default": "homeess"
+    },
+    {
+      "key": "password",
+      "label": "Kennwort",
+      "type": "password",
+      "default": "",
+      "hint": "Zugangsdaten der Datenbank. Bei der Ersteinrichtung über die Unterseite „Datenbank\" wird der Benutzer mit genau diesem Kennwort angelegt – mindestens acht Zeichen, keine Anführungszeichen."
+    },
+    {
+      "key": "verifyTls",
+      "label": "TLS-Zertifikat prüfen",
+      "type": "checkbox",
+      "default": true,
+      "hint": "Nur bei https. Ausschalten, wenn der Server ein selbst ausgestelltes Zertifikat verwendet."
+    },
+    {
+      "key": "createDatabase",
+      "label": "Fehlende Datenbank automatisch anlegen",
+      "type": "checkbox",
+      "default": true,
+      "hint": "Beim Verbinden wird die Datenbank angelegt, falls sie noch nicht existiert."
+    },
+    {
+      "key": "instanceTag",
+      "label": "Instanznamen als Tag mitschreiben",
+      "type": "checkbox",
+      "default": true,
+      "hint": "Schreibt jeden Messpunkt mit dem Tag instance=<Instanzname>. Damit bleiben mehrere Instanzen in derselben Datenbank getrennt, auch wenn sie denselben Alias verwenden. Ausschalten nur, wenn mehrere Instanzen bewusst in dieselbe Messreihe schreiben sollen."
+    },
+    {
+      "key": "flushSeconds",
+      "label": "Sammelfenster (Sekunden)",
+      "type": "number",
+      "default": 2,
+      "hint": "So lange werden Messpunkte gesammelt und dann gemeinsam geschrieben."
+    },
+    {
+      "key": "queueLimit",
+      "label": "Maximale Warteschlange",
+      "type": "number",
+      "default": 5000,
+      "hint": "Bei Ausfall der Datenbank zwischengespeicherte Messpunkte. Ältere werden verworfen."
+    }
+  ]
+}

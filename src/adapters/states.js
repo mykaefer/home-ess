@@ -7,6 +7,7 @@
 
 const bus = require('../state-bus');
 const { compareNodes, sortStates } = require('../states/sort');
+const stateProperties = require('../states/properties');
 const registry = require('./registry');
 const instancesRepo = require('./instances');
 const host = require('./host');
@@ -31,7 +32,10 @@ function loadStateRows(db) {
   });
 }
 
-function displayValue(value, unit) {
+// Anzeige eines Wertes. Sind für das Topic eigene Eigenschaften hinterlegt
+// (Nachkommastellen, Rundung, Einheit), gehen diese der Quelle vor.
+function displayValue(value, unit, topic) {
+  if (topic) return stateProperties.format(value, unit, topic);
   if (value == null || value === '') return '—';
   return unit ? `${value} ${unit}` : String(value);
 }
@@ -88,7 +92,7 @@ async function buildStatesTree(db) {
         unit: row.unit || '',
         writable: !!row.writable,
         value: value == null ? null : value,
-        display: displayValue(value, row.unit),
+        display: displayValue(value, row.unit, topic),
       });
     }
     const categories = categoryList(categoryRoot);

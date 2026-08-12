@@ -145,6 +145,39 @@ function buildHost() {
     listStates(limit) {
       return hostCall('states.list', limit == null ? {} : { limit: Number(limit) });
     },
+    // Tab im Eigenschaften-Dialog eines States anmelden oder aktualisieren.
+    // `schema` = { label?, hint?, enabledField?, fields: [ … ] }; `null`
+    // entfernt den Tab wieder. Ohne Aufruf gilt `stateOptions` aus dem
+    // Manifest. homeESS merkt sich das zuletzt gemeldete Schema, sodass der
+    // Tab auch bei gestoppter Instanz erscheint.
+    setStateOptionsSchema(schema) {
+      if (schema == null) {
+        send({ type: 'state-options-schema', schema: null });
+        return;
+      }
+      const fields = Array.isArray(schema.fields) ? schema.fields : [];
+      send({ type: 'state-options-schema', schema: {
+        ...schema,
+        label: schema.label == null ? schema.label : localize(schema.label),
+        hint: schema.hint == null ? schema.hint : localize(schema.hint),
+        fields: fields.map((field) => field && ({
+          ...field,
+          label: field.label == null ? field.label : localize(field.label),
+          hint: field.hint == null ? field.hint : localize(field.hint),
+          options: Array.isArray(field.options)
+            ? field.options.map((option) => (option && typeof option === 'object'
+              ? { ...option, label: option.label == null ? option.label : localize(option.label) }
+              : option))
+            : field.options,
+        })),
+      } });
+    },
+    // Die vom Benutzer je State hinterlegten Adapteroptionen dieser Instanz:
+    // [{ topic, options }]. Das Schema stammt aus manifest.stateOptions. Nach
+    // einer Änderung ruft homeESS zusätzlich stateOptionsChanged() auf.
+    listStateOptions() {
+      return hostCall('states.options');
+    },
     // Einen Wert gezielt in eine homeESS-Datenquelle schreiben. Die Parent-
     // Laufzeit übernimmt MQTT-, Adapter- und Schreibschutzregeln zentral.
     writeState(topic, value) {
@@ -245,6 +278,10 @@ process.on('message', (msg) => {
         send({ type: 'log', level: 'error', message: `State-Listener fehlgeschlagen: ${err.message}` });
       }
     }
+  } else if (msg.type === 'state-options') {
+    Promise.resolve()
+      .then(() => (adapter && typeof adapter.stateOptionsChanged === 'function' ? adapter.stateOptionsChanged() : null))
+      .catch((err) => send({ type: 'log', level: 'error', message: `stateOptionsChanged fehlgeschlagen: ${err.message}` }));
   } else if (msg.type === 'host-call-result') {
     const pending = hostCalls.get(String(msg.requestId));
     if (!pending) return;

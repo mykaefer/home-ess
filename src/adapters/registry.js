@@ -19,8 +19,18 @@ function adapterDir() {
   return config.ADAPTER_DIR;
 }
 
+// Feldschlüssel landen als HTML-Attribut (id/name/data-key) in der Oberfläche
+// und als JSON-Schlüssel in der Datenbank. Sie kommen aus einem Manifest, das
+// auch per ZIP hochgeladen worden sein kann — deshalb hier eine feste,
+// unkritische Zeichenmenge statt bloßer Stringkonvertierung.
+const FIELD_KEY_RE = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$/;
+
 function normalizeSettingField(field) {
   if (!field || typeof field !== 'object' || !field.key) return null;
+  if (!FIELD_KEY_RE.test(String(field.key))) {
+    console.error(`[adapters] Ungültiger Feldschlüssel "${String(field.key).slice(0, 40)}" – Feld wird verworfen.`);
+    return null;
+  }
   const type = ['text', 'number', 'checkbox', 'select', 'password'].includes(field.type)
     ? field.type
     : 'text';
@@ -107,6 +117,25 @@ function normalizePublicFiles(raw) {
     assets,
     label: raw.label ? String(raw.label) : 'Öffentliche Adapterdateien',
     hint: raw.hint ? String(raw.hint) : '',
+  };
+}
+
+// Optionale Einstellungen je State: Der Adapter deklariert ein Formularschema,
+// homeESS rendert daraus im Eigenschaften-Dialog eines States einen eigenen Tab
+// je aktiver Instanz und speichert die Werte je (Instanz, Topic). Der Adapter
+// liest sie über host.listStateOptions().
+function normalizeStateOptions(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const fields = Array.isArray(raw.fields) ? raw.fields.map(normalizeSettingField).filter(Boolean) : [];
+  if (!fields.length) return null;
+  return {
+    label: raw.label ? String(raw.label) : 'Adapter',
+    hint: raw.hint ? String(raw.hint) : '',
+    // Feld, dessen aktivierter Zustand entscheidet, ob der State überhaupt
+    // vom Adapter berücksichtigt wird. Ohne Angabe gilt jeder gespeicherte
+    // Datensatz als aktiv.
+    enabledField: raw.enabledField ? String(raw.enabledField) : '',
+    fields,
   };
 }
 
@@ -218,6 +247,7 @@ function readManifest(dir, folderName, options = {}) {
     mainPath,
     settings,
     stateEditor: normalizeStateEditor(parsed.stateEditor),
+    stateOptions: normalizeStateOptions(parsed.stateOptions),
     devicePage: normalizeDevicePage(parsed.devicePage),
     managementPage: normalizeManagementPage(parsed.managementPage, path.join(dir, folderName)),
     publicFiles: normalizePublicFiles(parsed.publicFiles),
@@ -270,4 +300,5 @@ function getManifest(adapterId) {
   return manifests.find((m) => m.id === String(adapterId).toLowerCase()) || null;
 }
 
-module.exports = { loadRegistry, getRegistry, getManifest, readManifest };
+module.exports = {
+  FIELD_KEY_RE, normalizeStateOptions, loadRegistry, getRegistry, getManifest, readManifest };

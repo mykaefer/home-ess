@@ -95,6 +95,11 @@ async function handleHostCall(entry, msg) {
         writable: !!entry.writable,
         sourceType: entry.sourceType || 'adapter',
       }));
+    } else if (msg.method === 'states.options') {
+      // Adapterspezifische Einstellungen, die der Benutzer je State im
+      // Eigenschaften-Dialog hinterlegt hat (Schema siehe manifest.stateOptions).
+      if (!db) throw new Error('States sind noch nicht verfügbar.');
+      reply.result = await require('../states/properties').listOptionsForInstance(db, entry.instance.id);
     } else if (msg.method === 'state.write') {
       const topic = String(msg.topic || '').trim();
       if (!topic) throw new Error('Schreibziel fehlt.');
@@ -144,6 +149,43 @@ function reloadRegistry() {
   router.clearSchemes();
   for (const manifest of manifests) router.registerScheme(manifest.prefix, manifest.id);
   return manifests;
+}
+
+// Von einer Instanz gemeldetes Tab-Schema für den Eigenschaften-Dialog.
+// Es wird mit derselben Funktion normalisiert wie ein Manifestschema und
+// persistiert, damit der Dialog es auch bei gestoppter Instanz kennt.
+function persistStateOptionsSchema(instanceId, raw) {
+  if (!db) return null;
+  const schema = raw == null ? null : registry.normalizeStateOptions(raw);
+  if (!schema) {
+    db.run('DELETE FROM adapter_state_schemas WHERE instance_id = ?', [instanceId]);
+    return null;
+  }
+  db.run(
+    `INSERT INTO adapter_state_schemas (instance_id, schema_json, updated_at)
+     VALUES (?, ?, ?)
+     ON CONFLICT(instance_id) DO UPDATE SET
+       schema_json = excluded.schema_json,
+       updated_at = excluded.updated_at`,
+    [instanceId, JSON.stringify(schema), Date.now()]
+  );
+  return schema;
+}
+
+// Das gültige Tab-Schema einer Instanz: gemeldetes Schema vor Manifestschema.
+function stateOptionsSchema(instanceId, manifest) {
+  return new Promise((resolve) => {
+    const fallback = manifest && manifest.stateOptions ? manifest.stateOptions : null;
+    if (!db) return resolve(fallback);
+    db.get('SELECT schema_json FROM adapter_state_schemas WHERE instance_id = ?', [instanceId], (error, row) => {
+      if (error || !row || !row.schema_json) return resolve(fallback);
+      try {
+        resolve(registry.normalizeStateOptions(JSON.parse(row.schema_json)) || fallback);
+      } catch (_) {
+        resolve(fallback);
+      }
+    });
+  });
 }
 
 function persistStates(instanceId, list) {
@@ -196,6 +238,9 @@ function handleMessage(entry, msg) {
       break;
     case 'states':
       persistStates(entry.instance.id, Array.isArray(msg.list) ? msg.list : []);
+      break;
+    case 'state-options-schema':
+      persistStateOptionsSchema(entry.instance.id, msg.schema);
       break;
     case 'status':
       // Vom Adapter gemeldeter Verbindungszustand (z. B. Modbus-TCP verbunden).
@@ -307,8 +352,17 @@ function cleanup(instanceId) {
 // vollständig unberührt.
 function managementRequest(instanceId, request, timeoutMs = MANAGEMENT_TIMEOUT_MS) {
   const entry = running.get(Number(instanceId));
-  if (!entry || !entry.child || !entry.manifest.managementPage) {
-    return Promise.reject(new Error('Adapterverwaltung ist nicht verfügbar.'));
+  if (!entry || !entry.child) {
+    // Die Verwaltung lebt im Adapterprozess: ohne laufende Instanz gibt es
+    // niemanden, der die Seite beantworten könnte.
+    const error = new Error('Diese Instanz ist nicht aktiv. Bitte sie auf der Adapterseite aktivieren und danach erneut öffnen.');
+    error.status = 409;
+    return Promise.reject(error);
+  }
+  if (!entry.manifest.managementPage) {
+    const error = new Error('Dieser Adapter stellt keine Verwaltungsseite bereit.');
+    error.status = 404;
+    return Promise.reject(error);
   }
   const requestId = `${process.pid}-${Date.now()}-${++requestSequence}-${crypto.randomBytes(4).toString('hex')}`;
   return new Promise((resolve, reject) => {
@@ -325,6 +379,19 @@ function managementRequest(instanceId, request, timeoutMs = MANAGEMENT_TIMEOUT_M
       reject(err);
     }
   });
+}
+
+// Der Benutzer hat die State-Optionen dieser Instanz geändert: der laufende
+// Adapter zieht sie selbst nach, ohne dass die Instanz neu starten muss.
+function notifyStateOptions(instanceId) {
+  const entry = running.get(Number(instanceId));
+  if (!entry || !entry.child) return false;
+  try {
+    entry.child.send({ type: 'state-options' });
+    return true;
+  } catch (_) {
+    return false;
+  }
 }
 
 function deliverSubscriptions(entries, event) {
@@ -467,6 +534,8 @@ module.exports = {
   isRunning,
   getStatus,
   managementRequest,
+  notifyStateOptions,
+  stateOptionsSchema,
   _setForkImpl,
   _handleMessage: handleMessage,
   _deliverSubscriptions: deliverSubscriptions,

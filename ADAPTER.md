@@ -8,7 +8,8 @@
 
 Inhalt: [Überblick](#überblick) · [Verzeichnislayout](#verzeichnislayout) ·
 [Manifest](#das-manifest-adapterjson) · [Einstiegsdatei](#die-einstiegsdatei-indexjs) ·
-[Host-API](#die-host-api) · [Hardwaredialoge](#capability-gesteuerte-hardwaredialoge) ·
+[Host-API](#die-host-api) · [State-Tabs](#optional-eigener-tab-im-eigenschaften-dialog-eines-states) ·
+[Hardwaredialoge](#capability-gesteuerte-hardwaredialoge) ·
 [States & Adressen](#states--adressen) ·
 [Topics & Routing](#topics--routing) · [Instanzen & Einstellungen](#instanzen--einstellungen) ·
 [Lebenszyklus & Isolation](#lebenszyklus--isolation) · [Checkliste](#checkliste-für-einen-neuen-adapter)
@@ -138,6 +139,12 @@ dass der Adapter verworfen wird.
 Bei `select` zusätzlich `options: ["a", "b"]` oder
 `options: [{ "value": "a", "label": "A" }]`. Optionales `hint` als Hilfetext.
 
+Ein **Feldschlüssel** (`key`) wird zum HTML-Attribut und zum Datenbankschlüssel
+und muss deshalb der Form `^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$` genügen. Felder
+mit abweichendem Schlüssel verwirft homeESS beim Laden des Manifests und
+protokolliert das. Das gilt für `settings`, `stateEditor.columns` und
+`stateOptions.fields` gleichermaßen.
+
 ### Optional: `stateEditor` (States/Register-Verwaltung mit Presets)
 
 Manche Adapter haben **viele, vom Nutzer zu pflegende** States (z. B. Modbus-
@@ -178,7 +185,120 @@ abzutippen. Das Preset-Dateiformat beschreibt der Adapter selbst in einer
 Nach jeder Änderung (Zeile gespeichert/gelöscht, Preset geladen) startet homeESS die
 Instanz neu, damit der Adapter die geänderte State-Liste übernimmt.
 
-### Optional: `devicePage` (erkannte Geräte)
+### Optional: Eigener Tab im Eigenschaften-Dialog eines States
+
+Auf der States-Seite öffnet die Stiftschaltfläche neben jedem Wert einen Dialog
+mit Tableiste. Der erste Tab **Allgemein** gehört homeESS (Nachkommastellen,
+Rundung, Einheit). **Jede aktive Adapterinstanz kann einen weiteren Tab
+anhängen** — hängt kein Adapter etwas an, bleibt es allein bei „Allgemein".
+
+Der Adapter liefert dafür ausschließlich ein **Formularschema**. Das Rendern,
+Prüfen und Speichern übernimmt homeESS; der Adapterprozess wird beim Öffnen des
+Dialogs nicht befragt und liefert kein Markup.
+
+#### Das Schema
+
+```js
+{
+  label: 'InfluxDB · homeess',   // optional, Überschrift im Tab. Default 'Adapter'
+  hint: 'Historie dieses States.', // optional, Erklärtext unter der Überschrift
+  enabledField: 'enabled',       // optional, Feld, das den Tab als belegt markiert
+  fields: [                      // Pflicht, mindestens ein gültiges Feld
+    { key: 'enabled', label: 'Aufzeichnen', type: 'checkbox', default: false },
+    { key: 'alias',   label: 'Messreihe',   type: 'text',     default: '', hint: '…' },
+    { key: 'mode',    label: 'Speichern',   type: 'select',   default: 'change',
+      options: [{ value: 'change', label: 'Bei Änderung' }, { value: 'interval', label: 'Intervall' }] },
+    { key: 'intervalSeconds', label: 'Abstand (s)', type: 'number', default: 60 },
+  ],
+}
+```
+
+| Feld | Pflicht | Bedeutung |
+|------|:------:|-----------|
+| `fields` | ja | Liste der Formularfelder. Ein Schema ohne gültiges Feld wird verworfen — der Tab erscheint dann nicht. |
+| `label` | nein | Überschrift im Tab-Inhalt. Die **Tab-Beschriftung selbst ist immer der Instanzname**, damit mehrere Instanzen unterscheidbar bleiben. |
+| `hint` | nein | Erklärtext unter der Überschrift. |
+| `enabledField` | nein | Schlüssel eines `checkbox`-Feldes. Ist es `true`, markiert homeESS den Tab als belegt (farbiger Punkt). Ohne Angabe gilt der Tab als belegt, sobald irgendein Wert gespeichert ist. |
+
+**Feldobjekt:** `key` (Pflicht), `label`, `type`, `default`, `hint`, bei
+`select` zusätzlich `options`. Typen und Schreibweise sind identisch zu den
+Instanz-Einstellungen: `text`, `number`, `checkbox`, `select`, `password`.
+Für `key` gilt dieselbe Form wie überall im Manifest
+(`^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$`); Felder mit abweichendem Schlüssel
+verwirft homeESS.
+
+#### Zwei Wege, ein Schema
+
+**Statisch im Manifest** — der Tab existiert, sobald die Instanz aktiviert ist,
+auch vor ihrem ersten Start:
+
+```json
+"stateOptions": {
+  "label": "InfluxDB",
+  "enabledField": "enabled",
+  "fields": [ { "key": "enabled", "label": "Aufzeichnen", "type": "checkbox", "default": false } ]
+}
+```
+
+**Zur Laufzeit über die Host-API** — für Felder, die erst im Betrieb feststehen
+(vorhandene Datenbanken, erkannte Kanäle, Auswahllisten aus dem Gerät):
+
+```js
+host.setStateOptionsSchema(schema);   // anmelden oder ersetzen
+host.setStateOptionsSchema(null);     // Tab wieder entfernen
+```
+
+Der Aufruf ersetzt das Schema vollständig (wie `setStates`) und darf beliebig
+oft erfolgen. homeESS **merkt sich das zuletzt gemeldete Schema**, sodass der
+Tab auch bei gestoppter Instanz erscheint. Ein gemeldetes Schema hat Vorrang vor
+dem Manifest; beides zusammen ist die empfohlene Kombination: das Manifest als
+Startfassung, die API für die verfeinerte Fassung.
+
+#### Die gepflegten Werte lesen
+
+```js
+const list = await host.listStateOptions();
+// [ { topic: 'hdp://wz/temperatur', options: { enabled: true, alias: 'temp', … } }, … ]
+```
+
+Geliefert werden ausschließlich die Werte **der eigenen Instanz**, und nur für
+States, zu denen etwas gespeichert wurde. Die Werte sind bereits typisiert:
+`checkbox` → Boolean, `number` → Zahl, `select` → einer der deklarierten Werte,
+sonst Text. Unbekannte Felder verwirft homeESS beim Speichern.
+
+Nach jeder Änderung im Dialog ruft homeESS die **optionale** Adaptermethode
+`stateOptionsChanged()` auf — ohne Neustart der Instanz:
+
+```js
+module.exports = function createAdapter(host) {
+  return {
+    async start() {
+      host.setStateOptionsSchema({ enabledField: 'enabled', fields: [
+        { key: 'enabled', label: 'Aufzeichnen', type: 'checkbox', default: false },
+      ] });
+      await this.stateOptionsChanged();
+    },
+    async stateOptionsChanged() {
+      for (const { topic, options } of await host.listStateOptions()) {
+        if (options.enabled) host.subscribeState(topic, (value) => { /* … */ });
+      }
+    },
+  };
+};
+```
+
+#### Regeln
+
+- Eine Instanz erhält **keinen Tab für ihre eigenen States** (`prefix://instanz/…`);
+  ein Adapter kann sich also nicht selbst als Quelle eintragen.
+- Nur **aktivierte** Instanzen erscheinen. Läuft die Instanz gerade nicht, ist
+  der Tab bedienbar und der Dialog weist darauf hin, dass die Änderung beim
+  nächsten Start übernommen wird.
+- Gespeichert wird je **(Instanz, Topic)**. Wird die Instanz gelöscht,
+  verschwinden ihre Zuordnungen mit.
+- Der Dialog ist für Benutzer ohne Schreibrecht lesbar, aber nicht speicherbar.
+
+### Optional: `devicePage` (erkannte Geräte)### Optional: `devicePage` (erkannte Geräte)
 
 Mit `"devicePage": { "storageKey": "devices", "label": "Geräte" }` aktiviert
 ein Adapter eine generische Geräteseite. Er persistiert dort anzuzeigende Geräte
@@ -344,6 +464,8 @@ Das an die Factory übergebene `host`-Objekt:
 | `await host.persistStorage(key, value)` | Wie `setStorage`, bestätigt aber erst nach erfolgreichem SQLite-Commit. Für Protokollschritte, die nachweislich erst nach dauerhafter lokaler Speicherung beginnen dürfen. Bestehende Adapter verwenden unverändert `setStorage`. |
 | `host.subscribeState(topic, listener)` | Abonniert ereignisgesteuert eine MQTT- oder `prefix://`-Datenquelle und liefert eine idempotente Abmeldefunktion. Ein vorhandener Retained-Wert wird sofort zugestellt. |
 | `await host.writeState(topic, value)` | Schreibt einen Wert in eine beliebige homeESS-Datenquelle (MQTT-Topic oder `prefix://`-State). MQTT-, Adapter- und Schreibschutzregeln setzt der Host zentral durch; nicht beschreibbare Ziele werden abgewiesen. |
+| `host.setStateOptionsSchema(schema)` | Hängt einen **Tab an den Eigenschaften-Dialog** eines States an oder ersetzt ihn; `null` entfernt ihn. Schema und Regeln siehe [Eigener Tab im Eigenschaften-Dialog](#optional-eigener-tab-im-eigenschaften-dialog-eines-states). Das zuletzt gemeldete Schema bleibt gespeichert. |
+| `await host.listStateOptions()` | Liefert die vom Benutzer je State hinterlegten **Adapteroptionen dieser Instanz** als `[{ topic, options }]`. Das Formularschema stammt aus `stateOptions` im Manifest (siehe unten). Nach einer Änderung ruft homeESS zusätzlich `stateOptionsChanged()` am Adapter auf. |
 | `await host.listStates(limit?)` | Liefert den **quellenübergreifenden State-Katalog** als flache Liste `{ topic, name, category, unit, value, writable, sourceType }` — Systemwerte, Custom States und alle Adapter-Instanzen mit ihrem kanonischen Topic. Für Adapter, die States weiterreichen oder spiegeln. Werte selbst kommen weiterhin über `subscribeState`. |
 | `await host.getDataDirectory()` | Instanzeigenes Datenverzeichnis (0700) für Nutzdaten, die zu groß für die Instanz-Einstellungen sind. |
 | `host.getInstanceIdentity()` | Liefert die dauerhafte öffentliche homeESS-Instanz-ID und deren Fingerprint, niemals den privaten Schlüssel. |
@@ -533,7 +655,12 @@ ihre eigenen Oberflächen einbauen.
 7. Bei komplexer Verwaltung `managementPage` deklarieren und
    `handleManagementRequest` implementieren; Secrets ausschließlich über den
    Secret-Store und Quellen über `subscribeState` anbinden.
-8. Bei capability-gesteuerter Hardware nur relevante Felder anzeigen und
+8. Sollen einzelne fremde States verarbeitet werden, einen Tab im
+   Eigenschaften-Dialog anhängen (`stateOptions` im Manifest und/oder
+   `host.setStateOptionsSchema(...)`) und die Auswahl über
+   `host.listStateOptions()` samt `stateOptionsChanged()` auswerten, statt eine
+   eigene Auswahlliste zu bauen.
+9. Bei capability-gesteuerter Hardware nur relevante Felder anzeigen und
    übertragen, die kanonische Konfiguration serverseitig validieren und den
    State-Katalog nach Hardwareänderungen vollständig erneuern.
 

@@ -7,6 +7,7 @@
 
 const bus = require('../state-bus');
 const { compareNodes, compareCatalogItems, compareText, sortStates } = require('./sort');
+const stateProperties = require('./properties');
 const {
   buildStatesTree: buildAdapterStatesTree,
   categoryParts,
@@ -109,7 +110,7 @@ async function buildStatesTree(db, cache = bus.getCache()) {
   const decorated = decorateAdapterBlocks(adapters);
   const virtual = decorated.filter((block) => block.virtual);
   const physical = decorated.filter((block) => !block.virtual);
-  return [{
+  const blocks = [{
     instanceId: 'system',
     instanceName: 'system',
     adapterId: null,
@@ -125,6 +126,7 @@ async function buildStatesTree(db, cache = bus.getCache()) {
       ...virtual.flatMap((block) => block.categories || []),
     ]),
   }, ...sortBlocks([custom, ...physical])];
+  return stateProperties.applyToBlocks(blocks);
 }
 
 // Anzeigetitel eines Blocks – zugleich sein Sortierschlüssel. Der System-Block
@@ -190,7 +192,7 @@ async function listAllStates(db, cache = bus.getCache()) {
     })),
     ...entriesFromBlocks(decorateAdapterBlocks(adapters)),
     ...custom,
-  ].sort(compareCatalogItems));
+  ]).then((values) => stateProperties.applyToEntries(values).sort(compareCatalogItems));
   snapshotInFlight = { db, cache, promise };
   try {
     const values = await promise;
