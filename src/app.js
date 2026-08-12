@@ -16,6 +16,7 @@ const { loadAllStateDefinitions } = require('./mqtt/state-definitions');
 const outputEngine = require('./output/engine');
 const systemStatesRuntime = require('./states/system-runtime');
 const customStates = require('./states/custom');
+const stateProperties = require('./states/properties');
 const timeHandler = require('./time-handler');
 
 const authRoutes = require('./auth/routes');
@@ -165,12 +166,17 @@ function createApp() {
   const customStatesReady = customStates.init(db).catch((err) => {
     console.error('[custom-states] Init fehlgeschlagen:', err && err.message);
   });
+  // Anzeige-Eigenschaften der States (Nachkommastellen, Einheit) in den Cache
+  // laden, bevor die ersten Seiten gerendert werden.
+  const statePropertiesReady = stateProperties.init(db).catch((err) => {
+    console.error('[state-properties] Init fehlgeschlagen:', err && err.message);
+  });
   const timeReady = timeHandler.init(db).catch((err) => {
     console.error('[time-handler] Init fehlgeschlagen:', err && err.message);
   });
   modulesReady
     .then(() => operatingReady)
-    .then(() => Promise.all([adaptersReady, customStatesReady, timeReady]))
+    .then(() => Promise.all([adaptersReady, customStatesReady, statePropertiesReady, timeReady]))
     .then(() => loadAllStateDefinitions(db))
     .then(async (defs) => {
       mqttClient.setStateDefinitions(defs);

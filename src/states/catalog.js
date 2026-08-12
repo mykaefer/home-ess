@@ -14,6 +14,7 @@ const {
   listCalculatedInternalValues,
 } = require('./system-values');
 const customStates = require('./custom');
+const stateProperties = require('./properties');
 
 const PAGE_SIZE = 100;
 const MAX_PATH_LENGTH = 1000;
@@ -61,7 +62,7 @@ function catalogEntryFromState(state, instance, categoryPath) {
     id,
     label: state.catalogLabel || `${instance.name} – ${state.name || state.address}`,
     value: cachedValue == null ? null : cachedValue,
-    display: state.display == null ? displayValue(cachedValue, state.unit || '') : state.display,
+    display: state.display == null ? displayValue(cachedValue, state.unit || '', id) : state.display,
     category: [adapterRoot(instance), ...categoryPath].join(' / '),
   };
 }
@@ -96,7 +97,7 @@ async function listLocalValues(db, cache) {
     buildProvidedStatesBlocks(db, cache),
     customStates.listCatalogEntries(db),
   ]);
-  return [
+  return stateProperties.applyToEntries([
     ...calculated.map((entry) => ({
       ...entry,
       category: `System / ${entry.category || 'Sonstiges'}`,
@@ -110,7 +111,7 @@ async function listLocalValues(db, cache) {
       topicSelectable: true,
     })),
     ...custom,
-  ];
+  ]);
 }
 
 function orderRootNodes(nodes) {
@@ -268,7 +269,7 @@ async function adapterLevel(db, cache, instance, path, offset) {
       ...row,
       topic: id,
       value,
-      display: displayValue(value, row.unit),
+      display: displayValue(value, row.unit, id),
     }, instance, categoryParts(row.category));
   }).map(({ id, label, display, category }) => ({ id, label, display, category }));
 
@@ -345,7 +346,7 @@ async function searchAdapterValues(db, cache, query) {
       ...row,
       topic: id,
       value,
-      display: displayValue(value, row.unit),
+      display: displayValue(value, row.unit, id),
     }, instance, categoryParts(row.category));
   });
   return { items, truncated };
@@ -425,7 +426,7 @@ async function resolveInternalValues(db, cache, sourceIds) {
       ...row,
       topic: id,
       value,
-      display: displayValue(value, row.unit),
+      display: displayValue(value, row.unit, id),
     }, instance, categoryParts(row.category)));
   }
 

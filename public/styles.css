@@ -1370,7 +1370,11 @@ h2 .cmd-confirm { font-size: 13px; vertical-align: middle; }
     background: #dbeafe;
 }
 
+/* Das Label nimmt den freien Platz ein. Dadurch stehen Wert und
+   Stiftschaltfläche immer rechtsbündig beieinander – der Wert wandert nicht
+   mehr mit der Beschriftungslänge. */
 .value-row-label {
+    flex: 1 1 auto;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1380,10 +1384,88 @@ h2 .cmd-confirm { font-size: 13px; vertical-align: middle; }
 }
 
 .value-row-now {
-    flex-shrink: 0;
+    flex: 0 0 auto;
+    margin-left: auto;
     color: #e67e22;
     font-weight: 700;
     white-space: nowrap;
+    text-align: right;
+}
+
+/* Stiftschaltfläche rechts neben dem Wert: öffnet den Eigenschaften-Dialog
+   (Nachkommastellen, Einheit, Adapteroptionen wie die InfluxDB-Historie). */
+.state-edit-button {
+    flex: 0 0 auto;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    color: #94a3b8;
+    font-size: 12px;
+    line-height: 1;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.12s ease, color 0.12s ease;
+}
+
+.value-row:hover .state-edit-button,
+.state-edit-button:focus-visible {
+    opacity: 1;
+}
+
+.state-edit-button:hover {
+    border-color: #cbd5e1;
+    background: #fff;
+    color: #1f2937;
+}
+
+.state-props-dialog {
+    min-width: min(560px, 92vw);
+}
+
+.state-props-tabbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 4px 0 14px;
+    border-bottom: 1px solid #e5e7eb;
+}
+
+.state-props-tab {
+    padding: 8px 14px;
+    border: none;
+    border-bottom: 2px solid transparent;
+    background: transparent;
+    color: #64748b;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.state-props-tab.is-active {
+    border-bottom-color: var(--color-action, #39705f);
+    color: #0f172a;
+}
+
+.state-props-heading {
+    margin: 0 0 6px;
+    font-size: 14px;
+}
+
+/* Adaptertab, der diesen State bereits führt. */
+.state-props-tab--used {
+    color: var(--color-action, #39705f);
+}
+
+.state-props-panel .field-block {
+    min-width: 0;
+}
+
+@media (max-width: 768px) {
+    /* Ohne Hover: die Schaltfläche bleibt dauerhaft sichtbar. */
+    .state-edit-button { opacity: 1; }
 }
 
 /* Dashboard-Widgets, Gruppen & Tabs */

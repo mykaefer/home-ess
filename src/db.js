@@ -697,6 +697,43 @@ function openDatabase() {
         FOREIGN KEY (folder_id) REFERENCES custom_state_folders(id) ON DELETE CASCADE
       )`
     );
+    // Anzeige-Eigenschaften eines beliebigen States, unabhängig von seiner
+    // Quelle (Adapter, System, Custom). Der Schlüssel ist das kanonische Topic;
+    // fehlt ein Eintrag, gilt weiterhin die Darstellung der Quelle.
+    db.run(
+      `CREATE TABLE IF NOT EXISTS state_properties (
+        topic TEXT PRIMARY KEY,
+        decimals INTEGER,
+        rounding TEXT NOT NULL DEFAULT 'nearest',
+        unit TEXT NOT NULL DEFAULT '',
+        updated_at INTEGER NOT NULL DEFAULT 0
+      )`
+    );
+    // Von einer laufenden Adapterinstanz gemeldetes Tab-Schema für den
+    // Eigenschaften-Dialog (host.setStateOptionsSchema). Es wird persistiert,
+    // damit der Dialog den Tab auch bei gestoppter Instanz zeigen kann; ohne
+    // Meldung gilt `stateOptions` aus dem Manifest.
+    db.run(
+      `CREATE TABLE IF NOT EXISTS adapter_state_schemas (
+        instance_id INTEGER PRIMARY KEY,
+        schema_json TEXT NOT NULL DEFAULT '',
+        updated_at INTEGER NOT NULL DEFAULT 0,
+        FOREIGN KEY (instance_id) REFERENCES adapter_instances(id) ON DELETE CASCADE
+      )`
+    );
+    // Adapterspezifische Einstellungen je State und Instanz (z. B. Historie in
+    // einer InfluxDB). Das Schema stammt aus dem Manifest des Adapters
+    // (stateOptions); homeESS speichert die ausgefüllten Werte als JSON.
+    db.run(
+      `CREATE TABLE IF NOT EXISTS state_adapter_options (
+        instance_id INTEGER NOT NULL,
+        topic TEXT NOT NULL,
+        options_json TEXT NOT NULL DEFAULT '{}',
+        updated_at INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (instance_id, topic),
+        FOREIGN KEY (instance_id) REFERENCES adapter_instances(id) ON DELETE CASCADE
+      )`
+    );
     db.run(
       `CREATE UNIQUE INDEX IF NOT EXISTS idx_custom_folders_parent_name
          ON custom_state_folders (IFNULL(parent_id, -1), name COLLATE NOCASE)`

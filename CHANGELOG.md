@@ -3,6 +3,69 @@
 Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [1.4.5] — 2026-08-11
+
+### Hinzugefügt
+
+- **Eigenschaften-Dialog für jeden State.** Auf der States-Seite öffnet eine
+  Stiftschaltfläche rechts neben dem Wert einen Dialog mit Tableiste. Der Tab
+  **Allgemein** stellt Nachkommastellen samt Rundungsart (kaufmännisch,
+  ab-, aufrunden, abschneiden) und eine Einheit ein, die in der Anzeige an den
+  Wert gehängt wird und die Einheit der Quelle überschreibt. Die Angaben gelten
+  quellenübergreifend für System-, Custom- und Adapter-States und wirken auf
+  States-Seite, Wertekatalog und State-Picker. Gespeichert wird in der neuen
+  Tabelle `state_properties`; der Rohwert bleibt unverändert.
+- **Adapter hängen eigene Tabs an den Eigenschaften-Dialog.** Ein Adapter
+  liefert dafür nur ein Formularschema — statisch über `stateOptions` im
+  Manifest, zur Laufzeit über die neue Host-API
+  `host.setStateOptionsSchema(schema)` (`null` entfernt den Tab wieder). Das
+  zuletzt gemeldete Schema wird persistiert (Tabelle `adapter_state_schemas`)
+  und geht dem Manifest vor, sodass der Tab auch bei gestoppter Instanz
+  erscheint. Hängt kein Adapter etwas an, bleibt es beim Tab „Allgemein".
+  homeESS rendert, prüft und speichert je (Instanz, Topic) in
+  `state_adapter_options`; der Adapterprozess wird beim Öffnen nicht befragt und
+  liefert kein Markup. Gelesen wird über `host.listStateOptions()`, und nach
+  jeder Änderung ruft homeESS die optionale Adaptermethode
+  `stateOptionsChanged()` auf — ohne Neustart der Instanz. Für ihre eigenen
+  States erscheint eine Instanz nicht als Tab. Die vollständige Schnittstelle
+  steht in [ADAPTER.md](ADAPTER.md).
+- **Sichtbarer Zeitpunkt der nächsten Updateprüfung.** Der Updatestatus führt
+  jetzt `nextCheckAt`; die Einstellungsseite zeigt ihn neben der letzten Prüfung
+  an und führt ihn live nach.
+
+### Behoben
+
+- **Adapter-Verwaltungsseiten meldeten „Keine Berechtigung."** Das interne
+  Zugriffsobjekt führte kein `canRead`, obwohl `GET /me/access` und
+  [ADAPTER.md](ADAPTER.md) es als Vertrag beschreiben. Die Management-Brücke
+  reichte deshalb für **jeden** Benutzer `canRead: false` an den Adapter durch —
+  auch für Administratoren. Jeder angemeldete Benutzer hat jetzt Leserecht;
+  Bedienen und Schreiben bleiben an die Rolle gebunden.
+- **Verständliche Meldung bei gestoppter Instanz.** Die Verwaltungsseite eines
+  nicht aktiven Adapters antwortete mit „Adapterverwaltung ist nicht
+  verfügbar." Sie nennt jetzt den Grund und den nächsten Schritt (Instanz auf
+  der Adapterseite aktivieren) und antwortet mit 409 statt 500.
+
+### Geändert
+
+- **Feldschlüssel aus Adaptermanifesten werden strikt geprüft.** `key` in
+  `settings`, `stateEditor.columns` und `stateOptions.fields` muss der Form
+  `^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$` genügen; abweichende Felder werden beim
+  Laden verworfen und protokolliert. Die Schlüssel landen als HTML-Attribut in
+  der Oberfläche, und Manifeste können per ZIP hochgeladen werden — ohne diese
+  Prüfung ließe sich darüber Markup einschleusen. Kein mitgelieferter Adapter
+  ist betroffen.
+- **Updateprüfung und Installationsautomatik sind in den Einstellungen
+  getrennt.** Das Prüfintervall stand bisher im Block des Wartungsfensters und
+  wurde mit ihm ausgegraut, sobald die automatische Installation ausgeschaltet
+  war — obwohl die Prüfung immer lief. Es steht jetzt als eigenes Feld darüber
+  und ist unabhängig bedienbar. Das Wartungsfenster legt ausschließlich fest,
+  wann ein bereits gefundenes Update eingespielt werden darf.
+- **Fehlgeschlagene Updateprüfungen blockieren nicht mehr das ganze Intervall.**
+  Nach einem Fehler wird der nächste Versuch nach spätestens 15 Minuten
+  unternommen statt erst nach Ablauf des eingestellten Abstands, der wöchentlich
+  oder monatlich sein kann.
+
 ## [1.4.4] — 2026-08-11
 
 ### Hinzugefügt

@@ -84,6 +84,10 @@ function accessForUser(user) {
     userName: user.name || 'Administrator',
     isAdmin,
     role,
+    // Jeder angemeldete Benutzer darf lesen; erst Bedienen und Schreiben sind
+    // an die Rolle gebunden. Das Feld gehört zum dokumentierten Vertrag von
+    // GET /me/access und wird auch an Adapter-Verwaltungsseiten durchgereicht.
+    canRead: true,
     canWrite: role === 'write',
     canOperate: role === 'write' || role === 'operate',
     // null = alle Seiten sichtbar (Administrator oder ohne Einschränkung).
@@ -99,6 +103,7 @@ function fullAccess() {
     userName: '',
     isAdmin: true,
     role: 'write',
+    canRead: true,
     canWrite: true,
     canOperate: true,
     visiblePages: null,

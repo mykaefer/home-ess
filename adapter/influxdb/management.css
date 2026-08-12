@@ -1,0 +1,106 @@
+/* InfluxDB-Verwaltung. Alle Regeln bleiben unter der adapterspezifischen
+   Wurzelklasse .influx gekapselt und werden nur auf dieser Seite geladen. */
+.influx {
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.influx h1 { margin: 0 0 16px; }
+.influx h2 { margin: 28px 0 10px; font-size: 16px; }
+
+.influx-status {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 24px;
+    padding: 14px 16px;
+    border: 1px solid var(--color-border, #e5e7eb);
+    border-radius: 10px;
+    background: var(--color-surface, #fff);
+    font-size: 14px;
+}
+
+.influx-note {
+    margin: 8px 0;
+    padding: 10px 12px;
+    border-left: 3px solid #cbd5e1;
+    background: #f8fafc;
+    color: #475569;
+    font-size: 14px;
+}
+
+.influx-note--ok { border-left-color: #0f9d58; }
+.influx-note--warn { border-left-color: #d97706; }
+.influx-note--busy { border-left-color: #2563eb; }
+
+.influx-manual { margin: 12px 0; }
+.influx-manual summary { cursor: pointer; font-weight: 700; font-size: 14px; }
+
+.influx-script {
+    max-height: 420px;
+    overflow: auto;
+    padding: 12px;
+    border-radius: 8px;
+    background: #0f172a;
+    color: #e2e8f0;
+    font-size: 12px;
+    line-height: 1.5;
+    white-space: pre;
+}
+
+.influx-log {
+    margin: 8px 0;
+    padding-left: 18px;
+    color: #475569;
+    font-size: 13px;
+}
+
+.influx-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+}
+
+.influx-table th,
+.influx-table td {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--color-border, #e5e7eb);
+    text-align: left;
+}
+
+.influx-table thead th {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #6b7280;
+}
+
+.influx-table code { font-size: 13px; word-break: break-all; }
+.influx-empty { color: #6b7280; }
+
+.influx-button {
+    padding: 8px 14px;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    background: var(--color-action, #39705f);
+    color: #fff;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.influx-button:hover { background: var(--color-action-hover, #2c594b); }
+.influx-button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.influx-button--secondary {
+    background: #e2e8f0;
+    color: #0f172a;
+}
+
+.influx-button--secondary:hover { background: #cbd5e1; }
+
+@media (prefers-color-scheme: dark) {
+    .influx-status { border-color: #334155; background: #111827; }
+    .influx-note { background: #111827; color: #94a3b8; }
+    .influx-table th, .influx-table td { border-bottom-color: #334155; }
+    .influx-table thead th, .influx-empty, .influx-log { color: #94a3b8; }
+}

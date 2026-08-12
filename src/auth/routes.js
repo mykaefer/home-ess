@@ -81,7 +81,7 @@ function authRoutes(db) {
       user: acc.userName,
       role: acc.role,
       isAdmin: acc.isAdmin,
-      canRead: true,
+      canRead: acc.canRead !== false,
       canOperate: acc.canOperate,
       canWrite: acc.canWrite,
       language: i18n.current(),
