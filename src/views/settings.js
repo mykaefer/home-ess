@@ -134,7 +134,7 @@ function renderSettings({
     internal: { time: '--:--:--', date: '--.--.----' },
     mqtt: { available: false, fresh: false, display: '' }, offsetSeconds: 0,
   };
-  const update = updateStatus || { currentVersion: '—', availableVersion: null, checkedAt: null, checkError: null, supported: false };
+  const update = updateStatus || { currentVersion: '—', availableVersion: null, checkedAt: null, nextCheckAt: null, checkError: null, supported: false };
   const automaticChecked = updateConfig.automaticEnabled ? ' checked' : '';
   const intervalOptions = Object.entries(INTERVAL_LABELS)
     .map(([value, label]) => `<option value="${value}"${updateConfig.checkInterval === value ? ' selected' : ''}>${escapeHtml(label)}</option>`)
@@ -291,24 +291,28 @@ ${tabBar}
           <form action="/settings/update" method="POST" class="settings-card settings-form update-settings-card">
             <div class="settings-card-head">
               <h2>homeESS-Updates</h2>
-              <p class="settings-card-hint">Prüft stabile Releases aus dem offiziellen GitHub-Repository. Automatische Installationen sind standardmäßig ausgeschaltet und erfolgen ausschließlich im festgelegten Wartungsfenster.</p>
+              <p class="settings-card-hint">Prüft stabile Releases aus dem offiziellen GitHub-Repository. Die Prüfung läuft eigenständig; die automatische Installation ist davon unabhängig, standardmäßig ausgeschaltet und erfolgt ausschließlich im festgelegten Wartungsfenster.</p>
             </div>
             ${statusText(updateMessage, 'success')}
             <div class="update-settings-versions" aria-live="polite">
               <div><span>Installierte Version</span><strong id="settingsUpdateCurrent">${escapeHtml(update.currentVersion)}</strong></div>
               <div><span>Online verfügbar</span><strong id="settingsUpdateAvailable">${escapeHtml(update.availableVersion || 'Kein neueres Release')}</strong></div>
               <div><span>Letzte Prüfung</span><strong id="settingsUpdateChecked">${escapeHtml(update.checkedAt ? new Date(update.checkedAt).toLocaleString(locale) : 'Noch nicht geprüft')}</strong></div>
+              <div><span>Nächste Prüfung</span><strong id="settingsUpdateNext">${escapeHtml(update.nextCheckAt ? new Date(update.nextCheckAt).toLocaleString(locale) : 'Wird geplant …')}</strong></div>
             </div>
             <p class="settings-card-hint settings-update-result" id="settingsUpdateResult">${escapeHtml(update.checkError || '')}</p>
-            <label class="checkbox-field" for="automaticUpdatesEnabled">
-              <input type="checkbox" id="automaticUpdatesEnabled" name="automaticEnabled" value="1"${automaticChecked} onchange="toggleUpdateMaintenanceFields()">
-              <span>Neue Versionen automatisch im Wartungsfenster installieren</span>
-            </label>
-            <div class="field-grid update-maintenance-fields" id="updateMaintenanceFields">
+            <div class="field-grid update-check-fields">
               <div class="field">
-                <label for="updateCheckInterval">Auf Updates prüfen</label>
+                <label for="updateCheckInterval">Automatisch auf Updates prüfen</label>
                 <select id="updateCheckInterval" name="checkInterval">${intervalOptions}</select>
               </div>
+            </div>
+            <p class="settings-card-hint">Dieser Abstand gilt unabhängig von der automatischen Installation. Sobald eine neuere Version vorliegt, erscheint der Hinweis in der Kopfzeile. Nach einer fehlgeschlagenen Prüfung wird der nächste Versuch vorgezogen.</p>
+            <label class="checkbox-field" for="automaticUpdatesEnabled">
+              <input type="checkbox" id="automaticUpdatesEnabled" name="automaticEnabled" value="1"${automaticChecked} onchange="toggleUpdateMaintenanceFields()">
+              <span>Gefundene Versionen automatisch im Wartungsfenster installieren</span>
+            </label>
+            <div class="field-grid update-maintenance-fields" id="updateMaintenanceFields">
               <div class="field">
                 <label for="updateMaintenanceStart">Wartungsfenster von</label>
                 <input type="time" id="updateMaintenanceStart" name="maintenanceStart" value="${escapeHtml(updateConfig.maintenanceStart)}">
@@ -318,7 +322,7 @@ ${tabBar}
                 <input type="time" id="updateMaintenanceEnd" name="maintenanceEnd" value="${escapeHtml(updateConfig.maintenanceEnd)}">
               </div>
             </div>
-            <p class="settings-card-hint">Das Wartungsfenster verwendet die oben konfigurierte homeESS-Zeitzone. Gleiche Start- und Endzeit bedeutet ganztägig; ein Fenster über Mitternacht ist möglich.</p>
+            <p class="settings-card-hint">Das Wartungsfenster legt ausschließlich fest, wann ein bereits gefundenes Update eingespielt werden darf. Es verwendet die oben konfigurierte homeESS-Zeitzone; gleiche Start- und Endzeit bedeutet ganztägig, ein Fenster über Mitternacht ist möglich.</p>
             <div class="button-row update-settings-actions">
               <button type="submit">Updateeinstellungen speichern</button>
               <button type="button" class="button-secondary" id="settingsUpdateCheck" onclick="checkHomeessUpdate()">Jetzt auf Updates prüfen</button>
@@ -422,6 +426,8 @@ ${remote.body}
       if (current) current.textContent = status.currentVersion || '—';
       if (available) available.textContent = status.availableVersion || 'Kein neueres Release';
       if (checked) checked.textContent = status.checkedAt ? new Date(status.checkedAt).toLocaleString(document.documentElement.lang || 'de-DE') : 'Noch nicht geprüft';
+      var next = document.getElementById('settingsUpdateNext');
+      if (next) next.textContent = status.nextCheckAt ? new Date(status.nextCheckAt).toLocaleString(document.documentElement.lang || 'de-DE') : 'Wird geplant …';
       if (result) result.textContent = status.checkError || (status.availableVersion ? 'Eine neue Version ist verfügbar.' : 'homeESS ist aktuell.');
       if (updateNow) {
         updateNow.disabled = !(status.supported && status.availableVersion);

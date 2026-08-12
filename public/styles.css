@@ -304,6 +304,7 @@ body {
 .update-settings-versions span { color: var(--color-text-soft); font-size: 12px; }
 .update-settings-versions strong { overflow-wrap: anywhere; font-size: 14px; }
 .settings-update-result { min-height: 20px; margin: -7px 0 14px; }
+.update-check-fields { margin: 18px 0 10px; }
 .update-maintenance-fields { margin: 18px 0 10px; transition: opacity 0.2s ease; }
 .update-maintenance-fields.is-disabled { opacity: 0.5; }
 .update-settings-actions { flex-wrap: wrap; margin-top: 18px; }

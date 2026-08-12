@@ -10,6 +10,9 @@ const updateSettingsRepo = require('./settings');
 
 const pkg = require('../../package.json');
 const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
+// Nach einer fehlgeschlagenen Prüfung früher erneut versuchen: eine kurze
+// Netzstörung darf nicht das gesamte Prüfintervall blockieren.
+const CHECK_RETRY_MS = 15 * 60 * 1000;
 const AUTOMATION_TICK_MS = 60 * 1000;
 const UPDATE_UNIT = '/etc/systemd/system/home-ess-update.path';
 
@@ -43,6 +46,7 @@ class UpdateService {
     this.check = readJson(this.checkFile) || {};
     this.timer = null;
     this.automationTimer = null;
+    this.nextCheckAt = null;
     this.started = false;
     this.checkPromise = null;
     this.db = null;
@@ -53,6 +57,18 @@ class UpdateService {
     return fs.existsSync(this.infrastructureFile);
   }
 
+  // Eingestellter Abstand der automatischen Updateprüfung. Sie läuft immer –
+  // unabhängig davon, ob Updates automatisch installiert werden dürfen.
+  checkIntervalMs() {
+    return updateSettingsRepo.INTERVALS[this.settings.checkInterval] || CHECK_INTERVAL_MS;
+  }
+
+  // Abstand bis zur nächsten fälligen Prüfung, nach einem Fehler verkürzt.
+  currentCheckDelayMs() {
+    const interval = this.checkIntervalMs();
+    return this.check && this.check.error ? Math.min(interval, CHECK_RETRY_MS) : interval;
+  }
+
   availableVersion() {
     const latest = normalizeVersion(this.check.latestVersion);
     return latest && compareVersions(latest, this.currentVersion) > 0 ? latest : null;
@@ -61,7 +77,7 @@ class UpdateService {
   async checkNow({ force = false } = {}) {
     if (this.checkPromise) return this.checkPromise;
     const checkedAt = Date.parse(this.check.checkedAt || '');
-    const intervalMs = updateSettingsRepo.INTERVALS[this.settings.checkInterval] || CHECK_INTERVAL_MS;
+    const intervalMs = this.currentCheckDelayMs();
     if (!force && Number.isFinite(checkedAt) && this.now() - checkedAt < intervalMs) {
       return this.getStatus();
     }
@@ -101,6 +117,7 @@ class UpdateService {
       availableVersion: this.availableVersion(),
       releaseUrl: this.check.releaseUrl || null,
       checkedAt: this.check.checkedAt || null,
+      nextCheckAt: this.nextCheckAt ? new Date(this.nextCheckAt).toISOString() : null,
       checkError: this.check.error || null,
       supported: this.isSupported(),
       settings: { ...this.settings },
@@ -145,10 +162,11 @@ class UpdateService {
 
   scheduleNextCheck() {
     if (this.timer) clearTimeout(this.timer);
-    const intervalMs = updateSettingsRepo.INTERVALS[this.settings.checkInterval] || CHECK_INTERVAL_MS;
+    const intervalMs = this.currentCheckDelayMs();
     const checkedAt = Date.parse(this.check.checkedAt || '');
     const elapsed = Number.isFinite(checkedAt) ? Math.max(0, this.now() - checkedAt) : intervalMs;
     const delay = Math.max(1000, intervalMs - elapsed);
+    this.nextCheckAt = this.now() + delay;
     this.timer = setTimeout(async () => {
       await this.checkNow().catch(() => {});
       await this.maybeInstallAutomatic().catch(() => {});
@@ -192,6 +210,7 @@ class UpdateService {
     if (this.automationTimer) clearInterval(this.automationTimer);
     this.timer = null;
     this.automationTimer = null;
+    this.nextCheckAt = null;
     this.started = false;
   }
 }
@@ -201,3 +220,4 @@ const service = new UpdateService();
 module.exports = service;
 module.exports.UpdateService = UpdateService;
 module.exports.CHECK_INTERVAL_MS = CHECK_INTERVAL_MS;
+module.exports.CHECK_RETRY_MS = CHECK_RETRY_MS;

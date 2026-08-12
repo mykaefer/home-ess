@@ -7,7 +7,7 @@ const os = require('os');
 const path = require('path');
 const sqlite3 = require('sqlite3').verbose();
 const { normalizeVersion, compareVersions } = require('../src/update/version');
-const { UpdateService, CHECK_INTERVAL_MS } = require('../src/update/service');
+const { UpdateService, CHECK_INTERVAL_MS, CHECK_RETRY_MS } = require('../src/update/service');
 const { renderLayout } = require('../src/views/layout');
 const updateRoutes = require('../src/routes/update');
 const updateSettings = require('../src/update/settings');
@@ -150,6 +150,113 @@ test('Allgemeine Einstellungen enthalten Updatekarte und Automatikstandard', () 
   assert.doesNotMatch(html, /id="automaticUpdatesEnabled"[^>]*\schecked/);
   assert.match(html, /data-version="1\.3\.42"/);
   assert.match(html, /Jetzt auf Updates prüfen/);
+});
+
+test('Das Prüfintervall steht außerhalb des Wartungsfensters und bleibt immer bedienbar', () => {
+  const html = renderSettings({
+    updateStatus: {
+      currentVersion: '1.4.4', availableVersion: null, checkedAt: null,
+      nextCheckAt: '2026-08-11T04:00:00.000Z', supported: true,
+    },
+  });
+  const intervalAt = html.indexOf('id="updateCheckInterval"');
+  const automaticAt = html.indexOf('id="automaticUpdatesEnabled"');
+  const maintenanceAt = html.indexOf('id="updateMaintenanceFields"');
+  assert.ok(intervalAt > 0 && automaticAt > 0 && maintenanceAt > 0);
+  assert.ok(intervalAt < automaticAt, 'die Prüfung steht vor der Installationsautomatik');
+  assert.ok(automaticAt < maintenanceAt, 'das Wartungsfenster gehört zur Automatik');
+  // Der ausgraubare Wartungsblock enthält nur noch die beiden Zeitfelder.
+  const maintenanceBlock = html.slice(maintenanceAt, html.indexOf('Das Wartungsfenster legt'));
+  assert.doesNotMatch(maintenanceBlock, /updateCheckInterval/);
+  assert.match(maintenanceBlock, /updateMaintenanceStart/);
+  assert.match(maintenanceBlock, /updateMaintenanceEnd/);
+  // Der nächste Prüfzeitpunkt ist sichtbar und wird live nachgeführt.
+  assert.match(html, /id="settingsUpdateNext"/);
+  assert.match(html, /status\.nextCheckAt/);
+});
+
+test('Die Updateprüfung läuft unabhängig von der Installationsautomatik', async (t) => {
+  const { root, unit } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  let now = Date.parse('2026-08-11T10:00:00Z');
+  let calls = 0;
+  const service = new UpdateService({
+    dataDir: root,
+    currentVersion: '1.4.4',
+    infrastructureFile: unit,
+    now: () => now,
+    fetchLatest: async () => {
+      calls += 1;
+      return { version: '1.4.5', url: 'https://example.invalid/release' };
+    },
+  });
+  // Automatik aus, Prüfung stündlich: der Hinweis auf eine neue Version muss
+  // trotzdem von selbst erscheinen.
+  service.configure({ automaticEnabled: false, checkInterval: 'hourly' });
+  assert.equal(service.checkIntervalMs(), 60 * 60 * 1000);
+
+  await service.checkNow();
+  assert.equal(calls, 1);
+  assert.equal(service.getStatus().availableVersion, '1.4.5');
+
+  now += 30 * 60 * 1000;
+  await service.checkNow();
+  assert.equal(calls, 1, 'innerhalb des Intervalls wird nicht erneut geprüft');
+  now += 31 * 60 * 1000;
+  await service.checkNow();
+  assert.equal(calls, 2, 'nach Ablauf des eingestellten Intervalls schon');
+});
+
+test('Nach einer fehlgeschlagenen Prüfung wird der nächste Versuch vorgezogen', async (t) => {
+  const { root, unit } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  let now = Date.parse('2026-08-11T10:00:00Z');
+  let fail = true;
+  let calls = 0;
+  const service = new UpdateService({
+    dataDir: root,
+    currentVersion: '1.4.4',
+    infrastructureFile: unit,
+    now: () => now,
+    fetchLatest: async () => {
+      calls += 1;
+      if (fail) throw new Error('GitHub nicht erreichbar.');
+      return { version: '1.4.5', url: 'https://example.invalid/release' };
+    },
+  });
+  service.configure({ automaticEnabled: false, checkInterval: 'monthly' });
+
+  await service.checkNow();
+  assert.equal(service.getStatus().checkError, 'GitHub nicht erreichbar.');
+  assert.equal(service.currentCheckDelayMs(), CHECK_RETRY_MS,
+    'ein Fehler darf das Monatsintervall nicht blockieren');
+
+  now += CHECK_RETRY_MS + 1;
+  fail = false;
+  await service.checkNow();
+  assert.equal(calls, 2);
+  assert.equal(service.getStatus().checkError, null);
+  assert.equal(service.currentCheckDelayMs(), require('../src/update/settings').INTERVALS.monthly);
+});
+
+test('Der Status nennt den geplanten Zeitpunkt der nächsten Prüfung', async (t) => {
+  const { root, unit } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const now = Date.parse('2026-08-11T10:00:00Z');
+  const service = new UpdateService({
+    dataDir: root,
+    currentVersion: '1.4.4',
+    infrastructureFile: unit,
+    now: () => now,
+    fetchLatest: async () => ({ version: '1.4.4', url: 'https://example.invalid/release' }),
+  });
+  t.after(() => service.shutdown());
+  service.configure({ automaticEnabled: false, checkInterval: 'hourly' });
+  assert.equal(service.getStatus().nextCheckAt, null);
+
+  await service.checkNow();
+  service.scheduleNextCheck();
+  assert.equal(service.getStatus().nextCheckAt, new Date(now + 60 * 60 * 1000).toISOString());
 });
 
 test('Privilegierter Helper ist syntaktisch gültig und verwendet nur das feste Repository', () => {
