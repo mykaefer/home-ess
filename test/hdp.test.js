@@ -28,6 +28,7 @@ const { ReleaseStore } = require('../adapter/hdp/release-store');
 const createHdpAdapter = require('../adapter/hdp');
 
 const DEVICE_ID = 'hdp-esp8266-a1b2c3d4e5f60718';
+const STATE_DEVICE_ID = 'hdp_esp8266_a1b2c3d4e5f60718';
 const INSTANCE_ID = 'homeess-main';
 const BINDING_KEY = 'a'.repeat(64);
 const BINDING_ID = 'e0e77a507412b120f6ede61f62295b1a7b2ff19d3dcc8f7253e51663470c888e';
@@ -789,6 +790,36 @@ test('OutputClient stoppt laufende Timelines vor dem Ersatz und unterstützt nor
   });
 });
 
+test('OutputClient spielt eine inhaltsgleiche Timeline mit geänderter Schleifendauer neu auf', async () => {
+  const calls = [];
+  const transport = { ready: true, async request(type) { throw new Error(`Unerwarteter Request ${type}`); } };
+  const client = new OutputClient({
+    transport, manifest: pixelManifest(), getConfig: () => outputConfig(),
+  });
+  // Nur der Impulsabstand ändert sich: Das Programm und damit sein Hash bleiben
+  // gleich, allein durationMilliseconds unterscheidet sich.
+  const program = { sha256: 'c'.repeat(64), durationMilliseconds: 4000 };
+  const longer = { sha256: 'c'.repeat(64), durationMilliseconds: 8000 };
+  client.reconciled.add('main');
+  client.stop = async (outputId) => {
+    calls.push({ type: 'stop' });
+    client.activeTimelines.delete(outputId);
+  };
+  client.uploadTimeline = async (outputId, timelineId, timeline) => {
+    calls.push({ type: 'upload', timelineId, duration: timeline.durationMilliseconds });
+  };
+  client.play = async () => { calls.push({ type: 'play' }); };
+  await client.setTimeline('main', 'indicator-cccccccccccccccc-4000', program);
+  await client.setTimeline('main', 'indicator-cccccccccccccccc-8000', longer);
+  assert.deepEqual(calls.filter((call) => call.type === 'upload'), [
+    { type: 'upload', timelineId: 'indicator-cccccccccccccccc-4000', duration: 4000 },
+    { type: 'upload', timelineId: 'indicator-cccccccccccccccc-8000', duration: 8000 },
+  ]);
+  assert.equal(
+    (await client.setTimeline('main', 'indicator-cccccccccccccccc-8000', longer)).unchanged, true,
+  );
+});
+
 test('OutputClient räumt eine nach Sitzungsneuaufbau weiterlaufende Timeline vor dem Upload frei', async () => {
   const calls = [];
   let playing = true;
@@ -867,6 +898,7 @@ test('OutputClient räumt eine nach Sitzungsneuaufbau weiterlaufende Timeline vo
   assert.equal(types.filter((type) => type === 'output.timeline.begin').length, 1);
   assert.deepEqual(client.activeTimelines.get('main'), {
     timelineId: 'eigene-loop', sha256: timeline.sha256,
+    durationMilliseconds: timeline.durationMilliseconds,
   });
   // Die Wunschlage überlebt das Freiräumen, sonst ginge sie beim nächsten
   // Sitzungsneuaufbau verloren.
@@ -910,6 +942,7 @@ test('OutputClient übernimmt eine bereits laufende Wunschtimeline ohne Neustart
   assert.deepEqual(calls.map((call) => call.type), ['output.status.get']);
   assert.deepEqual(client.activeTimelines.get('main'), {
     timelineId: 'eigene-loop', sha256: timeline.sha256,
+    durationMilliseconds: timeline.durationMilliseconds,
   });
 });
 
@@ -1208,9 +1241,11 @@ test('hDP Discovery akzeptiert nur den vollständigen normativen TXT-Vertrag', (
 test('hDP Discovery meldet unveränderte mDNS-Antworten nicht wiederholt', () => {
   const found = [];
   const updated = [];
+  const seen = [];
   const instance = new discovery.Discovery({ intervalMs: 30000 });
   instance.on('found', (device) => found.push(device));
   instance.on('updated', (device) => updated.push(device));
+  instance.on('seen', (device) => seen.push(device));
   const device = {
     deviceId: DEVICE_ID, address: '192.168.1.20', hostname: 'hdp.local',
     apiPort: 80, wsPort: 81, pairingState: 'paired', bindingId: BINDING_ID,
@@ -1219,6 +1254,7 @@ test('hDP Discovery meldet unveränderte mDNS-Antworten nicht wiederholt', () =>
   instance.ingest([device], 2000);
   assert.equal(found.length, 1);
   assert.equal(updated.length, 0);
+  assert.equal(seen.length, 1);
   assert.equal(instance.devices.get(DEVICE_ID).lastSeenAt, 2000);
   instance.ingest([{ ...device, address: '192.168.1.21' }], 3000);
   assert.equal(updated.length, 1);
@@ -2636,11 +2672,11 @@ test('veröffentlichte hDP-States folgen einem einheitlichen Schema je Gerätety
     ['Prozentwert', 'Aktive Timeline', 'Ausgabemodus'].includes(name)), []);
   assert.ok(percentageChannels[0].states.some((state) => state.name === 'Maximalhelligkeit'));
   assert.ok(percentageChannels[1].states.some((state) => state.name === 'Prozentwert'));
-  assert.ok(percentageChannels[1].states.some((state) => state.name === 'Aktive Timeline'));
-  assert.ok(percentageChannels[1].states.some((state) => state.name === 'Dimmschalter aktiv'));
-  assert.ok(!percentageChannels[0].states.some((state) => state.name === 'Dimmschalter aktiv'));
+  assert.ok(percentageChannels[1].states.some((state) => state.name === 'Aktive_Timeline'));
+  assert.ok(percentageChannels[1].states.some((state) => state.name === 'Dimmschalter_aktiv'));
+  assert.ok(!percentageChannels[0].states.some((state) => state.name === 'Dimmschalter_aktiv'));
   assert.ok(deviceStateCatalog(percentage)
-    .find((state) => state.name === 'Prozentwert').category.endsWith('/ Prozentanzeige'));
+    .find((state) => state.name === 'Prozentwert').category.endsWith('/Prozentanzeige'));
 
   const binary = {
     ...common,
@@ -2656,10 +2692,10 @@ test('veröffentlichte hDP-States folgen einem einheitlichen Schema je Gerätety
   assert.deepEqual(binaryChannels.map((channel) => channel.name),
     ['Status', 'Binary-Eingänge', 'Binary-Ausgänge']);
   assert.deepEqual(binaryChannels.find((channel) => channel.name === 'Binary-Ausgänge')
-    .states.map((state) => state.name), ['GPIO 15', 'GPIO 16']);
+    .states.map((state) => state.name), ['GPIO_15', 'GPIO_16']);
   const binaryAddresses = deviceStateValues(binary).map((state) => state.address);
-  assert.ok(binaryAddresses.includes(`devices/${DEVICE_ID}/binary/pin-15`));
-  assert.ok(binaryAddresses.includes(`devices/${DEVICE_ID}/binary/pin-16`));
+  assert.ok(binaryAddresses.includes(`devices/${STATE_DEVICE_ID}/binary/pin_15`));
+  assert.ok(binaryAddresses.includes(`devices/${STATE_DEVICE_ID}/binary/pin_16`));
   assert.ok(!binaryAddresses.some((address) => /percentage|timeline|brightness|current|argb/.test(address)));
 
   const argb = {
@@ -2681,9 +2717,9 @@ test('veröffentlichte hDP-States folgen einem einheitlichen Schema je Gerätety
     ['Status', 'ARGB-Ausgang', 'LED-Zustände', 'Binary-Eingänge', 'Binary-Ausgänge']);
   assert.ok(!deviceStateValues(argb).some((state) => /percentage|timeline-id/.test(state.address)));
   assert.ok(argbChannels.find((channel) => channel.name === 'ARGB-Ausgang')
-    .states.some((state) => state.name === 'Dimmschalter aktiv'));
+    .states.some((state) => state.name === 'Dimmschalter_aktiv'));
   assert.deepEqual(argbChannels.find((channel) => channel.name === 'Binary-Ausgänge')
-    .states.map((state) => state.name), ['GPIO 15', 'GPIO 16']);
+    .states.map((state) => state.name), ['GPIO_15', 'GPIO_16']);
 
   applyDeviceStatus(argb, {
     wifi_connected: true, wifi_rssi_dbm: -47, ip_address: '192.168.1.42',
@@ -2691,7 +2727,7 @@ test('veröffentlichte hDP-States folgen einem einheitlichen Schema je Gerätety
     last_boot: { reset_reason: 'power_on', config_load_status: 'ok' },
   });
   const statusStates = deviceStateChannels(argb)[0].states;
-  assert.equal(statusStates.find((state) => state.name === 'IP-Adresse').value, '192.168.1.42');
+  assert.equal(statusStates.find((state) => state.name === 'IP_Adresse').value, '192.168.1.42');
   assert.equal(statusStates.find((state) => state.name === 'Gerätelaufzeit').value, 123);
 });
 
@@ -3197,17 +3233,17 @@ test('ARGB-Ausgang verknüpft einzelne LEDs über Einschaltkriterien mit States'
   const ledAddresses = published.at(-1).map((value) => value.address)
     .filter((address) => address.includes('/argb/'));
   assert.deepEqual(ledAddresses, [
-    `devices/${DEVICE_ID}/argb/led-0`, `devices/${DEVICE_ID}/argb/led-2`,
+    `devices/${STATE_DEVICE_ID}/argb/led_0`, `devices/${STATE_DEVICE_ID}/argb/led_2`,
   ]);
 
   // Ein eintreffender Wert schaltet genau die zugehörige LED.
   subscriptions.find((entry) => entry.topic === 'batterie/soc').listener(55);
   const active = published.at(-1)
-    .find((value) => value.address === `devices/${DEVICE_ID}/argb/led-0`);
+    .find((value) => value.address === `devices/${STATE_DEVICE_ID}/argb/led_0`);
   assert.equal(active.value, true);
   subscriptions.find((entry) => entry.topic === 'batterie/soc').listener(95);
   assert.equal(published.at(-1)
-    .find((value) => value.address === `devices/${DEVICE_ID}/argb/led-0`).value, false);
+    .find((value) => value.address === `devices/${STATE_DEVICE_ID}/argb/led_0`).value, false);
 
   // Der Dimmschalter skaliert nur adapterseitig die übertragene Helligkeit.
   subscriptions.find((entry) => entry.topic === 'kino/aktiv').listener(1);
@@ -3315,7 +3351,7 @@ test('Sensorwerte werden in SI-Einheiten und kalibrierte States umgesetzt', () =
   assert.equal(createHdpAdapter._test.deviceTypeOf(device), 'sensors');
 });
 
-test('hDP Adapter persistiert Pairing-Secrets und gruppiert die Gerätekonfiguration', async () => {
+test('hDP Adapter persistiert Pairing-Secrets und gruppiert die Gerätekonfiguration', async (t) => {
   class FakeDiscovery extends EventEmitter {
     constructor() { super(); FakeDiscovery.last = this; }
     start() {}
@@ -3325,11 +3361,18 @@ test('hDP Adapter persistiert Pairing-Secrets und gruppiert die Gerätekonfigura
   const events = [];
   let pairCalls = 0;
   let restoring = false;
+  let restoreFailures = 0;
+  let restorePairingStatusCalls = 0;
   class FakeClient {
     constructor(device, credentials) { this.device = device; this.credentials = credentials; }
     update(device, credentials) { this.device = device; this.credentials = credentials; }
     async pairingStatus() {
       if (restoring) {
+        restorePairingStatusCalls += 1;
+        if (restoreFailures > 0) {
+          restoreFailures -= 1;
+          throw new Error('Einmaliger Binding-Abgleichfehler');
+        }
         return {
           pairing_state: 'paired', paired: true,
           binding_id: auth.bindingId(this.credentials.bindingKey),
@@ -3476,6 +3519,7 @@ test('hDP Adapter persistiert Pairing-Secrets und gruppiert die Gerätekonfigura
   const restoredAdapter = createHdpAdapter(host, {
     Discovery: FakeDiscovery, HdpClient: FakeClient, RuntimeConnection: FakeConnection,
   });
+  t.after(() => restoredAdapter.stop());
   await restoredAdapter.start({
     hdpDevices: storage.hdpDevices.map((record) => ({
       ...record, paired: false, rssi: -42, connectionState: 'connected',
@@ -3491,9 +3535,24 @@ test('hDP Adapter persistiert Pairing-Secrets und gruppiert die Gerätekonfigura
   assert.match(restoredOverview.view.body, />Verwalten <span/);
 
   restoring = true;
+  restoreFailures = 1;
+  FakeConnection.last = null;
   FakeDiscovery.last.emit('found', {
     deviceId: DEVICE_ID, address: '127.0.0.1', hostname: 'badge.local',
     apiPort: 80, wsPort: 81, otaPort: 8080, protocolVersion: '1.0-draft',
+    runtimeProfile: null,
+    firmwareVersion: '0.2.0', platform: 'esp8266', pairingState: 'paired',
+    bindingId: auth.bindingId(secrets.get(`device-${DEVICE_ID}`)), pairable: false,
+    hardwareConfigPresent: true, configRevision: 4, online: true,
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(FakeConnection.last, null,
+    `ein fehlgeschlagener erster Binding-Abgleich erzeugt noch keine Verbindung (Abgleiche: ${restorePairingStatusCalls})`);
+  FakeDiscovery.last.emit('seen', {
+    deviceId: DEVICE_ID, address: '127.0.0.1', hostname: 'badge.local',
+    apiPort: 80, wsPort: 81, otaPort: 8080, protocolVersion: '1.0-draft',
+    runtimeProfile: null,
     firmwareVersion: '0.2.0', platform: 'esp8266', pairingState: 'paired',
     bindingId: auth.bindingId(secrets.get(`device-${DEVICE_ID}`)), pairable: false,
     hardwareConfigPresent: true, configRevision: 4, online: true,

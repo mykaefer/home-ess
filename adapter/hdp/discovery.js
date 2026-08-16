@@ -259,6 +259,7 @@ class Discovery extends EventEmitter {
       const changed = previous.online !== true
         || Object.keys(device).some((key) => previous[key] !== device[key]);
       if (changed) this.emit('updated', next, previous);
+      else this.emit('seen', next, previous);
     }
   }
 

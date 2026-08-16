@@ -8,10 +8,11 @@ const PIXEL_RUNTIME_PROFILE = 'pixel-timeline-v1';
 const BINARY_RUNTIME_PROFILE = 'binary-io-v1';
 const SENSOR_RUNTIME_PROFILE = 'sensor-reading-v1';
 const FINGERPRINT_RUNTIME_PROFILE = 'fingerprint-event-v1';
+const IR_RUNTIME_PROFILE = 'ir-transceiver-v1';
 const RUNTIME_PROFILE = PIXEL_RUNTIME_PROFILE;
 const RUNTIME_PROFILES = Object.freeze([
   PIXEL_RUNTIME_PROFILE, BINARY_RUNTIME_PROFILE, SENSOR_RUNTIME_PROFILE,
-  FINGERPRINT_RUNTIME_PROFILE,
+  FINGERPRINT_RUNTIME_PROFILE, IR_RUNTIME_PROFILE,
 ]);
 
 function supportedRuntimeProfile(value) {
@@ -176,6 +177,9 @@ function strictInteger(value, min, max, label) {
 
 function validateHardwareConfig(input, capabilities = {}) {
   const config = input && typeof input === 'object' ? input : {};
+  if (config.device_type === 'ir_transceiver' || config.receiver || config.blaster) {
+    return validateIrConfig(config, capabilities);
+  }
   if (config.device_type === 'fingerprint_reader' || config.uart) {
     return validateFingerprintConfig(config, capabilities);
   }
@@ -241,6 +245,66 @@ function validateHardwareConfig(input, capabilities = {}) {
     },
     offline: { mode },
   };
+  if (Object.prototype.hasOwnProperty.call(config, 'revision')) {
+    result.revision = strictInteger(config.revision, 0, 0xffffffff, 'Revision');
+  }
+  return result;
+}
+
+function validateIrConfig(input, capabilities = {}) {
+  const config = input && typeof input === 'object' ? input : {};
+  const manifest = capabilities.manifest || capabilities;
+  const hardware = manifest.hardware_capabilities || capabilities;
+  const allowedPins = Array.isArray(hardware.binary_pins) ? hardware.binary_pins : [];
+  const pullupPins = Array.isArray(hardware.binary_pullup_pins)
+    ? hardware.binary_pullup_pins : allowedPins;
+  if (config.device_type !== 'ir_transceiver') {
+    throw new Error('IR-Konfiguration benötigt device_type ir_transceiver.');
+  }
+  const receiver = config.receiver && typeof config.receiver === 'object' ? config.receiver : {};
+  const blaster = config.blaster && typeof config.blaster === 'object' ? config.blaster : {};
+  if (typeof receiver.enabled !== 'boolean' || typeof blaster.enabled !== 'boolean'
+      || (!receiver.enabled && !blaster.enabled)) {
+    throw new Error('Receiver oder Blaster muss aktiviert sein.');
+  }
+  const result = {
+    device_type: 'ir_transceiver',
+    receiver: { enabled: receiver.enabled },
+    blaster: { enabled: blaster.enabled },
+  };
+  const used = new Set();
+  const pin = (value, label, allowed = allowedPins) => {
+    const parsed = strictInteger(value, 0, 255, label);
+    if (!allowed.includes(parsed)) throw new Error(`${label} wird vom Gerät nicht unterstützt.`);
+    if (used.has(parsed)) throw new Error('IR-GPIOs müssen eindeutig sein.');
+    used.add(parsed); return parsed;
+  };
+  if (receiver.enabled) {
+    result.receiver.pin = pin(receiver.pin, 'Receiver-GPIO');
+    result.receiver.carrier_frequency_hz = strictInteger(
+      receiver.carrier_frequency_hz == null ? 38000 : receiver.carrier_frequency_hz,
+      20000, 60000, 'IR-Trägerfrequenz',
+    );
+    const modes = Array.isArray(hardware.ir_receiver_modes)
+      ? hardware.ir_receiver_modes : ['passthrough', 'record'];
+    if (!['passthrough', 'record'].includes(receiver.mode) || !modes.includes(receiver.mode)) {
+      throw new Error('Receiver-Modus muss passthrough oder record sein.');
+    }
+    result.receiver.mode = receiver.mode;
+    result.receiver.trigger_pin = receiver.trigger_pin == null
+      ? null : pin(receiver.trigger_pin, 'Trigger-GPIO', pullupPins);
+  } else {
+    result.receiver.pin = Number(hardware.ir_default_receiver_pin || 14);
+    result.receiver.carrier_frequency_hz = 38000;
+    result.receiver.mode = 'passthrough'; result.receiver.trigger_pin = null;
+  }
+  if (blaster.enabled) result.blaster.pin = pin(blaster.pin, 'Blaster-GPIO');
+  else result.blaster.pin = Number(hardware.ir_default_blaster_pin || 4);
+  result.status_led_pin = pin(
+    config.status_led_pin == null
+      ? Number(hardware.ir_default_status_led_pin || 2) : config.status_led_pin,
+    'Signal-LED-GPIO',
+  );
   if (Object.prototype.hasOwnProperty.call(config, 'revision')) {
     result.revision = strictInteger(config.revision, 0, 0xffffffff, 'Revision');
   }
@@ -665,13 +729,13 @@ function validateOutputConfig(input, capabilities = {}) {
 
 module.exports = {
   PROTOCOL_VERSION, RUNTIME_PROFILE, PIXEL_RUNTIME_PROFILE, BINARY_RUNTIME_PROFILE,
-  SENSOR_RUNTIME_PROFILE, FINGERPRINT_RUNTIME_PROFILE,
+  SENSOR_RUNTIME_PROFILE, FINGERPRINT_RUNTIME_PROFILE, IR_RUNTIME_PROFILE,
   RUNTIME_PROFILES, supportedRuntimeProfile,
   clamp, finite, strictFinite, bounded, integer, strictInteger,
   validateDeviceId, validateInstanceId, validatePort, validateProtocol,
   compatibleProtocol, parseSemVer, compareSemVer, color, colorStops, scale,
   interpolateColor, validateHardwareConfig, validateOutputConfig, validateBinaryConfig,
-  validateSensorConfig, SENSOR_TYPES, validateFingerprintConfig,
+  validateSensorConfig, SENSOR_TYPES, validateFingerprintConfig, validateIrConfig,
   FINGERPRINT_LED_SCENES, FINGERPRINT_LED_EFFECTS, FINGERPRINT_LED_COLORS,
   validateOpaqueId,
   ARGB_OPERATORS, ARGB_OPERATOR_LABELS,

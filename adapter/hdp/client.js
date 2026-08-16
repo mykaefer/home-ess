@@ -32,6 +32,7 @@ const ERROR_CODES = new Set([
   'BINARY_PIN_NOT_FOUND', 'BINARY_PIN_DIRECTION_MISMATCH',
   'BINARY_CONFIG_REVISION_MISMATCH',
   'FINGERPRINT_CONFIG_REVISION_MISMATCH', 'FINGERPRINT_OPERATION_REJECTED',
+  'IR_CONFIG_REVISION_MISMATCH', 'IR_OPERATION_REJECTED',
   'FACTORY_RESET_NOT_ALLOWED', 'INTERNAL_ERROR', 'OTA_AUTH_REQUIRED', 'OTA_ALREADY_RUNNING',
   'OTA_INVALID_METADATA', 'OTA_FIRMWARE_NAME_MISMATCH', 'OTA_PLATFORM_MISMATCH',
   'OTA_BOARD_MISMATCH', 'OTA_VARIANT_MISMATCH', 'OTA_PROTOCOL_INCOMPATIBLE',
@@ -333,6 +334,19 @@ function validateManifestInfo(data) {
             code: 'INVALID_REQUEST', status: 502,
           });
         }
+      }
+      if (data.device_types.includes('ir_transceiver')
+          && (data.features.ir_receive !== true || data.features.ir_transmit !== true
+            || data.features.ir_record_trigger !== true
+            || !Array.isArray(data.hardware_capabilities.ir_receiver_modes)
+            || !data.hardware_capabilities.ir_receiver_modes.includes('passthrough')
+            || !data.hardware_capabilities.ir_receiver_modes.includes('record')
+            || !Number.isInteger(data.limits.maximum_ir_durations)
+            || data.limits.maximum_ir_durations < 2
+            || data.limits.maximum_ir_durations > 1024)) {
+        throw new HdpError('Gerätemanifest enthält keinen vollständigen IR-Vertrag.', {
+          code: 'INVALID_REQUEST', status: 502,
+        });
       }
       const binaryPins = data.hardware_capabilities.binary_pins;
       if (!binaryPins.length || binaryPins.length > data.limits.maximum_binary_pins

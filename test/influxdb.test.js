@@ -319,10 +319,18 @@ test('Unzulässige Zugangsdaten werden vor jeder Ausführung abgewiesen', () => 
 });
 
 test('Ohne Rootrechte zeigt die Verwaltung die Anleitung statt einer Schaltfläche', async (t) => {
-  // Im Normalbetrieb läuft homeESS unprivilegiert; der Testlauf hier kann root sein.
+  // Im Normalbetrieb läuft homeESS unprivilegiert; der Testlauf hier kann root
+  // sein und auf dem Build-Rechner kann InfluxDB bereits installiert sein.
+  // Beide Hosteigenschaften werden isoliert, damit wirklich der beabsichtigte
+  // Zustand „unprivilegiert und noch nicht installiert“ geprüft wird.
   const realGetuid = process.getuid;
+  const realLocalInstallationPresent = setup.localInstallationPresent;
   process.getuid = () => 1000;
-  t.after(() => { process.getuid = realGetuid; });
+  setup.localInstallationPresent = () => false;
+  t.after(() => {
+    process.getuid = realGetuid;
+    setup.localInstallationPresent = realLocalInstallationPresent;
+  });
 
   const config = { host: '127.0.0.1', port: 1, database: 'homeess', username: 'homeess', password: 'geheim123', timeoutMs: 200 };
   const { host, directory } = createHost(config);

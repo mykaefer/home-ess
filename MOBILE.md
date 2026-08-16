@@ -107,6 +107,7 @@
 | Schaltgruppen (Unterseite) | ✅ Basis | Spalten stapeln sich (Gruppen, darunter nicht zugeordnete Geräte), Seite scrollt selbst; Gruppenkopf bricht um (kein Überlauf), Gerätenamen voll (Statuspunkt-`grid-area` auf `.ms-row` eingegrenzt); **DnD-Ersatz offen** |
 | Adapter / Instanzen | ✅ umgesetzt | Instanz-Zeilen 2-spaltig, Adresse volle Breite |
 | Adapter-States (State-Editor) | ✅ umgesetzt | Register-Tabelle scrollt im eigenen Container (bewusst Tabelle) |
+| Adapter-Verwaltungsseiten (managementPage) | ✅ Basis | Der Adapter liefert seine mobile Ansicht im eigenen `stylesheet` mit (Breakpoint 768 px, Farbthema über die homeESS-Variablen); Referenz: Display-Dashboard (Navigation als Leiste, State-Liste als Kartenliste, Dialog als Bottom-Sheet) |
 | States | ✅ umgesetzt | Baum + umbruchfähige Wert-Zeilen (Querschnitt) |
 | Output | ✅ umgesetzt | Zeilen stapeln, Aktionen mit Touch-Größe |
 | Module | ✅ umgesetzt | Karten gestapelt, vollbreiter Aktivieren-Button |

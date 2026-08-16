@@ -19,7 +19,6 @@ const FORECAST_ENERGY_EPSILON_KWH = 0.05;
 const HOUSE_BATTERY_FULL_SOC_THRESHOLD = 95; // ab hier gilt der Hausakku als praktisch voll
 
 // Sonderfälle (decideWallboxAction):
-const SETTLE_MS = 8000;          // nach eigener Schaltung kurz nicht auf „manuell" prüfen
 const RESTART_OFF_MS = 60 * 1000; // 1 Minute aus zum Neustart eines hängenden Ladevorgangs
 const STALL_EXPECT_MIN_W = 1400; // Stall nur prüfen, wenn substanzielle Ladung erwartet wird
 const MAX_RESTART_ATTEMPTS = 3;  // danach nicht weiter takten (z. B. wirklich kein Fahrzeug)
@@ -192,21 +191,21 @@ function planCharge(box, ctx = {}) {
 // effektiv zu schaltende Aktion. Testbar ohne MQTT/DB.
 //
 // state: { output:'on'|'off'|null, changedAt, lastSyncValue,
-//          syncInitialized, expectedSyncValue, syncRebaselineUntil, ownSyncUntil, manualFull,
+//          syncInitialized, expectedSyncValue, syncRebaselineUntil, manualFull,
 //          manualFullSawCharging, manualOff, manualOffDay, chargeStartedAt,
 //          restartUntil, restartAttempts }
-// ctx:   { plan, syncStatus:'on'|'off'|null, powerW, pvPowerW,
+// ctx:   { plan, syncStatus:'on'|'off'|null, syncRequest:'on'|'off'|null,
+//          syncRequestAck:boolean|null, powerW, pvPowerW,
 //          selfConsumptionW, houseBatterySoc, houseBatteryMinSoc, soc, todayKey,
 //          levelAllows, now }
-// `syncStatus` ist der am Steuerung-Sync-Topic beobachtete An/Aus-Wert. Nur eine
-// EXTERNE Änderung dort (nicht von homeESS selbst gespiegelt) ist ein Bedienwunsch.
+// `syncStatus` ist der bestätigte Ist-Wert am Steuerung-Sync-Topic und dient nur
+// der Baseline/Anzeige. `syncRequest` ist ein echter externer Schreibwunsch. Er
+// gilt nur dann als Bedienung, wenn er vom lokalen Soll-Schatten abweicht.
 // Rückgabe: { on, setpointW, priority, bypassHold, reason }
 function decideWallboxAction(box, state, ctx) {
   const { plan } = ctx;
   const priority = plan.priority;
   const now = ctx.now;
-  const settleOk = !state.changedAt || (now - state.changedAt) >= SETTLE_MS;
-
   // Reconnect-Fenster: Nach einem MQTT-Wiederverbindungsaufbau spielt der Broker
   // alle retained-Werte erneut ein – auch den des Steuerung-Sync-Topics, u. U. mit
   // einem abweichenden Wert. Solange das Fenster offen ist, wird jeder Sync-Wert nur
@@ -216,45 +215,36 @@ function decideWallboxAction(box, state, ctx) {
   if (state.syncRebaselineUntil != null && now >= state.syncRebaselineUntil) {
     state.syncRebaselineUntil = null;
   }
-  const ownSyncWindow = state.ownSyncUntil != null && now < state.ownSyncUntil;
-  if (state.ownSyncUntil != null && now >= state.ownSyncUntil) {
-    state.ownSyncUntil = null;
+  // Bestätigte Zustände sind niemals Bedienwünsche. Beim ersten Wert nach dem
+  // Prozessstart initialisieren sie lediglich den lokalen Soll-Schatten und den
+  // bekannten Ausgangszustand. Reconnect-/Retained-Werte dürfen einen bereits
+  // bekannten Soll-Schatten nicht verändern.
+  if (ctx.syncStatus) {
+    state.syncInitialized = true;
+    state.lastSyncValue = ctx.syncStatus;
+    if (state.expectedSyncValue == null) state.expectedSyncValue = ctx.syncStatus;
+    if (state.output == null) state.output = ctx.syncStatus;
   }
 
-  // Den ersten Sync-Wert nach einem Prozessstart nur als Ausgangszustand übernehmen.
-  // Andernfalls würde eine bereits laufende Ladung fälschlich als manuelles
-  // Einschalten gelten. Entspricht der Sync-Wert exakt dem zuletzt von homeESS
-  // gespiegelten Wert, ist das nur unser eigener Readback und kein Nutzerwunsch.
-  const ownReadback = ctx.syncStatus && state.expectedSyncValue === ctx.syncStatus;
-  if (ownReadback) {
-    state.expectedSyncValue = null;
-    state.syncInitialized = true;
-    state.lastSyncValue = ctx.syncStatus;
-    if (state.output == null) state.output = ctx.syncStatus;
-  } else if (ctx.syncStatus && ownSyncWindow) {
-    // Manche Wallboxen nutzen dasselbe Topic gleichzeitig als Steuerung und als
-    // Aktiv-Status. Nach einem homeESS-Schaltbefehl kann deshalb ein Folge-Status
-    // (z. B. "off", weil kein Fahrzeug angesteckt ist) eintreffen. Auch wenn der
-    // Wert nicht dem geschriebenen Befehl entspricht, ist das kein Nutzerwunsch.
-    state.syncInitialized = true;
-    state.lastSyncValue = ctx.syncStatus;
-    if (state.output == null) state.output = ctx.syncStatus;
-  } else if (ctx.syncStatus && (!state.syncInitialized || rebaselining)) {
-    // Erstwert nach (Wieder-)Verbindung: nur Ausgangszustand, keine Bedienerkennung.
-    state.syncInitialized = true;
-    state.lastSyncValue = ctx.syncStatus;
-    if (state.output == null) state.output = ctx.syncStatus;
-  // (2)/(3) Externe Schaltung am Steuerung-Sync-Topic erkennen: ein späterer
-  // Wertwechsel, den homeESS nicht selbst gespiegelt hat.
-  } else if (settleOk && ctx.syncStatus && ctx.syncStatus !== state.lastSyncValue) {
+  // (2)/(3) Nur ein expliziter externer Schreibwunsch, der vom lokal gemerkten
+  // Remote-Sollwert abweicht, ist eine neue Bedienung. Eigene MQTT-Echos und bei
+  // einem Neustart wiederholte Anforderungen stimmen mit expectedSyncValue
+  // überein und werden folgenlos verworfen.
+  // JSON-lose Rohwerte sind als Legacy-Schreibwünsche zulässig, während eines
+  // Broker-Reconnects aber nicht von Retained-Zuständen unterscheidbar. Im
+  // Rebaseline-Fenster werden sie deshalb nur ignoriert; echte ioBroker-Kommandos
+  // (ack:false) bleiben eindeutig und dürfen sofort wirken.
+  const rawReconnectReplay = rebaselining && ctx.syncRequestAck == null;
+  if (ctx.syncRequest && !rawReconnectReplay && ctx.syncRequest !== state.expectedSyncValue) {
+    state.expectedSyncValue = ctx.syncRequest;
     const autoWantsOn = plan.desiredOn === true && ctx.levelAllows === true;
-    if (ctx.syncStatus === 'on' && state.output !== 'on' && !autoWantsOn) {
+    if (ctx.syncRequest === 'on' && state.output !== 'on' && !autoWantsOn) {
       // Extern EIN → einmalig voll laden, sofern die Modus-Priorität es zulässt.
       if (ctx.levelAllows) state.manualFull = true;
       state.manualFullSawCharging = false;
       state.manualOff = false;
       state.manualOffDay = '';
-    } else if (ctx.syncStatus === 'off' && state.output === 'on' && autoWantsOn) {
+    } else if (ctx.syncRequest === 'off' && state.output === 'on' && autoWantsOn) {
       // Extern AUS → aus bleiben bis Folgetag, PV erstmals > Wallbox-Leistung.
       state.manualOff = true;
       state.manualOffDay = ctx.todayKey;
@@ -264,7 +254,6 @@ function decideWallboxAction(box, state, ctx) {
       state.restartAttempts = 0;
     }
   }
-  if (ctx.syncStatus) state.lastSyncValue = ctx.syncStatus;
 
   let on = plan.desiredOn;
   let setpointW = plan.setpointW;
@@ -419,5 +408,5 @@ module.exports = {
   BUSINESS_READY_HOUR, BUSINESS_START_BUFFER_HOURS, CHARGE_EFFICIENCY,
   HOUSE_BATTERY_RESERVE_MARGIN_PERCENT, FORECAST_ENERGY_EPSILON_KWH,
   HOUSE_BATTERY_FULL_SOC_THRESHOLD,
-  SETTLE_MS, RESTART_OFF_MS, STALL_EXPECT_MIN_W, MAX_RESTART_ATTEMPTS,
+  RESTART_OFF_MS, STALL_EXPECT_MIN_W, MAX_RESTART_ATTEMPTS,
 };

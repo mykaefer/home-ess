@@ -386,7 +386,7 @@ test('Beruflich: freier Tag fällt auf die Privatregel zurück', () => {
 function freshState() {
   return {
     output: null, changedAt: 0, setpointW: null, lastSyncValue: null,
-    syncInitialized: true, expectedSyncValue: null, ownSyncUntil: null,
+    syncInitialized: true, expectedSyncValue: null,
     manualFull: false, manualFullSawCharging: false,
     manualOff: false, manualOffDay: '',
     chargeStartedAt: null, restartUntil: 0, restartAttempts: 0,
@@ -396,7 +396,8 @@ function freshState() {
 function baseDecideCtx(over = {}) {
   return {
     plan: { desiredOn: false, setpointW: null, priority: 3 },
-    syncStatus: null, powerW: null, pvPowerW: null, selfConsumptionW: 0,
+    syncStatus: null, syncRequest: null, syncRequestAck: false,
+    powerW: null, pvPowerW: null, selfConsumptionW: 0,
     houseBatterySoc: 30, houseBatteryMinSoc: 20, soc: null, plugged: true,
     todayKey: '2026-06-30', levelAllows: true, now: 1_000_000,
     ...over,
@@ -414,6 +415,7 @@ test('Erster Sync-Wert nach Neustart löst keine manuelle Volladung aus', () => 
   }));
 
   assert.equal(s.lastSyncValue, 'on');
+  assert.equal(s.expectedSyncValue, 'on');
   assert.equal(s.syncInitialized, true);
   assert.equal(s.manualFull, false);
   assert.equal(d.on, false);
@@ -428,7 +430,7 @@ test('Erst eine spätere externe Sync-Wertänderung löst manuelles Vollladen au
   assert.equal(s.manualFull, false);
 
   const d = decideWallboxAction(box, s, baseDecideCtx({
-    syncStatus: 'on', levelAllows: true, now: 1_030_000,
+    syncRequest: 'on', levelAllows: true, now: 1_030_000,
   }));
   assert.equal(s.manualFull, true);
   assert.equal(d.on, true);
@@ -446,7 +448,7 @@ test('Readback eines Automatikbefehls ist kein manueller Schaltwunsch', () => {
     syncStatus: 'on',
   }));
 
-  assert.equal(s.expectedSyncValue, null);
+  assert.equal(s.expectedSyncValue, 'on');
   assert.equal(s.lastSyncValue, 'on');
   assert.equal(s.manualFull, false);
   assert.equal(d.on, true);
@@ -456,21 +458,23 @@ test('Extern EIN am Sync-Topic löst einmalige Volladung aus (wenn Level es zul�
   const box = { id: 1, maxPowerW: 11000, setpointTopic: 'x' };
   const s = freshState();
   s.output = 'off'; s.lastSyncValue = 'off';
+  s.expectedSyncValue = 'off';
   // Plan würde nicht laden; Broker meldet plötzlich „on".
   const d = decideWallboxAction(box, s, baseDecideCtx({
     plan: { desiredOn: false, setpointW: null, priority: 3 },
-    syncStatus: 'on', levelAllows: true,
+    syncRequest: 'on', levelAllows: true,
   }));
   assert.equal(s.manualFull, true);
   assert.equal(d.on, true);
   assert.equal(d.setpointW, 11000);
 });
 
-test('Automatik-EIN am Sync-Topic löst kein manuelles Vollladen aus', () => {
+test('Bestätigter Automatik-EIN-Readback löst kein manuelles Vollladen aus', () => {
   const box = { id: 1, maxPowerW: 11000, setpointTopic: 'x' };
   const s = freshState();
   s.output = 'off';
   s.lastSyncValue = 'off';
+  s.expectedSyncValue = 'on';
 
   const d = decideWallboxAction(box, s, baseDecideCtx({
     plan: { desiredOn: true, setpointW: 3500, priority: 3 },
@@ -493,6 +497,7 @@ test('Beruflich: Überschussladung oberhalb Mindeststand bleibt Automatik', () =
   const s = freshState();
   s.output = 'off';
   s.lastSyncValue = 'off';
+  s.expectedSyncValue = 'on';
 
   const plan = planCharge(box, {
     plugged: true, soc: 96, surplusW: 4200, hour: 12, minute: 0,
@@ -515,7 +520,8 @@ test('Extern EIN wird ignoriert, wenn die Modus-Priorität es nicht zulässt', (
   const box = { id: 1, maxPowerW: 11000, setpointTopic: 'x' };
   const s = freshState();
   s.output = 'off'; s.lastSyncValue = 'off';
-  const d = decideWallboxAction(box, s, baseDecideCtx({ syncStatus: 'on', levelAllows: false }));
+  s.expectedSyncValue = 'off';
+  const d = decideWallboxAction(box, s, baseDecideCtx({ syncRequest: 'on', levelAllows: false }));
   assert.equal(s.manualFull, false);
   assert.equal(d.on, false);
 });
@@ -535,10 +541,11 @@ test('Extern AUS sperrt bis Folgetag mit PV über Wallbox-Leistung', () => {
   const box = { id: 1, maxPowerW: 11000, setpointTopic: 'x' };
   const s = freshState();
   s.output = 'on'; s.lastSyncValue = 'on';
+  s.expectedSyncValue = 'on';
   // Broker meldet „off" obwohl wir „on" kommandiert hatten → manuell aus.
   let d = decideWallboxAction(box, s, baseDecideCtx({
     plan: { desiredOn: true, setpointW: 11000, priority: 3 },
-    syncStatus: 'off', todayKey: '2026-06-30',
+    syncRequest: 'off', todayKey: '2026-06-30',
   }));
   assert.equal(s.manualOff, true);
   assert.equal(d.on, false);
@@ -588,7 +595,7 @@ test('Aktiv-Status AUS nach eigener Automatik-Freigabe ist kein manuelles Aussch
   s.output = 'on';
   s.changedAt = 900_000;
   s.lastSyncValue = 'on';
-  s.ownSyncUntil = 1_060_000;
+  s.expectedSyncValue = 'on';
 
   const d = decideWallboxAction(box, s, baseDecideCtx({
     plan: { desiredOn: true, setpointW: 3500, priority: 3 },
@@ -602,23 +609,25 @@ test('Aktiv-Status AUS nach eigener Automatik-Freigabe ist kein manuelles Aussch
   assert.equal(d.on, true);
 });
 
-test('AUS am Sync-Topic nach eigener Schutzfrist bleibt manuelles Ausschalten', () => {
+test('Wiederholter externer AUS-Schreibwunsch wird gegen den Soll-Schatten dedupliziert', () => {
   const box = { id: 1, maxPowerW: 11000, setpointTopic: 'x' };
   const s = freshState();
   s.output = 'on';
   s.changedAt = 900_000;
   s.lastSyncValue = 'on';
-  s.ownSyncUntil = 990_000;
+  // AUS wurde bereits als letzter Remote-Sollwert gemerkt. Eine Wiederholung –
+  // etwa beim Neustart des Remote-Systems – ist keine neue Nutzeranforderung.
+  s.expectedSyncValue = 'off';
 
   const d = decideWallboxAction(box, s, baseDecideCtx({
     plan: { desiredOn: true, setpointW: 3500, priority: 3 },
-    syncStatus: 'off',
+    syncRequest: 'off',
     levelAllows: true,
     now: 1_000_000,
   }));
 
-  assert.equal(s.manualOff, true);
-  assert.equal(d.on, false);
+  assert.equal(s.manualOff, false);
+  assert.equal(d.on, true);
 });
 
 test('Reconnect/Refresh des Sync-Topics schaltet nicht auf AUS (Regel 3)', () => {
@@ -627,6 +636,7 @@ test('Reconnect/Refresh des Sync-Topics schaltet nicht auf AUS (Regel 3)', () =>
   const s = freshState();
   s.output = 'on';
   s.lastSyncValue = 'on';
+  s.expectedSyncValue = 'on';
   // Ein Reconnect hat das Baseline-Fenster geöffnet; der Broker spielt jetzt den
   // retained-Wert '0' (Gerät meldet echten Aus-Zustand) erneut ein.
   s.syncRebaselineUntil = 1_040_000;
@@ -639,14 +649,39 @@ test('Reconnect/Refresh des Sync-Topics schaltet nicht auf AUS (Regel 3)', () =>
   assert.equal(s.lastSyncValue, 'off');
   assert.equal(d.on, true); // Automatik lädt weiter
 
-  // Nach Ablauf des Fensters wird eine echte Nutzerschaltung wieder erkannt.
+  // Auch nach Ablauf des Fensters bleibt ein bestätigter Ist-Wert ein Readback
+  // und darf niemals als Nutzerschaltung gelten.
   s.output = 'on';
   s.lastSyncValue = 'on';
   decideWallboxAction(box, s, baseDecideCtx({
     plan: { desiredOn: true, setpointW: null, priority: 3 },
     syncStatus: 'off', now: 1_050_000,
   }));
+  assert.equal(s.manualOff, false);
+
+  // Erst ein expliziter abweichender Schreibwunsch schaltet manuell aus.
+  decideWallboxAction(box, s, baseDecideCtx({
+    plan: { desiredOn: true, setpointW: null, priority: 3 },
+    syncRequest: 'off', now: 1_051_000,
+  }));
   assert.equal(s.manualOff, true);
+});
+
+test('JSON-loser Retained-Wert wird während eines Broker-Reconnects nicht als Bedienung gewertet', () => {
+  const box = { id: 1, maxPowerW: 11000, setpointTopic: '' };
+  const s = freshState();
+  s.output = 'on';
+  s.expectedSyncValue = 'on';
+  s.syncRebaselineUntil = 1_040_000;
+
+  const d = decideWallboxAction(box, s, baseDecideCtx({
+    plan: { desiredOn: true, setpointW: null, priority: 3 },
+    syncRequest: 'off', syncRequestAck: null, now: 1_000_000,
+  }));
+
+  assert.equal(s.expectedSyncValue, 'on');
+  assert.equal(s.manualOff, false);
+  assert.equal(d.on, true);
 });
 
 test('Umschalter AUS kehrt erst bei PV-Deckung und Hausakku-Reserve am Folgetag zurück', () => {

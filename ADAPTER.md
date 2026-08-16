@@ -316,7 +316,8 @@ eigene, weiterhin vom Host geschützte Verwaltungsseite deklarieren:
 "managementPage": {
   "label": "hDP Geräte",
   "maxUploadBytes": 8388608,
-  "stylesheet": "management.css"
+  "stylesheet": "management.css",
+  "asSettings": false
 }
 ```
 
@@ -335,6 +336,19 @@ einer adapterspezifischen Wurzelklasse kapseln, beispielsweise `.mein-adapter`.
 restriktive temporäre Datei gestreamt; der Adapter erhält
 `request.upload={path,size,filename}`. Der Host löscht die Datei nach Abschluss.
 Andere Adapterdateien oder freie Serverpfade werden dadurch nicht veröffentlicht.
+
+Mit `asSettings: true` führt der **Einstellungsknopf der Instanz** direkt in die
+Adapterverwaltung statt auf die generische Einstellungsseite. Gedacht für
+Adapter, deren gesamte Konfiguration in der eigenen Verwaltung liegt — dann
+bleibt `settings` im Manifest leer. Der zweite Verwaltungslink entfällt; die
+generische Seite bleibt unter `/adapter/instance/<id>` erreichbar. Das betrifft
+nur die Verlinkung: Route, Anmeldung und Rechteprüfung bleiben unverändert. Die
+Seite wird stets in die homeESS-Oberfläche eingebettet; sie sollte deshalb das
+Farbthema des Hauptprojekts (CSS-Variablen aus `public/styles.css`, z. B.
+`--color-surface`, `--color-text`, `--color-action`) verwenden und die mobile
+Ansicht nach [MOBILE.md](MOBILE.md) mitliefern.
+
+Der **Display-Dashboard-Adapter** ist die Referenz für dieses Muster.
 
 ## Capability-gesteuerte Hardwaredialoge
 

@@ -44,6 +44,8 @@ test('Registry normalisiert die rückwärtskompatible Management-Seite', () => {
     label: 'Verwalten',
     maxUploadBytes: 123456,
     stylesheet: 'management.css',
+    // Ohne Angabe im Manifest bleibt der Einstellungsknopf wie bisher.
+    asSettings: false,
   });
 });
 

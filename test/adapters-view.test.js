@@ -54,3 +54,32 @@ test('Adapterlöschen warnt ausdrücklich, verlangt die ID und blockiert vorhand
   }, () => renderAdapters({ registry: [adapter] }));
   assert.doesNotMatch(nonAdmin, /<button[^>]+data-delete-adapter|<dialog[^>]+adapter-delete-dialog/);
 });
+
+test('managementPage.asSettings führt den Einstellungsknopf in die Adapterverwaltung', () => {
+  const adapter = {
+    id: 'display-dashboard', name: 'Display-Dashboard', prefix: 'display-dashboard',
+    description: '', version: '1.0.0',
+    managementPage: { label: 'Dashboard-Verwaltung', asSettings: true },
+  };
+  const html = renderAdapters({
+    registry: [adapter],
+    instancesByAdapter: new Map([['display-dashboard', [{ id: 4, name: 'wohnzimmer', enabled: true }]]]),
+  });
+  assert.match(html, /<a href="\/adapter\/instance\/4\/manage" class="module-toggle-btn">Einstellungen<\/a>/);
+  // Ohne zweiten Link: die Verwaltung IST die Einstellungsseite dieses Adapters.
+  assert.doesNotMatch(html, />Dashboard-Verwaltung</);
+  assert.doesNotMatch(html, /<a href="\/adapter\/instance\/4" class="module-toggle-btn">Einstellungen<\/a>/);
+});
+
+test('Ohne asSettings bleiben Einstellungen und Verwaltung getrennte Links', () => {
+  const adapter = {
+    id: 'mqttbroker', name: 'MQTT-Broker', prefix: 'mqttbroker', description: '', version: '1.0.0',
+    managementPage: { label: 'Broker' },
+  };
+  const html = renderAdapters({
+    registry: [adapter],
+    instancesByAdapter: new Map([['mqttbroker', [{ id: 2, name: 'broker', enabled: true }]]]),
+  });
+  assert.match(html, /<a href="\/adapter\/instance\/2" class="module-toggle-btn">Einstellungen<\/a>/);
+  assert.match(html, /<a href="\/adapter\/instance\/2\/manage" class="module-toggle-btn">Broker<\/a>/);
+});

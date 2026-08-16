@@ -3,6 +3,72 @@
 Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [Unreleased]
+
+## [1.4.6] — 2026-08-16
+
+### Hinzugefügt
+
+- **Renault-/Dacia-Connected-Vehicle-Adapter.** Der neue Adapter bindet unter
+  anderem den Dacia Spring über My Renault/My Dacia an und stellt Akku,
+  Reichweite, Ladezustand, Kilometerstand sowie Klimadaten als States bereit.
+  Zugangsdaten und erneuerbare Tokens bleiben im serverseitigen Secret-Store;
+  optionale Schreibzugriffe für Laden und Vorklimatisierung müssen ausdrücklich
+  aktiviert werden. Cloudfehler lösen keine aggressive Neustartschleife aus.
+- **hDP-Infrarot-Transceiver.** hDP-Geräte können als Receiver, Blaster oder
+  kombinierter Transceiver eingerichtet werden. Unterstützt werden Passthrough,
+  dauerhafte benannte Aufzeichnungen, Aufnahme per Oberfläche oder Trigger-GPIO,
+  Umbenennen, Löschen und Senden sowie ein beschreibbarer Blaster-State. Die
+  Hardwarekonfiguration prüft GPIO-Konflikte, Trägerfrequenz und Gerätevertrag;
+  die Verwaltungsseite enthält eine responsive IR-Bibliothek.
+- **`managementPage.asSettings`.** Ein Adapter, dessen gesamte Konfiguration in
+  seiner eigenen Verwaltung liegt, kann den Einstellungsknopf der Instanz
+  dorthin führen. Das betrifft nur die Verlinkung; Route, Anmeldung und
+  Rollenprüfung bleiben unverändert. Siehe [ADAPTER.md](ADAPTER.md).
+
+### Behoben
+
+- **Dynamische Adapter-States mit Anfangswert waren nach dem Start nicht
+  lesbar.** Werte, die ein Adapter bereits zusammen mit `host.setStates()`
+  meldet, gelangen jetzt wie `publishState()` und `publishStates()` in den
+  zentralen State-Bus samt Retained-Cache. Objektwerte werden in
+  `adapter_states.last_value` als JSON statt als `[object Object]` gespeichert.
+  Dadurch können Bedingungen beispielsweise einen dauerhaft gespeicherten
+  hDP-IR-Code unmittelbar nach dem Adapterstart lesen und an einen
+  beschreibbaren Blaster-State weiterreichen.
+- **Festgefahrene hDP-Verbindung nach einem einmaligen Binding-Fehler.** Bleibt
+  ein bereits gekoppeltes und weiterhin per mDNS sichtbares Gerät nach dem
+  Adapterstart ohne Laufzeitverbindung, stößt sein nächstes unverändertes
+  Lebenszeichen den Binding-Abgleich erneut an. Der Badge bleibt dadurch nicht
+  mehr bis zu einem manuellen Adapterneustart offline.
+- **Wallbox-Steuerung nach ioBroker-/MQTT-Neustarts.** homeESS führt für das
+  Steuerung-Sync-Topic nun einen lokalen Soll-Schatten. Nur ein echter,
+  abweichender Schreibwunsch gilt als manuelle Bedienung; bestätigte Readbacks,
+  Retained-Werte und wiederholte eigene Anforderungen setzen die Steuerung nicht
+  mehr fälschlich dauerhaft auf „Aus".
+- **hDP-Richtungsindikator übernahm reine Änderungen am Impulsabstand nicht.**
+  Die Schleifendauer ist jetzt Bestandteil von Timeline-Identität und
+  Gleichheitsprüfung, sodass ein neuer Abstand auch ohne geändertes
+  Ablaufprogramm an das Gerät übertragen wird.
+
+### Geändert
+
+- **Leerzeichen und Unterstriche sind in Adapter-State-Adressen intern
+  gleichwertig.** Schema-Topics der Form `prefix://instanz/adresse` werden in
+  State-Bus, Cache, States-Baum und Wertekatalog segmentweise kanonisiert;
+  Leerraum und Folgen von Unterstrichen erscheinen dort einheitlich als `_`.
+  Der State-Picker übernimmt ausschließlich diese kanonische Topicform und
+  behandelt beide Schreibweisen auch bei der Suche identisch. Beim Lesen und
+  Schreiben löst der Router das kanonische Topic wieder auf die vom Adapter
+  gemeldete Originaladresse auf. Diese Aliaszuordnung wird aus dem
+  persistierten State-Katalog bereits beim Start geladen. Existieren sowohl
+  `A B` als auch ein echter State `A_B`, hat die bereits kanonische Adresse
+  `A_B` eindeutig Vorrang und erscheint nur einmal in der State-Liste.
+- **hDP-State-Namen sind automationsfreundlich vereinheitlicht.** Veröffentlichte
+  Adressen, Namen und Kategorien verwenden durchgängig Unterstriche statt
+  Leerzeichen oder Bindestriche; gespeicherte und kanonische Topics bleiben
+  über die Aliasauflösung erreichbar.
+
 ## [1.4.5] — 2026-08-11
 
 ### Hinzugefügt

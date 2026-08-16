@@ -34,7 +34,6 @@ const { computePrognosis } = require('../prognosis/forecast');
 
 const HOLD_MS = 2 * 60 * 1000;        // Mindesthaltedauer für An/Aus-Wechsel
 const SETPOINT_MIN_DELTA_W = 200;     // kleinere Soll-Änderungen nicht senden
-const OWN_SYNC_IGNORE_MS = 60 * 1000;  // Statusfolgen eigener Schaltbefehle ignorieren
 const WALLBOX_DEBUG = /^(1|true)$/i.test(process.env.HOMEESS_WALLBOX_DEBUG || '');
 const WALLBOX_DECISION_LOG = path.join(process.cwd(), 'data', 'wallbox-decision.log');
 
@@ -50,9 +49,10 @@ function boxState(id) {
     s = {
       output: null, changedAt: 0, setpointW: null, lastModeSync: null,
       // Steuerung-Sync-Topic (an/aus): zuletzt beobachteter Wert, Erstwert-Übernahme,
-      // erwarteter eigener Spiegel-Readback und Reconnect-Fenster.
+      // lokaler Soll-Schatten des Remote-Topics, ausstehender externer
+      // Schreibwunsch und Reconnect-Fenster.
       lastSyncValue: null, syncInitialized: false, expectedSyncValue: null,
-      syncRebaselineUntil: null, ownSyncUntil: null,
+      pendingSyncRequests: [], syncRebaselineUntil: null,
       manualFull: false, manualFullSawCharging: false,
       manualOff: false, manualOffDay: '', lastTodayKey: '',
       chargeStartedAt: null, restartUntil: 0, restartAttempts: 0,
@@ -85,12 +85,12 @@ function sendActuator(box, on) {
 }
 
 // Steuerung-Sync-Topic auf den aktuellen Schaltzustand spiegeln (Fall 1). Der
-// gespiegelte Wert wird als „eigener" markiert, damit sein Readback nicht als
-// externe Nutzerschaltung fehlgedeutet wird.
+// gespiegelte Wert wird dauerhaft als lokaler Soll-Schatten gemerkt. Bestätigte
+// Readbacks und nach Neustarts erneut gesendete Werte dürfen diesen Sollwert
+// nicht als vermeintliche Nutzeranforderung überschreiben.
 function mirrorControlSync(box, stateForBox, on) {
   if (!box.controlSyncTopic) return;
   stateForBox.expectedSyncValue = on ? 'on' : 'off';
-  stateForBox.ownSyncUntil = Date.now() + OWN_SYNC_IGNORE_MS;
   mqttClient.publish(box.controlSyncTopic, on ? '1' : '0');
 }
 
@@ -136,8 +136,9 @@ function logDecision(box, s, details) {
     loadShed: details.loadShed,
     reason: details.reason,
     syncStatus: details.syncStatus,
+    syncRequest: details.syncRequest,
+    expectedSyncValue: s.expectedSyncValue,
     lastSyncValue: s.lastSyncValue,
-    ownSyncUntil: s.ownSyncUntil,
     manualFull: s.manualFull,
     manualOff: s.manualOff,
     values: {
@@ -300,7 +301,6 @@ function rearmSyncBaselineOnReconnect(now) {
   _lastConnectEpoch = epoch;
   for (const s of state.values()) {
     s.syncInitialized = false;
-    s.expectedSyncValue = null;
     s.syncRebaselineUntil = now + RECONNECT_REBASELINE_MS;
   }
 }
@@ -421,10 +421,17 @@ async function tick(db) {
 
     // Sonderfälle (manuelle Schaltung, Ladestart-Neustart, Level-Gate) anwenden.
     const syncStatus = readControlSync(cache, box);
+    // Schreibwünsche werden vom MQTT-Client getrennt von bestätigten Zuständen
+    // geliefert und genau einmal ausgewertet. Eigene Echos stimmen bereits mit
+    // expectedSyncValue überein und werden im Planner dedupliziert.
+    const pendingSyncRequest = s.pendingSyncRequests.shift() || null;
+    const syncRequest = pendingSyncRequest ? pendingSyncRequest.value : null;
     const levelAllows = levelHandler.isAllowed(plan.priority);
     const decision = decideWallboxAction(box, s, {
       plan,
       syncStatus,
+      syncRequest,
+      syncRequestAck: pendingSyncRequest ? pendingSyncRequest.ack : null,
       powerW: live.powerW,
       pvPowerW,
       selfConsumptionW: parseNumber(strom.eigenverbrauchPower),
@@ -462,6 +469,7 @@ async function tick(db) {
       loadShed: loadShedApplied,
       reason: decision.reason || plan.reason,
       syncStatus,
+      syncRequest,
       manualMode: controlModeFromState(s),
       surplusW,
       netzbezugW: strom.netzbezugPower,
@@ -616,6 +624,7 @@ async function applyModeChange(db, box) {
 let _timer = null;
 let _tickChain = Promise.resolve();
 let _unsubscribe = null;
+let _unsubscribeWriteRequests = null;
 
 function runNow(db) {
   const run = _tickChain.then(() => tick(db));
@@ -625,6 +634,22 @@ function runNow(db) {
 
 function init(db) {
   if (_timer) return;
+  if (!_unsubscribeWriteRequests && typeof mqttClient.onWriteRequest === 'function') {
+    _unsubscribeWriteRequests = mqttClient.onWriteRequest((event) => {
+      const keys = event && Array.isArray(event.cacheKeys) ? event.cacheKeys : [];
+      let relevant = false;
+      for (const key of keys) {
+        const match = /^wallbox:(\d+):controlSync$/.exec(String(key));
+        if (!match) continue;
+        boxState(Number(match[1])).pendingSyncRequests.push({
+          value: parseBool(event.value) ? 'on' : 'off',
+          ack: event.ack,
+        });
+        relevant = true;
+      }
+      if (relevant) runNow(db).catch(() => {});
+    });
+  }
   if (!_unsubscribe) {
     _unsubscribe = mqttClient.onValuesChanged((event) => {
       const keys = event && Array.isArray(event.changedKeys) ? event.changedKeys : [];

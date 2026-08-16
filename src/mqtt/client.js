@@ -1,6 +1,7 @@
 'use strict';
 
 const mqtt = require('mqtt');
+const { EventEmitter } = require('events');
 const bus = require('../state-bus');
 const adapterRouter = require('../adapters/router');
 const systemRouter = require('../states/system-router');
@@ -38,6 +39,14 @@ let connectEpoch = 0;
 let subscribedTopics = new Set(); // Deduplizierung der Abos
 // Zentraler Wert-Cache liegt im gemeinsamen state-bus (auch von Adaptern genutzt).
 const valueCache = bus.getCache();
+// Schreibwünsche werden getrennt vom bestätigten Werte-Cache verteilt. Damit
+// können Verbraucher wie die Wallbox-Bedienerkennung ein echtes ioBroker-
+// Kommando (ack:false) von einem beim Start erneut gesendeten Ist-Zustand
+// (ack:true) unterscheiden. JSON-lose Rohwerte bleiben aus Kompatibilitäts-
+// gründen ebenfalls mögliche Schreibwünsche; der Verbraucher dedupliziert sie
+// gegen seinen lokalen Soll-Schatten.
+const writeRequestEvents = new EventEmitter();
+writeRequestEvents.setMaxListeners(0);
 const topicRoutes = new Map(); // exaktes incomingTopic -> [{ cacheKey, configuredTopic }]
 
 // Ad-hoc-Topics (Modul-Topics außerhalb der State-Definitionen).
@@ -148,22 +157,31 @@ function handleMessage(topic, buffer) {
   const { value: payload, ack } = unwrapMqttMessage(buffer.toString('utf8'));
   dbg('<-', incomingTopic, payload, `ack=${ack}`);
   if (!isMeaningfulValue(payload)) return;
+  const routedKeys = [];
+  for (const route of topicRoutes.get(incomingTopic) || []) {
+    if (!routedKeys.includes(route.cacheKey)) routedKeys.push(route.cacheKey);
+  }
+  const adhocKeys = adhocRoutes.get(incomingTopic);
+  for (const adhocKey of adhocKeys || []) {
+    if (!routedKeys.includes(adhocKey)) routedKeys.push(adhocKey);
+  }
+  const receivedAt = Date.now();
+  // Nur ack:true ist eindeutig eine bestätigte Zustandsmeldung. ack:false ist
+  // ein ioBroker-Schreibwunsch; ein JSON-loser Rohwert kann je nach Broker sowohl
+  // Kommando als auch Zustand sein und wird deshalb zusätzlich als möglicher
+  // Schreibwunsch signalisiert. Der normale Cache bleibt für Rohwerte erhalten.
+  if (ack !== true && routedKeys.length) {
+    writeRequestEvents.emit('request', {
+      topic: incomingTopic, cacheKeys: routedKeys, value: payload, ack, receivedAt,
+    });
+  }
   // ack:false ist ein Schreibwunsch/Kommando (u. a. das Echo unserer eigenen
   // Schreibvorgänge auf dem Haupt-Topic) – kein bestätigter Ist-Zustand. Solche
   // Nachrichten dürfen den Readback-Cache nicht verfälschen, sonst meldet die
   // Verifikation fälschlich „bestätigt", obwohl ioBroker einen anderen Wert hält.
   if (ack === false) return;
-  const receivedAt = Date.now();
-  const changedKeys = [];
-  for (const route of topicRoutes.get(incomingTopic) || []) {
-    changedKeys.push(route.cacheKey);
-  }
-  const adhocKeys = adhocRoutes.get(incomingTopic);
-  for (const adhocKey of adhocKeys || []) {
-    if (!changedKeys.includes(adhocKey)) changedKeys.push(adhocKey);
-  }
   // Werte setzen und ein gemeinsames Event über den state-bus auslösen.
-  bus.ingest(changedKeys, payload, { topic: incomingTopic, receivedAt });
+  bus.ingest(routedKeys, payload, { topic: incomingTopic, receivedAt });
 }
 
 // Verbindung mit der übergebenen Konfiguration (neu) aufbauen.
@@ -240,6 +258,13 @@ function getConnectEpoch() {
 // Engine, /live, Dashboard) unverändert mqttClient.onValuesChanged verwenden.
 function onValuesChanged(listener) {
   return bus.onValuesChanged(listener);
+}
+
+// Unbestätigte Schreibwünsche separat abonnieren. Sie werden bewusst nicht in
+// den zentralen Ist-Wert-Cache aufgenommen (siehe handleMessage).
+function onWriteRequest(listener) {
+  writeRequestEvents.on('request', listener);
+  return () => writeRequestEvents.off('request', listener);
 }
 
 // Konfigurierte States setzen und Routing/Abos neu aufbauen.
@@ -470,6 +495,7 @@ module.exports = {
   getCache,
   getConnectEpoch,
   onValuesChanged,
+  onWriteRequest,
   setStateDefinitions,
   subscribeAdHoc,
   unsubscribeAdHoc,

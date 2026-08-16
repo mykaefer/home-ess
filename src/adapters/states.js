@@ -11,7 +11,7 @@ const stateProperties = require('../states/properties');
 const registry = require('./registry');
 const instancesRepo = require('./instances');
 const host = require('./host');
-const { buildSchemeTopic } = require('../mqtt/topics');
+const { buildSchemeTopic, canonicalStateAddress } = require('../mqtt/topics');
 
 // Zusätzliche States-Blöcke interner Module (z. B. Schaltgruppen): ein Provider
 // liefert pro Aufruf 0..n Blöcke in derselben Form wie eine Adapter-Instanz
@@ -74,7 +74,15 @@ async function buildStatesTree(db) {
     const manifest = registry.getManifest(instance.adapterId);
     const prefix = manifest ? manifest.prefix : instance.adapterId;
     const categoryRoot = new Map();
+    const logicalRows = new Map();
     for (const row of rowsByInstance.get(instance.id) || []) {
+      const canonical = canonicalStateAddress(row.address);
+      const previous = logicalRows.get(canonical);
+      // A_B ist bei einer Kollision die repraesentative Zeile, A B bleibt aber
+      // die Source-Adresse des Adapters, solange kein echtes A_B existiert.
+      if (!previous || row.address === canonical) logicalRows.set(canonical, row);
+    }
+    for (const row of logicalRows.values()) {
       const topic = buildSchemeTopic(prefix, instance.name, row.address);
       const cached = cache.get(topic);
       const value = cached ? cached.value : row.last_value;
@@ -86,7 +94,7 @@ async function buildStatesTree(db) {
         level = category._children;
       }
       category.states.push({
-        address: row.address,
+        address: canonicalStateAddress(row.address),
         name: row.name || row.address,
         topic,
         unit: row.unit || '',

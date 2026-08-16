@@ -162,12 +162,23 @@ function statePickerScript() {
       if (statePickerTarget) {
         var input = document.getElementById(statePickerTarget);
         if (input) {
-          input.value = topic;
+          input.value = statePickerCanonicalTopic(topic);
           input.dispatchEvent(new Event('input', { bubbles: true }));
           input.dispatchEvent(new Event('change', { bubbles: true }));
         }
       }
       statePickerClose();
+    }
+
+    function statePickerCanonicalTopic(topic) {
+      return String(topic == null ? '' : topic)
+        .replace(/(?:\\s|%20|_)+/gi, '_')
+        .replace(/_+\\//g, '/')
+        .replace(/\\/_+/g, '/');
+    }
+
+    function statePickerSearchKey(value) {
+      return String(value == null ? '' : value).toLowerCase().replace(/[\\s_]+/g, '_');
     }
 
     function statePickerToggle(head) {
@@ -199,7 +210,7 @@ function statePickerScript() {
       for (var s = 0; s < cat.states.length; s++) {
         var st = cat.states[s];
         if (statePickerWritableOnly && st.writable !== true) continue;
-        html += '<button type="button" class="value-row" data-topic="' + statePickerEsc(st.topic) + '" data-search="' + statePickerEsc((currentPath + ' ' + st.name + ' ' + st.topic).toLowerCase()) + '" onclick="statePickerSelect(this.getAttribute(\\'data-topic\\'))"><span class="value-row-label">' + statePickerEsc(st.name) + '</span><span class="value-row-now">' + statePickerEsc(st.display == null ? '—' : st.display) + '</span></button>';
+        html += '<button type="button" class="value-row" data-topic="' + statePickerEsc(statePickerCanonicalTopic(st.topic)) + '" data-search="' + statePickerEsc(statePickerSearchKey(currentPath + ' ' + st.name + ' ' + st.topic)) + '" onclick="statePickerSelect(this.getAttribute(\\'data-topic\\'))"><span class="value-row-label">' + statePickerEsc(st.name) + '</span><span class="value-row-now">' + statePickerEsc(st.display == null ? '—' : st.display) + '</span></button>';
       }
       for (var c = 0; c < (cat.children || []).length; c++) html += statePickerRenderCategory(cat.children[c], depth + 1, currentPath, instKey);
       return html + '</div></div>';
@@ -239,7 +250,7 @@ function statePickerScript() {
     function statePickerFilter(query) {
       var body = document.getElementById('state-picker-body');
       if (!body) return;
-      var q = (query || '').trim().toLowerCase();
+      var q = statePickerSearchKey(query).trim();
       var cats = body.querySelectorAll('.value-cat');
       for (var i = 0; i < cats.length; i++) {
         var any = false;
