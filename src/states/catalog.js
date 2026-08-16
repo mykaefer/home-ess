@@ -8,7 +8,7 @@ const {
   categoryParts,
   displayValue,
 } = require('../adapters/states');
-const { buildSchemeTopic, parseSchemeTopic } = require('../mqtt/topics');
+const { buildSchemeTopic, parseSchemeTopic, canonicalStateAddress } = require('../mqtt/topics');
 const { parseSystemTopic } = require('./system-topics');
 const {
   listCalculatedInternalValues,
@@ -56,7 +56,10 @@ function adapterPrefix(instance) {
 }
 
 function catalogEntryFromState(state, instance, categoryPath) {
-  const id = state.topic || buildSchemeTopic(adapterPrefix(instance), instance.name, state.address);
+  const parsedTopic = state.topic && parseSchemeTopic(state.topic);
+  const id = parsedTopic
+    ? buildSchemeTopic(parsedTopic.scheme, parsedTopic.instance, parsedTopic.address)
+    : buildSchemeTopic(adapterPrefix(instance), instance.name, state.address);
   const cachedValue = state.value;
   return {
     id,
@@ -76,8 +79,11 @@ function entriesFromProvidedBlocks(blocks) {
         ? currentPath
         : [...currentPath, category.name];
       for (const state of category.states || []) {
+        const parsedTopic = parseSchemeTopic(state.topic);
         entries.push({
-          id: state.topic,
+          id: parsedTopic
+            ? buildSchemeTopic(parsedTopic.scheme, parsedTopic.instance, parsedTopic.address)
+            : state.topic,
           label: state.catalogLabel || `${instance.instanceName} – ${state.name}`,
           value: state.value,
           display: state.display,
@@ -317,6 +323,7 @@ function escapeLike(value) {
 
 async function searchAdapterValues(db, cache, query) {
   const like = `%${escapeLike(query.toLowerCase())}%`;
+  const canonicalLike = `%${escapeLike(canonicalStateAddress(query).toLowerCase())}%`;
   const rows = await dbAll(
     db,
     `SELECT s.address, s.name, s.category, s.unit, s.last_value,
@@ -325,11 +332,12 @@ async function searchAdapterValues(db, cache, query) {
        JOIN adapter_instances i ON i.id = s.instance_id
       WHERE lower(s.name) LIKE ? ESCAPE '\\'
          OR lower(s.address) LIKE ? ESCAPE '\\'
+         OR lower(replace(s.address, ' ', '_')) LIKE ? ESCAPE '\\'
          OR lower(s.category) LIKE ? ESCAPE '\\'
          OR lower(i.name) LIKE ? ESCAPE '\\'
       ORDER BY i.name COLLATE NOCASE, s.name COLLATE NOCASE, s.address
       LIMIT ?`,
-    [like, like, like, like, PAGE_SIZE + 1]
+    [like, like, canonicalLike, like, like, PAGE_SIZE + 1]
   );
   const truncated = rows.length > PAGE_SIZE;
   const items = rows.slice(0, PAGE_SIZE).map((row) => {
@@ -375,7 +383,11 @@ async function searchCatalog(db, cache, rawQuery = '') {
 }
 
 async function resolveInternalValues(db, cache, sourceIds) {
-  const wanted = new Set((sourceIds || []).map(String).filter(Boolean));
+  const wanted = new Set((sourceIds || []).map((sourceId) => {
+    const id = String(sourceId || '');
+    const parsed = parseSchemeTopic(id);
+    return parsed ? buildSchemeTopic(parsed.scheme, parsed.instance, parsed.address) : id;
+  }).filter(Boolean));
   if (!wanted.size) return [];
   const calculated = await listCalculatedInternalValues(db, cache);
   const found = calculated
@@ -409,24 +421,29 @@ async function resolveInternalValues(db, cache, sourceIds) {
       unresolved.push(id);
       continue;
     }
-    const row = await dbGet(
+    const candidateRows = await dbAll(
       db,
       `SELECT address, name, category, unit, last_value
          FROM adapter_states
-        WHERE instance_id = ? AND address = ?`,
-      [instance.id, parsed.address]
+        WHERE instance_id = ?`,
+      [instance.id]
     );
+    const matchingRows = candidateRows.filter((candidate) =>
+      canonicalStateAddress(candidate.address) === canonicalStateAddress(parsed.address));
+    const row = matchingRows.find((candidate) => candidate.address === canonicalStateAddress(candidate.address))
+      || matchingRows[0];
     if (!row) {
       unresolved.push(id);
       continue;
     }
-    const cached = cache.get(id);
+    const canonicalId = buildSchemeTopic(parsed.scheme, parsed.instance, parsed.address);
+    const cached = cache.get(canonicalId);
     const value = cached ? cached.value : row.last_value;
     found.push(catalogEntryFromState({
       ...row,
-      topic: id,
+      topic: canonicalId,
       value,
-      display: displayValue(value, row.unit, id),
+      display: displayValue(value, row.unit, canonicalId),
     }, instance, categoryParts(row.category)));
   }
 

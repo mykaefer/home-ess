@@ -139,6 +139,34 @@ function validFingerprintMessage(message) {
   return false;
 }
 
+function validIrCode(code) {
+  return code && code.encoding === 'raw-microseconds-v1'
+    && Number.isInteger(code.carrier_frequency_hz)
+    && code.carrier_frequency_hz >= 20000 && code.carrier_frequency_hz <= 60000
+    && Array.isArray(code.durations) && code.durations.length >= 2
+    && code.durations.length <= 1024
+    && code.durations.every((value) => Number.isInteger(value) && value >= 1 && value <= 65535);
+}
+
+function validIrMessage(message) {
+  const payload = message && message.payload;
+  if (!payload || !uint32(payload.config_revision)) return false;
+  if (message.type === 'ir.transmit.accepted') {
+    return typeof payload.reply_to === 'string'
+      && Number.isInteger(payload.repeat_count) && payload.repeat_count >= 1 && payload.repeat_count <= 20;
+  }
+  if (message.type === 'ir.record.status') {
+    return (payload.reply_to === undefined || typeof payload.reply_to === 'string')
+      && typeof payload.armed === 'boolean';
+  }
+  if (!uint32(payload.event_sequence) || payload.event_sequence < 1
+      || !uint32(payload.occurred_at_uptime_milliseconds)) return false;
+  if (message.type === 'ir.received' || message.type === 'ir.recorded') {
+    return validIrCode(payload.code);
+  }
+  return message.type === 'ir.transmit.completed';
+}
+
 class RuntimeConnection extends EventEmitter {
   constructor(options) {
     super();
@@ -346,6 +374,10 @@ class RuntimeConnection extends EventEmitter {
       this.protocolFailure('INVALID_REQUEST', 'Ungültige Fingerabdrucknachricht.');
       return;
     }
+    if (message.type.startsWith('ir.') && !validIrMessage(message)) {
+      this.protocolFailure('INVALID_REQUEST', 'Ungültige IR-Nachricht.');
+      return;
+    }
     const replyTo = message.payload && message.payload.reply_to;
     if (typeof replyTo === 'string' && message.type !== 'error') {
       const pending = this.pendingRequests.get(replyTo);
@@ -463,6 +495,8 @@ class RuntimeConnection extends EventEmitter {
       this.emit('sensor', message);
     } else if (message.type.startsWith('fingerprint.')) {
       this.emit('fingerprint', message);
+    } else if (message.type.startsWith('ir.')) {
+      this.emit('ir', message);
     } else {
       this.emit('warning', Object.assign(new Error(`Nicht unterstützter Nachrichtentyp ${message.type}.`), {
         code: 'UNSUPPORTED_MESSAGE_TYPE',
@@ -560,5 +594,6 @@ module.exports = {
   MAX_MESSAGE_BYTES, HELLO_TIMEOUT_MS, HEARTBEAT_MS, HEARTBEAT_TIMEOUT_MS,
   RECONNECT_DELAYS, connectionErrorMessage, validEnvelope, validBinaryMessage,
   validSensorSample, validSensorMessage, validFingerprintMessage,
+  validIrCode, validIrMessage,
   RuntimeConnection,
 };

@@ -16,6 +16,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { validateManifest, selectArtifact, checkCompatibility, validateArtifactFile } = require('./firmware');
 const { compareSemVer } = require('./validation');
+const { ReleaseSource } = require('./release-source');
 
 const CHANNELS = Object.freeze(['stable', 'beta', 'development']);
 const FILENAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/;
@@ -37,14 +38,19 @@ function validFilename(value) {
 class ReleaseStore {
   constructor(options = {}) {
     this.directory = options.directory || null;
+    this.bundledDirectory = options.bundledDirectory === undefined
+      ? path.join(__dirname, 'bundled-firmware') : options.bundledDirectory;
     this.publicKey = options.publicKey || null;
+    this.source = options.source || '';
+    this.sourceFactory = options.sourceFactory || ((url) => new ReleaseSource(url));
     // kanal -> { manifest, storedAt }
     this.releases = new Map();
   }
 
-  attach(directory) {
+  async attach(directory) {
     this.directory = directory;
     this.load();
+    return this.seedBundled();
   }
 
   channelDirectory(channel) {
@@ -75,6 +81,149 @@ class ReleaseStore {
 
   artifactPath(channel, filename) {
     return path.join(this.channelDirectory(channel), validFilename(filename));
+  }
+
+  originPath(channel) {
+    return path.join(this.directory, '.firmware-origins', `${validChannel(channel)}.json`);
+  }
+
+  origin(channel) {
+    try {
+      return JSON.parse(fs.readFileSync(this.originPath(channel), 'utf8'));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  clearOrigin(channel) {
+    try { fs.rmSync(this.originPath(channel), { force: true }); } catch (_) { /* egal */ }
+  }
+
+  writeOrigin(channel, origin) {
+    const target = this.originPath(channel);
+    fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+    const temporary = `${target}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+    fs.writeFileSync(temporary, JSON.stringify(origin, null, 2), { mode: 0o600 });
+    fs.renameSync(temporary, target);
+  }
+
+  async validateReleaseFiles(manifest, files, options = {}) {
+    for (const artifact of manifest.artifacts) {
+      const file = files.get(artifact.filename);
+      if (!file) throw new Error(`Firmwaredatei ${artifact.filename} fehlt.`);
+      await validateArtifactFile(file, artifact, options);
+    }
+  }
+
+  installRelease(manifestInput, files, origin) {
+    const manifest = validateManifest(manifestInput);
+    const channel = validChannel(manifest.release.channel);
+    const firmwareDirectory = path.join(this.directory, 'firmware');
+    fs.mkdirSync(firmwareDirectory, { recursive: true, mode: 0o700 });
+    const directory = this.channelDirectory(channel);
+    const staging = fs.mkdtempSync(path.join(firmwareDirectory, `.${channel}-install-`));
+    fs.chmodSync(staging, 0o700);
+    for (const artifact of manifest.artifacts) {
+      const source = files.get(artifact.filename);
+      const target = path.join(staging, validFilename(artifact.filename));
+      fs.copyFileSync(source, target);
+      fs.chmodSync(target, 0o600);
+    }
+    fs.writeFileSync(path.join(staging, 'manifest.json'), JSON.stringify(manifest, null, 2), { mode: 0o600 });
+    const backup = path.join(firmwareDirectory,
+      `.${channel}-previous-${process.pid}-${crypto.randomBytes(6).toString('hex')}`);
+    let movedPrevious = false;
+    try {
+      if (fs.existsSync(directory)) {
+        fs.renameSync(directory, backup);
+        movedPrevious = true;
+      }
+      fs.renameSync(staging, directory);
+      if (movedPrevious) fs.rmSync(backup, { recursive: true, force: true });
+    } catch (error) {
+      try {
+        if (!fs.existsSync(directory) && movedPrevious && fs.existsSync(backup)) fs.renameSync(backup, directory);
+      } catch (_) { /* ursprünglichen Fehler beibehalten */ }
+      try { fs.rmSync(staging, { recursive: true, force: true }); } catch (_) { /* egal */ }
+      throw error;
+    }
+    this.releases.set(channel, { manifest, storedAt: new Date().toISOString() });
+    this.writeOrigin(channel, origin);
+    return { channel, manifest, origin, missing: this.missingArtifacts(channel) };
+  }
+
+  async seedBundled() {
+    const results = [];
+    if (!this.directory || !this.bundledDirectory) return results;
+    for (const channel of CHANNELS) {
+      const bundledChannel = path.join(this.bundledDirectory, channel);
+      const bundledManifestFile = path.join(bundledChannel, 'manifest.json');
+      if (!fs.existsSync(bundledManifestFile)) continue;
+      const manifest = validateManifest(JSON.parse(fs.readFileSync(bundledManifestFile, 'utf8')));
+      if (manifest.release.channel !== channel) throw new Error(`Gebündeltes Manifest ist nicht dem Kanal ${channel} zugeordnet.`);
+      const files = new Map(manifest.artifacts.map((artifact) =>
+        [artifact.filename, path.join(bundledChannel, validFilename(artifact.filename))]));
+      await this.validateReleaseFiles(manifest, files, { requireSignature: false });
+
+      const current = this.release(channel);
+      const currentOrigin = this.origin(channel);
+      const managedBundle = currentOrigin && currentOrigin.kind === 'bundled'
+        && current && currentOrigin.version === current.release.version;
+      if (current && (!managedBundle
+          || compareSemVer(manifest.release.version, current.release.version) <= 0)) {
+        results.push({ channel, installed: false, reason: managedBundle ? 'not-newer' : 'locally-managed' });
+        continue;
+      }
+      this.installRelease(manifest, files, {
+        kind: 'bundled', version: manifest.release.version,
+      });
+      results.push({ channel, installed: true, version: manifest.release.version });
+    }
+    return results;
+  }
+
+  async syncFromSource(channels = CHANNELS) {
+    if (!String(this.source || '').trim()) return [];
+    if (!this.publicKey) throw new Error('Für Online-Firmwareupdates muss ein Ed25519-Prüfschlüssel konfiguriert sein.');
+    if (!this.directory) throw new Error('Firmwarespeicher ist nicht initialisiert.');
+    const source = this.sourceFactory(this.source);
+    const results = [];
+    for (const rawChannel of channels) {
+      const channel = validChannel(rawChannel);
+      let temporaryDirectory = null;
+      try {
+        const manifest = validateManifest(await source.manifest(channel));
+        if (manifest.release.channel !== channel) throw new Error(`Remote-Manifest ist nicht dem Kanal ${channel} zugeordnet.`);
+        const current = this.release(channel);
+        if (current && this.complete(channel)
+            && compareSemVer(manifest.release.version, current.release.version) <= 0) {
+          results.push({ channel, updated: false, version: current.release.version });
+          continue;
+        }
+        temporaryDirectory = fs.mkdtempSync(path.join(this.directory, '.firmware-download-'));
+        fs.chmodSync(temporaryDirectory, 0o700);
+        const files = new Map();
+        for (const artifact of manifest.artifacts) {
+          const filename = validFilename(artifact.filename);
+          const target = path.join(temporaryDirectory, filename);
+          fs.writeFileSync(target, await source.artifact(channel, filename, artifact.size_bytes), { mode: 0o600 });
+          files.set(filename, target);
+        }
+        await this.validateReleaseFiles(manifest, files, {
+          publicKey: this.publicKey, requireSignature: true,
+        });
+        this.installRelease(manifest, files, {
+          kind: 'remote', version: manifest.release.version,
+          source: source.baseUrl.origin + source.baseUrl.pathname,
+        });
+        results.push({ channel, updated: true, version: manifest.release.version });
+      } catch (error) {
+        results.push({ channel, updated: false, error: error.message });
+      } finally {
+        if (temporaryDirectory) fs.rmSync(temporaryDirectory, { recursive: true, force: true });
+      }
+    }
+    return results;
   }
 
   artifactStored(channel, artifact) {
@@ -136,6 +285,7 @@ class ReleaseStore {
       ? { ...source, release: { ...source.release, channel: requested } }
       : source;
     const channel = validChannel(manifest.release.channel);
+    this.clearOrigin(channel);
     for (const artifact of manifest.artifacts) validFilename(artifact.filename);
     const directory = this.channelDirectory(channel);
     fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -207,6 +357,7 @@ class ReleaseStore {
   removeChannel(channel) {
     const directory = this.channelDirectory(channel);
     fs.rmSync(directory, { recursive: true, force: true });
+    this.clearOrigin(channel);
     this.releases.delete(validChannel(channel));
     return true;
   }
@@ -248,6 +399,7 @@ class ReleaseStore {
       manifest,
       artifact,
       release: manifest.release,
+      origin: this.origin(channel),
       file: this.artifactPath(channel, artifact.filename),
     };
   }

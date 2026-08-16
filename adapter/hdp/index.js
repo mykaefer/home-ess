@@ -12,6 +12,7 @@ const {
   finite, bounded, scale, interpolateColor, colorStops, validateHardwareConfig,
   validateDeviceId, RUNTIME_PROFILE, BINARY_RUNTIME_PROFILE, SENSOR_RUNTIME_PROFILE,
   FINGERPRINT_RUNTIME_PROFILE, SENSOR_TYPES,
+  IR_RUNTIME_PROFILE,
   FINGERPRINT_LED_SCENES, FINGERPRINT_LED_EFFECTS, FINGERPRINT_LED_COLORS,
   ARGB_OPERATORS, ARGB_OPERATOR_LABELS, validateArgbCondition, argbConditionActive,
   argbOutputPinRoles, argbOutputPins,
@@ -84,6 +85,7 @@ function defaultBindings() {
     // { "<sensor_id>": { "<messgröße>": { topic } } } — je Messwert ein
     // Ziel-State, in den bei jeder Messung geschrieben wird.
     sensor: {},
+    ir: { passthrough_topic: '', repeat_count: 1, repeat_interval_milliseconds: 100 },
   };
 }
 
@@ -138,6 +140,7 @@ function mergeBindings(value) {
           : {},
       ]))
       : {},
+    ir: { ...base.ir, ...(input.ir && typeof input.ir === 'object' ? input.ir : {}) },
   };
 }
 
@@ -291,6 +294,22 @@ function normalizeDeviceBindings(device, hardwareConfig) {
     device.bindings, argbPixelCount({ hardwareConfig }),
   );
   device.bindings.fingerprint = normalizeFingerprintBindings(device.bindings);
+  device.bindings.ir = {
+    passthrough_topic: String((device.bindings.ir && device.bindings.ir.passthrough_topic) || '').trim(),
+    repeat_count: Math.max(1, Math.min(20, Math.round(number(
+      device.bindings.ir && device.bindings.ir.repeat_count, 1,
+    )))),
+    repeat_interval_milliseconds: Math.max(0, Math.min(60000, Math.round(number(
+      device.bindings.ir && device.bindings.ir.repeat_interval_milliseconds, 100,
+    )))),
+  };
+  device.irRecordings = device.irRecordings && typeof device.irRecordings === 'object'
+    ? device.irRecordings : {};
+  for (const [id, entry] of Object.entries(device.irRecordings)) {
+    if (entry && typeof entry === 'object') {
+      entry.name = normalizeIrRecordingName(entry.name, id);
+    }
+  }
 }
 
 function validateDimmingSwitch(bindings) {
@@ -339,6 +358,8 @@ function sanitizeDevice(device) {
   delete copy.argbValues;
   delete copy.argbStates;
   delete copy.fingerprintTopicValues;
+  delete copy.irBlasterValue;
+  delete copy.irTransmitRunning;
   delete copy.rawDimmingSwitch;
   return copy;
 }
@@ -466,7 +487,7 @@ function requestedDeviceName(input, fallback = '') {
 }
 
 const DEVICE_TYPES = Object.freeze([
-  'percentage_indicator', 'argb_output', 'binary_io', 'sensors', 'fingerprint_reader',
+  'percentage_indicator', 'argb_output', 'binary_io', 'sensors', 'fingerprint_reader', 'ir_transceiver',
 ]);
 const DEVICE_TYPE_LABELS = Object.freeze({
   percentage_indicator: 'Prozentanzeige',
@@ -474,6 +495,7 @@ const DEVICE_TYPE_LABELS = Object.freeze({
   binary_io: 'Binary-I/O',
   sensors: 'Sensoren',
   fingerprint_reader: 'Fingerabdrucksensor',
+  ir_transceiver: 'IR-Blaster / Receiver',
 });
 // Prozentanzeige und ARGB-Ausgang teilen sich Hardwareprofil und Laufzeit-
 // profil; sie unterscheiden sich ausschließlich darin, wie homeESS die Pixel
@@ -513,13 +535,15 @@ function deviceTypeOf(device) {
     if (config.device_type === 'argb_output') return 'argb_output';
     if (config.device_type === 'sensors') return 'sensors';
     if (config.device_type === 'fingerprint_reader') return 'fingerprint_reader';
+    if (config.device_type === 'ir_transceiver') return 'ir_transceiver';
     if (typeof config.device_type === 'string' && config.device_type) return 'percentage_indicator';
     if (Array.isArray(config.pins)) return 'binary_io';
   }
   return device && device.runtimeProfile === BINARY_RUNTIME_PROFILE
     ? 'binary_io' : device && device.runtimeProfile === SENSOR_RUNTIME_PROFILE
       ? 'sensors' : device && device.runtimeProfile === FINGERPRINT_RUNTIME_PROFILE
-        ? 'fingerprint_reader' : 'percentage_indicator';
+        ? 'fingerprint_reader' : device && device.runtimeProfile === IR_RUNTIME_PROFILE
+          ? 'ir_transceiver' : 'percentage_indicator';
 }
 
 function isBinaryDevice(device) {
@@ -536,6 +560,10 @@ function isSensorDevice(device) {
 
 function isFingerprintDevice(device) {
   return deviceTypeOf(device) === 'fingerprint_reader';
+}
+
+function isIrDevice(device) {
+  return deviceTypeOf(device) === 'ir_transceiver';
 }
 
 const FINGERPRINT_ERROR_LABELS = Object.freeze({
@@ -702,6 +730,69 @@ function stateValue(value) {
   return value == null ? '' : value;
 }
 
+function normalizeStateToken(value) {
+  return String(value == null ? '' : value).trim()
+    .replace(/[\s_-]+/g, '_').replace(/^_+|_+$/g, '');
+}
+
+function normalizeStateCategory(value) {
+  return String(value == null ? '' : value).split('/')
+    .map((segment) => normalizeStateToken(segment)).filter(Boolean).join('/');
+}
+
+function normalizeStateAddress(value) {
+  return String(value == null ? '' : value).split('/').map((segment) => {
+    let decoded = segment;
+    try { decoded = decodeURIComponent(segment); } catch (_) { /* unverändert normalisieren */ }
+    return encodeURIComponent(normalizeStateToken(decoded));
+  }).join('/');
+}
+
+function normalizePublishedState(state) {
+  return {
+    ...state,
+    address: normalizeStateAddress(state.address),
+    name: normalizeStateToken(state.name),
+    ...(state.category == null ? {} : { category: normalizeStateCategory(state.category) }),
+  };
+}
+
+function normalizeIrCode(value) {
+  let code = value;
+  if (typeof code === 'string') {
+    const text = code.trim();
+    if (!text) return null;
+    try { code = JSON.parse(text); } catch (_) { throw new Error('IR-Code muss gültiges JSON sein.'); }
+  }
+  if (!code || typeof code !== 'object' || Array.isArray(code)
+      || code.encoding !== 'raw-microseconds-v1'
+      || !Number.isInteger(code.carrier_frequency_hz)
+      || code.carrier_frequency_hz < 20000 || code.carrier_frequency_hz > 60000
+      || !Array.isArray(code.durations) || code.durations.length < 2
+      || code.durations.length > 1024
+      || code.durations.some((duration) => !Number.isInteger(duration)
+        || duration < 1 || duration > 65535)) {
+    throw new Error('IR-Code ist ungültig oder nicht raw-microseconds-v1.');
+  }
+  return {
+    encoding: code.encoding, carrier_frequency_hz: code.carrier_frequency_hz,
+    durations: [...code.durations],
+  };
+}
+
+function irRecordingId(name, recordings) {
+  const base = String(name || 'IR-Code').normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 48) || 'ir_code';
+  let id = base; let suffix = 2;
+  while (Object.prototype.hasOwnProperty.call(recordings || {}, id)) id = `${base}_${suffix++}`;
+  return id;
+}
+
+function normalizeIrRecordingName(value, fallback = '') {
+  return normalizeStateToken(value).slice(0, 100)
+    || normalizeStateToken(fallback).slice(0, 100);
+}
+
 const SENSOR_VALUE_META = Object.freeze({
   temperature_millicelsius: ['Temperatur', '°C', 0.001],
   humidity_millipercent: ['Luftfeuchtigkeit', '%', 0.001],
@@ -745,8 +836,9 @@ function deviceStateChannels(device) {
   const root = `devices/${encodeURIComponent(device.deviceId)}`;
   const type = deviceTypeOf(device);
   const output = configuredOutput(device);
-  const state = (suffix, name, value, unit = '') => ({
+  const state = (suffix, name, value, unit = '', extra = {}) => normalizePublishedState({
     address: `${root}/${suffix}`, name, value: stateValue(value), ...(unit ? { unit } : {}),
+    ...extra,
   });
   const channels = [{
     address: 'status', name: 'Status', states: [
@@ -869,14 +961,51 @@ function deviceStateChannels(device) {
       state('fingerprint/last-error', 'R503-Fehler', fingerprint.last_error),
     ] });
   }
+  if (type === 'ir_transceiver') {
+    const config = device.hardwareConfig || {};
+    const receiver = config.receiver || {};
+    const blaster = config.blaster || {};
+    if (receiver.enabled) {
+      channels.push({ address: 'ir-receiver', name: 'IR-Receiver', states: [
+        state('ir/receiver-mode', 'Receiver-Modus', receiver.mode),
+        state('ir/recording-armed', 'Aufnahme aktiv', !!device.irRecordingArmed),
+        state('ir/last-received', 'Zuletzt empfangener IR-Code', device.irLastReceived || ''),
+      ] });
+    }
+    if (blaster.enabled) {
+      channels.push({ address: 'ir-blaster', name: 'IR-Blaster', states: [
+        state('ir/blaster', 'IR-Code senden', device.irBlasterValue, '', { writable: true }),
+      ] });
+    }
+  }
   return channels;
 }
 
 function deviceStateCatalog(device) {
   const deviceName = device.name || device.deviceId;
   return deviceStateChannels(device).flatMap((channel) => channel.states.map(({ value, ...state }) => ({
-    ...state, category: `${deviceName} / ${channel.name}`,
+    ...state, category: normalizeStateCategory(`${deviceName}/${channel.name}`),
   })));
+}
+
+function irRecordingStateCatalog(deviceList) {
+  const used = new Set();
+  const states = [];
+  for (const device of deviceList) {
+    if (!device.paired) continue;
+    for (const [id, entry] of Object.entries(device.irRecordings || {})) {
+      let stateId = id;
+      if (used.has(stateId)) stateId = `${id}_${device.deviceId}`;
+      used.add(stateId);
+      states.push(normalizePublishedState({
+        address: `ir-recordings/${encodeURIComponent(stateId)}`,
+        name: normalizeIrRecordingName(entry.name, id),
+        value: stateValue(entry.code),
+        category: 'Aufgezeichnete IR-Codes',
+      }));
+    }
+  }
+  return states;
 }
 
 function deviceStateValues(device) {
@@ -910,7 +1039,9 @@ function createHdpAdapter(host, dependencies = {}) {
   let stopped = true;
   let firmwarePoll = null;
   let rolloutPoll = null;
+  let releaseSourcePoll = null;
   let rolloutRunning = false;
+  let releaseSourceRunning = false;
   let managementBase = '';
   const devices = new Map();
   const discovered = new Map();
@@ -933,8 +1064,8 @@ function createHdpAdapter(host, dependencies = {}) {
       generation: device.platform || '',
       online: !!device.online,
       channels: device.paired ? deviceStateChannels(device).map((channel) => ({
-        address: channel.address,
-        name: channel.name,
+        address: normalizeStateToken(channel.address),
+        name: normalizeStateToken(channel.name),
         states: channel.states.map(({ value, ...state }) => state),
       })) : [{ address: 'status', name: 'Discovery', states: [] }],
     }));
@@ -965,7 +1096,19 @@ function createHdpAdapter(host, dependencies = {}) {
   }
 
   function publishCatalog() {
-    host.setStates(Array.from(devices.values()).filter((d) => d.paired).flatMap(deviceStateCatalog));
+    const paired = Array.from(devices.values()).filter((device) => device.paired);
+    host.setStates([...paired.flatMap(deviceStateCatalog), ...irRecordingStateCatalog(paired)]);
+  }
+
+  function occupiedIrRecordingIds(exceptDeviceId = '', exceptRecordingId = '') {
+    const occupied = {};
+    for (const device of devices.values()) {
+      for (const recordingId of Object.keys(device.irRecordings || {})) {
+        if (device.deviceId === exceptDeviceId && recordingId === exceptRecordingId) continue;
+        occupied[recordingId] = true;
+      }
+    }
+    return occupied;
   }
 
   function publishDevice(device) {
@@ -1160,6 +1303,68 @@ function createHdpAdapter(host, dependencies = {}) {
     publishDevice(device);
   }
 
+  function handleIrMessage(device, message) {
+    const payload = message.payload || {};
+    if (payload.config_revision !== device.configRevision) {
+      host.warn(`hDP ${device.deviceId}: IR-Nachricht für Revision ${payload.config_revision} ignoriert.`);
+      return;
+    }
+    if (message.type === 'ir.record.status') {
+      device.irRecordingArmed = payload.armed;
+      if (!payload.armed) device.pendingIrRecordName = null;
+    } else if (message.type === 'ir.received') {
+      device.irLastReceived = normalizeIrCode(payload.code);
+      const topic = device.bindings.ir && device.bindings.ir.passthrough_topic;
+      if (topic) host.writeState(topic, device.irLastReceived)
+        .catch((error) => setError(device, error, 'IR-Passthrough'));
+    } else if (message.type === 'ir.recorded') {
+      const code = normalizeIrCode(payload.code);
+      device.irLastReceived = code;
+      device.irRecordingArmed = false;
+      device.irRecordings = device.irRecordings || {};
+      const name = normalizeIrRecordingName(device.pendingIrRecordName,
+        `IR-Code_${new Date().toLocaleString('de-DE')}`);
+      const id = irRecordingId(name, occupiedIrRecordingIds());
+      device.irRecordings[id] = { name, code, recorded_at: new Date().toISOString() };
+      device.pendingIrRecordName = null;
+      publishCatalog(); persist();
+    } else if (message.type === 'ir.transmit.completed') {
+      device.irTransmitRunning = false;
+      device.irBlasterValue = '';
+    }
+    publishDevice(device);
+  }
+
+  async function writeIrBlaster(device, value) {
+    if (!isIrDevice(device) || !(device.hardwareConfig && device.hardwareConfig.blaster
+        && device.hardwareConfig.blaster.enabled)) {
+      throw Object.assign(new Error('IR-Blaster ist nicht konfiguriert.'), { code: 'INVALID_OUTPUT_STATE' });
+    }
+    if (!device.connection || !device.connection.ready) {
+      throw Object.assign(new Error('IR-Blaster ist nicht verbunden.'), { code: 'DEVICE_OFFLINE' });
+    }
+    if (device.irTransmitRunning) {
+      throw Object.assign(new Error('IR-Blaster sendet bereits.'), { code: 'DEVICE_BUSY' });
+    }
+    const code = normalizeIrCode(value);
+    if (!code) return;
+    const settings = device.bindings.ir || {};
+    device.irTransmitRunning = true;
+    device.irBlasterValue = code;
+    publishDevice(device);
+    try {
+      await device.connection.request('ir.transmit', {
+        config_revision: device.configRevision, code,
+        repeat_count: Math.max(1, Math.min(20, Number(settings.repeat_count) || 1)),
+        repeat_interval_milliseconds: Math.max(0, Math.min(60000,
+          Number(settings.repeat_interval_milliseconds) || 0)),
+      }, 5000);
+    } catch (error) {
+      device.irTransmitRunning = false; device.irBlasterValue = '';
+      publishDevice(device); throw error;
+    }
+  }
+
   async function applyFingerprintMatch(device, payload) {
     const key = String(payload.template_id);
     const binding = device.bindings.fingerprint && device.bindings.fingerprint[key];
@@ -1294,7 +1499,11 @@ function createHdpAdapter(host, dependencies = {}) {
             direction: pending.direction,
             ...device.bindings.indicator,
           }, device.manifest.limits);
-          const timelineId = `indicator-${timeline.sha256.slice(0, 16)}`;
+          // Der Programm-Hash deckt nur die Ereignisse ab, nicht die Schleifendauer:
+          // Der Impulsabstand steckt allein in durationMilliseconds. Ohne ihn in der
+          // ID bliebe eine reine Impulsabstandsänderung inhaltsgleich und würde vom
+          // Ausgang als bereits aktiv abgetan.
+          const timelineId = `indicator-${timeline.sha256.slice(0, 16)}-${timeline.durationMilliseconds}`;
           await device.outputClient.setTimeline(pending.outputId, timelineId, timeline);
         } else {
           await device.outputClient.setFrame(pending.outputId, pending.pixels);
@@ -1386,7 +1595,8 @@ function createHdpAdapter(host, dependencies = {}) {
 
   function applyRuntime(device) {
     try {
-      if (isBinaryDevice(device) || isSensorDevice(device) || isFingerprintDevice(device)) {
+      if (isBinaryDevice(device) || isSensorDevice(device) || isFingerprintDevice(device)
+          || isIrDevice(device)) {
         publishDevice(device);
         return;
       }
@@ -1437,6 +1647,7 @@ function createHdpAdapter(host, dependencies = {}) {
   function subscribeSources(device) {
     stopSubscriptions(device);
     device.unsubscribers = [];
+    if (isIrDevice(device)) return;
     if (isSensorDevice(device)) {
       if (hasBinaryIo(device)) subscribeBinarySources(device);
       return;
@@ -1576,6 +1787,11 @@ function createHdpAdapter(host, dependencies = {}) {
       device.effectiveBrightness = null;
       device.estimatedCurrent = null;
       device.powerLimited = null;
+      if (isIrDevice(device)) {
+        device.irTransmitRunning = false;
+        device.irBlasterValue = '';
+        device.irRecordingArmed = false;
+      }
       if (hasBinaryIo(device)) {
         device.binaryStates = device.binaryStates || {};
         for (const pin of (device.hardwareConfig && Array.isArray(device.hardwareConfig.pins)
@@ -1634,6 +1850,7 @@ function createHdpAdapter(host, dependencies = {}) {
     connection.on('binary', (message) => handleBinaryMessage(device, message));
     connection.on('sensor', (message) => handleSensorMessage(device, message));
     connection.on('fingerprint', (message) => handleFingerprintMessage(device, message));
+    connection.on('ir', (message) => handleIrMessage(device, message));
     connection.on('deviceError', (payload) => {
       const rejectedTextFrame = payload.code === 'INVALID_REQUEST'
         && /UTF-8 text messages up to 1024 bytes/i.test(payload.message || '');
@@ -1757,6 +1974,22 @@ function createHdpAdapter(host, dependencies = {}) {
       publishDevice(local);
     }
     persist();
+  }
+
+  // Unveränderte mDNS-Antworten aktualisieren normalerweise nur den internen
+  // Discovery-Zeitstempel. Fehlt nach einem einmalig gescheiterten
+  // Binding-Abgleich jedoch weiterhin die Laufzeitverbindung, muss auch ein
+  // unverändertes Lebenszeichen einen neuen Versuch auslösen. Andernfalls
+  // bleibt das Gerät bis zum nächsten Adapterneustart dauerhaft offline.
+  function onSeen(found) {
+    const local = devices.get(found.deviceId);
+    if (!local || local.bindingState !== 'active' || local.paired !== true
+        || local.connection || local.reconciling || found.online !== true) return;
+    local.discoveredOnline = true;
+    clientFor(local).update(local, {
+      instanceId: identity.instanceId, bindingKey: local.bindingKey,
+    });
+    reconcileBinding(local).catch((error) => setError(local, error, 'Binding-Abgleich'));
   }
 
   // Das Manifest beschreibt die Fähigkeiten genau einer Firmwareversion und
@@ -2097,7 +2330,19 @@ function createHdpAdapter(host, dependencies = {}) {
   function saveBindings(deviceId, input) {
     const device = requirePaired(deviceId);
     const previousBindings = device.bindings;
-    const nextBindings = isBinaryDevice(device) || isSensorDevice(device)
+    const nextBindings = isIrDevice(device)
+      ? (() => {
+        const bindings = mergeBindings(input.bindings || input);
+        bindings.ir.passthrough_topic = String(bindings.ir.passthrough_topic || '').trim();
+        bindings.ir.repeat_count = require('./validation').integer(
+          bindings.ir.repeat_count, 1, 20, 'IR-Wiederholungen',
+        );
+        bindings.ir.repeat_interval_milliseconds = require('./validation').integer(
+          bindings.ir.repeat_interval_milliseconds, 0, 60000, 'IR-Wiederholabstand',
+        );
+        return bindings;
+      })()
+      : isBinaryDevice(device) || isSensorDevice(device)
       ? validateBinaryBindings(device, input.bindings || input)
       : isFingerprintDevice(device)
         ? validateFingerprintBindings(device, input.bindings || input)
@@ -2105,7 +2350,7 @@ function createHdpAdapter(host, dependencies = {}) {
         ? validateArgbBindings(device, input.bindings || input)
         : validateBindings(input.bindings || input);
     if (!isBinaryDevice(device) && !isArgbDevice(device) && !isSensorDevice(device)
-        && !isFingerprintDevice(device)) {
+        && !isFingerprintDevice(device) && !isIrDevice(device)) {
       resetChangedIndicatorState(device, previousBindings, nextBindings);
     }
     if (!isBinaryDevice(device) && !isSensorDevice(device)
@@ -2246,6 +2491,11 @@ function createHdpAdapter(host, dependencies = {}) {
     }
     const fileCheck = await validateArtifactFile(candidate.file, candidate.artifact, {
       publicKey: releaseStore.publicKey,
+      // Das gebündelte Image ist Teil des verifizierten homeESS-Pakets und wird
+      // zusätzlich gegen die fest mitgelieferte Größe und SHA-256-Summe geprüft.
+      // Ein konfigurierter Schlüssel ist für Online- und manuelle Releases
+      // bindend, darf diesen lokalen Bootstrap aber nicht nachträglich sperren.
+      requireSignature: candidate.origin && candidate.origin.kind === 'bundled' ? false : undefined,
     });
     try {
       device.otaProgress = { state: 'uploading', progress_percent: 0 };
@@ -2486,6 +2736,26 @@ function createHdpAdapter(host, dependencies = {}) {
     }
   }
 
+  async function syncReleaseSource() {
+    if (stopped || releaseSourceRunning || !String(releaseStore.source || '').trim()) return;
+    releaseSourceRunning = true;
+    try {
+      const results = await releaseStore.syncFromSource();
+      let changed = false;
+      for (const result of results) {
+        if (result.updated) {
+          changed = true;
+          host.log(`hDP Firmware: ${result.channel} auf ${result.version} aktualisiert.`);
+        } else if (result.error) {
+          host.warn(`hDP Firmwarequelle (${result.channel}): ${result.error}`);
+        }
+      }
+      if (changed) await runRollout();
+    } finally {
+      releaseSourceRunning = false;
+    }
+  }
+
   function deviceFromForm(body, existing) {
     const requestedType = String(body.device_type || deviceTypeOf(existing));
     const available = supportedDeviceTypes(existing.manifest);
@@ -2502,6 +2772,30 @@ function createHdpAdapter(host, dependencies = {}) {
         new Error('Der ARGB-Ausgang benötigt eine Firmware mit generischem Pixel-Ausgang.'),
         { code: 'UNSUPPORTED_DEVICE_TYPE', status: 422 },
       );
+    }
+    if (requestedType === 'ir_transceiver') {
+      const current = existing.hardwareConfig || {};
+      const receiverEnabled = bool(body.ir_receiver_enabled);
+      const blasterEnabled = bool(body.ir_blaster_enabled);
+      const rawTrigger = String(body.ir_trigger_pin == null ? '' : body.ir_trigger_pin).trim();
+      return validateHardwareConfig({
+        revision: number(body.revision, existing.configRevision || 0),
+        device_type: 'ir_transceiver',
+        receiver: {
+          enabled: receiverEnabled,
+          pin: number(body.ir_receiver_pin, (current.receiver && current.receiver.pin) || 14),
+          carrier_frequency_hz: number(body.ir_carrier_frequency_hz,
+            (current.receiver && current.receiver.carrier_frequency_hz) || 38000),
+          mode: body.ir_receiver_mode === 'record' ? 'record' : 'passthrough',
+          trigger_pin: receiverEnabled && rawTrigger ? number(rawTrigger, 13) : null,
+        },
+        blaster: {
+          enabled: blasterEnabled,
+          pin: number(body.ir_blaster_pin, (current.blaster && current.blaster.pin) || 4),
+        },
+        status_led_pin: number(body.ir_status_led_pin,
+          current.status_led_pin == null ? 2 : current.status_led_pin),
+      }, existing.manifest);
     }
     if (requestedType === 'fingerprint_reader') {
       const defaults = {
@@ -2705,6 +2999,16 @@ function createHdpAdapter(host, dependencies = {}) {
   }
 
   function bindingsFromForm(body, device) {
+    if (device && isIrDevice(device)) {
+      return {
+        ...mergeBindings(device.bindings),
+        ir: {
+          passthrough_topic: String(body.ir_passthrough_topic || '').trim(),
+          repeat_count: number(body.ir_repeat_count, 1),
+          repeat_interval_milliseconds: number(body.ir_repeat_interval_milliseconds, 100),
+        },
+      };
+    }
     if (device && isSensorDevice(device)) {
       // Die Sensoren kommen indiziert aus dem Formular, damit ihre Kennungen
       // nicht in Feldnamen zerlegt werden müssen; die Kennung selbst reist in
@@ -3390,6 +3694,24 @@ hdp-flash.exe --channel development</code></pre>
       <section class="dialog-section" data-hdp-type-panel="fingerprint_reader"><div class="dialog-section-head"><h4>LED-Ring</h4><p class="muted">Geschwindigkeit und Wiederholungen sind R503-Werte von 0 bis 255.</p></div>${ledRows}</section>
       <section class="dialog-section" data-hdp-type-panel="fingerprint_reader"><div class="dialog-section-head"><h4>Freie Binary-Pins</h4><p class="muted">Angezeigt werden ausschließlich die GPIOs, die weder UART noch Wakeup belegen. Gewünschte Pins einzeln aktivieren.</p>${binaryPinLegend(device)}</div>${fingerprintBinaryPinRows(device, hw)}</section>`;
     })() : '';
+    const irSection = available.includes('ir_transceiver') ? (() => {
+      const receiver = hw.receiver || {};
+      const blaster = hw.blaster || {};
+      const capabilities = (device.manifest && device.manifest.hardware_capabilities) || {};
+      const pins = Array.isArray(capabilities.binary_pins) ? capabilities.binary_pins : [];
+      const pullups = Array.isArray(capabilities.binary_pullup_pins)
+        ? capabilities.binary_pullup_pins : pins;
+      return `<section class="dialog-section" data-hdp-type-panel="ir_transceiver"><div class="dialog-section-head"><h4>IR-Receiver und Blaster</h4><p class="muted">Standard: TSOP384xx an D5/GPIO14, Trigger an D7/GPIO13, MOSFET für IR-LEDs an D2/GPIO4, Signal-LED an D4/GPIO2 (aktiv-low).</p></div>
+        <div class="hdp-toggle-row"><label><input type="checkbox" name="ir_receiver_enabled"${receiver.enabled !== false ? ' checked' : ''}> Receiver aktiv</label><label><input type="checkbox" name="ir_blaster_enabled"${blaster.enabled !== false ? ' checked' : ''}> Blaster aktiv</label></div>
+        <div class="dialog-grid dialog-grid--three">
+          <label class="field-block">Receiver-GPIO<select name="ir_receiver_pin">${gpioOptions(device, receiver.pin == null ? 14 : receiver.pin, pins)}</select></label>
+          <label class="field-block">Receiver-Modus<select name="ir_receiver_mode"><option value="passthrough"${receiver.mode !== 'record' ? ' selected' : ''}>Passthrough</option><option value="record"${receiver.mode === 'record' ? ' selected' : ''}>Record</option></select></label>
+          <label class="field-block">Trägerfrequenz (Hz)<input type="number" min="20000" max="60000" step="1000" name="ir_carrier_frequency_hz" value="${esc(receiver.carrier_frequency_hz || 38000)}"></label>
+          <label class="field-block">Trigger-GPIO (optional)<select name="ir_trigger_pin"><option value="">Nicht angeschlossen</option>${gpioOptions(device, receiver.trigger_pin == null ? 13 : receiver.trigger_pin, pullups)}</select></label>
+          <label class="field-block">Blaster-GPIO<select name="ir_blaster_pin">${gpioOptions(device, blaster.pin == null ? 4 : blaster.pin, pins)}</select></label>
+          <label class="field-block">Signal-LED-GPIO<select name="ir_status_led_pin">${gpioOptions(device, hw.status_led_pin == null ? 2 : hw.status_led_pin, pins)}</select></label>
+        </div></section>`;
+    })() : '';
     return `<dialog id="hdp-hardware-dialog" class="value-dialog hdp-hardware-dialog">
       <form method="post" action="/adapter/instance/INSTANCE/manage/api/devices/${encodeURIComponent(device.deviceId)}/config" class="dialog-form">
         <input type="hidden" name="revision" value="${esc(device.configRevision || 0)}">
@@ -3403,6 +3725,7 @@ hdp-flash.exe --channel development</code></pre>
         ${binarySection}
         ${sensorSection}
         ${fingerprintSection}
+        ${irSection}
         <div class="button-row hdp-dialog-actions"><button type="button" class="button-secondary" onclick="this.closest('dialog').close()">Abbrechen</button><button>Hardware auf Gerät speichern</button></div>
       </form>
     </dialog>`;
@@ -3781,6 +4104,61 @@ hdp-flash.exe --channel development</code></pre>
       ${hardwareDialog(device)}</div>`;
   }
 
+  function renderIrDevicePage(device) {
+    const config = device.hardwareConfig || {};
+    const receiver = config.receiver || {};
+    const blaster = config.blaster || {};
+    const settings = (device.bindings && device.bindings.ir) || {};
+    const recordingEntries = Object.entries(device.irRecordings || {});
+    const recordings = recordingEntries.map(([id, entry]) => {
+      const recordedAt = entry.recorded_at && !Number.isNaN(Date.parse(entry.recorded_at))
+        ? new Date(entry.recorded_at).toLocaleString('de-DE') : (entry.recorded_at || '—');
+      const fieldId = `hdp-ir-name-${id.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
+      const statePath = `ir_recordings/${id}`;
+      const base = `/adapter/instance/INSTANCE/manage/api/devices/${encodeURIComponent(device.deviceId)}/ir/recordings`;
+      return `<form class="hdp-ir-code-row" method="post" action="${base}/rename/${encodeURIComponent(id)}">
+        <div class="hdp-ir-code-name"><input id="${esc(fieldId)}" aria-label="Lesbarer Name" name="name" maxlength="100" value="${esc(entry.name || id)}"></div>
+        <code class="hdp-ir-state-path" title="${esc(statePath)}">${esc(statePath)}</code>
+        <time datetime="${esc(entry.recorded_at || '')}">${esc(recordedAt)}</time>
+        <div class="hdp-ir-code-actions">${blaster.enabled ? `<button class="button-secondary" formaction="${base}/send/${encodeURIComponent(id)}">Senden</button>` : ''}<button>Umbenennen</button><button class="button-danger" formaction="${base}/delete/${encodeURIComponent(id)}" onclick="return confirm('IR-Code wirklich löschen?');">Löschen</button></div>
+      </form>`;
+    }).join('');
+    const recordingSection = receiver.enabled && receiver.mode === 'record'
+      ? `<section class="settings-card hdp-config-card hdp-ir-record-panel">
+          <div class="settings-card-head hdp-card-head"><div><span class="hdp-section-kicker">Receiver · Record</span><h2>IR-Code aufzeichnen</h2><p class="settings-card-hint">Per Schaltfläche oder Trigger-Taster starten. Ein zweiter Druck bricht die Aufnahme ab.</p></div><span class="status-badge ${device.irRecordingArmed ? 'status-warn' : 'status-ok'}">${device.irRecordingArmed ? 'Aufnahmebereit' : 'Bereit'}</span></div>
+          <form class="hdp-ir-record-form" method="post" action="/adapter/instance/INSTANCE/manage/api/devices/${encodeURIComponent(device.deviceId)}/ir/record">
+            <div class="field"><label for="hdp-ir-record-name">Name des Codes</label><input id="hdp-ir-record-name" name="name" maxlength="100" value="${esc(device.pendingIrRecordName || '')}" placeholder="z. B. Fernseher einschalten" ${device.irRecordingArmed ? 'readonly' : ''}></div>
+            <div class="hdp-ir-record-action"><button ${device.irRecordingArmed ? 'class="button-danger" formaction="/adapter/instance/INSTANCE/manage/api/devices/' + encodeURIComponent(device.deviceId) + '/ir/record/cancel"' : ''} ${device.online ? '' : 'disabled'}>${device.irRecordingArmed ? 'Aufnahme beenden' : 'Aufnahme starten'}</button></div>
+          </form>
+        </section>
+        <div class="hdp-ir-recordings-head"><div><span class="hdp-section-kicker">Bibliothek</span><h2>Aufgezeichnete Codes</h2></div><span class="hdp-ir-count">${recordingEntries.length}</span></div>
+        ${recordings ? `<div class="hdp-ir-code-list"><div class="hdp-ir-code-list-head"><span>Name</span><span>State</span><span>Aufgezeichnet</span><span>Aktionen</span></div>${recordings}</div>` : '<section class="settings-card hdp-ir-empty"><h3>Noch keine IR-Codes</h3><p>Starte eine Aufnahme und drücke anschließend die gewünschte Fernbedienungstaste.</p></section>'}`
+      : '';
+    const liveRevision = crypto.createHash('sha256').update(JSON.stringify({
+      online: !!device.online,
+      armed: !!device.irRecordingArmed,
+      recordings: Object.entries(device.irRecordings || {}).map(([id, entry]) =>
+        [id, entry.name, entry.recorded_at]),
+    })).digest('hex').slice(0, 16);
+    return `<div class="hdp-device-page" data-hdp-ir-page data-hdp-device="${esc(device.deviceId)}" data-hdp-ir-revision="${liveRevision}"><div class="hdp-device-head"><div><a class="hdp-back-link" href="/adapter/instance/INSTANCE/manage">← Geräteverwaltung</a><h1>${esc(device.name || device.deviceId)}</h1><p class="hdp-device-meta"><code>${esc(device.deviceId)}</code><span>IR-Blaster / Receiver</span><span>Revision ${esc(device.configRevision)}</span></p></div><button type="button" class="button-secondary hdp-hardware-open" onclick="hdpOpenHardware()">Hardware einrichten</button></div>
+      ${device.lastError ? `<p class="error-text">${esc(device.lastError)}</p>` : ''}
+      ${commonStatusCard(device, 'ir-transceiver-v1')}
+      ${recordingSection}
+      <form class="hdp-settings-form" method="post" action="/adapter/instance/INSTANCE/manage/api/devices/${encodeURIComponent(device.deviceId)}/bindings">
+        <div class="hdp-ir-settings-grid">
+          ${receiver.enabled ? `<section class="settings-card hdp-config-card"><div class="settings-card-head"><span class="hdp-section-kicker">Empfang · GPIO ${esc(receiver.pin)}</span><h2>Receiver</h2><p class="settings-card-hint">${receiver.mode === 'record' ? 'Aufnahmen werden dauerhaft gespeichert und als States veröffentlicht.' : 'Jeder empfangene Code wird an den gewählten State weitergeleitet.'}</p></div>
+            ${receiver.mode === 'passthrough' ? `<div class="field"><label for="hdp-ir-passthrough">Passthrough-Ziel</label><input id="hdp-ir-passthrough" data-state-picker name="ir_passthrough_topic" value="${esc(settings.passthrough_topic || '')}" placeholder="State auswählen"></div>` : `<dl class="hdp-ir-facts"><div><dt>Modus</dt><dd>Record</dd></div><div><dt>Trigger</dt><dd>${receiver.trigger_pin == null ? '—' : `GPIO ${esc(receiver.trigger_pin)}`}</dd></div><div><dt>Signal-LED</dt><dd>GPIO ${esc(config.status_led_pin == null ? 2 : config.status_led_pin)}</dd></div></dl>`}
+          </section>` : ''}
+          ${blaster.enabled ? `<section class="settings-card hdp-config-card"><div class="settings-card-head"><span class="hdp-section-kicker">Senden · GPIO ${esc(blaster.pin)}</span><h2>Blaster</h2><p class="settings-card-hint">Der beschreibbare State <code>/ir/blaster</code> wird nach der Ausgabe automatisch geleert.</p></div><div class="hdp-form-grid"><div class="field"><label for="hdp-ir-repeat-count">Ausgaben je Code</label><input id="hdp-ir-repeat-count" type="number" min="1" max="20" name="ir_repeat_count" value="${esc(settings.repeat_count || 1)}"></div><div class="field"><label for="hdp-ir-repeat-gap">Abstand (ms)</label><input id="hdp-ir-repeat-gap" type="number" min="0" max="60000" name="ir_repeat_interval_milliseconds" value="${esc(settings.repeat_interval_milliseconds == null ? 100 : settings.repeat_interval_milliseconds)}"></div></div></section>` : ''}
+        </div>
+        ${updateAutomationSection(device, '03')}
+        <div class="hdp-save-bar"><button>Einstellungen speichern</button></div>
+      </form>
+      ${firmwareCard(device)}
+      <section class="settings-card hdp-danger-card"><form method="post" action="/adapter/instance/INSTANCE/manage/api/devices/${encodeURIComponent(device.deviceId)}/unpair"><input type="hidden" name="confirmation" value="ENTKOPPELN"><button class="button-danger">Gerät entkoppeln</button></form></section>
+      ${hardwareDialog(device)}</div>`;
+  }
+
   function renderDevicePage(device) {
     // Der konfigurierte Gerätetyp entscheidet, nicht das Runtime-Profil: Nach
     // einem Typwechsel folgt das Profil erst mit dem Geräteneustart.
@@ -3788,6 +4166,7 @@ hdp-flash.exe --channel development</code></pre>
     if (isArgbDevice(device)) return renderArgbDevicePage(device);
     if (isSensorDevice(device)) return renderSensorDevicePage(device);
     if (isFingerprintDevice(device)) return renderFingerprintDevicePage(device);
+    if (isIrDevice(device)) return renderIrDevicePage(device);
     const binding = device.bindings;
     const firmware = device.firmwareInfo || {};
     const firmwareStatus = device.firmwareStatus || {};
@@ -4133,6 +4512,31 @@ hdp-flash.exe --channel development</code></pre>
           window.setTimeout(function () {
             if (!document.hidden) location.reload();
           }, 1500);
+        }());
+        (function hdpRefreshIrPage() {
+          var page = document.querySelector('[data-hdp-ir-page]');
+          if (!page) return;
+          var revision = page.getAttribute('data-hdp-ir-revision') || '';
+          var deviceId = page.getAttribute('data-hdp-device') || '';
+          var base = location.pathname.replace(/\\/+$/, '').replace(/\\/device\\/[^/]+$/, '');
+          async function tick() {
+            if (!document.hidden) {
+              try {
+                var response = await fetch(base + '/api/devices/'
+                  + encodeURIComponent(deviceId) + '/ir/status', {
+                    cache: 'no-store', headers: { Accept: 'application/json' }
+                  });
+                if (response.ok) {
+                  var status = await response.json();
+                  if (status.revision && status.revision !== revision) {
+                    location.reload(); return;
+                  }
+                }
+              } catch (_) { /* Nächster Takt versucht es erneut. */ }
+            }
+            window.setTimeout(tick, 750);
+          }
+          window.setTimeout(tick, 500);
         }());
         hdpBindMode('hdp-color-mode', 'data-hdp-color-panel');
         hdpBindMode('hdp-brightness-mode', 'data-hdp-brightness-panel');
@@ -4482,6 +4886,88 @@ hdp-flash.exe --channel development</code></pre>
         persist();
         return { status: 303, redirect: `${managementBase}/device/${encodeURIComponent(id)}` };
       }
+      if (method === 'POST' && action === 'ir/record') {
+        const device = requirePaired(id);
+        if (!isIrDevice(device) || !(device.hardwareConfig.receiver
+            && device.hardwareConfig.receiver.enabled)
+            || device.hardwareConfig.receiver.mode !== 'record'
+            || !device.connection || !device.connection.ready) {
+          throw Object.assign(new Error('IR-Receiver ist nicht im Record-Modus verbunden.'), {
+            code: 'IR_OPERATION_REJECTED', status: 409,
+          });
+        }
+        device.pendingIrRecordName = normalizeIrRecordingName(request.body.name) || null;
+        await device.connection.request('ir.record.begin', {
+          config_revision: device.configRevision,
+        }, 5000);
+        device.irRecordingArmed = true; persist(); publishDevice(device);
+        return { status: 303, redirect: `${managementBase}/device/${encodeURIComponent(id)}` };
+      }
+      if (method === 'POST' && action === 'ir/record/cancel') {
+        const device = requirePaired(id);
+        if (!isIrDevice(device) || !device.connection || !device.connection.ready) {
+          throw Object.assign(new Error('IR-Receiver ist nicht verbunden.'), {
+            code: 'IR_OPERATION_REJECTED', status: 409,
+          });
+        }
+        await device.connection.request('ir.record.cancel', {
+          config_revision: device.configRevision,
+        }, 5000);
+        device.pendingIrRecordName = null;
+        device.irRecordingArmed = false; persist(); publishDevice(device);
+        return { status: 303, redirect: `${managementBase}/device/${encodeURIComponent(id)}` };
+      }
+      if (method === 'GET' && action === 'ir/status') {
+        const device = requirePaired(id);
+        if (!isIrDevice(device)) {
+          throw Object.assign(new Error('Gerät ist kein IR-Transceiver.'), { status: 409 });
+        }
+        const value = {
+          online: !!device.online,
+          armed: !!device.irRecordingArmed,
+          recordings: Object.entries(device.irRecordings || {}).map(([recordingId, entry]) =>
+            [recordingId, entry.name, entry.recorded_at]),
+        };
+        return { status: 200, json: {
+          online: value.online,
+          armed: value.armed,
+          revision: crypto.createHash('sha256').update(JSON.stringify(value))
+            .digest('hex').slice(0, 16),
+        } };
+      }
+      if (method === 'POST' && action.startsWith('ir/recordings/delete/')) {
+        const device = requirePaired(id);
+        const recordingId = action.slice('ir/recordings/delete/'.length);
+        if (device.irRecordings && Object.prototype.hasOwnProperty.call(device.irRecordings, recordingId)) {
+          delete device.irRecordings[recordingId]; publishCatalog(); persist();
+        }
+        return { status: 303, redirect: `${managementBase}/device/${encodeURIComponent(id)}` };
+      }
+      if (method === 'POST' && action.startsWith('ir/recordings/send/')) {
+        const device = requirePaired(id);
+        const recordingId = action.slice('ir/recordings/send/'.length);
+        const entry = device.irRecordings && device.irRecordings[recordingId];
+        if (!entry || !entry.code) {
+          throw Object.assign(new Error('IR-Aufnahme wurde nicht gefunden.'), { status: 404 });
+        }
+        await writeIrBlaster(device, entry.code);
+        return { status: 303, redirect: `${managementBase}/device/${encodeURIComponent(id)}` };
+      }
+      if (method === 'POST' && action.startsWith('ir/recordings/rename/')) {
+        const device = requirePaired(id);
+        const recordingId = action.slice('ir/recordings/rename/'.length);
+        const entry = device.irRecordings && device.irRecordings[recordingId];
+        const name = normalizeIrRecordingName(request.body.name);
+        if (!entry || !name) throw Object.assign(new Error('Aufnahme oder Name ist ungültig.'), { status: 422 });
+        const nextId = irRecordingId(name, occupiedIrRecordingIds(device.deviceId, recordingId));
+        entry.name = name;
+        if (nextId !== recordingId) {
+          delete device.irRecordings[recordingId];
+          device.irRecordings[nextId] = entry;
+        }
+        publishCatalog(); persist();
+        return { status: 303, redirect: `${managementBase}/device/${encodeURIComponent(id)}` };
+      }
       if (method === 'POST' && action === 'fingerprints/cancel') {
         const device = requirePaired(id);
         requireFingerprintReady(device);
@@ -4647,7 +5133,10 @@ hdp-flash.exe --channel development</code></pre>
       // Firmwareimage den bei jedem Persistieren neu geschriebenen Blob sonst
       // um Größenordnungen aufblähen würde.
       try {
-        releaseStore.attach(await host.getDataDirectory());
+        const seeded = await releaseStore.attach(await host.getDataDirectory());
+        for (const result of seeded) {
+          if (result.installed) host.log(`hDP Firmware: gebündelter ${result.channel}-Stand ${result.version} bereitgestellt.`);
+        }
       } catch (error) {
         host.warn(`Firmwarespeicher nicht verfügbar: ${error.message}`);
       }
@@ -4662,6 +5151,7 @@ hdp-flash.exe --channel development</code></pre>
       discovery.on('found', onDiscovered);
       discovery.on('updated', onDiscovered);
       discovery.on('lost', onDiscovered);
+      discovery.on('seen', onSeen);
       discovery.on('warning', (err) => host.warn(`mDNS: ${err.message}`));
       discovery.start();
       firmwarePoll = setInterval(() => {
@@ -4678,6 +5168,13 @@ hdp-flash.exe --channel development</code></pre>
       rolloutPoll = setInterval(() => {
         runRollout().catch((error) => host.error(`hDP Rollout: ${error.message}`));
       }, 60 * 1000);
+      // Online-Releases werden nur vom Adapter über HTTPS geladen. Die Geräte
+      // bleiben vollständig lokal und erhalten Images weiterhin über den
+      // authentifizierten hDP-OTA-Pfad. Der erste Abruf blockiert den Start nicht.
+      syncReleaseSource().catch((error) => host.warn(`hDP Firmwarequelle: ${error.message}`));
+      releaseSourcePoll = setInterval(() => {
+        syncReleaseSource().catch((error) => host.warn(`hDP Firmwarequelle: ${error.message}`));
+      }, 6 * 60 * 60 * 1000);
       host.setConnected(true, 'hDP-Discovery aktiv');
       persist();
       host.log(`hDP Adapter gestartet (${identity.instanceId}).`);
@@ -4691,11 +5188,23 @@ hdp-flash.exe --channel development</code></pre>
       firmwarePoll = null;
       if (rolloutPoll) clearInterval(rolloutPoll);
       rolloutPoll = null;
+      if (releaseSourcePoll) clearInterval(releaseSourcePoll);
+      releaseSourcePoll = null;
       for (const device of devices.values()) {
         if (device.connection) device.connection.stop();
         stopSubscriptions(device);
       }
       host.setConnected(false, 'hDP Adapter gestoppt');
+    },
+
+    async write(address, value) {
+      const match = /^devices\/([^/]+)\/ir\/blaster$/.exec(String(address || ''));
+      if (!match) throw new Error('Unbekannter oder nicht beschreibbarer hDP-State.');
+      const normalizedDeviceId = decodeURIComponent(match[1]);
+      const found = Array.from(devices.values()).find((candidate) =>
+        normalizeStateToken(candidate.deviceId) === normalizedDeviceId);
+      const device = requirePaired(found ? found.deviceId : normalizedDeviceId);
+      await writeIrBlaster(device, value);
     },
 
     handleManagementRequest,
@@ -4714,10 +5223,12 @@ module.exports._test = {
   binaryBoolean, normalizeBinaryBindings, binaryEventTarget,
   defaultArgbBinding, normalizeArgbBindings, renderArgbFrame, argbPixelCount,
   hexColor, colorHex, argbColor,
-  deviceTypeOf, isBinaryDevice, isArgbDevice, isSensorDevice, isFingerprintDevice,
+  deviceTypeOf, isBinaryDevice, isArgbDevice, isSensorDevice, isFingerprintDevice, isIrDevice,
   normalizeFingerprintBinding, normalizeFingerprintBindings,
   fingerprintWiring, fingerprintReadiness,
   supportedDeviceTypes, binaryPinSlots, applySensorSample, sensorUiFields,
+  normalizeIrCode, irRecordingId, normalizeIrRecordingName, irRecordingStateCatalog,
+  normalizeStateToken, normalizeStateAddress, normalizeStateCategory, normalizePublishedState,
   insideMaintenanceWindow, otaInProgress, releaseInterruptedOta,
   reconcileOtaProgress,
   applyDeviceStatus,

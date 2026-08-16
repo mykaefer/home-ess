@@ -1,0 +1,32 @@
+{
+  "id": "renault",
+  "name": "Renault / Dacia Connected Vehicle",
+  "prefix": "renault",
+  "version": "1.0.0",
+  "description": "Bindet Renault- und Dacia-Fahrzeuge über die Connected-Services der My-Renault-/My-Dacia-Cloud an, darunter den Dacia Spring Electric.",
+  "copyright": "Copyright (C) 2026 Kevin Käfer",
+  "multiInstance": true,
+  "main": "index.js",
+  "devicePage": {
+    "storageKey": "vehicles",
+    "label": "Fahrzeuge",
+    "emptyText": "Noch kein Fahrzeug erkannt. Zugangsdaten und Connected-Services-Vertrag prüfen und die Instanz aktivieren."
+  },
+  "settings": [
+    { "key": "username", "label": "My Renault / My Dacia E-Mail", "type": "text", "default": "", "hint": "E-Mail-Adresse des Kontos, in dem das Fahrzeug registriert ist." },
+    { "key": "password", "label": "Passwort (nur zur Erstanmeldung)", "type": "password", "default": "", "hint": "Wird nach erfolgreicher Anmeldung gegen ein geschütztes Login-Token getauscht und aus den Einstellungen entfernt. Bei abgelaufener Sitzung erneut eintragen." },
+    { "key": "locale", "label": "Land / Sprache", "type": "select", "default": "de_DE", "options": [
+      { "value": "de_DE", "label": "Deutschland" },
+      { "value": "de_AT", "label": "Österreich" },
+      { "value": "de_CH", "label": "Schweiz" },
+      { "value": "fr_FR", "label": "Frankreich" },
+      { "value": "nl_NL", "label": "Niederlande" },
+      { "value": "en_GB", "label": "Großbritannien" }
+    ] },
+    { "key": "accountId", "label": "Kamereon-Konto-ID (optional)", "type": "text", "default": "", "hint": "Normalerweise automatisch erkannt. Nur bei mehreren Fahrzeugkonten erforderlich." },
+    { "key": "vin", "label": "FIN / VIN (optional)", "type": "text", "default": "", "hint": "Normalerweise automatisch erkannt. Bei mehreren Fahrzeugen hier die 17-stellige FIN auswählen." },
+    { "key": "pollInterval", "label": "Aktualisierungsintervall (min)", "type": "number", "default": 15, "hint": "Mindestens 5 Minuten. Das Fahrzeug liefert Cloud-Daten oft zeitverzögert; kurze Intervalle wecken es nicht automatisch auf." },
+    { "key": "enableControls", "label": "Fahrzeugsteuerung erlauben", "type": "checkbox", "default": false, "hint": "Erlaubt Schreibzugriffe für Klimatisierung und Laden. Nur Funktionen mit aktivem Connected-Service-Vertrag werden vom Fahrzeug angenommen." },
+    { "key": "targetTemperature", "label": "Klimazieltemperatur (°C)", "type": "number", "default": 21, "hint": "Wird beim Einschalten der Vorklimatisierung verwendet (16–26 °C)." }
+  ]
+}

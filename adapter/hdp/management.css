@@ -370,6 +370,188 @@
     box-sizing: border-box;
 }
 
+/* IR-Transceiver: Aufnahme und Codebibliothek bilden eine eigene, kompakte
+   Arbeitsfläche. Die Regeln sind absichtlich auf die IR-Seite begrenzt. */
+.hdp-device-page[data-hdp-ir-page] {
+    max-width: 1180px;
+    margin-right: auto;
+    margin-left: auto;
+}
+
+.hdp-ir-record-panel .settings-card-head {
+    margin-bottom: 20px;
+}
+
+.hdp-ir-record-form {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 14px;
+    align-items: end;
+}
+
+.hdp-ir-record-action button {
+    min-width: 170px;
+}
+
+.hdp-ir-recordings-head {
+    display: flex;
+    align-items: end;
+    justify-content: space-between;
+    gap: 16px;
+    margin: 24px 2px 12px;
+}
+
+.hdp-ir-recordings-head h2 {
+    margin: 0;
+    font-size: 20px;
+}
+
+.hdp-ir-count {
+    display: inline-grid;
+    min-width: 30px;
+    height: 30px;
+    place-items: center;
+    border-radius: 999px;
+    background: var(--color-action-tint, #e9f1ee);
+    color: var(--color-action, #39705f);
+    font-size: 13px;
+    font-weight: 800;
+}
+
+.hdp-ir-code-list {
+    margin-bottom: 22px;
+    overflow: hidden;
+    border: 1px solid #dbe3e1;
+    border-radius: 10px;
+    background: #fff;
+}
+
+.hdp-ir-code-list-head,
+.hdp-ir-code-row {
+    display: grid;
+    grid-template-columns: minmax(170px, .9fr) minmax(240px, 1.5fr) 150px auto;
+    gap: 12px;
+    align-items: center;
+}
+
+.hdp-ir-code-list-head {
+    padding: 8px 12px;
+    background: #f1f5f4;
+    color: #64748b;
+    font-size: 11px;
+    font-weight: 750;
+    text-transform: uppercase;
+}
+
+.hdp-ir-code-row {
+    margin: 0;
+    padding: 7px 12px;
+    border-top: 1px solid #e8eeec;
+}
+
+.hdp-ir-code-name,
+.hdp-ir-state-path {
+    min-width: 0;
+}
+
+.hdp-ir-code-name input {
+    width: 100%;
+    min-height: 34px;
+    padding: 5px 8px;
+    box-sizing: border-box;
+}
+
+.hdp-ir-state-path {
+    display: block;
+    overflow: hidden;
+    color: #475569;
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.hdp-ir-code-row time {
+    color: #64748b;
+    font-size: 12px;
+    white-space: nowrap;
+}
+
+.hdp-ir-code-actions {
+    display: flex;
+    gap: 6px;
+    justify-content: flex-end;
+}
+
+.hdp-ir-code-actions button {
+    min-height: 34px;
+    padding: 6px 10px;
+    white-space: nowrap;
+}
+
+.hdp-device-page .hdp-ir-empty {
+    min-width: 0;
+    margin-bottom: 22px;
+}
+
+.hdp-ir-settings-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+}
+
+.hdp-ir-facts {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+    margin: 0;
+}
+
+.hdp-ir-facts > div {
+    padding: 12px 14px;
+    border-radius: 9px;
+    background: #f8fafc;
+}
+
+.hdp-ir-facts dt {
+    color: #64748b;
+    font-size: 11px;
+    font-weight: 750;
+    text-transform: uppercase;
+}
+
+.hdp-ir-facts dd {
+    margin: 4px 0 0;
+    color: #0f172a;
+    font-weight: 750;
+}
+
+.hdp-ir-empty {
+    color: #64748b;
+    text-align: center;
+}
+
+.hdp-ir-empty h3 {
+    margin: 0 0 5px;
+    color: #334155;
+}
+
+.hdp-device-page[data-hdp-ir-page] .field label {
+    display: block;
+    margin-bottom: 6px;
+}
+
+.hdp-device-page[data-hdp-ir-page] .field input:not([type="checkbox"]),
+.hdp-device-page[data-hdp-ir-page] .field select {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 10px 12px;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    background: #fff;
+    color: #0f172a;
+    font: inherit;
+}
+
 .hdp-device-page button.button-danger {
     border-color: #fecaca;
     background: #fff;
@@ -1147,6 +1329,32 @@
         gap: 14px;
     }
 
+    .hdp-ir-settings-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .hdp-ir-code-list-head {
+        display: none;
+    }
+
+    .hdp-ir-code-row {
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 5px 12px;
+        padding: 10px 12px;
+    }
+
+    .hdp-ir-code-name,
+    .hdp-ir-state-path,
+    .hdp-ir-code-row time {
+        grid-column: 1;
+    }
+
+    .hdp-ir-code-actions {
+        grid-column: 2;
+        grid-row: 1 / span 3;
+        flex-direction: column;
+    }
+
     .hdp-status-grid > div,
     .hdp-status-grid > div:first-child {
         padding: 0;
@@ -1240,6 +1448,14 @@
     .hdp-form-grid,
     .hdp-status-grid {
         grid-template-columns: 1fr;
+    }
+
+    .hdp-ir-record-form {
+        grid-template-columns: 1fr;
+    }
+
+    .hdp-ir-record-action button {
+        width: 100%;
     }
 
     .hdp-span-full {

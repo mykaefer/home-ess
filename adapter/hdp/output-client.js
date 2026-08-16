@@ -328,7 +328,9 @@ class OutputClient extends EventEmitter {
         // die gewünschte Wiedergabe aus. Übernehmen statt neu aufzuspielen, damit
         // ein Reconnect die Anzeige nicht sichtbar neu startet.
         this.activeTimelines.set(outputId, {
-          timelineId: status.timeline_id, sha256: desired.timeline.sha256,
+          timelineId: status.timeline_id,
+          sha256: desired.timeline.sha256,
+          durationMilliseconds: desired.timeline.durationMilliseconds,
         });
         this.baselines.add(outputId);
       } else {
@@ -485,7 +487,8 @@ class OutputClient extends EventEmitter {
     if (!this.activeTimelines.has(outputId)) await this.adoptOutput(outputId);
     const active = this.activeTimelines.get(outputId);
     if (active && active.timelineId === timelineId
-        && active.sha256 === timeline.sha256) return { unchanged: true };
+        && active.sha256 === timeline.sha256
+        && active.durationMilliseconds === timeline.durationMilliseconds) return { unchanged: true };
     if (active) {
       await this.stop(outputId, active.timelineId, 'hold');
     }
@@ -498,7 +501,9 @@ class OutputClient extends EventEmitter {
       await this.uploadTimeline(outputId, timelineId, timeline);
       uploaded = true;
       await this.play(outputId, timelineId, true, 0);
-      this.activeTimelines.set(outputId, { timelineId, sha256: timeline.sha256 });
+      this.activeTimelines.set(outputId, {
+        timelineId, sha256: timeline.sha256, durationMilliseconds: timeline.durationMilliseconds,
+      });
       return { timelineId };
     } catch (error) {
       if (!uploaded && this.transport.ready) {

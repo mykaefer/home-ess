@@ -268,7 +268,14 @@ function renderInstanceRow(adapter, inst, status) {
     : adapter.id === 'tasmota'
     ? `<a href="/adapter/instance/${inst.id}/tasmota-devices" class="module-toggle-btn">Geräte</a>`
     : '';
-  const managementLink = adapter.managementPage
+  // Ein Adapter, dessen Konfiguration vollständig in der eigenen Verwaltung
+  // liegt (managementPage.asSettings), führt den Einstellungsknopf direkt
+  // dorthin.
+  const settingsIsManagement = !!(adapter.managementPage && adapter.managementPage.asSettings);
+  const settingsLink = settingsIsManagement
+    ? `<a href="/adapter/instance/${inst.id}/manage" class="module-toggle-btn">Einstellungen</a>`
+    : `<a href="/adapter/instance/${inst.id}" class="module-toggle-btn">Einstellungen</a>`;
+  const managementLink = adapter.managementPage && !settingsIsManagement
     ? `<a href="/adapter/instance/${inst.id}/manage" class="module-toggle-btn">${escapeHtml(adapter.managementPage.label)}</a>`
     : '';
 
@@ -278,7 +285,7 @@ function renderInstanceRow(adapter, inst, status) {
               <span>${badge('active', active[0], active[1])}</span>
               <span>${badge('conn', conn[0], conn[1], status.detail)}</span>
               <span class="adapter-row-actions">
-                <a href="/adapter/instance/${inst.id}" class="module-toggle-btn">Einstellungen</a>
+                ${settingsLink}
                 ${adapter.stateEditor ? `<a href="/adapter/instance/${inst.id}/states" class="module-toggle-btn">${escapeHtml(adapter.stateEditor.label)}</a>` : ''}
                 ${tasmotaLink}
                 ${managementLink}

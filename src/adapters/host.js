@@ -72,32 +72,24 @@ async function handleHostCall(entry, msg) {
       entry.instance.settings = { ...(entry.instance.settings || {}), [String(msg.key)]: msg.value };
       reply.result = true;
     } else if (msg.method === 'states.list') {
-      // Vollständiger, quellenübergreifender State-Katalog (System, Custom, alle
-      // Adapter-Instanzen). Nur Metadaten inklusive Schreibbarkeit – Werte laufen
-      // weiterhin über subscribeState. Lazy require: states/repository lädt
-      // seinerseits adapters/states und damit diese Datei.
       if (!db) throw new Error('States sind noch nicht verfügbar.');
       const { listAllStates } = require('../states/repository');
       const { topicForId } = require('../states/system-topics');
       const values = await listAllStates(db, require('../mqtt/client').getCache());
       const limit = Math.max(1, Math.min(50000, Number(msg.limit) || 20000));
-      // Berechnete Systemwerte tragen intern ihre fachliche Kurz-ID; nach außen
-      // ist ausschließlich das kanonische system://-Topic adressierbar.
-      const canonical = (entry) => (/^[a-z][a-z0-9_-]*:\/\//i.test(String(entry.id))
-        ? String(entry.id)
-        : topicForId(entry.id));
-      reply.result = values.slice(0, limit).map((entry) => ({
-        topic: canonical(entry),
-        name: entry.label == null ? String(entry.id) : String(entry.label),
-        category: entry.category == null ? '' : String(entry.category),
-        unit: entry.unit == null ? '' : String(entry.unit),
-        value: entry.value === undefined ? null : entry.value,
-        writable: !!entry.writable,
-        sourceType: entry.sourceType || 'adapter',
+      const canonical = (item) => (/^[a-z][a-z0-9_-]*:\/\//i.test(String(item.id))
+        ? String(item.id)
+        : topicForId(item.id));
+      reply.result = values.slice(0, limit).map((item) => ({
+        topic: canonical(item),
+        name: item.label == null ? String(item.id) : String(item.label),
+        category: item.category == null ? '' : String(item.category),
+        unit: item.unit == null ? '' : String(item.unit),
+        value: item.value === undefined ? null : item.value,
+        writable: !!item.writable,
+        sourceType: item.sourceType || 'adapter',
       }));
     } else if (msg.method === 'states.options') {
-      // Adapterspezifische Einstellungen, die der Benutzer je State im
-      // Eigenschaften-Dialog hinterlegt hat (Schema siehe manifest.stateOptions).
       if (!db) throw new Error('States sind noch nicht verfügbar.');
       reply.result = await require('../states/properties').listOptionsForInstance(db, entry.instance.id);
     } else if (msg.method === 'state.write') {
@@ -151,9 +143,6 @@ function reloadRegistry() {
   return manifests;
 }
 
-// Von einer Instanz gemeldetes Tab-Schema für den Eigenschaften-Dialog.
-// Es wird mit derselben Funktion normalisiert wie ein Manifestschema und
-// persistiert, damit der Dialog es auch bei gestoppter Instanz kennt.
 function persistStateOptionsSchema(instanceId, raw) {
   if (!db) return null;
   const schema = raw == null ? null : registry.normalizeStateOptions(raw);
@@ -172,7 +161,6 @@ function persistStateOptionsSchema(instanceId, raw) {
   return schema;
 }
 
-// Das gültige Tab-Schema einer Instanz: gemeldetes Schema vor Manifestschema.
 function stateOptionsSchema(instanceId, manifest) {
   return new Promise((resolve) => {
     const fallback = manifest && manifest.stateOptions ? manifest.stateOptions : null;
@@ -211,12 +199,42 @@ function persistStates(instanceId, list) {
         s.category ? String(s.category) : '',
         s.unit ? String(s.unit) : '',
         s.writable ? 1 : 0,
-        s.value == null ? null : String(s.value),
+        serializeStateValue(s.value),
         now,
       ]);
     }
     stmt.finalize();
     db.run('COMMIT');
+  });
+}
+
+function serializeStateValue(value) {
+  if (value == null) return null;
+  if (typeof value === 'string') return value;
+  if (typeof value === 'object') {
+    try { return JSON.stringify(value); } catch (_) { /* auf String zurueckfallen */ }
+  }
+  return String(value);
+}
+
+function loadPersistedAddressAliases() {
+  return new Promise((resolve) => {
+    db.all(
+      `SELECT i.name AS instance_name, s.address
+         FROM adapter_instances i
+         JOIN adapter_states s ON s.instance_id = i.id
+        ORDER BY i.name, s.address`,
+      (err, rows) => {
+        if (err) return resolve();
+        const grouped = new Map();
+        for (const row of rows || []) {
+          if (!grouped.has(row.instance_name)) grouped.set(row.instance_name, []);
+          grouped.get(row.instance_name).push(row.address);
+        }
+        for (const [instanceName, addresses] of grouped) router.setAddressAliases(instanceName, addresses);
+        resolve();
+      }
+    );
   });
 }
 
@@ -237,7 +255,18 @@ function handleMessage(entry, msg) {
       router.ingestBatchFromInstance(name, Array.isArray(msg.values) ? msg.values : []);
       break;
     case 'states':
-      persistStates(entry.instance.id, Array.isArray(msg.list) ? msg.list : []);
+      {
+        const list = Array.isArray(msg.list) ? msg.list : [];
+        const validStates = list.filter((state) => state && state.address != null);
+        router.setAddressAliases(name, validStates.map((state) => state.address));
+        persistStates(entry.instance.id, list);
+        // Dynamisch deklarierte States duerfen bereits ihren aktuellen Wert
+        // enthalten (z. B. dauerhaft gespeicherte IR-Aufzeichnungen). Dieser
+        // Wert muss ebenso in Bus und Retained-Cache landen wie publishState().
+        router.ingestBatchFromInstance(name, validStates
+          .filter((state) => Object.prototype.hasOwnProperty.call(state, 'value'))
+          .map((state) => ({ address: state.address, value: state.value })));
+      }
       break;
     case 'state-options-schema':
       persistStateOptionsSchema(entry.instance.id, msg.schema);
@@ -353,8 +382,6 @@ function cleanup(instanceId) {
 function managementRequest(instanceId, request, timeoutMs = MANAGEMENT_TIMEOUT_MS) {
   const entry = running.get(Number(instanceId));
   if (!entry || !entry.child) {
-    // Die Verwaltung lebt im Adapterprozess: ohne laufende Instanz gibt es
-    // niemanden, der die Seite beantworten könnte.
     const error = new Error('Diese Instanz ist nicht aktiv. Bitte sie auf der Adapterseite aktivieren und danach erneut öffnen.');
     error.status = 409;
     return Promise.reject(error);
@@ -381,8 +408,6 @@ function managementRequest(instanceId, request, timeoutMs = MANAGEMENT_TIMEOUT_M
   });
 }
 
-// Der Benutzer hat die State-Optionen dieser Instanz geändert: der laufende
-// Adapter zieht sie selbst nach, ohne dass die Instanz neu starten muss.
 function notifyStateOptions(instanceId) {
   const entry = running.get(Number(instanceId));
   if (!entry || !entry.child) return false;
@@ -456,8 +481,6 @@ async function reloadInstance(instanceId) {
 
 async function reloadAllForLanguage() {
   const ids = Array.from(running.keys());
-  // Parallel stoppen, danach aus der DB mit den frisch lokalisierten Manifesten
-  // wieder starten. Deaktivierte Instanzen bleiben deaktiviert.
   await Promise.all(ids.map((id) => stopInstance(id)));
   if (!db) return;
   const instances = await instancesRepo.listInstances(db);
@@ -473,6 +496,7 @@ async function initAdapters(database) {
     read: (name, address) => read(name, address),
   });
   reloadRegistry();
+  await loadPersistedAddressAliases();
   const instances = await instancesRepo.listInstances(db);
   for (const instance of instances) {
     if (instance.enabled) startInstance(instance);

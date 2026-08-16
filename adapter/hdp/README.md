@@ -61,6 +61,21 @@ zieht ausschließlich den Kanal aus seinen Updateeinstellungen. Ein Kanal gilt
 erst als installierbar, wenn zu jedem deklarierten Artefakt auch die Datei
 vorliegt.
 
+Der Adapter bringt einen geprüften Stable-Stand unter
+`bundled-firmware/stable/` mit. Beim ersten Start wird er in den beschreibbaren
+Firmwarespeicher übernommen. Bei späteren Adapterupdates wird nur ein weiterhin
+als gebündelt markierter, älterer Stable-Stand ersetzt; sobald der Betreiber den
+Kanal manuell befüllt, bleibt er vollständig unter seiner Kontrolle.
+
+Optional kann `releaseSource` auf eine HTTPS-Basis-URL zeigen. Darunter erwartet
+der Adapter je Kanal `<kanal>/manifest.json` und die im Manifest genannten
+Artefakte, beispielsweise `stable/manifest.json`. Er prüft beim Start und danach
+alle sechs Stunden. Online-Abrufe sind nur mit konfiguriertem Ed25519-
+`firmwarePublicKey` möglich und verlangen für jedes Artefakt eine gültige
+Signatur. Erst wenn alle Dateien Größen-, SHA-256- und Signaturprüfung bestehen,
+wird der Kanal atomar ersetzt. Die Geräte sprechen weiterhin ausschließlich mit
+homeESS im lokalen Netz.
+
 OTA prüft Familie, SemVer, Kanal, Plattform, Board, Variante, Protokoll,
 Konfigurationsschema, Größe und SHA-256. Ist ein Ed25519-Release-Schlüssel
 konfiguriert, muss das Artefakt zusätzlich signiert und über die 32 rohen

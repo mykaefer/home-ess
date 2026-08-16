@@ -10,12 +10,43 @@
 // (write/read an die jeweilige Instanz) via setHost().
 
 const bus = require('../state-bus');
-const { parseSchemeTopic, buildSchemeTopic } = require('../mqtt/topics');
+const { parseSchemeTopic, buildSchemeTopic, canonicalStateAddress } = require('../mqtt/topics');
 
 // kanonisches Topic -> Set<cacheKey>
 const routes = new Map();
 // schema (prefix) -> adapterId – wird beim Laden der Registry gefüllt.
 const schemes = new Map();
+// Instanz -> (kanonische Adresse -> vom Adapter erwartete Originaladresse).
+const sourceAddresses = new Map();
+
+function setAddressAliases(instanceName, addresses) {
+  const aliases = new Map();
+  const rawAddresses = (addresses || []).map(String);
+  // Bei einer echten Kollision gewinnt der bereits kanonische State A_B vor A B.
+  rawAddresses.sort((left, right) =>
+    Number(left === canonicalStateAddress(left)) - Number(right === canonicalStateAddress(right)));
+  for (const raw of rawAddresses) aliases.set(canonicalStateAddress(raw), raw);
+  sourceAddresses.set(String(instanceName), aliases);
+}
+
+function rememberAddressAlias(instanceName, address) {
+  const instance = String(instanceName);
+  const raw = String(address);
+  const canonical = canonicalStateAddress(raw);
+  const aliases = sourceAddresses.get(instance) || new Map();
+  const previous = aliases.get(canonical);
+  if (!previous || raw === canonical || previous !== canonical) aliases.set(canonical, raw);
+  sourceAddresses.set(instance, aliases);
+}
+
+function sourceAddress(instanceName, address) {
+  const canonical = canonicalStateAddress(address);
+  return sourceAddresses.get(String(instanceName))?.get(canonical) || canonical;
+}
+
+function clearAddressAliases(instanceName) {
+  sourceAddresses.delete(String(instanceName));
+}
 
 // Host-Anbindung (gesetzt von host.init). Erlaubt write/read an eine Instanz.
 let host = null;
@@ -36,6 +67,7 @@ function registerVirtualInstance(instanceName, scheme, handlers) {
 function unregisterVirtualInstance(instanceName) {
   virtualInstances.delete(String(instanceName));
   removeInstanceScheme(instanceName);
+  clearAddressAliases(instanceName);
 }
 function registerVirtualScheme(scheme, handlers) {
   virtualSchemes.set(String(scheme).toLowerCase(), handlers || {});
@@ -117,7 +149,7 @@ function write(topic, value) {
     if (typeof virtual.write === 'function') virtual.write(parsed.address, value);
     return true;
   }
-  if (host) host.write(parsed.instance, parsed.address, value);
+  if (host) host.write(parsed.instance, sourceAddress(parsed.instance, parsed.address), value);
   return true;
 }
 
@@ -135,13 +167,14 @@ function requestValue(topic) {
     if (typeof virtual.read === 'function') virtual.read(parsed.address);
     return true;
   }
-  if (host) host.read(parsed.instance, parsed.address);
+  if (host) host.read(parsed.instance, sourceAddress(parsed.instance, parsed.address));
   return true;
 }
 
 // Vom Host aufgerufen, wenn eine Instanz einen Wert meldet. Schreibt in den Bus
 // und verteilt an alle für dieses Topic registrierten Cache-Schlüssel.
 function ingestFromInstance(instanceName, address, value, receivedAt) {
+  rememberAddressAlias(instanceName, address);
   const canonical = buildSchemeTopic(schemeForInstance(instanceName), instanceName, address);
   const keys = routes.get(canonical);
   const targetKeys = keys ? Array.from(keys) : [];
@@ -156,6 +189,7 @@ function ingestBatchFromInstance(instanceName, values, receivedAt) {
   const items = [];
   for (const entry of values || []) {
     if (!entry || entry.address == null) continue;
+    rememberAddressAlias(instanceName, entry.address);
     const canonical = buildSchemeTopic(scheme, instanceName, String(entry.address));
     const keys = routes.get(canonical);
     const targetKeys = keys ? Array.from(keys) : [];
@@ -199,6 +233,9 @@ module.exports = {
   registerScheme,
   clearSchemes,
   adapterIdForScheme,
+  setAddressAliases,
+  sourceAddress,
+  clearAddressAliases,
   canonicalTopic,
   registerRoute,
   unregisterRoute,

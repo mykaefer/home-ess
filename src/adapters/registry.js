@@ -150,6 +150,11 @@ function normalizeManagementPage(raw, adapterPath) {
     maxUploadBytes: Number.isInteger(maxUploadBytes) && maxUploadBytes > 0
       ? Math.min(maxUploadBytes, 64 * 1024 * 1024)
       : 2 * 1024 * 1024,
+    // Adapter, deren gesamte Konfiguration in der eigenen Verwaltung liegt,
+    // dürfen sie an die Stelle der generischen Einstellungsseite setzen. Das
+    // betrifft nur die Verlinkung; Route, Anmeldung und Rechteprüfung bleiben
+    // unverändert.
+    asSettings: raw.asSettings === true,
   };
   const stylesheet = raw.stylesheet == null ? '' : String(raw.stylesheet).trim();
   // Styles werden bewusst nur als einzelne, deklarierte Datei direkt aus dem

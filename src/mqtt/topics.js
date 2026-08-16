@@ -113,10 +113,21 @@ function isSchemeTopic(topic) {
   return parseSchemeTopic(topic) != null;
 }
 
+// Adapter duerfen historisch State-Adressen mit Leerzeichen liefern. Intern
+// sind Leerraum und Unterstriche dasselbe Trennzeichen, damit ein Topic immer
+// eindeutig und MQTT-tauglich angesprochen werden kann.
+function canonicalStateAddress(address) {
+  return String(address == null ? '' : address)
+    .split('/')
+    .map((part) => part.trim().replace(/[\s_]+/g, '_').replace(/^_+|_+$/g, ''))
+    .join('/');
+}
+
 // Kanonisches Schema-Topic aus seinen Bestandteilen zusammensetzen.
 function buildSchemeTopic(scheme, instance, address) {
   const base = `${String(scheme).toLowerCase()}://${instance}`;
-  return address ? `${base}/${address}` : base;
+  const canonicalAddress = canonicalStateAddress(address);
+  return canonicalAddress ? `${base}/${canonicalAddress}` : base;
 }
 
 function isCommandTopic(topic) {
@@ -173,6 +184,7 @@ module.exports = {
   mqttSubscribeCandidates,
   parseSchemeTopic,
   isSchemeTopic,
+  canonicalStateAddress,
   buildSchemeTopic,
   isCommandTopic,
   unwrapMqttMessage,
