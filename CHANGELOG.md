@@ -21,6 +21,12 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
   Umbenennen, Löschen und Senden sowie ein beschreibbarer Blaster-State. Die
   Hardwarekonfiguration prüft GPIO-Konflikte, Trägerfrequenz und Gerätevertrag;
   die Verwaltungsseite enthält eine responsive IR-Bibliothek.
+- **hDP-Firmware-Bootstrap und optionale Online-Releases.** Firmware 0.7.3 für
+  ESP8266/D1 Mini wird mit dem hDP-Adapter ausgeliefert und initialisiert den
+  lokalen Stable-Kanal, ohne manuell gepflegte Kanäle zu überschreiben. Eine
+  optionale HTTPS-Releasequelle kann signierte Releases abrufen; Manifest und
+  Artefakte werden vor der atomaren Übernahme vollständig gegen Größe, SHA-256
+  und den konfigurierten Ed25519-Schlüssel geprüft. Geräte bleiben rein lokal.
 - **`managementPage.asSettings`.** Ein Adapter, dessen gesamte Konfiguration in
   seiner eigenen Verwaltung liegt, kann den Einstellungsknopf der Instanz
   dorthin führen. Das betrifft nur die Verlinkung; Route, Anmeldung und

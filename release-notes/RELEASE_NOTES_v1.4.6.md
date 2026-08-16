@@ -32,7 +32,7 @@ Vertrag und möglichen Änderungen der Cloud-Endpunkte ab.
 
 ### hDP-Infrarot-Transceiver
 
-Der hDP-Adapter 1.2.6 unterstützt Geräte als IR-Receiver, IR-Blaster oder
+Der hDP-Adapter 1.2.7 unterstützt Geräte als IR-Receiver, IR-Blaster oder
 kombinierten Transceiver. Die Hardwareeinrichtung prüft GPIO-Belegung,
 Trägerfrequenz und den vom Gerät gemeldeten Funktionsumfang.
 
@@ -42,6 +42,17 @@ oder einen Trigger-Taster aufnehmen, dauerhaft benennen, umbenennen, löschen
 und erneut senden. Aufzeichnungen erscheinen unter
 `hdp://<instanz>/ir_recordings/<name>`; ein beschreibbarer Blaster-State nimmt
 auch Codes aus anderen States oder Automationen entgegen.
+
+### Firmware ist direkt verfügbar
+
+Der aktuelle Stable-Stand 0.7.3 für ESP8266/D1 Mini wird mit dem Adapter
+ausgeliefert und beim ersten Start in den lokalen Firmware-Store übernommen.
+Ein vorhandener, manuell verwalteter Stable-Kanal wird nicht überschrieben.
+
+Optional kann homeESS neue Releases von einer HTTPS-Basis-URL beziehen. Dieser
+Abruf setzt einen Ed25519-Prüfschlüssel voraus; jedes Remote-Artefakt wird vor
+der atomaren Übernahme gegen Größe, SHA-256 und Signatur geprüft. Die hDP-Geräte
+selbst greifen zu keinem Zeitpunkt auf das Internet zu.
 
 ### Adapterverwaltung als Einstellungsseite
 
@@ -100,7 +111,7 @@ nach dem Update einmal prüfen.
 
 ## Hinweise zum Update
 
-- Die sichtbare homeESS-Version lautet **1.4.6**, der hDP-Adapter **1.2.6** und
+- Die sichtbare homeESS-Version lautet **1.4.6**, der hDP-Adapter **1.2.7** und
   der Renault-/Dacia-Adapter **1.0.0**.
 - Es gibt keine neue Datenbankmigration und keine Änderung an systemd-Units oder
   der realen Environment-Datei.

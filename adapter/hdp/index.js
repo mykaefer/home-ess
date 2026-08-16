@@ -1039,7 +1039,9 @@ function createHdpAdapter(host, dependencies = {}) {
   let stopped = true;
   let firmwarePoll = null;
   let rolloutPoll = null;
+  let releaseSourcePoll = null;
   let rolloutRunning = false;
+  let releaseSourceRunning = false;
   let managementBase = '';
   const devices = new Map();
   const discovered = new Map();
@@ -2489,6 +2491,11 @@ function createHdpAdapter(host, dependencies = {}) {
     }
     const fileCheck = await validateArtifactFile(candidate.file, candidate.artifact, {
       publicKey: releaseStore.publicKey,
+      // Das gebündelte Image ist Teil des verifizierten homeESS-Pakets und wird
+      // zusätzlich gegen die fest mitgelieferte Größe und SHA-256-Summe geprüft.
+      // Ein konfigurierter Schlüssel ist für Online- und manuelle Releases
+      // bindend, darf diesen lokalen Bootstrap aber nicht nachträglich sperren.
+      requireSignature: candidate.origin && candidate.origin.kind === 'bundled' ? false : undefined,
     });
     try {
       device.otaProgress = { state: 'uploading', progress_percent: 0 };
@@ -2726,6 +2733,26 @@ function createHdpAdapter(host, dependencies = {}) {
       }
     } finally {
       rolloutRunning = false;
+    }
+  }
+
+  async function syncReleaseSource() {
+    if (stopped || releaseSourceRunning || !String(releaseStore.source || '').trim()) return;
+    releaseSourceRunning = true;
+    try {
+      const results = await releaseStore.syncFromSource();
+      let changed = false;
+      for (const result of results) {
+        if (result.updated) {
+          changed = true;
+          host.log(`hDP Firmware: ${result.channel} auf ${result.version} aktualisiert.`);
+        } else if (result.error) {
+          host.warn(`hDP Firmwarequelle (${result.channel}): ${result.error}`);
+        }
+      }
+      if (changed) await runRollout();
+    } finally {
+      releaseSourceRunning = false;
     }
   }
 
@@ -5106,7 +5133,10 @@ hdp-flash.exe --channel development</code></pre>
       // Firmwareimage den bei jedem Persistieren neu geschriebenen Blob sonst
       // um Größenordnungen aufblähen würde.
       try {
-        releaseStore.attach(await host.getDataDirectory());
+        const seeded = await releaseStore.attach(await host.getDataDirectory());
+        for (const result of seeded) {
+          if (result.installed) host.log(`hDP Firmware: gebündelter ${result.channel}-Stand ${result.version} bereitgestellt.`);
+        }
       } catch (error) {
         host.warn(`Firmwarespeicher nicht verfügbar: ${error.message}`);
       }
@@ -5138,6 +5168,13 @@ hdp-flash.exe --channel development</code></pre>
       rolloutPoll = setInterval(() => {
         runRollout().catch((error) => host.error(`hDP Rollout: ${error.message}`));
       }, 60 * 1000);
+      // Online-Releases werden nur vom Adapter über HTTPS geladen. Die Geräte
+      // bleiben vollständig lokal und erhalten Images weiterhin über den
+      // authentifizierten hDP-OTA-Pfad. Der erste Abruf blockiert den Start nicht.
+      syncReleaseSource().catch((error) => host.warn(`hDP Firmwarequelle: ${error.message}`));
+      releaseSourcePoll = setInterval(() => {
+        syncReleaseSource().catch((error) => host.warn(`hDP Firmwarequelle: ${error.message}`));
+      }, 6 * 60 * 60 * 1000);
       host.setConnected(true, 'hDP-Discovery aktiv');
       persist();
       host.log(`hDP Adapter gestartet (${identity.instanceId}).`);
@@ -5151,6 +5188,8 @@ hdp-flash.exe --channel development</code></pre>
       firmwarePoll = null;
       if (rolloutPoll) clearInterval(rolloutPoll);
       rolloutPoll = null;
+      if (releaseSourcePoll) clearInterval(releaseSourcePoll);
+      releaseSourcePoll = null;
       for (const device of devices.values()) {
         if (device.connection) device.connection.stop();
         stopSubscriptions(device);

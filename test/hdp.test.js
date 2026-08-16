@@ -2117,7 +2117,8 @@ test('Ein-Klick-Update installiert aus dem zentralen Speicher', async (t) => {
 
   // Ohne hinterlegtes Release wird kein Update angeboten.
   const empty = await call('GET', '/api/firmware');
-  assert.deepEqual(empty.json.channels.map((entry) => entry.present), [false, false, false]);
+  assert.deepEqual(empty.json.channels.map((entry) => entry.present), [true, false, false],
+    'der gebündelte Stable-Stand wird beim ersten Start automatisch bereitgestellt');
   const before = (await call('GET', `/device/${DEVICE_ID}`)).view.body;
   assert.match(before, /Kein Update verfügbar/);
   await assert.rejects(async () => {

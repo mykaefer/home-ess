@@ -2,7 +2,7 @@
   "id": "hdp",
   "name": "hDP Adapter",
   "prefix": "hdp",
-  "version": "1.2.6",
+  "version": "1.2.7",
   "description": "Direkte Einbindung hDP-kompatibler Sensoren, Aktoren und Anzeigen ohne MQTT oder manuelle Pfadkonfiguration.",
   "copyright": "Copyright (C) 2026 Kevin Käfer",
   "multiInstance": false,
@@ -43,7 +43,7 @@
       "label": "Firmware-Releasequelle",
       "type": "text",
       "default": "",
-      "hint": "Vorbereitet für den automatischen Abruf offizieller GitHub-Release-Manifeste. Noch ohne Funktion; die Firmware wird derzeit in der Geräteverwaltung hinterlegt. Geräte greifen nie selbst auf diese Quelle zu."
+      "hint": "Optionale HTTPS-Basis-URL mit stable/beta/development-Unterverzeichnissen. homeESS prüft dort alle sechs Stunden signierte Manifeste und Artefakte; Geräte greifen nie selbst auf diese Quelle zu. Erfordert einen Firmware-Prüfschlüssel."
     },
     {
       "key": "firmwarePublicKey",

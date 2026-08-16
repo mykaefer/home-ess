@@ -5,6 +5,21 @@ wird unabhängig von homeESS versioniert; die Version steht in
 [adapter.json](adapter.json). Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [1.2.7] — 2026-08-16
+
+### Hinzugefügt
+
+- **Stable-Firmware wird mit dem Adapter ausgeliefert.** Der geprüfte Stand
+  0.7.3 für ESP8266/D1 Mini liegt im Adapterpaket und initialisiert beim ersten
+  Start automatisch den lokalen Stable-Kanal. Spätere Paketstände aktualisieren
+  nur einen weiterhin von homeESS verwalteten Bootstrap; ein manuell gepflegter
+  Stable-Kanal wird nicht überschrieben.
+- **Signierte HTTPS-Releasequelle.** Eine konfigurierte Basis-URL wird beim
+  Start und danach alle sechs Stunden nach Stable-, Beta- und Development-
+  Releases abgefragt. Remote-Artefakte gelangen erst nach Größen-, SHA-256- und
+  zwingender Ed25519-Prüfung atomar in den lokalen Store. Die hDP-Geräte selbst
+  benötigen weiterhin keinen Internetzugriff.
+
 ## [1.2.6] — 2026-08-16
 
 ### Hinzugefügt
