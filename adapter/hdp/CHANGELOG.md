@@ -5,6 +5,19 @@ wird unabhängig von homeESS versioniert; die Version steht in
 [adapter.json](adapter.json). Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [1.2.8] — 2026-08-16
+
+### Geändert
+
+- **Mitgelieferte Stable-Firmware auf 0.7.4 angehoben.** Der Stand 0.7.3 konnte
+  `GET /api/v1/manifest` bei knappem Heap abgeschnitten ausliefern — mit einer
+  `Content-Length`, die zur gekappten Länge passte, sodass die Antwort erst beim
+  Parsen als „Ungültige JSON-Antwort (HTTP 200)“ auffiel und der Manifestabgleich
+  nach jedem Verbindungsaufbau scheiterte. 0.7.4 liefert das Manifest wieder
+  vollständig aus. Ein bereits vorhandener, lokal gepflegter Stable-Kanal wird
+  wie bisher nicht überschrieben; die Anhebung wirkt für Neuinstallationen und
+  für Bootstraps, die weiterhin von homeESS verwaltet werden.
+
 ## [1.2.7] — 2026-08-16
 
 ### Hinzugefügt

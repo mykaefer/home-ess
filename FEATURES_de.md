@@ -67,6 +67,16 @@ eigenständige Desktop- und Mobilansichten.
   Temperaturen, Sonnenbedingungen, Prioritäten und gelerntem Energiebedarf.
 - Wallboxsteuerung unterstützt mehrere Ladegeräte, die Modi Privat, Beruflich
   und Immer voll, Fahrzeug-Ladezustand, Prognosen, Prioritäten und Zählung.
+- Heimkino verwaltet beliebig viele frei benannte Räume. Jeder Raum bekommt
+  einen beschreibbaren Kinomodus-State unter „System / Heimkino" und steht als
+  Schaltziel „Kinomodus Raum …" für Dashboard-Widgets bereit. Ein Raum öffnet
+  sich als eigene Seite mit getrennten Aktionsfolgen für An und Aus:
+  Wertzuweisungen wie bei den Bedingungen, Pausen und beliebig verschachtelbare
+  Schleifen mit frei verschiebbaren Aktionen. Eine Schleife kann zusätzlich in
+  festem Abstand prüfen, ob der gewünschte Zustand tatsächlich erreicht wurde,
+  und sich andernfalls allein wiederholen. Ein optionales Sync-Topic hält den
+  Kinomodus bidirektional mit einem externen Topic synchron; nach einem Neustart
+  ist dessen Zustand maßgeblich und wird ohne Aktionsfolge übernommen.
 - Optionale Module lassen sich in den Einstellungen aktivieren, ohne parallele
   Server- oder Authentifizierungsstrukturen anzulegen.
 

@@ -199,7 +199,7 @@ function validateWidgetInput(input) {
   const errors = [];
   if (input.type === 'value' && !input.stateTopic) errors.push('Bitte einen State auswählen.');
   if (input.type === 'switch' && !input.sourceId) {
-    errors.push('Bitte ein schaltbares Gerät oder eine Schaltgruppe auswählen.');
+    errors.push('Bitte ein schaltbares Gerät, eine Schaltgruppe oder einen Kinomodus auswählen.');
   }
   return errors;
 }

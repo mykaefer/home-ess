@@ -13,6 +13,7 @@ const updateSettings = require('../update/settings');
 const updateService = require('../update/service');
 const i18n = require('../i18n');
 const adapterHost = require('../adapters/host');
+const heimkinoRuntime = require('../heimkino/runtime');
 
 // Query-Parameter (?tab=) auf einen gültigen Tab abbilden. Der alte
 // /remote-access-Link leitet mit ?tab=remote-access hierher.
@@ -91,6 +92,9 @@ function settingsRoutes(db) {
     if (!mod) return res.status(404).send('Unbekanntes Modul.');
     modulesState
       .setEnabled(db, key, enable)
+      // Das Heimkino stellt eigene States bereit und prüft Schleifen zyklisch;
+      // beides richtet sich erst nach dem erneuten Laden nach dem Modulstatus.
+      .then(() => (key === 'heimkino' ? heimkinoRuntime.reload().catch(() => {}) : null))
       .then(() => sendSettings(res, {
         activeTab: 'module',
         moduleMessage: `Modul "${mod.label}" wurde ${enable ? 'aktiviert' : 'deaktiviert'}.`,

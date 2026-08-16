@@ -23,6 +23,12 @@ const REGISTRY = [
     path: '/wallbox',
     description: 'Verwaltung mehrerer PKW-Wallboxen mit vorausschauender Überschuss-Ladung und Lademodi (Privat / Beruflich / Immer voll).',
   },
+  {
+    key: 'heimkino',
+    label: 'Heimkino',
+    path: '/heimkino',
+    description: 'Beliebig viele Heimkino-Räume mit beschreibbarem Kinomodus und getrennten Aktionsfolgen für An und Aus (Wertzuweisung, Pause, Schleife mit zyklischer Plausibilitätsprüfung).',
+  },
 ];
 
 let _enabledKeys = new Set();
@@ -61,12 +67,18 @@ function setEnabled(db, key, enabled) {
   });
 }
 
+// Module und ihre Menüeinträge stehen überall alphanumerisch aufsteigend – in
+// der Modulverwaltung wie im eigenen Navigationsblock unterhalb der Kernseiten.
+function byLabel(left, right) {
+  return left.label.localeCompare(right.label, 'de', { numeric: true, sensitivity: 'base' });
+}
+
 function getRegistry() {
-  return REGISTRY;
+  return [...REGISTRY].sort(byLabel);
 }
 
 function getEnabledNavItems() {
-  return REGISTRY
+  return getRegistry()
     .filter((m) => _enabledKeys.has(m.key))
     .map((m) => ({ path: m.path, label: m.label, section: 'main' }));
 }

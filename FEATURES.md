@@ -65,6 +65,15 @@ desktop and mobile layouts.
   solar conditions, priorities and learned energy demand.
 - Wallbox Control supports multiple chargers, private, work and always-full
   charging modes, vehicle state of charge, forecasts, priorities and metering.
+- Home Cinema manages any number of freely named rooms. Each room exposes a
+  writable cinema-mode state under "System / Heimkino" and is available as a
+  dashboard switch target. A room opens as its own page with separate action
+  sequences for on and off: value assignments as in the conditions engine,
+  pauses and freely nestable loops with drag-and-drop ordering. A loop can also
+  verify at a fixed interval that the intended state was actually reached and
+  repeat itself alone if it was not. An optional sync topic keeps cinema mode in
+  bidirectional sync with an external topic; after a restart that topic's state
+  wins and is adopted without running the action sequence.
 - Optional modules can be enabled or disabled from the settings page without
   creating parallel server or authentication structures.
 

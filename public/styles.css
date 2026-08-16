@@ -2597,6 +2597,16 @@ body.dash-editing .widget-group {
     background-color: var(--color-action-hover);
 }
 
+/* Als Button gestaltete Links (Adapter-Zeilen, Seitenkopf) sollen sich von
+   echten Buttons nicht unterscheiden. */
+a.module-toggle-btn,
+a.secondary-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    text-decoration: none;
+}
+
 .module-toggle-btn.button-danger {
     background-color: #fff;
     color: #dc3545;
@@ -3759,6 +3769,121 @@ body.dash-editing .widget-group {
     .condition-head .ms-group-count { margin-right: auto; }
     .condition-item { grid-template-columns: 58px minmax(0, 1fr) auto; }
     .condition-inline-fields { grid-template-columns: 1fr; }
+}
+
+/* Heimkino: Übersicht der Räume und die beiden Aktionsfolgen eines Raums.
+   Liste und Design folgen den Bedingungen; anders als dort ist jede Aktion
+   verschiebbar und trägt deshalb eine eigene Dragfläche. */
+.hk-rooms,
+.hk-groups { margin-top: 0; }
+/* Raumzeilen folgen dem Adapterdesign, nur mit mehr Luft und einer eigenen
+   Spalte für das Sync-Topic. Jede Zeile ist ein eigenes Grid. Damit die Kopfzeile exakt über den Spalten
+   steht, darf keine Spur inhaltsabhängig sein (auto/min-content): die leere
+   Aktionsspalte der Kopfzeile wäre sonst schmaler als die der Datenzeilen und
+   verschöbe alle übrigen Spalten. Deshalb ausschließlich minmax(0, …fr). */
+.hk-room-row {
+    grid-template-columns:
+        minmax(0, 1.5fr) minmax(0, 1.4fr) minmax(0, 1.4fr)
+        minmax(0, 1fr) minmax(0, 0.8fr) minmax(0, 2.1fr);
+    gap: 14px;
+    min-height: 56px;
+    padding: 10px 14px;
+    font-size: 14px;
+}
+.hk-room-row.adapter-row--head { min-height: 0; padding: 7px 14px; font-size: 11px; }
+.hk-room-row.adapter-row--head > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hk-room-row .adapter-col-name { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.hk-room-row .adapter-row-actions { gap: 8px; justify-content: flex-start; }
+.hk-room-row .module-toggle-btn { padding: 6px 12px; font-size: 13px; }
+.hk-room-note { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hk-room-note--error { color: #b91c1c; }
+.hk-room-row:not(.adapter-row--head) .hk-room-counts { font-size: 13px; }
+.hk-room-counts { white-space: nowrap; }
+.hk-room-link { color: inherit; text-decoration: none; }
+.hk-room-link:hover { text-decoration: underline; }
+.hk-inline-form { display: inline-flex; margin: 0; }
+.hk-state-line { display: flex; align-items: center; gap: 10px; margin: 0 0 12px; flex-wrap: wrap; }
+.hk-inline-error { margin: 0; text-align: left; }
+.hk-phase-head .ms-group-count { margin-right: 0; }
+.hk-phase-head .condition-runtime { margin-right: auto; }
+.hk-phase-body { background: var(--color-surface-subtle); }
+.hk-zone {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-height: 40px;
+    padding: 8px;
+}
+.hk-zone:empty::after {
+    content: 'Keine Aktionen – Aktion hierher ziehen oder unten hinzufügen.';
+    display: block;
+    padding: 6px 8px;
+    color: #94a3b8;
+    font-size: 12px;
+}
+.hk-loop-zone:empty::after { content: 'Leere Schleife – Aktion hierher ziehen.'; }
+.hk-zone.condition-drag-over { outline: 2px dashed #3b82f6; outline-offset: -3px; border-radius: 8px; }
+.hk-node { border-radius: 6px; }
+.hk-node.group-dragging { opacity: .45; }
+.hk-node.condition-drop-before { box-shadow: inset 0 3px 0 #3b82f6; }
+.hk-node.condition-drop-after { box-shadow: inset 0 -3px 0 #3b82f6; }
+.hk-action {
+    display: grid;
+    grid-template-columns: 22px 68px minmax(0, 1fr) 60px;
+    align-items: center;
+    gap: 9px;
+    min-height: 38px;
+    padding: 3px 12px 3px 6px;
+    border: 1px solid #e6ebe8;
+    background: #fff;
+    font-size: 13px;
+}
+.hk-action .widget-actions { justify-self: end; }
+.hk-action:hover .widget-actions,
+.hk-action:focus-within .widget-actions { opacity: 1; }
+.hk-drag { cursor: grab; }
+.hk-kind--write { color: #166534; background: #dcfce7; }
+.hk-kind--pause { color: #854d0e; background: #fef3c7; }
+.hk-kind--loop { color: #155e75; background: #cffafe; }
+.hk-loop { border: 1px solid #cbd5e1; overflow: hidden; background: #fff; }
+.hk-loop-head { min-height: 36px; }
+.hk-loop-head.condition-drag-over { outline: 2px solid #0891b2; outline-offset: -3px; background: rgba(8, 145, 178, .3); }
+.hk-loop-title { flex: 1 1 auto; font-weight: 600; }
+.hk-loop-head .ms-group-count { margin-right: 0; }
+.hk-loop-body { display: none; background: var(--color-surface-subtle); }
+.hk-loop.is-open > .hk-loop-body { display: block; }
+.hk-loop.is-open > .hk-loop-head .ms-caret { transform: rotate(90deg); }
+
+@media (max-width: 1400px) {
+    /* Weniger Spalten statt gequetschter Inhalte – Kopf- und Datenzeile
+       verlieren dieselben Spalten und bleiben deckungsgleich. */
+    .hk-room-row {
+        grid-template-columns: minmax(0, 1.5fr) minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 2.1fr);
+    }
+    .hk-room-row > .hk-col-state,
+    .hk-room-row > .hk-room-counts { display: none; }
+}
+
+@media (max-width: 1100px) {
+    .hk-room-row { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 2.2fr); }
+    .hk-room-row > .hk-col-remote { display: none; }
+}
+
+@media (max-width: 768px) {
+    .hk-room-row {
+        grid-template-columns: 1fr;
+        gap: 8px;
+    }
+    .hk-room-row.adapter-row--head { display: none; }
+    .hk-room-row .adapter-row-actions { justify-content: flex-start; }
+    .hk-phase-head .condition-runtime { display: none; }
+    .hk-phase-head .ms-group-count { margin-right: auto; }
+    .hk-action {
+        grid-template-columns: 22px 62px minmax(0, 1fr) auto;
+        gap: 6px 8px;
+        padding: 7px 8px;
+    }
+    .hk-action .widget-actions { opacity: 1; }
 }
 
 /* State-Picker: an das Topic-Feld angedockter Dropdown (Popover, Top-Layer) */

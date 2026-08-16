@@ -713,6 +713,38 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
       den absoluten Zeitpunkt je Box ab (`getNextCharge`); der Wertekatalog rechnet daraus
       zur Lesezeit die **Restzeit in Sekunden** (`wallbox.<id>.naechsterLadebeginnSekunden`)
       sowie die **Uhrzeit** (`wallbox.<id>.naechsterLadebeginn`); die Wallbox-Seite zeigt es an.
+  - **Heimkino** (`/heimkino`, `src/heimkino/`): beliebig viele frei benannte Räume.
+    Jeder Raum hat einen **beschreibbaren Kinomodus** als virtuellen State
+    (`heimkino://raeume/<id>`, Tabelle `heimkino_rooms`), der über
+    `registerStatesProvider` unter **„System / Heimkino"** in States-Seite,
+    State-Picker und Wertekatalog erscheint (Vorbild: Schaltgruppen) und
+    zusätzlich als Dashboard-Schaltziel `heimkino:<id>` („Kinomodus Raum …")
+    bereitsteht. Anders als bei der Wallbox öffnet ein Raum **keinen Dialog,
+    sondern eine eigene Seite** (`/heimkino/raum/<id>`) in Liste und Design der
+    Bedingungen.
+    - Optionales **Sync-Topic** (`remote_topic`) je Raum: bidirektional
+      gekoppelt. Externe Wertänderung ⇒ Raum schalten (mit Aktionsfolge),
+      lokaler Wechsel ⇒ Topic sofort nachziehen (Payload-Format aus der zuletzt
+      empfangenen Darstellung, wie bei den Schaltgruppen). Der erste retained
+      Wert nach Start **und nach jedem MQTT-Connect** ist nur Ausgangsbasis: er
+      wird übernommen, ohne die Aktionsfolge zu durchlaufen (analog Regel 3 der
+      Wallbox-Steuerung). Das eigene Echo eines Rückschreibens gilt nie als
+      Schaltwunsch.
+    - Je Raum zwei **Aktionsfolgen** (`heimkino_actions.phase` = `on`/`off`), die
+      bei jeder Zustandsänderung der Reihe nach abgearbeitet werden. Eine neue
+      Änderung bricht eine noch laufende Folge desselben Raums ab.
+    - Aktionsarten: **Wert zuweisen** (identische Regeln und Validierung wie das
+      „Dann" der Bedingungen — fester Wert oder Topic-Verweis, Rechenfunktion,
+      Rundung), **Pause** (Sekunden) und **Schleife** (`parent_id`, beliebig
+      verschachtelbar, `repeats` Durchläufe). Alle Aktionen sind per Dragfläche
+      frei verschiebbar (Layout wird als vollständige Momentaufnahme gespeichert).
+    - **Prüfung einer Schleife** (optional): im eingestellten Abstand wird eine
+      Bedingung (ein „Wenn" der Bedingungen) erneut bewertet; trifft sie nicht zu,
+      wird **ausschließlich diese Schleife** erneut abgespult, nicht die übrige
+      Folge. Der Abstand zählt ab der letzten Ausführung der Schleife bzw. ab dem
+      Start von homeESS; ein unbekannter Wert gilt als nicht erfüllt. Geprüft wird
+      nur die Folge, die zum **aktuellen** Kinomodus gehört — sonst würden „an"
+      und „aus" einander dauerhaft überschreiben.
 - **Wert-Katalog** (`output/internal-values.js`): berechnete und gemessene Werte
   für Outputs und Dashboard-Widgets. Enthält PV, Stromverbrauch, Sonnenintensität,
   **PV-Prognose** (erwarteter Tagesertrag heute/morgen/+2/+3 sowie heute bisher /
