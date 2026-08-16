@@ -92,6 +92,20 @@ Die Schleifendauer gehört jetzt zur Identität einer Timeline. Wird nur der
 Impulsabstand geändert, spielt der Adapter die Timeline deshalb ebenfalls neu
 auf.
 
+### Fehlgeschlagener Eigenschaftendialog nennt seine Ursache
+
+Ließ sich der Eigenschaftendialog eines States nicht laden oder speichern, blieb
+es bei einer allgemeinen Meldung, und der eigentliche Grund war nirgends
+nachvollziehbar. Der Fehler wird jetzt mit vollständigem Stack ins Log
+geschrieben; im Dialog bleibt die Meldung unverändert.
+
+Praktisch hilft das vor allem in einem Fall: Läuft der Dienst schon längere Zeit,
+während der Programmcode zwischenzeitlich aktualisiert wurde, arbeitet er
+weiterhin mit dem beim Start geladenen Stand. Passen Oberfläche und geladener
+Stand nicht mehr zusammen, konnte sich das als kommentarlos scheiternder
+Eigenschaftendialog zeigen. Ein Neustart des Dienstes übernimmt den aktuellen
+Stand; das Log benennt den Grund nun eindeutig.
+
 ## Geändert
 
 ### Einheitliche Adapter-State-Adressen

@@ -161,7 +161,11 @@ function statesRoutes(db) {
         adapters: await adapterOptionTabs(topic),
         canWrite: !!(req.access && req.access.canWrite),
       });
-    } catch (_) {
+    } catch (error) {
+      // Der Dialog bekommt nur eine allgemeine Meldung; die Ursache gehört ins
+      // Log. Ein stiller 500 ist sonst von außen nicht zu unterscheiden von
+      // einem fehlenden State und kostet unnötig Suchzeit.
+      console.error('[states] Eigenschaften nicht ladbar:', error && error.stack ? error.stack : error);
       return res.status(500).json({ error: 'Eigenschaften konnten nicht geladen werden.' });
     }
   });
@@ -189,6 +193,7 @@ function statesRoutes(db) {
       invalidateStates();
       return res.json({ ok: true, general, display: stateProperties.format(body.value, body.unit || '', topic) });
     } catch (error) {
+      console.error('[states] Eigenschaften nicht speicherbar:', error && error.stack ? error.stack : error);
       return res.status(400).json({ error: error.message || 'Eigenschaften konnten nicht gespeichert werden.' });
     }
   });
