@@ -56,6 +56,12 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
   Die Schleifendauer ist jetzt Bestandteil von Timeline-Identität und
   Gleichheitsprüfung, sodass ein neuer Abstand auch ohne geändertes
   Ablaufprogramm an das Gerät übertragen wird.
+- **Eigenschaftendialog der States nennt die Ursache eines Fehlschlags.**
+  Scheitert das Laden oder Speichern der State-Eigenschaften, steht der Fehler
+  samt Stack im Log; der Dialog zeigt weiterhin nur die allgemeine Meldung. Ein
+  stiller `500` war von außen nicht von einem fehlenden State zu unterscheiden
+  und verdeckte insbesondere den Fall, dass ein lange laufender Dienst noch
+  einen älteren Modulstand im Speicher hält.
 
 ### Geändert
 
