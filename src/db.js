@@ -791,6 +791,39 @@ function openDatabase() {
     db.run(
       'CREATE INDEX IF NOT EXISTS idx_automation_items_condition_kind ON automation_condition_items (condition_id, kind, position, id)'
     );
+    // Heimkino (optionales Modul): frei benannte Räume mit je einem
+    // beschreibbaren Kinomodus. Zu jedem Raum gehören zwei Aktionsfolgen
+    // (`phase` an/aus), die bei einer Zustandsänderung nacheinander abgearbeitet
+    // werden. Schleifen (`type` = loop) nehmen über `parent_id` weitere Aktionen
+    // auf; die typabhängige Konfiguration bleibt als validiertes JSON erweiterbar.
+    db.run(
+      `CREATE TABLE IF NOT EXISTS heimkino_rooms (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+        position INTEGER NOT NULL DEFAULT 0,
+        cinema_on INTEGER NOT NULL DEFAULT 0,
+        remote_topic TEXT NOT NULL DEFAULT '',
+        last_run_at INTEGER,
+        last_result TEXT NOT NULL DEFAULT '',
+        last_error TEXT NOT NULL DEFAULT ''
+      )`
+    );
+    db.run(
+      `CREATE TABLE IF NOT EXISTS heimkino_actions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        room_id INTEGER NOT NULL,
+        phase TEXT NOT NULL CHECK (phase IN ('on', 'off')),
+        parent_id INTEGER,
+        type TEXT NOT NULL CHECK (type IN ('write', 'pause', 'loop')),
+        position INTEGER NOT NULL DEFAULT 0,
+        config_json TEXT NOT NULL DEFAULT '{}',
+        FOREIGN KEY (room_id) REFERENCES heimkino_rooms(id) ON DELETE CASCADE,
+        FOREIGN KEY (parent_id) REFERENCES heimkino_actions(id) ON DELETE CASCADE
+      )`
+    );
+    db.run(
+      'CREATE INDEX IF NOT EXISTS idx_heimkino_actions_room ON heimkino_actions (room_id, phase, IFNULL(parent_id, -1), position, id)'
+    );
     // Historisierte, abgeschlossene Tageswerte einzelner Kennzahlen (PV-Ertrag,
     // Netzbezug, Eigenverbrauch) für die
     // Jahres-Statistik (Durchschnitt/Minimum/Maximum inkl. Datum) im
@@ -839,6 +872,7 @@ function openDatabase() {
     migrateMessSchaltTemperaturePower(db);
     migrateConditionFolders(db);
     migrateConditionElseKind(db);
+    migrateHeimkinoRooms(db);
   });
 
   return db;
@@ -860,6 +894,17 @@ function migrateConditionFolders(db) {
 // Der Sonst-Zweig kam nach den ersten Bedingungen dazu. Die Elementtabelle
 // begrenzt `kind` per CHECK; SQLite kann eine solche Regel nicht ändern, die
 // Tabelle wird deshalb einmalig mit erweitertem CHECK neu aufgebaut.
+// Bestandsdatenbanken bekommen das optionale Sync-Topic (Remote) je Raum.
+function migrateHeimkinoRooms(db) {
+  db.all('PRAGMA table_info(heimkino_rooms)', (err, rows) => {
+    if (err || !Array.isArray(rows) || rows.length === 0) return;
+    const existing = new Set(rows.map((r) => r.name));
+    if (!existing.has('remote_topic')) {
+      db.run("ALTER TABLE heimkino_rooms ADD COLUMN remote_topic TEXT NOT NULL DEFAULT ''");
+    }
+  });
+}
+
 function migrateConditionElseKind(db) {
   db.get("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'automation_condition_items'", (err, row) => {
     if (err || !row || !row.sql || row.sql.includes("'else'")) return;

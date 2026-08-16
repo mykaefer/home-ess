@@ -1,19 +1,23 @@
 'use strict';
 
 // Schalter-Widgets des Dashboards: schaltbare Ziele sind Geräte mit
-// Schalt-Topic aus Messen + Schalten sowie Schaltgruppen. Das Schalten läuft
-// über die bestehenden Mechanismen (automation.commandManual bzw.
-// schaltgruppenAutomation.commandGroup) — inklusive Prioritäts-Gating; es wird
-// keine eigene Schreiblogik eingeführt. Das Ziel wird als `actor:<id>` bzw.
-// `schaltgruppe:<id>` in der sourceId des Widgets abgelegt.
+// Schalt-Topic aus Messen + Schalten, Schaltgruppen sowie – bei aktivem Modul –
+// der Kinomodus jedes Heimkino-Raums. Das Schalten läuft über die bestehenden
+// Mechanismen (automation.commandManual, schaltgruppenAutomation.commandGroup
+// bzw. heimkinoRuntime.setRoomState) — inklusive Prioritäts-Gating; es wird
+// keine eigene Schreiblogik eingeführt. Das Ziel wird als `actor:<id>`,
+// `schaltgruppe:<id>` bzw. `heimkino:<id>` in der sourceId des Widgets abgelegt.
 
 const { listActors, getActor } = require('../messen-schalten/actors');
 const { listSwitchGroups, getSwitchGroup } = require('../messen-schalten/schaltgruppen');
 const { readActorValues } = require('../messen-schalten/aggregation');
 const automation = require('../messen-schalten/automation');
 const schaltgruppenAutomation = require('../messen-schalten/schaltgruppen-automation');
+const heimkinoRooms = require('../heimkino/rooms');
+const heimkinoRuntime = require('../heimkino/runtime');
+const { isEnabled } = require('../modules');
 
-const TARGET_PATTERN = /^(actor|schaltgruppe):(\d+)$/;
+const TARGET_PATTERN = /^(actor|schaltgruppe|heimkino):(\d+)$/;
 
 // Ziel-Angabe validieren; ungültige Eingaben ergeben '' (= kein Ziel gewählt).
 function normalizeSwitchTarget(value) {
@@ -39,6 +43,12 @@ async function listSwitchTargets(db) {
   for (const group of groups) {
     targets.push({ id: `schaltgruppe:${group.id}`, label: group.name, kind: 'Schaltgruppe' });
   }
+  // Kinomodus je Heimkino-Raum – nur solange das Modul aktiv ist.
+  if (isEnabled('heimkino')) {
+    for (const room of await heimkinoRooms.listRooms(db)) {
+      targets.push({ id: `heimkino:${room.id}`, label: `Kinomodus Raum ${room.name}`, kind: 'Heimkino' });
+    }
+  }
   return targets;
 }
 
@@ -49,7 +59,16 @@ async function readSwitchStates(db, cache, widgets) {
   const switchWidgets = (widgets || []).filter((widget) => widget.type === 'switch');
   if (!switchWidgets.length) return result;
 
-  const [actors, groups] = await Promise.all([listActors(db), listSwitchGroups(db)]);
+  const needsRooms = switchWidgets.some((widget) => {
+    const target = parseSwitchTarget(widget.sourceId);
+    return !!target && target.kind === 'heimkino';
+  });
+  const [actors, groups, rooms] = await Promise.all([
+    listActors(db),
+    listSwitchGroups(db),
+    needsRooms ? heimkinoRooms.listRooms(db) : Promise.resolve([]),
+  ]);
+  const roomsById = new Map(rooms.map((room) => [room.id, room]));
   const values = await readActorValues(db, cache, actors);
   const statusByActorId = new Map(values.map((v) => [v.id, v.statusOn == null ? null : !!v.statusOn]));
   const actorsById = new Map(actors.map((actor) => [actor.id, actor]));
@@ -66,6 +85,14 @@ async function readSwitchStates(db, cache, widgets) {
       result.set(widget.id, {
         on: actor ? statusByActorId.get(actor.id) : null,
         label: actor ? actor.name : 'Gerät fehlt',
+      });
+      continue;
+    }
+    if (target.kind === 'heimkino') {
+      const room = roomsById.get(target.id);
+      result.set(widget.id, {
+        on: room ? room.cinemaOn : null,
+        label: room ? `Kinomodus ${room.name}` : 'Raum fehlt',
       });
       continue;
     }
@@ -98,6 +125,11 @@ async function commandSwitch(db, targetValue, on) {
     if (!actor) return { ok: false, blocked: false, missing: true };
     const accepted = await automation.commandManual(db, target.id, on);
     return { ok: true, blocked: on && !accepted && actor.alwaysOn !== true };
+  }
+  // Kinomodus: setzt den Raum-State und startet dadurch die Aktionsfolge.
+  if (target.kind === 'heimkino') {
+    const ok = await heimkinoRuntime.setRoomState(db, target.id, on);
+    return { ok, blocked: false, missing: !ok };
   }
   const group = await getSwitchGroup(db, target.id);
   if (!group) return { ok: false, blocked: false, missing: true };

@@ -3,7 +3,60 @@
 Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
-## [Unreleased]
+## [1.4.7] — 2026-08-16
+
+### Hinzugefügt
+
+- **Heimkino-Modul (optional).** Unter „Einstellungen → Module“ aktivierbar.
+  Es verwaltet beliebig viele frei benannte Räume; jeder Raum erhält unter
+  „System / Heimkino“ einen beschreibbaren booleschen State mit seinem Namen
+  (`heimkino://raeume/<id>`), der den Kinomodus zugleich anzeigt und festlegt.
+  Derselbe Schaltzustand steht als Ziel „Kinomodus Raum …“ für die
+  Schaltwidgets des Dashboards zur Verfügung. Das Schalten läuft dort über die
+  Modullogik; eine eigene Schreiblogik führen die Widgets nicht ein.
+- **Aktionsfolgen je Raum.** Ein Raum öffnet sich als eigenständige Seite
+  (`/heimkino/raum/<id>`) in Liste und Design der Bedingungen, mit je einem
+  Verzeichnis für die Folge „An“ und „Aus“. Jede Zustandsänderung ruft die
+  passende Folge nacheinander ab. Zur Verfügung stehen **Wert zuweisen** (wie
+  das „Dann“ der Bedingungen: fester Wert oder Wert eines anderen Topics,
+  Rechenfunktion und Rundung), **Pause** und **Schleife**. Schleifen sind
+  ineinander verschachtelbar, nehmen Aktionen auf und durchlaufen ihren Inhalt
+  so oft wie eingestellt; alle Aktionen lassen sich per Dragfläche frei
+  verschieben.
+- **Sync-Topic je Raum (optional).** Ein frei wählbares Topic wird bidirektional
+  mit dem Kinomodus synchron gehalten: Wechselt es extern auf an, schaltet der
+  Raum ein (samt Aktionsfolge); wird in homeESS geschaltet, folgt das Topic
+  sofort (1/0 bzw. true/false je nach seiner bisherigen Darstellung). Beim
+  Neustart von homeESS — und nach jedem MQTT-Wiederverbindungsaufbau — ist der
+  dort hinterlegte Zustand maßgeblich: er wird übernommen, ohne die
+  Aktionsfolge zu durchlaufen.
+- **Plausibilitätsprüfung in Schleifen.** Eine Schleife kann eine Bedingung in
+  einem festlegbaren Abstand immer wieder prüfen (gezählt ab ihrer letzten
+  Ausführung bzw. ab dem Start von homeESS). Trifft die Bedingung nicht zu,
+  wird ausschließlich diese Schleife erneut abgespult — die übrige Aktionsfolge
+  bleibt unberührt. So bleibt ein extern verstellter Verbraucher nicht in einem
+  unbekannten Schaltzustand. Geprüft wird jeweils nur die Folge, die zum
+  aktuellen Kinomodus des Raums gehört.
+
+### Geändert
+
+- **Module und Modulseiten stehen alphanumerisch aufsteigend** – in der
+  Modulverwaltung wie in ihrem eigenen Navigationsblock unterhalb der
+  Kernseiten. Auch die Heimkino-Räume sind alphanumerisch sortiert.
+- **Räume im Zeilendesign der Adapterseite.** Die Heimkino-Übersicht zeigt je
+  Raum Name, Kinomodus-State, Sync-Topic, Zustand und die Zahl der Aktionen in
+  großzügigeren Zeilen. Die Spaltenüberschriften stehen exakt über ihren
+  Spalten, und je nach Fensterbreite entfallen Spalten in Kopf- und Datenzeile
+  gemeinsam. Als Schaltflächen gestaltete Links (Adapter-Zeilen, Seitenköpfe)
+  sehen jetzt wie echte Buttons aus.
+
+### Behoben
+
+- **Mitgelieferte hDP-Stable-Firmware auf 0.7.4 angehoben.** Der bisher
+  gebündelte Stand 0.7.3 konnte sein Manifest bei knappem Heap abgeschnitten
+  ausliefern, sodass der Manifestabgleich nach jedem Verbindungsaufbau mit
+  „Ungültige JSON-Antwort (HTTP 200)“ scheiterte. Einzelheiten im
+  [Adapter-Changelog](adapter/hdp/CHANGELOG.md) (hDP-Adapter 1.2.8).
 
 ## [1.4.6] — 2026-08-16
 

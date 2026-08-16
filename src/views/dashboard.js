@@ -1066,7 +1066,7 @@ function renderWidgetDialog({ switchTargets, infoFields = [], tabs = [], groupsF
     .join('');
   const switchTargetHint = switchTargets.length
     ? ''
-    : '<small class="muted">Keine schaltbaren Ziele vorhanden. Lege unter Messen + Schalten ein Gerät mit Schalt-Topic oder eine Schaltgruppe an.</small>';
+    : '<small class="muted">Keine schaltbaren Ziele vorhanden. Lege unter Messen + Schalten ein Gerät mit Schalt-Topic oder eine Schaltgruppe an – oder im Heimkino-Modul einen Raum.</small>';
   return `        <dialog id="widgetDialog" class="value-dialog">
           <form id="widgetForm" action="/dashboard/widgets" method="POST" class="dialog-form">
             <div class="dialog-hero">
