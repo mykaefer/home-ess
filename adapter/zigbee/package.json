@@ -1,0 +1,11 @@
+{
+  "name": "homeess-adapter-zigbee",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Abhängigkeiten des homeESS-Zigbee-Adapters. Sie liegen bewusst im Adapterverzeichnis und werden nicht global in homeESS installiert.",
+  "license": "AGPL-3.0-only",
+  "dependencies": {
+    "zigbee-herdsman": "10.9.0",
+    "zigbee-herdsman-converters": "26.97.0"
+  }
+}

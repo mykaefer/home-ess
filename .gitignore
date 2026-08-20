@@ -55,3 +55,16 @@ future/
 
 # Proprietary app/relay interface documentation
 HOMEESS_TRANSPORT_API.md
+
+# Adaptereigene Abhängigkeiten.
+# Ein Adapter ist portabel und bringt seine JavaScript-Abhängigkeiten laut
+# ADAPTER.md im eigenen Verzeichnis mit; homeESS führt für Adapter weder
+# `npm install` noch einen globalen Installationsschritt aus. Das `npm ci` von
+# Installer und Self-Updater läuft ausschließlich im Projektwurzelverzeichnis,
+# und beim Update übernimmt die Adapterauswahl nur Verzeichnisse, die das neue
+# Release nicht selbst mitbringt. Ohne diese Ausnahme fehlten die Bibliotheken
+# nach Klon und Update, und der Adapter wäre nicht lauffähig.
+# Die Ausnahme gilt eng begrenzt für Adapterverzeichnisse; die Regeln
+# `node_modules/` und `dist/` bleiben für den Rest des Projekts unverändert.
+!adapter/*/node_modules/
+!adapter/*/node_modules/**

@@ -1,0 +1,116 @@
+"use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.ledvanceTz = exports.ledvanceFz = void 0;
+exports.ledvanceOnOff = ledvanceOnOff;
+exports.ledvanceLight = ledvanceLight;
+const zigbee_herdsman_1 = require("zigbee-herdsman");
+const utils = __importStar(require("../lib/utils"));
+const m = __importStar(require("./modernExtend"));
+const manufacturerOptions = { manufacturerCode: zigbee_herdsman_1.Zcl.ManufacturerCode.OSRAM_SYLVANIA };
+const ledvanceExtend = {
+    addmanuSpecificOsramCluster: () => m.deviceAddCustomCluster("manuSpecificOsram", {
+        name: "manuSpecificOsram",
+        ID: 0xfc0f,
+        attributes: {},
+        commands: {
+            saveStartupParams: { name: "saveStartupParams", ID: 0x01, parameters: [] },
+            resetStartupParams: { name: "resetStartupParams", ID: 0x02, parameters: [] },
+        },
+        commandsResponse: {
+            saveStartupParamsRsp: { name: "saveStartupParamsRsp", ID: 0x00, parameters: [] },
+        },
+    }),
+};
+exports.ledvanceFz = {
+    pbc_level_to_action: {
+        cluster: "genLevelCtrl",
+        type: ["commandMoveWithOnOff", "commandStopWithOnOff", "commandMove", "commandStop", "commandMoveToLevelWithOnOff"],
+        convert: (model, msg, publish, options, meta) => {
+            if (utils.hasAlreadyProcessedMessage(msg, model))
+                return;
+            const lookup = {
+                commandMoveWithOnOff: "hold",
+                commandMove: "hold",
+                commandStopWithOnOff: "release",
+                commandStop: "release",
+                commandMoveToLevelWithOnOff: "toggle",
+            };
+            return { [utils.postfixWithEndpointName("action", msg, model, meta)]: lookup[msg.type] };
+        },
+    },
+};
+exports.ledvanceTz = {
+    ledvance_commands: {
+        /* deprecated osram_*/
+        key: ["set_transition", "remember_state", "osram_set_transition", "osram_remember_state"],
+        convertSet: async (entity, key, value, meta) => {
+            if (key === "osram_set_transition" || key === "set_transition") {
+                if (value) {
+                    utils.assertNumber(value, key);
+                    const transition = value > 1 ? Number((Math.round(Number((value * 2).toFixed(1))) / 2).toFixed(1)) * 10 : 1;
+                    const payload = { 18: { value: transition, type: 0x21 }, 19: { value: transition, type: 0x21 } };
+                    await entity.write("genLevelCtrl", payload);
+                }
+            }
+            else if (key === "osram_remember_state" || key === "remember_state") {
+                if (value === true) {
+                    await entity.command("manuSpecificOsram", "saveStartupParams", {}, manufacturerOptions);
+                }
+                else if (value === false) {
+                    await entity.command("manuSpecificOsram", "resetStartupParams", {}, manufacturerOptions);
+                }
+            }
+        },
+    },
+};
+function ledvanceOnOff(args) {
+    args = { ota: true, configureReporting: true, ...args };
+    return m.onOff(args);
+}
+function ledvanceLight(args) {
+    args = { powerOnBehavior: false, ota: true, ...args };
+    if (args.colorTemp)
+        args.colorTemp.startup = false;
+    if (args.color)
+        args.color = { modes: ["xy", "hs"], ...(utils.isObject(args.color) ? args.color : {}) };
+    const extend = m.light(args);
+    const customCluster = ledvanceExtend.addmanuSpecificOsramCluster();
+    extend.onEvent = [...(customCluster.onEvent ?? []), ...(extend.onEvent ?? [])];
+    extend.configure = [...(customCluster.configure ?? []), ...(extend.configure ?? [])];
+    extend.toZigbee.push(exports.ledvanceTz.ledvance_commands);
+    return extend;
+}
+//# sourceMappingURL=ledvance.js.map

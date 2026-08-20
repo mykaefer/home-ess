@@ -5,6 +5,53 @@ wird unabhängig von homeESS versioniert; die Version steht in
 [adapter.json](adapter.json). Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [1.0.1] — 2026-08-17
+
+### Geändert
+
+- **Ausgespart bleibt nur noch die eigene Instanz, nicht der gesamte eigene
+  Prefix.** Andere MQTT-Broker-Instanzen sind gewöhnliche Fremd-States und
+  erscheinen im `states/`-Baum unter `states/mqttbroker/<instanz>/…` — samt
+  Schreibrecht, denn ihre Geräte-States sind schreibbar. Die eigene Instanz
+  bleibt außen vor, sonst spiegelte sie sich selbst.
+- **Punkte in der State-Adresse öffnen im `states/`-Baum eine eigene Topic-Ebene**
+  (`system://homeess/geraet.3.leistung` → `states/system/homeess/geraet/3/leistung`
+  statt bisher `states/system/homeess/geraet.3.leistung`). Die homeESS-
+  Systemwerte gliedern sich mit Punkten; ohne diese Regel lagen mehrere hundert
+  States flach in einem einzigen Verzeichnis.
+  **Achtung:** Abos und Retained Messages auf die alten, punktbehafteten Pfade
+  greifen nicht mehr — betroffene Clients müssen auf die neuen Topics umgestellt
+  werden. Geräte-Topics und die Rückabbildung auf die homeESS-Adressen bleiben
+  unverändert.
+- Bilden zwei States nach dieser Regel dasselbe Topic (etwa `a.b` und `a/b`),
+  behält der erste es; der zweite bleibt unsichtbar und wird protokolliert.
+
+### Hinzugefügt
+
+- **Topic-Browser auf der Verwaltungsseite.** Alle über MQTT erreichbaren Topics
+  der Instanz stehen als aufklappbarer Verzeichnisbaum bereit: die von Clients
+  angelegten Geräte-Topics und — sofern freigeschaltet — der Systembaum unter
+  `states/`. Jede Ebene zeigt die Anzahl der States darunter, jede State-Zeile
+  den letzten bekannten Wert und ein Schloss bei schreibgeschützten States. Ein
+  Suchfeld filtert über Klarname und Pfad zugleich, „Alle aufklappen"/„Alle
+  zuklappen" öffnet und schließt den Baum.
+- **Zwei Gliederungen.** Vorgabe ist die **homeESS-Struktur** — dieselben Ebenen
+  wie im States-Baum (Kategoriepfad) mit dem Klarnamen des States und dem
+  vollständigen MQTT-Pfad daneben. Umschaltbar auf die **MQTT-Pfad**-Gliederung,
+  die dem Topic folgt und den Klarnamen neben dem Pfadabschnitt zeigt.
+- **Verzeichnis „MQTT-Geräte / <Instanz>" je Broker.** Dort sammeln sich die
+  Topics, die MQTT-Clients selbst anlegen — für jede Broker-Instanz eines. Das
+  Verzeichnis der eigenen Instanz steht auch dann im Baum, wenn noch kein Client
+  etwas veröffentlicht hat: es ist der einzige Bereich, in dem Clients States
+  frei anlegen dürfen (im `states/`-Baum entstehen keine neuen States).
+- **Kopierknopf je Zeile.** Er legt den vollständigen MQTT-Pfad in die
+  Zwischenablage — bei Verzeichnissen der MQTT-Gliederung den passenden
+  Abo-Filter mit `/#`. Ohne HTTPS steht die Clipboard-API des Browsers nicht
+  bereit; dann greift ein Rückfallweg, notfalls über einen Kopierdialog.
+- Die Topic-Liste wird getrennt von der Seite geladen (`GET …/manage/topics`,
+  Leserecht vorausgesetzt), damit große Installationen das HTML nicht aufblähen;
+  jede Gliederung wird einmal geholt und danach zwischengespeichert.
+
 ## [1.0.0] — 2026-08-11
 
 ### Hinzugefügt

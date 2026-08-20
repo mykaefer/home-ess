@@ -11,11 +11,19 @@ const HEARTBEAT_MS = 15000;
 const HEARTBEAT_TIMEOUT_MS = 45000;
 const RECONNECT_DELAYS = [1000, 2000, 5000, 10000, 30000];
 
-function connectionErrorMessage(error) {
+function connectionErrorMessage(error, context = {}) {
   if (error && error.code === 'HPE_INVALID_HEADER_TOKEN') {
     return 'Das Gerät sendet beim WebSocket-Upgrade syntaktisch ungültige HTTP-Header.';
   }
   if (error && /opening handshake has timed out/i.test(error.message || '')) {
+    // ws fasst TCP-Aufbau und HTTP-Upgrade unter einem Timeout zusammen. Ohne
+    // die Unterscheidung liest sich ein Gerät, das gar nicht mehr im Netz ist,
+    // wie eines, das antwortet und nur den Upgrade schuldig bleibt — die
+    // Fehlersuche beginnt dann bei der Firmware statt beim Gerät selbst.
+    if (context.tcpEstablished === false) {
+      return `Das Gerät war unter ${context.target || 'der bekannten Adresse'} nicht erreichbar `
+        + '(keine TCP-Verbindung innerhalb von 3000 ms).';
+    }
     return 'Das Gerät hat den WebSocket-Upgrade nicht innerhalb von 3000 ms beantwortet.';
   }
   return error && error.message ? error.message : String(error || 'WebSocket-Verbindung fehlgeschlagen.');
@@ -203,9 +211,13 @@ class RuntimeConnection extends EventEmitter {
     if (changed && !this.stopped && !this.reconnectForbidden) this.reconnectNow();
   }
 
-  url() {
+  endpoint() {
     const host = this.device.address || this.device.hostname;
-    return `ws://${host}:${this.device.wsPort || this.device.apiPort}/api/v1/ws`;
+    return `${host}:${this.device.wsPort || this.device.apiPort}`;
+  }
+
+  url() {
+    return `ws://${this.endpoint()}/api/v1/ws`;
   }
 
   start() {
@@ -231,6 +243,19 @@ class RuntimeConnection extends EventEmitter {
       return;
     }
     this.socket = socket;
+    // Rein beobachtend: Ob der TCP-Aufbau überhaupt zustande kam, steht nur im
+    // darunterliegenden Socket. Fehlt er (etwa im Test), bleibt der Wert offen
+    // und die Meldung so allgemein wie bisher.
+    let tcpEstablished = null;
+    const request = socket._req;
+    if (request && typeof request.once === 'function') {
+      tcpEstablished = false;
+      request.once('socket', (tcp) => {
+        if (!tcp) return;
+        if (tcp.connecting === false) tcpEstablished = true;
+        else tcp.once('connect', () => { tcpEstablished = true; });
+      });
+    }
     const isCurrentSocket = () => this.socket === socket;
     this.ready = false;
     this.outSequence = 0;
@@ -259,7 +284,10 @@ class RuntimeConnection extends EventEmitter {
     });
     socket.on('error', (error) => {
       if (!isCurrentSocket()) return;
-      const diagnostic = Object.assign(new Error(connectionErrorMessage(error)), {
+      const diagnostic = Object.assign(new Error(connectionErrorMessage(error, {
+        tcpEstablished,
+        target: this.endpoint(),
+      })), {
         code: error && error.code,
         cause: error,
       });

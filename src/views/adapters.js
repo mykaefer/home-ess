@@ -16,12 +16,18 @@ function renderAdapters({ registry = [], instancesByAdapter = new Map(), statusB
   const body = `        <div class="page-head page-head--split">
           <div>
             <h1>Adapter</h1>
-            <p class="muted" style="margin-bottom: 18px;">Adapter verbinden homeESS mit Geräten (z. B. Modbus). Jeder Adapter liegt als Unterverzeichnis in <code>/adapter/</code>. Pro Adapter lassen sich mehrere benannte Instanzen anlegen und einzeln aktivieren. Werte werden über <code>prefix://instanz/adresse</code> angesprochen.</p>
+            <p class="muted adapter-page-intro" style="margin-bottom: 18px;">Adapter verbinden homeESS mit Geräten (z. B. Modbus). Jeder Adapter liegt als Unterverzeichnis in <code>/adapter/</code>. Pro Adapter lassen sich mehrere benannte Instanzen anlegen und einzeln aktivieren. Werte werden über <code>prefix://instanz/adresse</code> angesprochen.</p>
           </div>
-          <label class="adapter-filter-toggle">
-            <input type="checkbox" id="hide-inactive-adapters" checked>
-            <span>Inaktive Adapter ausblenden</span>
-          </label>
+          <div class="adapter-filter-toggles">
+            <label class="adapter-filter-toggle">
+              <input type="checkbox" id="hide-inactive-adapters" checked>
+              <span>Inaktive Adapter ausblenden</span>
+            </label>
+            <label class="adapter-filter-toggle">
+              <input type="checkbox" id="compact-adapters">
+              <span>Kompakte Ansicht</span>
+            </label>
+          </div>
         </div>
         ${message ? statusText(message, 'success') : ''}
         ${error ? statusText(error) : ''}
@@ -56,6 +62,7 @@ ${blocks}
 
   const script = `
     var ADAPTER_HIDE_INACTIVE_KEY = 'homeess.adapters.hideInactive.v1';
+    var ADAPTER_COMPACT_KEY = 'homeess.adapters.compact.v1';
     var ADAPTER_UPLOAD_MESSAGE_KEY = 'homeess.adapters.uploadMessage.v1';
 
     function adapterUploadMessage(text, failed) {
@@ -199,6 +206,23 @@ ${blocks}
           syncAdapterVisibility();
         }).catch(function () {});
     }
+    function applyAdapterCompactMode(toggle) {
+      document.body.classList.toggle('adapters-compact', !!(toggle && toggle.checked));
+    }
+    var compactToggle = document.getElementById('compact-adapters');
+    if (compactToggle) {
+      try {
+        var storedCompact = localStorage.getItem(ADAPTER_COMPACT_KEY);
+        if (storedCompact !== null) compactToggle.checked = storedCompact === '1';
+      } catch (_) {}
+      applyAdapterCompactMode(compactToggle);
+      compactToggle.addEventListener('change', function () {
+        try { localStorage.setItem(ADAPTER_COMPACT_KEY, compactToggle.checked ? '1' : '0'); }
+        catch (_) {}
+        applyAdapterCompactMode(compactToggle);
+      });
+    }
+
     var hideInactiveToggle = document.getElementById('hide-inactive-adapters');
     restoreAdapterVisibilityPreference(hideInactiveToggle);
     if (hideInactiveToggle) hideInactiveToggle.addEventListener('change', function () {
@@ -235,7 +259,8 @@ function renderAdapterBlock(adapter, instances, statusById, isAdmin) {
               <div class="adapter-block-title">
                 <strong>${escapeHtml(adapter.name)}</strong>
                 <span class="adapter-prefix">${escapeHtml(adapter.prefix)}://</span>
-                <span class="muted">${escapeHtml(adapter.description)} · v${escapeHtml(adapter.version)}</span>
+${adapter.description ? `                <span class="adapter-desc muted">${escapeHtml(adapter.description)} ·</span>` : ''}
+                <span class="adapter-version muted">v${escapeHtml(adapter.version)}</span>
 ${adapter.copyright ? `                <span class="adapter-copyright muted">${escapeHtml(adapter.copyright)}</span>` : ''}
               </div>
               <div class="adapter-block-actions">

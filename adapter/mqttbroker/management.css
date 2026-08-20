@@ -84,6 +84,184 @@
     color: #6b7280;
 }
 
+/* Topic-Browser: aufklappbare Verzeichnisebenen mit Kopierknopf je Zeile. */
+.mqttbroker-browser-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+    margin-bottom: 10px;
+}
+
+.mqttbroker-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: #6b7280;
+    font-size: 13px;
+}
+
+.mqttbroker-group select {
+    padding: 6px 8px;
+    border: 1px solid var(--color-border, #e5e7eb);
+    border-radius: 8px;
+    background: var(--color-surface, #fff);
+    color: inherit;
+    font-size: 13px;
+}
+
+.mqttbroker-filter {
+    flex: 1 1 220px;
+    min-width: 0;
+    padding: 7px 10px;
+    border: 1px solid var(--color-border, #e5e7eb);
+    border-radius: 8px;
+    background: var(--color-surface, #fff);
+    color: inherit;
+    font-size: 14px;
+}
+
+.mqttbroker-browser-count {
+    margin-left: auto;
+    color: #6b7280;
+    font-size: 13px;
+    white-space: nowrap;
+}
+
+.mqttbroker-tree {
+    padding: 6px 4px;
+    border: 1px solid var(--color-border, #e5e7eb);
+    border-radius: 10px;
+    background: var(--color-surface, #fff);
+    max-height: 60vh;
+    overflow: auto;
+}
+
+.mqttbroker-tree .mqttbroker-empty {
+    margin: 8px 10px;
+    font-size: 14px;
+}
+
+.mqttbroker-summary {
+    list-style: none;
+    cursor: pointer;
+}
+
+.mqttbroker-summary::-webkit-details-marker {
+    display: none;
+}
+
+.mqttbroker-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 8px;
+    border-radius: 6px;
+    font-size: 14px;
+}
+
+.mqttbroker-summary .mqttbroker-row::before {
+    content: "▸";
+    width: 12px;
+    color: #6b7280;
+    font-size: 12px;
+}
+
+.mqttbroker-node[open] > .mqttbroker-summary .mqttbroker-row::before {
+    content: "▾";
+}
+
+.mqttbroker-node--leaf .mqttbroker-row {
+    padding-left: 28px;
+}
+
+.mqttbroker-row:hover {
+    background: rgba(148, 163, 184, 0.16);
+}
+
+.mqttbroker-row-name {
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.mqttbroker-summary .mqttbroker-row-name {
+    font-weight: 700;
+}
+
+.mqttbroker-spacer {
+    flex: 1 1 auto;
+}
+
+.mqttbroker-row-path {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #6b7280;
+    font-size: 12px;
+}
+
+.mqttbroker-row-value {
+    margin-left: auto;
+    color: #6b7280;
+    font-size: 13px;
+    white-space: nowrap;
+}
+
+.mqttbroker-badge {
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: rgba(148, 163, 184, 0.22);
+    color: #4b5563;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+.mqttbroker-badge--lock {
+    background: none;
+    padding: 0;
+}
+
+.mqttbroker-children {
+    margin-left: 14px;
+    border-left: 1px solid var(--color-border, #e5e7eb);
+    padding-left: 4px;
+}
+
+.mqttbroker-copy {
+    flex: none;
+    padding: 2px 7px;
+    border: 1px solid var(--color-border, #e5e7eb);
+    border-radius: 6px;
+    background: transparent;
+    color: inherit;
+    font-size: 13px;
+    line-height: 1.4;
+    cursor: pointer;
+}
+
+.mqttbroker-copy:hover {
+    background: rgba(148, 163, 184, 0.28);
+}
+
+.mqttbroker-copy.is-copied {
+    border-color: var(--color-action, #39705f);
+    color: var(--color-action, #39705f);
+    font-weight: 700;
+}
+
+.mqttbroker-button--quiet {
+    background: transparent;
+    border-color: var(--color-border, #e5e7eb);
+    color: inherit;
+    font-weight: 600;
+}
+
+.mqttbroker-button--quiet:hover {
+    background: rgba(148, 163, 184, 0.22);
+}
+
 .mqttbroker-hint {
     margin: 8px 0 0;
     color: #6b7280;
@@ -105,5 +283,36 @@
     .mqttbroker-empty,
     .mqttbroker-hint {
         color: #94a3b8;
+    }
+
+    .mqttbroker-filter,
+    .mqttbroker-group select,
+    .mqttbroker-tree {
+        border-color: #334155;
+        background: #111827;
+    }
+
+    .mqttbroker-group {
+        color: #94a3b8;
+    }
+
+    .mqttbroker-children,
+    .mqttbroker-copy {
+        border-color: #334155;
+    }
+
+    .mqttbroker-browser-count,
+    .mqttbroker-row-path,
+    .mqttbroker-row-value,
+    .mqttbroker-summary .mqttbroker-row::before {
+        color: #94a3b8;
+    }
+
+    .mqttbroker-badge {
+        color: #cbd5f5;
+    }
+
+    .mqttbroker-button--quiet {
+        border-color: #334155;
     }
 }

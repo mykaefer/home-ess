@@ -48,6 +48,23 @@
     "no_states": "No states created yet.",
     "states_hint": "States appear automatically as soon as a client publishes to a topic. Without an update within the idle retention time they are removed again.",
     "confirm_clear": "Remove all device states of this instance?",
-    "action_failed": "Action failed."
+    "action_failed": "Action failed.",
+    "topic_browser": "Topic browser",
+    "filter_placeholder": "Filter topics …",
+    "expand_all": "Expand all",
+    "collapse_all": "Collapse all",
+    "loading": "Loading …",
+    "topics": "topics",
+    "copy_topic": "Copy MQTT path",
+    "copy_filter": "Copy subscription filter",
+    "read_only": "read-only",
+    "no_topics": "No topics yet.",
+    "no_match": "No topic matches the filter.",
+    "browser_failed": "The topic list could not be loaded.",
+    "browser_hint": "The homeESS grouping mirrors the state tree, the MQTT grouping follows the topic path. Either way the copy button puts the complete MQTT path on the clipboard — for directories of the MQTT grouping the matching subscription filter ending in “/#”.",
+    "browser_system_hint": "The states/ system tree only appears once system-wide state access is enabled in the instance settings.",
+    "grouping": "Grouping",
+    "group_states": "homeESS structure",
+    "group_path": "MQTT path"
   }
 }
