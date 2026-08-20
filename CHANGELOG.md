@@ -5,8 +5,20 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-08-20
+
 ### Hinzugefügt
 
+- **Zigbee-Adapter.** homeESS wird damit zur eigenständigen
+  Zigbee-Zentrale: Netzwerk, Pairing, Geräte-Interviews und Gerätebefehle
+  laufen vollständig im Adapter, der den Coordinator über Serial oder TCP
+  direkt anspricht. Zigbee2MQTT, ioBroker, deCONZ-Server, ein MQTT-Gateway
+  oder ein Cloud-Dienst werden nicht benötigt. Geräte-States entstehen
+  dynamisch aus den Exposes von `zigbee-herdsman-converters`, ein bestehendes
+  Netz lässt sich ohne erneutes Pairing übernehmen, und die Netzwerkkarte zeigt
+  die tatsächlich gemessenen Funkstrecken samt Bedienung je Gerät. Der Adapter
+  ist eigenständig versioniert (1.3.3) und in
+  [adapter/zigbee/CHANGELOG.md](adapter/zigbee/CHANGELOG.md) beschrieben.
 - **Adapterseite: kompakte Ansicht.** Oben rechts steht neben „Inaktive Adapter
   ausblenden“ ein zweiter Haken „Kompakte Ansicht“; die Auswahl wird browserlokal
   gespeichert (`homeess.adapters.compact.v1`). Aktiviert bleibt je Adapter eine
@@ -31,6 +43,14 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
   `zigbee-herdsman-converters` mitliefert; die Änderung gilt für alle Adapter
   gleichermaßen. Der Adapter selbst ist eigenständig versioniert und in
   [adapter/zigbee/CHANGELOG.md](adapter/zigbee/CHANGELOG.md) beschrieben.
+- **Aktualisierte Adapter.** Der MQTT-Broker-Adapter (1.0.1) bringt einen
+  Topic-Browser auf seiner Verwaltungsseite und gliedert Punkte in
+  State-Adressen zu eigenen Topic-Ebenen — **Abos und Retained Messages auf die
+  alten, punktbehafteten Pfade greifen nicht mehr**. Der hDP-Adapter (1.2.9)
+  unterscheidet in der Fehlermeldung jetzt zwischen einem nicht erreichbaren
+  Gerät und einem säumigen WebSocket-Upgrade. Einzelheiten in den
+  Adapter-Changelogs [MQTT-Broker](adapter/mqttbroker/CHANGELOG.md) und
+  [hDP](adapter/hdp/CHANGELOG.md).
 
 ## [1.4.7] — 2026-08-16
 
