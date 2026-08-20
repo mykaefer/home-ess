@@ -12,6 +12,7 @@ const { topicMatches, isValidTopicFilter, isValidTopicName, ipAllowed } = requir
 const { decodePayload, encodeValue } = require('../adapter/mqttbroker/payload');
 const { DeviceStates } = require('../adapter/mqttbroker/device-states');
 const { SystemTree } = require('../adapter/mqttbroker/system-tree');
+const { buildTopicTree, buildStateTree } = require('../adapter/mqttbroker/topic-tree');
 
 // ── Hilfsfunktionen ───────────────────────────────────────────────────────────
 
@@ -166,18 +167,27 @@ test('Nutzlasten werden zu Zahlen, Booleans und Texten', () => {
   assert.equal(encodeValue(null).length, 0);
 });
 
-test('Der Systembaum lässt den eigenen Prefix aus', () => {
-  const tree = new SystemTree({ ownPrefix: 'mqttbroker' });
-  const diff = tree.refresh([
+test('Der Systembaum lässt nur die eigene Instanz aus', () => {
+  const catalog = [
     { topic: 'hdp://wohnzimmer/messwerte/temperatur', name: 'Temperatur', writable: false },
     { topic: 'system://homeess/pv.current', name: 'PV', writable: false },
     { topic: 'mqttbroker://broker/haus/temp', name: 'Eigen', writable: true },
-  ]);
-  assert.equal(diff.total, 2);
+    { topic: 'mqttbroker://Broker EG/haus/temp', name: 'Nachbar', writable: true },
+  ];
+
+  const tree = new SystemTree({ ownPrefix: 'mqttbroker', ownInstance: 'broker' });
+  const diff = tree.refresh(catalog);
+  assert.equal(diff.total, 3);
   assert.ok(tree.entryByMqttTopic('states/hdp/wohnzimmer/messwerte/temperatur'));
-  assert.ok(tree.entryByMqttTopic('states/system/homeess/pv.current'));
+  assert.ok(tree.entryByMqttTopic('states/system/homeess/pv/current'));
   assert.equal(tree.entryByMqttTopic('states/mqttbroker/broker/haus/temp'), null);
   assert.equal(tree.mqttTopicFor('mqttbroker://broker/haus/temp'), '');
+  // Andere Broker-Instanzen sind gewöhnliche Fremd-States.
+  assert.ok(tree.entryByMqttTopic('states/mqttbroker/Broker_EG/haus/temp'));
+
+  // Ohne bekannten Instanznamen bleibt der gesamte eigene Prefix ausgespart.
+  const ohneInstanz = new SystemTree({ ownPrefix: 'mqttbroker' });
+  assert.equal(ohneInstanz.refresh(catalog).total, 2);
 });
 
 test('Die Idle-Haltezeit entfernt nur veraltete States', () => {
@@ -420,4 +430,237 @@ test('Geräte-States überleben einen Neustart des Adapters', async (t) => {
   assert.ok(lastCatalog(record).some((state) => state.address === 'keller/feuchte'));
 
   fs.rmSync(record.directory, { recursive: true, force: true });
+});
+
+// ── Topic-Browser ─────────────────────────────────────────────────────────────
+
+test('Der Topic-Baum bildet Verzeichnisebenen und Blätter ab', () => {
+  const root = buildTopicTree([
+    { topic: 'haus/wohnzimmer/temperatur', source: 'device' },
+    { topic: 'haus/wohnzimmer', source: 'device' },
+    { topic: 'haus/kueche/temperatur', source: 'device' },
+    { topic: 'keller', source: 'device' },
+    { topic: 'haus/wohnzimmer/temperatur', source: 'device' },
+    { topic: '', source: 'device' },
+  ]);
+
+  assert.equal(root.count, 4, 'doppelte und leere Topics zählen nur einmal');
+  // Verzeichnisse zuerst, danach die Blätter der gleichen Ebene.
+  assert.deepEqual(root.children.map((node) => node.name), ['haus', 'keller']);
+
+  const haus = root.children[0];
+  assert.equal(haus.entry, null, 'reine Zwischenebenen tragen keinen State');
+  assert.equal(haus.count, 3);
+  assert.deepEqual(haus.children.map((node) => node.path), ['haus/kueche', 'haus/wohnzimmer']);
+
+  // Ein Knoten darf gleichzeitig Blatt und Verzeichnis sein.
+  const wohnzimmer = haus.children[1];
+  assert.equal(wohnzimmer.entry.topic, 'haus/wohnzimmer');
+  assert.equal(wohnzimmer.children[0].path, 'haus/wohnzimmer/temperatur');
+  assert.equal(root.children[1].entry.topic, 'keller');
+});
+
+test('Der States-Baum gliedert nach Kategorie und Klarname', () => {
+  const root = buildStateTree([
+    { topic: 'states/system/homeess/geraet/3/leistung', name: 'Poolpumpe – Leistung', category: 'System / Geräte' },
+    { topic: 'states/system/homeess/batterie/charge', name: 'Ladung', category: 'System / Batterie' },
+    { topic: 'states/schaltgruppe/gruppen/1', name: 'Wohnzimmer', category: 'System / Schaltgruppen' },
+    { topic: 'haus/temp', name: 'Temperatur', category: 'MQTT-Geräte / haus' },
+    { topic: 'ohne/kategorie', name: 'Namenlos', category: '' },
+  ]);
+
+  assert.equal(root.count, 5);
+  assert.deepEqual(root.children.map((node) => node.name), ['Allgemein', 'MQTT-Geräte', 'System']);
+
+  const system = root.children[2];
+  assert.deepEqual(system.children.map((node) => node.name), ['Batterie', 'Geräte', 'Schaltgruppen']);
+  assert.equal(system.count, 3);
+
+  // Blätter tragen den Klarnamen und trotzdem den vollständigen MQTT-Pfad.
+  const gruppe = system.children[2].children[0];
+  assert.equal(gruppe.name, 'Wohnzimmer');
+  assert.equal(gruppe.path, 'states/schaltgruppe/gruppen/1');
+  assert.equal(gruppe.entry.topic, 'states/schaltgruppe/gruppen/1');
+  assert.equal(root.children[0].children[0].name, 'Namenlos', 'ohne Kategorie landet alles unter Allgemein');
+});
+
+test('Punkte in der State-Adresse öffnen eine eigene Topic-Ebene', () => {
+  const tree = new SystemTree({ ownPrefix: 'mqttbroker' });
+  tree.refresh([
+    { topic: 'system://homeess/geraet.3.leistung', name: 'Poolpumpe – Leistung', category: 'System / Geräte', writable: false },
+    { topic: 'system://homeess/pv.current', name: 'PV', category: 'System / Photovoltaik', writable: false },
+    { topic: 'hdp://wz/messwerte/temperatur', name: 'Temperatur', writable: false },
+  ]);
+
+  assert.ok(tree.entryByMqttTopic('states/system/homeess/geraet/3/leistung'));
+  assert.ok(tree.entryByMqttTopic('states/system/homeess/pv/current'));
+  // Die Rückabbildung auf die homeESS-Adresse bleibt exakt erhalten.
+  assert.equal(
+    tree.entryByMqttTopic('states/system/homeess/geraet/3/leistung').homeTopic,
+    'system://homeess/geraet.3.leistung'
+  );
+  assert.equal(tree.mqttTopicFor('hdp://wz/messwerte/temperatur'), 'states/hdp/wz/messwerte/temperatur');
+});
+
+test('Der Topic-Browser liefert Geräte-Topics und den Systembaum', async (t) => {
+  const states = [
+    { topic: 'hdp://wz/messwerte/temperatur', name: 'Temperatur', writable: false, category: 'hDP wz / Messwerte' },
+    { topic: 'hdp://wz/steuerung/schalter', name: 'Schalter', writable: true, category: 'hDP wz / Steuerung' },
+  ];
+  const { adapter, record, internals, port } = await startAdapter({ systemAccess: true }, { states });
+  t.after(async () => adapter.stop());
+
+  const client = await connectClient(port, { clientId: 'browser' });
+  t.after(() => client.end(true));
+  client.publish('haus/wohnzimmer/temperatur', '21.5', { retain: true });
+  await waitFor(() => record.values.some((entry) => entry.address === 'haus/wohnzimmer/temperatur'));
+  await new Promise((resolve, reject) => client.subscribe('states/#', (err) => (err ? reject(err) : resolve())));
+  await waitFor(() => internals.mirrors().size === 2);
+  deliver(record, 'hdp://wz/messwerte/temperatur', 19.5);
+
+  const response = await adapter.handleManagementRequest({
+    method: 'GET', path: '/topics', query: { group: 'path' }, access: { canRead: true },
+  });
+  assert.equal(response.status, 200);
+  const data = response.json;
+  assert.equal(data.group, 'path');
+  assert.equal(data.systemAccess, true);
+  assert.equal(data.device, 1);
+  assert.equal(data.system, 2);
+  assert.equal(data.total, 3);
+
+  const flat = new Map();
+  (function walk(nodes) {
+    for (const node of nodes) {
+      if (node.entry) flat.set(node.path, node.entry);
+      walk(node.children);
+    }
+  }(data.nodes));
+  assert.deepEqual(Array.from(flat.keys()).sort(), [
+    'haus/wohnzimmer/temperatur',
+    'states/hdp/wz/messwerte/temperatur',
+    'states/hdp/wz/steuerung/schalter',
+  ]);
+
+  const device = flat.get('haus/wohnzimmer/temperatur');
+  assert.equal(device.value, 21.5);
+  assert.equal(device.writable, true);
+  assert.equal(device.name, 'temperatur');
+  assert.equal(device.category, 'MQTT-Geräte / broker / haus / wohnzimmer');
+  assert.equal(device.homeTopic, 'mqttbroker://broker/haus/wohnzimmer/temperatur');
+
+  // Der Systembaum übernimmt Name, Kategorie und Schreibrechte des States.
+  const readOnly = flat.get('states/hdp/wz/messwerte/temperatur');
+  assert.equal(readOnly.writable, false);
+  assert.equal(readOnly.name, 'Temperatur');
+  assert.equal(readOnly.category, 'hDP wz / Messwerte');
+  assert.equal(readOnly.homeTopic, 'hdp://wz/messwerte/temperatur');
+  assert.equal(readOnly.value, 19.5);
+  assert.equal(readOnly.mirrored, true);
+  assert.equal(flat.get('states/hdp/wz/steuerung/schalter').writable, true);
+
+  // Diagnose-States werden nicht über MQTT verteilt und gehören nicht in den Baum.
+  assert.equal(Array.from(flat.keys()).some((topic) => topic.startsWith('$SYS/')), false);
+
+  // Dieselben Topics, gegliedert wie der States-Baum von homeESS.
+  const byState = await adapter.handleManagementRequest({
+    method: 'GET', path: '/topics', query: { group: 'category' }, access: { canRead: true },
+  });
+  assert.equal(byState.json.group, 'category');
+  assert.equal(byState.json.total, 3);
+  assert.deepEqual(byState.json.nodes.map((node) => node.name), ['hDP wz', 'MQTT-Geräte']);
+  const messwerte = byState.json.nodes[0].children[0];
+  assert.equal(messwerte.name, 'Messwerte');
+  assert.equal(messwerte.children[0].name, 'Temperatur');
+  assert.equal(messwerte.children[0].path, 'states/hdp/wz/messwerte/temperatur');
+
+  // Die eigenen Geräte-Topics stehen unter „MQTT-Geräte / <Instanz>".
+  const eigene = byState.json.nodes[1].children[0];
+  assert.equal(eigene.name, 'broker');
+  assert.equal(eigene.children[0].children[0].children[0].path, 'haus/wohnzimmer/temperatur');
+});
+
+test('Andere Broker-Instanzen erscheinen unter MQTT-Geräte, die eigene nicht', async (t) => {
+  const states = [
+    { topic: 'mqttbroker://Broker EG/haus/kueche/temp', name: 'Broker EG – temp', writable: true, category: 'Adapter: Broker EG / MQTT-Geräte / haus / kueche' },
+    { topic: 'mqttbroker://broker/haus/eigen', name: 'broker – eigen', writable: true, category: 'Adapter: broker / MQTT-Geräte / haus' },
+    { topic: 'hdp://wz/temp', name: 'Temperatur', writable: false, category: 'Adapter: wz / Messwerte' },
+  ];
+  const { adapter, internals, port } = await startAdapter({ systemAccess: true }, { states });
+  t.after(async () => adapter.stop());
+
+  // Nur die eigene Instanz bleibt ausgespart — sonst spiegelte sie sich selbst.
+  assert.equal(internals.systemTree().size, 2);
+  assert.ok(internals.systemTree().entryByMqttTopic('states/mqttbroker/Broker_EG/haus/kueche/temp'));
+  assert.equal(internals.systemTree().entryByMqttTopic('states/mqttbroker/broker/haus/eigen'), null);
+
+  // Ein Client kann den fremden Broker mitlesen wie jeden anderen State.
+  const client = await connectClient(port, { clientId: 'nachbar' });
+  t.after(() => client.end(true));
+  await new Promise((resolve, reject) => client.subscribe('states/mqttbroker/#', (err) => (err ? reject(err) : resolve())));
+  await waitFor(() => internals.mirrors().has('states/mqttbroker/Broker_EG/haus/kueche/temp'));
+
+  const data = (await adapter.handleManagementRequest({
+    method: 'GET', path: '/topics', access: { canRead: true },
+  })).json;
+  assert.equal(data.broker, 1);
+
+  const geraete = data.nodes.find((node) => node.name === 'MQTT-Geräte');
+  assert.deepEqual(geraete.children.map((node) => node.name), ['broker', 'Broker EG']);
+
+  // Das eigene Verzeichnis steht auch ohne einen einzigen Geräte-State im Baum.
+  const eigene = geraete.children[0];
+  assert.equal(eigene.folder, true);
+  assert.equal(eigene.count, 0);
+
+  // Der fremde Broker behält seine Topic-Gliederung unterhalb der Instanz.
+  const fremd = geraete.children[1];
+  assert.deepEqual(fremd.children.map((node) => node.name), ['haus']);
+  const leaf = fremd.children[0].children[0].children[0];
+  assert.equal(leaf.name, 'temp', 'der doppelte Instanzname fällt weg');
+  assert.equal(leaf.path, 'states/mqttbroker/Broker_EG/haus/kueche/temp');
+  assert.equal(leaf.entry.writable, true);
+});
+
+test('Der Topic-Browser bleibt ohne Leserecht verschlossen', async (t) => {
+  const { adapter } = await startAdapter();
+  t.after(async () => adapter.stop());
+
+  const denied = await adapter.handleManagementRequest({
+    method: 'GET', path: '/topics', access: {},
+  });
+  assert.equal(denied.status, 403);
+
+  const view = await adapter.handleManagementRequest({
+    method: 'GET', path: '/', basePath: '/adapter/instance/1/manage', access: { canRead: true },
+  });
+  assert.equal(view.status, 200);
+  assert.ok(view.view.body.includes('Topic-Browser'));
+  assert.ok(view.view.body.includes('mqttbroker-group'));
+  assert.ok(view.view.script.includes("'/topics?group='"));
+});
+
+test('Ohne systemweiten Zugriff zeigt der Topic-Browser nur Geräte-Topics', async (t) => {
+  const states = [{ topic: 'hdp://wz/temp', name: 'Temperatur', writable: false }];
+  const { adapter, record, port } = await startAdapter({ systemAccess: false }, { states });
+  t.after(async () => adapter.stop());
+
+  const client = await connectClient(port, { clientId: 'ohne-system' });
+  t.after(() => client.end(true));
+  client.publish('keller/feuchte', '55');
+  await waitFor(() => record.values.some((entry) => entry.address === 'keller/feuchte'));
+
+  const response = await adapter.handleManagementRequest({
+    method: 'GET', path: '/topics', query: { group: 'path' }, access: { canRead: true },
+  });
+  assert.equal(response.json.systemAccess, false);
+  assert.equal(response.json.system, 0);
+  assert.deepEqual(response.json.nodes.map((node) => node.name), ['keller']);
+
+  // Ohne ausdrückliche Angabe gilt die homeESS-Gliederung.
+  const fallback = await adapter.handleManagementRequest({
+    method: 'GET', path: '/topics', access: { canRead: true },
+  });
+  assert.equal(fallback.json.group, 'category');
+  assert.deepEqual(fallback.json.nodes.map((node) => node.name), ['MQTT-Geräte']);
 });

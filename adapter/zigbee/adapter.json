@@ -1,0 +1,149 @@
+{
+  "id": "zigbee",
+  "name": "Zigbee",
+  "prefix": "zigbee",
+  "version": "1.3.3",
+  "description": "Macht homeESS zur eigenständigen Zigbee-Zentrale. Der Adapter verwaltet Netzwerk, Pairing und Geräte selbst und spricht den Coordinator direkt über Serial oder TCP an – ohne Zigbee2MQTT, ioBroker, deCONZ-Server oder Cloud-Dienst. Geräte werden über zigbee-herdsman-converters automatisch erkannt; ihre States entstehen dynamisch aus den Exposes des jeweiligen Gerätes.",
+  "copyright": "Copyright (C) 2026 Kevin Käfer",
+  "multiInstance": true,
+  "main": "index.js",
+  "managementPage": {
+    "label": "Zigbee-Netz",
+    "stylesheet": "management.css",
+    "maxUploadBytes": 4194304
+  },
+  "settings": [
+    {
+      "key": "coordinatorType",
+      "label": "Coordinator-Typ",
+      "type": "select",
+      "default": "zstack",
+      "options": [
+        {
+          "value": "zstack",
+          "label": "Texas Instruments Z-Stack (CC2652, CC1352, Sonoff ZBDongle-P)"
+        },
+        {
+          "value": "ember",
+          "label": "Silicon Labs Ember / EmberZNet (noch nicht freigegeben)"
+        },
+        {
+          "value": "deconz",
+          "label": "Dresden Elektronik deCONZ (noch nicht freigegeben)"
+        }
+      ],
+      "hint": "Die Funkhardware. Für den Coordinator-Typ ist unabhängig davon frei wählbar, ob er lokal oder über das Netzwerk angebunden wird. Freigegeben ist derzeit ausschließlich Z-Stack."
+    },
+    {
+      "key": "transportType",
+      "label": "Anbindung",
+      "type": "select",
+      "default": "tcp",
+      "options": [
+        {
+          "value": "tcp",
+          "label": "TCP (Zigbee Bridge im Netzwerk)"
+        },
+        {
+          "value": "serial",
+          "label": "Seriell (lokal am Server)"
+        }
+      ],
+      "hint": "TCP setzt eine transparente, binärdurchlässige Seriell-über-TCP-Bridge voraus. Zigbee-Logik läuft immer hier im Adapter, nie auf der Bridge."
+    },
+    {
+      "key": "tcpHost",
+      "label": "Bridge-Adresse",
+      "type": "text",
+      "default": "",
+      "hint": "Nur bei TCP. IP-Adresse oder Hostname der Zigbee-Bridge, zum Beispiel 192.168.1.50."
+    },
+    {
+      "key": "tcpPort",
+      "label": "Bridge-Port",
+      "type": "number",
+      "default": 6638,
+      "hint": "Nur bei TCP."
+    },
+    {
+      "key": "serialPath",
+      "label": "Serieller Pfad",
+      "type": "text",
+      "default": "",
+      "hint": "Nur bei seriell. Möglichst den gleichbleibenden Pfad unter /dev/serial/by-id/… verwenden, nicht /dev/ttyUSB0 – die Nummerierung kann sich nach einem Neustart ändern."
+    },
+    {
+      "key": "baudRate",
+      "label": "Baudrate",
+      "type": "number",
+      "default": 115200,
+      "hint": "Nur bei seriell. Für Sonoff ZBDongle-P und die meisten CC2652-Sticks 115200."
+    },
+    {
+      "key": "rtscts",
+      "label": "Hardware-Flusssteuerung (RTS/CTS)",
+      "type": "checkbox",
+      "default": false,
+      "hint": "Nur bei seriell und nur, wenn der Coordinator das ausdrücklich verlangt."
+    },
+    {
+      "key": "networkMode",
+      "label": "Zigbee-Netzwerk",
+      "type": "select",
+      "default": "adopt",
+      "options": [
+        {
+          "value": "adopt",
+          "label": "Bestehendes Netzwerk übernehmen"
+        },
+        {
+          "value": "create",
+          "label": "Neues Netzwerk erstellen (löscht das vorhandene Netz)"
+        }
+      ],
+      "hint": "„Übernehmen“ liest die vorhandenen Netzwerkparameter aus dem Coordinator und lässt sie unverändert – vorhandene Geräte bleiben angelernt. „Neues Netzwerk erstellen“ wird nur ausgeführt, wenn es zusätzlich in der Unterseite „Zigbee-Netzwerk“ ausdrücklich bestätigt wurde; alle Geräte müssten danach neu angelernt werden."
+    },
+    {
+      "key": "permitJoinSeconds",
+      "label": "Anlernfenster (Sekunden)",
+      "type": "number",
+      "default": 120,
+      "hint": "Wie lange das Anlernen neuer Geräte offen bleibt. Es endet immer automatisch; ein dauerhaft offenes Netz ist nicht möglich. Maximal 600 Sekunden."
+    },
+    {
+      "key": "availabilityMainsMinutes",
+      "label": "Verfügbarkeit netzbetriebener Geräte (Minuten)",
+      "type": "number",
+      "default": 15,
+      "hint": "Meldet sich ein netzbetriebenes Gerät oder ein Router so lange nicht, gilt es als nicht verfügbar."
+    },
+    {
+      "key": "availabilityBatteryHours",
+      "label": "Verfügbarkeit von Batteriegeräten (Stunden)",
+      "type": "number",
+      "default": 25,
+      "hint": "Batteriebetriebene Sensoren schlafen zwischen ihren Meldungen. Ein kurzer Zeitraum würde sie fälschlich als offline führen; 25 Stunden fangen auch Geräte ab, die sich nur einmal täglich melden."
+    },
+    {
+      "key": "activePing",
+      "label": "Netzbetriebene Geräte aktiv prüfen",
+      "type": "checkbox",
+      "default": true,
+      "hint": "Fragt netzbetriebene Geräte regelmäßig ab, damit ihre Verfügbarkeit auch ohne eigene Meldungen stimmt. Batteriegeräte werden dabei nie geweckt."
+    },
+    {
+      "key": "autoTopology",
+      "label": "Netzwerkkarte selbsttätig aktualisieren",
+      "type": "checkbox",
+      "default": true,
+      "hint": "Ermittelt die Funkstrecken automatisch, sobald das Netz steht und wenn sich etwas ändert – ein Gerät kommt hinzu, verschwindet oder wechselt seinen Weg durch das Netz. Zwischen zwei Durchläufen liegen mindestens zehn Minuten, damit daraus kein Dauerfunk wird. Ausschalten führt dazu, dass die Karte nur noch auf Knopfdruck aktualisiert wird."
+    },
+    {
+      "key": "transmitPower",
+      "label": "Sendeleistung (dBm)",
+      "type": "number",
+      "default": 0,
+      "hint": "0 belässt die Einstellung des Coordinators. Nur ändern, wenn die Hardware das unterstützt."
+    }
+  ]
+}

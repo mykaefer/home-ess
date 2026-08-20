@@ -48,6 +48,23 @@
     "no_states": "Noch keine States angelegt.",
     "states_hint": "States entstehen automatisch, sobald ein Client auf ein Topic veröffentlicht. Ohne Aktualisierung innerhalb der Idle-Haltezeit werden sie wieder entfernt.",
     "confirm_clear": "Alle Geräte-States dieser Instanz entfernen?",
-    "action_failed": "Aktion fehlgeschlagen."
+    "action_failed": "Aktion fehlgeschlagen.",
+    "topic_browser": "Topic-Browser",
+    "filter_placeholder": "Topic filtern …",
+    "expand_all": "Alle aufklappen",
+    "collapse_all": "Alle zuklappen",
+    "loading": "Wird geladen …",
+    "topics": "Topics",
+    "copy_topic": "MQTT-Pfad kopieren",
+    "copy_filter": "Abo-Filter kopieren",
+    "read_only": "schreibgeschützt",
+    "no_topics": "Noch keine Topics vorhanden.",
+    "no_match": "Kein Topic passt zum Filter.",
+    "browser_failed": "Topic-Liste konnte nicht geladen werden.",
+    "browser_hint": "Die homeESS-Gliederung zeigt denselben Aufbau wie der States-Baum, die MQTT-Gliederung den Topic-Pfad. Der Kopierknopf übernimmt in beiden Fällen den vollständigen MQTT-Pfad — bei Verzeichnissen der MQTT-Gliederung den passenden Abo-Filter mit „/#“.",
+    "browser_system_hint": "Der Systembaum states/ erscheint erst, wenn der systemweite State-Zugriff in den Instanzeinstellungen aktiviert ist.",
+    "grouping": "Gliederung",
+    "group_states": "homeESS-Struktur",
+    "group_path": "MQTT-Pfad"
   }
 }

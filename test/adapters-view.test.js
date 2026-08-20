@@ -83,3 +83,17 @@ test('Ohne asSettings bleiben Einstellungen und Verwaltung getrennte Links', () 
   assert.match(html, /<a href="\/adapter\/instance\/2" class="module-toggle-btn">Einstellungen<\/a>/);
   assert.match(html, /<a href="\/adapter\/instance\/2\/manage" class="module-toggle-btn">Broker<\/a>/);
 });
+
+test('Kompakte Ansicht ist umschaltbar, browserlokal gespeichert und reduziert die Zeilen', () => {
+  const html = renderAdapters({
+    registry: [{ id: 'demo', name: 'Demo', prefix: 'demo', description: 'Kurzbeschreibung', version: '1.0.0' }],
+    instancesByAdapter: new Map([['demo', [{ id: 1, name: 'eins', enabled: true }]]]),
+  });
+  assert.match(html, /<input type="checkbox" id="compact-adapters">/);
+  assert.match(html, /homeess\.adapters\.compact\.v1/);
+  assert.match(html, /localStorage\.setItem\(ADAPTER_COMPACT_KEY, compactToggle\.checked \? '1' : '0'\)/);
+  assert.match(html, /classList\.toggle\('adapters-compact'/);
+  // Beschreibung und Version stehen getrennt, damit kompakt nur Name/Prefix/Version bleibt.
+  assert.match(html, /<span class="adapter-desc muted">Kurzbeschreibung ·<\/span>/);
+  assert.match(html, /<span class="adapter-version muted">v1\.0\.0<\/span>/);
+});

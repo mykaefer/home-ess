@@ -2,7 +2,7 @@
   "id": "mqttbroker",
   "name": "MQTT-Broker",
   "prefix": "mqttbroker",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Stellt einen eigenständigen MQTT-Broker (Server) für beliebige MQTT-Clients bereit. Angemeldete Geräte legen ihre States selbst unter mqttbroker://<instanz>/<topic> an; nicht mehr aktualisierte States werden nach einer einstellbaren Idle-Haltezeit automatisch entfernt. Optional wird der gesamte homeESS-States-Baum schreibrechtstreu unter states/ eingeblendet.",
   "copyright": "Copyright (C) 2026 Kevin Käfer",
   "multiInstance": true,

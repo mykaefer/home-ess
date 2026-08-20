@@ -3,6 +3,35 @@
 Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [Unreleased]
+
+### Hinzugefügt
+
+- **Adapterseite: kompakte Ansicht.** Oben rechts steht neben „Inaktive Adapter
+  ausblenden“ ein zweiter Haken „Kompakte Ansicht“; die Auswahl wird browserlokal
+  gespeichert (`homeess.adapters.compact.v1`). Aktiviert bleibt je Adapter eine
+  einzeilige Kopfzeile aus Name, Prefix und Version, darunter die Instanzen.
+  Kurzbeschreibungen der Adapter, der Copyright-Vermerk, die Kurzinfo oben auf
+  der Seite, die Spaltenüberschriften sowie die Adapteraktionen (Feld „Neue
+  Instanz“ samt Knopf und „Adapter löschen“) entfallen in dieser Ansicht. Auf
+  Smartphones darf die Adapter-Kopfzeile umbrechen, damit Name und Version
+  vollständig lesbar bleiben, statt an der Bildschirmkante abgeschnitten zu
+  werden.
+
+### Geändert
+
+- **`.gitignore`: Adaptereigene Abhängigkeiten werden mitversioniert.** Ein
+  Adapter ist laut [ADAPTER.md](ADAPTER.md) portabel und bringt seine
+  JavaScript-Abhängigkeiten im eigenen Verzeichnis mit; homeESS führt für
+  Adapter weder `npm install` noch einen globalen Installationsschritt aus. Die
+  Regeln `node_modules/` und `dist/` hätten genau diese Dateien ausgeschlossen —
+  nach Klon und Update hätten sie gefehlt. Die Ausnahme gilt eng begrenzt für
+  `adapter/*/node_modules/`; für den übrigen Programmcode bleiben beide Regeln
+  unverändert. Anlass ist der neue Zigbee-Adapter, der `zigbee-herdsman` und
+  `zigbee-herdsman-converters` mitliefert; die Änderung gilt für alle Adapter
+  gleichermaßen. Der Adapter selbst ist eigenständig versioniert und in
+  [adapter/zigbee/CHANGELOG.md](adapter/zigbee/CHANGELOG.md) beschrieben.
+
 ## [1.4.7] — 2026-08-16
 
 ### Hinzugefügt

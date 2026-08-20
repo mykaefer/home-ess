@@ -5,6 +5,20 @@ wird unabhängig von homeESS versioniert; die Version steht in
 [adapter.json](adapter.json). Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [1.2.9] — 2026-08-17
+
+### Behoben
+
+- **Nicht erreichbare Geräte werden nicht mehr als säumige WebSocket-Partner
+  gemeldet.** Die Bibliothek `ws` fasst TCP-Aufbau und HTTP-Upgrade unter einem
+  gemeinsamen Timeout zusammen; bislang wurde daraus in jedem Fall die Meldung
+  „Das Gerät hat den WebSocket-Upgrade nicht innerhalb von 3000 ms beantwortet.“
+  Bei einem Gerät, das gar nicht mehr im Netz ist, ist das eine Aussage, die es
+  so nicht treffen kann — die Fehlersuche begann dadurch bei der Firmware statt
+  beim Gerät. Kam die TCP-Verbindung nachweislich nicht zustande, meldet der
+  Adapter jetzt „nicht erreichbar (keine TCP-Verbindung innerhalb von 3000 ms)“
+  samt Zieladresse.
+
 ## [1.2.8] — 2026-08-16
 
 ### Geändert

@@ -3228,6 +3228,13 @@ a.secondary-button {
     height: 16px;
     margin: 0;
 }
+.adapter-filter-toggles {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    flex-wrap: wrap;
+    margin-left: auto;
+}
 .adapter-list { display: flex; flex-direction: column; gap: 16px; }
 .adapter-upload-card {
     display: flex;
@@ -3330,12 +3337,51 @@ a.secondary-button {
     border-radius: 50%;
     background: currentColor;
 }
+/* Kompakte Ansicht: nur das Nötigste – Adapter einzeilig (Name, Prefix,
+   Version), darunter die Instanzen. Beschreibungen, Seiten-Kurzinfo sowie die
+   Adapteraktionen (Feld „Neue Instanz“, „Adapter löschen“) entfallen.
+   Umschaltbar oben rechts, browserlokal gespeichert. */
+.adapters-compact .adapter-page-intro,
+.adapters-compact .adapter-desc,
+.adapters-compact .adapter-copyright,
+.adapters-compact .adapter-block-actions,
+.adapters-compact .adapter-row--head { display: none; }
+.adapters-compact .adapter-list { gap: 10px; }
+.adapters-compact .adapter-block-head {
+    flex-wrap: nowrap;
+    gap: 8px;
+    padding: 6px 12px;
+}
+.adapters-compact .adapter-block-title {
+    flex-wrap: nowrap;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+}
+/* Nur der Name wird gekürzt; Prefix und Version bleiben vollständig lesbar. */
+.adapters-compact .adapter-block-title > strong {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.adapters-compact .adapter-prefix,
+.adapters-compact .adapter-version { flex: 0 0 auto; }
+.adapters-compact .adapter-row { padding: 4px 12px; }
+.adapters-compact .adapter-row-actions .module-toggle-btn { padding: 3px 8px; }
+
 .adapter-badge--on { color: #16a34a; }
 .adapter-badge--off { color: #9ca3af; }
 .adapter-badge--warn { color: #d97706; }
 
 @media (max-width: 760px) {
     .page-head--split { flex-direction: column; }
+    .adapter-filter-toggles {
+        width: 100%;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 6px;
+        margin-left: 0;
+    }
     .adapter-filter-toggle {
         width: 100%;
         justify-content: flex-start;
@@ -5538,6 +5584,13 @@ body,
     .panel-head .dashboard-toolbar { flex-wrap: wrap; }
 
     /* ── Adapter (Übersicht + Instanzen) ──────────────────────────────── */
+    .adapter-filter-toggles {
+        width: 100%;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 6px;
+        margin-left: 0;
+    }
     .adapter-filter-toggle {
         width: 100%;
         justify-content: flex-start;
@@ -5546,18 +5599,35 @@ body,
 
     .adapter-row,
     .adapter-row--head {
-        grid-template-columns: 1fr 1fr;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
         row-gap: 4px;
         padding: 10px 14px;
     }
 
     .adapter-row--head { display: none; }
     .adapter-col-addr { grid-column: 1 / -1; }
+    .adapter-col-name { min-width: 0; overflow-wrap: anywhere; }
 
     .adapter-row-actions {
         grid-column: 1 / -1;
         justify-content: flex-start;
     }
+
+    /* Kompakte Ansicht auf Smartphones: die Kopfzeile darf umbrechen. Auf der
+       schmalen Breite wäre ein abgeschnittener Name samt fehlender Version
+       schlechter als zwei Zeilen — einzeilig bleibt es, wo der Platz reicht. */
+    .adapters-compact .adapter-block-head { flex-wrap: wrap; }
+    .adapters-compact .adapter-block-title {
+        flex-wrap: wrap;
+        row-gap: 2px;
+        overflow: visible;
+        white-space: normal;
+    }
+    .adapters-compact .adapter-block-title > strong {
+        overflow: visible;
+        overflow-wrap: anywhere;
+    }
+    .adapters-compact .adapter-row { padding: 6px 12px; }
 
     /* ── Adapter-States / State-Editor (auch HM-RPC/Tasmota-Geräte) ───── */
     /* Register-Tabellen sind echte Tabellen — sie scrollen im eigenen

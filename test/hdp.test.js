@@ -3574,3 +3574,20 @@ test('hDP Adapter persistiert Pairing-Secrets und gruppiert die Gerätekonfigura
   assert.match(reconnectedOverview.json.html, /Sehr gut <small>-42 dBm<\/small>/);
   restoredAdapter.stop();
 });
+
+test('hDP WebSocket unterscheidet nicht erreichbares Gerät vom ausbleibenden Upgrade', () => {
+  const timeout = new Error('Opening handshake has timed out');
+  assert.equal(
+    connectionErrorMessage(timeout, { tcpEstablished: false, target: '192.168.178.160:81' }),
+    'Das Gerät war unter 192.168.178.160:81 nicht erreichbar (keine TCP-Verbindung innerhalb von 3000 ms).');
+  assert.equal(
+    connectionErrorMessage(timeout, { tcpEstablished: true, target: '192.168.178.160:81' }),
+    'Das Gerät hat den WebSocket-Upgrade nicht innerhalb von 3000 ms beantwortet.');
+  assert.equal(
+    connectionErrorMessage(timeout, { tcpEstablished: null }),
+    'Das Gerät hat den WebSocket-Upgrade nicht innerhalb von 3000 ms beantwortet.');
+  assert.equal(
+    connectionErrorMessage(Object.assign(new Error('connect EHOSTUNREACH 192.168.178.160:81'),
+      { code: 'EHOSTUNREACH' }), { tcpEstablished: false, target: '192.168.178.160:81' }),
+    'connect EHOSTUNREACH 192.168.178.160:81');
+});
