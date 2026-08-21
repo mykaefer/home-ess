@@ -7,6 +7,7 @@ const {
   widgetTypeDef,
   mobileMinWidthFor,
 } = require('../dashboard/widget-types');
+const { SERIES_COLORS, CHART_WIDTH } = require('../dashboard/chart-svg');
 
 // Dashboard mit frei konfigurierbaren Widgets, Gruppen und Tabs. Widgets zeigen
 // einen zentralen State, schalten ein Gerät /
@@ -35,8 +36,11 @@ function renderDashboard({
   tabDialogError = '',
   editingTabId = null,
   selectTabId = null,
+  chartRanges = [],
+  chartAggregates = [],
+  maxChartSeries = 4,
 } = {}) {
-  const ctx = { infoFields, systemInfo };
+  const ctx = { infoFields, systemInfo, chartRanges };
   const tabTitleById = new Map(tabs.map((tab) => [tab.id, tab.title]));
   const initialTabId = tabs.some((tab) => tab.id === Number(selectTabId))
     ? Number(selectTabId)
@@ -71,7 +75,7 @@ ${tabs.map((tab) => renderTabButton(tab, tab.id === initialTabId)).join('\n')}
 ${tabs.map((tab) => renderTabPanel(tab, ctx, tab.id === initialTabId)).join('\n')}
         </div>
 
-        ${renderWidgetDialog({ switchTargets, infoFields, tabs, groupsForSelect, tabTitleById, dialogError })}
+        ${renderWidgetDialog({ switchTargets, infoFields, tabs, groupsForSelect, tabTitleById, dialogError, chartRanges, chartAggregates, maxChartSeries })}
         ${renderGroupDialog({ groupWidths, tabs })}
         ${renderTabDialog({ maxTabTitleLength, tabDialogError })}
         ${renderDeleteTabDialog()}
@@ -95,6 +99,9 @@ ${tabs.map((tab) => renderTabPanel(tab, ctx, tab.id === initialTabId)).join('\n'
       switchLabel: widget.switchLabel || '',
       onColor: widget.onColor || '',
       offColor: widget.offColor || '',
+      // Diagramme führen ihre vollständige Konfiguration mit, damit der
+      // Bearbeiten-Dialog sie ohne weiteren Abruf füllen kann.
+      chart: widget.chart || null,
     }))
   );
   const clientGroups = groupsForSelect.map((group) => ({
@@ -123,6 +130,12 @@ ${tabs.map((tab) => renderTabPanel(tab, ctx, tab.id === initialTabId)).join('\n'
     var initialTabDialogMode = ${JSON.stringify(tabDialogMode)};
     var initialEditingTabId = ${editingTabId == null ? 'null' : Number(editingTabId)};
     var serverSelectTabId = ${selectTabId == null ? 'null' : Number(selectTabId)};
+
+    // Diagrammfarben und Höchstzahl der Linien kommen aus der Serverdefinition
+    // (src/dashboard/chart-svg.js bzw. chart-config.js), damit Dialog und
+    // gezeichnetes Diagramm dieselbe Reihenfolge verwenden.
+    var CHART_COLORS = ${JSON.stringify(SERIES_COLORS)};
+    var MAX_CHART_SERIES = ${Number(maxChartSeries) || 4};
 
     var EDIT_STORAGE_KEY = 'homeess.dashboard.editing';
     var TAB_STORAGE_KEY = 'homeess.dashboard.activeTab';
@@ -292,6 +305,136 @@ ${tabs.map((tab) => renderTabPanel(tab, ctx, tab.id === initialTabId)).join('\n'
         panels[j].hidden = panels[j].getAttribute('data-panel') !== def.type;
       }
       document.getElementById('widgetSizeField').hidden = !def.supportsSize;
+      if (def.type === 'chart') loadChartMeasurements();
+    }
+
+    // --- Diagramm-Kacheln ----------------------------------------------------
+    // Auswahlliste der Messreihen einmal je geöffnetem Dialog laden. Die
+    // Datenbank kann extern und langsam sein, deshalb erst bei Bedarf.
+    var chartMeasurementsLoaded = false;
+    function loadChartMeasurements() {
+      if (chartMeasurementsLoaded) return;
+      chartMeasurementsLoaded = true;
+      var select = document.getElementById('widgetChartMeasurement');
+      var hint = document.getElementById('widgetChartHint');
+      fetch('/database/measurements', { headers: { Accept: 'application/json' } })
+        .then(function (response) { return response.json(); })
+        .then(function (data) {
+          var names = (data && data.measurements) || [];
+          if (data && data.error) throw new Error(data.error);
+          select.innerHTML = '';
+          if (!names.length) {
+            select.innerHTML = '<option value="">Keine Messreihen gefunden</option>';
+            hint.textContent = 'Die Datenbank enthält noch keine Messreihen. Der InfluxDB-Adapter füllt sie, sobald für einen State die Historie eingeschaltet ist.';
+            return;
+          }
+          var options = ['<option value="">Bitte wählen…</option>'];
+          for (var i = 0; i < names.length; i++) {
+            options.push('<option value="' + names[i].replace(/"/g, '&quot;') + '">' + names[i] + '</option>');
+          }
+          select.innerHTML = options.join('');
+          hint.textContent = '';
+        })
+        .catch(function (error) {
+          chartMeasurementsLoaded = false;
+          select.innerHTML = '<option value="">Keine Verbindung zur Datenbank</option>';
+          hint.textContent = error.message || 'Die Datenbank ist nicht erreichbar. Prüfe Einstellungen → Allgemein → Datenbank.';
+        });
+    }
+
+    // Gewählte Linien als Zeilen mit Farbe, Anzeigename und Messreihe. Genau
+    // diese Felder schickt das Formular ab (chartSeriesMeasurements,
+    // chartSeriesLabels, chartSeriesColors — parallele Listen in Zeilenreihenfolge).
+    function setChartSeries(series) {
+      var list = document.getElementById('widgetChartSeriesList');
+      list.innerHTML = '';
+      for (var i = 0; i < (series || []).length; i++) {
+        var entry = series[i];
+        if (typeof entry === 'string') entry = { measurement: entry, label: '', color: '' };
+        addChartSeriesRow(entry.measurement, entry.label || '', entry.color || '');
+      }
+      syncChartSeriesHint();
+    }
+
+    function chartSeriesNames() {
+      var inputs = document.querySelectorAll('#widgetChartSeriesList input[name="chartSeriesMeasurements"]');
+      var names = [];
+      for (var i = 0; i < inputs.length; i++) names.push(inputs[i].value);
+      return names;
+    }
+
+    function addChartSeriesRow(measurement, label, color) {
+      var list = document.getElementById('widgetChartSeriesList');
+      var index = list.children.length;
+      var row = document.createElement('div');
+      row.className = 'chart-series-row';
+
+      // Farbe: nativer Wähler, vorbelegt mit der Standardfarbe dieser Position.
+      // Sie hängt danach an der Linie — wird eine andere entfernt, behalten die
+      // übrigen ihre Farbe.
+      var colorInput = document.createElement('input');
+      colorInput.type = 'color';
+      colorInput.className = 'chart-series-color';
+      colorInput.name = 'chartSeriesColors';
+      colorInput.value = color || CHART_COLORS[index % CHART_COLORS.length];
+      colorInput.title = 'Farbe der Linie';
+
+      var texts = document.createElement('div');
+      texts.className = 'chart-series-texts';
+
+      var labelInput = document.createElement('input');
+      labelInput.type = 'text';
+      labelInput.name = 'chartSeriesLabels';
+      labelInput.className = 'chart-series-label';
+      labelInput.maxLength = 40;
+      labelInput.value = label || '';
+      labelInput.placeholder = measurement;
+      labelInput.setAttribute('aria-label', 'Name in der Legende für ' + measurement);
+
+      var source = document.createElement('span');
+      source.className = 'chart-series-name';
+      source.textContent = measurement;
+      source.title = measurement;
+
+      var hidden = document.createElement('input');
+      hidden.type = 'hidden';
+      hidden.name = 'chartSeriesMeasurements';
+      hidden.value = measurement;
+
+      var remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'widget-icon-btn';
+      remove.title = 'Messreihe entfernen';
+      remove.textContent = '✕';
+      remove.addEventListener('click', function () {
+        row.parentNode.removeChild(row);
+        syncChartSeriesHint();
+      });
+
+      texts.appendChild(labelInput);
+      texts.appendChild(source);
+      row.appendChild(colorInput);
+      row.appendChild(texts);
+      row.appendChild(remove);
+      row.appendChild(hidden);
+      list.appendChild(row);
+    }
+
+    function syncChartSeriesHint() {
+      var count = chartSeriesNames().length;
+      var addRow = document.querySelector('.chart-series-add');
+      if (addRow) addRow.hidden = count >= MAX_CHART_SERIES;
+    }
+
+    function addChartSeries() {
+      var select = document.getElementById('widgetChartMeasurement');
+      var name = select.value;
+      if (!name) return;
+      if (chartSeriesNames().indexOf(name) !== -1) return;
+      if (chartSeriesNames().length >= MAX_CHART_SERIES) return;
+      addChartSeriesRow(name, '', '');
+      syncChartSeriesHint();
+      select.value = '';
     }
 
     // Tab folgt der Gruppe: Bei gewählter Gruppe ist die Tab-Auswahl gesperrt
@@ -325,6 +468,15 @@ ${tabs.map((tab) => renderTabPanel(tab, ctx, tab.id === initialTabId)).join('\n'
       document.getElementById('widgetSwitchLabel').value = values.switchLabel || '';
       colorChoiceSync('widgetOnColor', values.onColor || '');
       colorChoiceSync('widgetOffColor', values.offColor || '');
+      // Diagramm: Messreihen als eigene Liste, Rest sind normale Felder.
+      var chart = values.chart || {};
+      document.getElementById('widgetChartTitle').value = chart.title || '';
+      document.getElementById('widgetChartRange').value = chart.range || '24h';
+      document.getElementById('widgetChartAggregate').value = chart.aggregate || 'mean';
+      document.getElementById('widgetChartUnit').value = chart.unit || '';
+      setChartSeries(chart.series || chart.measurements || []);
+      if (values.type === 'chart') loadChartMeasurements();
+
       // Info-Felder: ohne Vorgabe (Neuanlage) sind alle aktiv.
       var selected = values.infoFields || null;
       var boxes = document.querySelectorAll('#widgetDialog input[name="infoFields"]');
@@ -862,6 +1014,125 @@ ${tabs.map((tab) => renderTabPanel(tab, ctx, tab.id === initialTabId)).join('\n'
     }
 
     // --- Initialisierung -----------------------------------------------------
+    // --- Diagramm-Kacheln: Inhalt laden und Fadenkreuz ----------------------
+    // Das SVG wird serverseitig gezeichnet; hier wird es nur eingesetzt und mit
+    // einer Ablese-Hilfe versehen.
+    function loadChart(canvas) {
+      var id = canvas.getAttribute('data-chart-widget');
+      fetch('/dashboard/widgets/' + id + '/chart', { headers: { Accept: 'application/json' } })
+        .then(function (response) { return response.json(); })
+        .then(function (data) {
+          if (!data) return;
+          canvas.innerHTML = data.html || '';
+          var legend = document.getElementById('chart-legend-' + id);
+          if (legend) legend.innerHTML = data.legend || '';
+          attachChartCursor(canvas, id);
+        })
+        .catch(function () {
+          canvas.innerHTML = '<div class="chart-notice chart-notice--error">Das Diagramm konnte nicht geladen werden.</div>';
+        });
+    }
+
+    function loadAllCharts() {
+      var canvases = document.querySelectorAll('[data-chart-widget]');
+      for (var i = 0; i < canvases.length; i++) loadChart(canvases[i]);
+    }
+
+    // Fadenkreuz mit Werteanzeige. Die Punkte stehen als JSON im SVG, ein
+    // zweiter Abruf ist dafür nicht nötig.
+    function attachChartCursor(canvas, id) {
+      var svg = canvas.querySelector('.chart-svg');
+      var tooltip = document.getElementById('chart-tooltip-' + id);
+      if (!svg || !tooltip) return;
+      var data;
+      try { data = JSON.parse(svg.getAttribute('data-chart') || 'null'); } catch (_) { data = null; }
+      if (!data || !data.series || !data.series.length) return;
+      var cursor = svg.querySelector('.chart-cursor');
+      var cursorLine = svg.querySelector('.chart-cursor-line');
+
+      function userX(event) {
+        // Exakte Umrechnung Bildschirm → Nutzerkoordinaten, unabhängig davon,
+        // wie das SVG gerade skaliert ist.
+        if (typeof svg.getScreenCTM === 'function' && svg.getScreenCTM()) {
+          var point = svg.createSVGPoint();
+          point.x = event.clientX;
+          point.y = event.clientY;
+          return point.matrixTransform(svg.getScreenCTM().inverse()).x;
+        }
+        var rect = svg.getBoundingClientRect();
+        return ((event.clientX - rect.left) / rect.width) * ${CHART_WIDTH};
+      }
+
+      function nearest(points, timestamp) {
+        var best = null;
+        var bestDistance = Infinity;
+        for (var i = 0; i < points.length; i++) {
+          if (points[i][1] == null) continue;
+          var distance = Math.abs(points[i][0] - timestamp);
+          if (distance < bestDistance) {
+            bestDistance = distance;
+            best = points[i];
+          }
+        }
+        return best;
+      }
+
+      function formatValue(value) {
+        return new Intl.NumberFormat('de-DE', {
+          minimumFractionDigits: data.decimals,
+          maximumFractionDigits: data.decimals,
+        }).format(value) + (data.unit ? ' ' + data.unit : '');
+      }
+
+      function onMove(event) {
+        var x = userX(event);
+        var clamped = Math.min(Math.max(x, data.plot.left), data.plot.left + data.plot.width);
+        var fraction = (clamped - data.plot.left) / data.plot.width;
+        var timestamp = data.from + (data.to - data.from) * fraction;
+        var rows = [];
+        for (var i = 0; i < data.series.length; i++) {
+          var point = nearest(data.series[i].points, timestamp);
+          if (!point) continue;
+          rows.push('<span class="chart-tooltip-row">'
+            + '<span class="chart-legend-swatch" style="background:' + data.series[i].color + '"></span>'
+            + '<span class="chart-tooltip-name">' + data.series[i].name + '</span>'
+            + '<span class="chart-tooltip-value">' + formatValue(point[1]) + '</span></span>');
+          if (i === 0) timestamp = point[0];
+        }
+        if (!rows.length) return;
+        var stamp = new Date(timestamp);
+        tooltip.innerHTML = '<span class="chart-tooltip-time">' + stamp.toLocaleString('de-DE') + '</span>' + rows.join('');
+        tooltip.hidden = false;
+        if (cursor) cursor.hidden = false;
+        if (cursorLine) {
+          cursorLine.setAttribute('x1', String(clamped));
+          cursorLine.setAttribute('x2', String(clamped));
+        }
+        // Tooltip folgt dem Zeiger innerhalb der Kachel.
+        var canvasRect = canvas.getBoundingClientRect();
+        var offset = event.clientX - canvasRect.left;
+        var flip = offset > canvasRect.width / 2;
+        tooltip.style.left = flip ? 'auto' : Math.max(0, offset + 12) + 'px';
+        tooltip.style.right = flip ? Math.max(0, canvasRect.width - offset + 12) + 'px' : 'auto';
+      }
+
+      function onLeave() {
+        tooltip.hidden = true;
+        if (cursor) cursor.hidden = true;
+      }
+
+      svg.addEventListener('mousemove', onMove);
+      svg.addEventListener('mouseleave', onLeave);
+      // Auf Touchgeräten zeigt ein Tippen denselben Ablesepunkt.
+      svg.addEventListener('touchstart', function (event) {
+        if (event.touches && event.touches.length) onMove(event.touches[0]);
+      }, { passive: true });
+      svg.addEventListener('touchmove', function (event) {
+        if (event.touches && event.touches.length) onMove(event.touches[0]);
+      }, { passive: true });
+      svg.addEventListener('touchend', onLeave);
+    }
+
     var storedTab = null;
     try { storedTab = Number(sessionStorage.getItem(TAB_STORAGE_KEY)); } catch (_) {}
     activateTab(serverSelectTabId != null ? serverSelectTabId : (Number.isFinite(storedTab) ? storedTab : null));
@@ -885,7 +1156,12 @@ ${tabs.map((tab) => renderTabPanel(tab, ctx, tab.id === initialTabId)).join('\n'
 
     refreshWidgetValues();
     window.addEventListener('homeess:mqtt', queueWidgetRefresh);
-    setInterval(refreshWidgetValues, 60000);`;
+    setInterval(refreshWidgetValues, 60000);
+
+    loadAllCharts();
+    // Zeitreihen ändern sich langsamer als Momentanwerte; eine Minute genügt
+    // und hält die Last auf der Datenbank klein.
+    setInterval(loadAllCharts, 60000);`;
 
   return renderLayout({ title: 'Dashboard', activePath: '/dashboard', body, script });
 }
@@ -953,6 +1229,7 @@ function sizeClass(widget) {
 function renderWidgetCard(widget, ctx = {}) {
   if (widget.type === 'info') return renderInfoCard(widget, ctx);
   if (widget.type === 'switch') return renderSwitchCard(widget);
+  if (widget.type === 'chart') return renderChartCard(widget, ctx);
   const label = widget.label || widget.stateTopic || widget.sourceId;
   const currentDisplay = widget.currentDisplay == null ? '—' : widget.currentDisplay;
   const colorStyle = widget.color ? ` style="color:${escapeHtml(widget.color)}"` : '';
@@ -982,6 +1259,30 @@ function renderSwitchCard(widget) {
                 <span class="switch-state" id="switch-state-${widget.id}">${stateText}</span>
               </button>
               <p class="switch-error" id="switch-error-${widget.id}" hidden></p>
+${widgetEditBar(widget, label)}
+            </div>`;
+}
+
+// Diagramm-Kachel: Rahmen, Kopfzeile und Platzhalter. Das SVG selbst zeichnet
+// der Server (src/dashboard/chart-svg.js) und liefert es über
+// /dashboard/widgets/<id>/chart nach — so hängt der Aufbau des Dashboards nicht
+// an der Erreichbarkeit der Zeitreihen-Datenbank.
+function renderChartCard(widget, { chartRanges = [] } = {}) {
+  const chart = widget.chart || {};
+  const label = chart.title || (chart.measurements || []).join(', ') || 'Diagramm';
+  const range = chartRanges.find((entry) => entry.key === chart.range);
+  return `            <div class="widget-card widget-card--chart" data-id="${widget.id}" data-type="chart">
+              <div class="widget-body">
+                <div class="chart-head">
+                  <div class="widget-label" title="${escapeHtml(label)}">${escapeHtml(label)}</div>
+                  <span class="chart-range">${escapeHtml(range ? range.label : '')}</span>
+                </div>
+                <div class="chart-canvas" id="chart-canvas-${widget.id}" data-chart-widget="${widget.id}">
+                  <div class="chart-notice chart-notice--muted">Diagramm wird geladen…</div>
+                </div>
+                <div class="chart-tooltip" id="chart-tooltip-${widget.id}" hidden></div>
+                <div class="chart-legend-slot" id="chart-legend-${widget.id}"></div>
+              </div>
 ${widgetEditBar(widget, label)}
             </div>`;
 }
@@ -1039,7 +1340,7 @@ function renderColorChoice({ fieldId, name, label, defaultPicker }) {
               </div>`;
 }
 
-function renderWidgetDialog({ switchTargets, infoFields = [], tabs = [], groupsForSelect = [], tabTitleById = new Map(), dialogError = '' }) {
+function renderWidgetDialog({ switchTargets, infoFields = [], tabs = [], groupsForSelect = [], tabTitleById = new Map(), dialogError = '', chartRanges = [], chartAggregates = [], maxChartSeries = 4 }) {
   const typeTabs = WIDGET_TYPE_DEFS
     .map((def, index) => `              <button type="button" class="dialog-tab${index === 0 ? ' is-active' : ''}" data-tab="${def.type}" onclick="setWidgetType('${def.type}')">${escapeHtml(def.label)}</button>`)
     .join('\n');
@@ -1125,6 +1426,40 @@ ${typeTabs}
                 ${renderColorChoice({ fieldId: 'widgetOnColor', name: 'onColor', label: 'Farbe „Ein"', defaultPicker: '#f6c945' })}
                 ${renderColorChoice({ fieldId: 'widgetOffColor', name: 'offColor', label: 'Farbe „Aus"', defaultPicker: '#ffffff' })}
               </div>
+            </div>
+            <div class="tab-panel" data-panel="chart" hidden>
+              <label class="field-block" for="widgetChartTitle">
+                <span>Überschrift <span class="pool-optional">(optional, sonst die Messreihen)</span></span>
+                <input type="text" id="widgetChartTitle" name="chartTitle" maxlength="60">
+              </label>
+              <div class="field-block">
+                <span>Linien <span class="pool-optional">(höchstens ${maxChartSeries})</span></span>
+                <div class="chart-series-list" id="widgetChartSeriesList"></div>
+                <div class="chart-series-add">
+                  <select id="widgetChartMeasurement"><option value="">Messreihen werden geladen…</option></select>
+                  <button type="button" class="secondary-button" onclick="addChartSeries()">Hinzufügen</button>
+                </div>
+                <small class="muted">Farbe und Name je Linie sind frei wählbar; ohne Namen steht die Messreihe in der Legende. Alle Linien einer Kachel teilen sich eine Werteachse — sie sollten deshalb dieselbe Einheit haben.</small>
+                <small class="muted" id="widgetChartHint"></small>
+              </div>
+              <div class="dialog-grid dialog-grid--two">
+                <label class="field-block" for="widgetChartRange">
+                  <span>Zeitraum</span>
+                  <select id="widgetChartRange" name="chartRange">
+                    ${chartRanges.map((range) => `<option value="${escapeHtml(range.key)}">${escapeHtml(range.label)}</option>`).join('')}
+                  </select>
+                </label>
+                <label class="field-block" for="widgetChartAggregate">
+                  <span>Verdichtung</span>
+                  <select id="widgetChartAggregate" name="chartAggregate">
+                    ${chartAggregates.map((entry) => `<option value="${escapeHtml(entry.key)}">${escapeHtml(entry.label)}</option>`).join('')}
+                  </select>
+                </label>
+              </div>
+              <label class="field-block" for="widgetChartUnit">
+                <span>Einheit <span class="pool-optional">(optional)</span></span>
+                <input type="text" id="widgetChartUnit" name="chartUnit" maxlength="12" placeholder="z.B. W">
+              </label>
             </div>
             <div class="tab-panel" data-panel="info" hidden>
               <div class="field-block">

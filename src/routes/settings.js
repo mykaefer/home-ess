@@ -14,6 +14,8 @@ const updateService = require('../update/service');
 const i18n = require('../i18n');
 const adapterHost = require('../adapters/host');
 const heimkinoRuntime = require('../heimkino/runtime');
+const systemDatabase = require('../database');
+const { normalizeDatabaseInput } = require('../database/config');
 
 // Query-Parameter (?tab=) auf einen gültigen Tab abbilden. Der alte
 // /remote-access-Link leitet mit ?tab=remote-access hierher.
@@ -31,10 +33,11 @@ function settingsRoutes(db) {
   // Zusätzliche Zustände (Dialog offen, Fehler, Erfolgsmeldung, aktiver Tab)
   // werden durchgereicht.
   async function sendSettings(res, extra = {}) {
-    const [cfg, users, updateConfig] = await Promise.all([
+    const [cfg, users, updateConfig, databaseConfig] = await Promise.all([
       new Promise((resolve) => loadMqttConfig(db, resolve)),
       listUsers(db),
       updateSettings.load(db),
+      systemDatabase.load(db),
     ]);
     const registry = modulesState.getRegistry();
     const enabledKeys = new Set(registry.filter((m) => modulesState.isEnabled(m.key)).map((m) => m.key));
@@ -48,6 +51,8 @@ function settingsRoutes(db) {
       updateStatus: updateService.getStatus(),
       languages: i18n.listLanguages(),
       currentLanguage: i18n.current(),
+      database: databaseConfig,
+      databaseStatus: systemDatabase.getStatus(),
       ...extra,
     }));
   }
@@ -197,6 +202,43 @@ function settingsRoutes(db) {
 
   router.post('/settings/mqtt/test', requireAuth, async (req, res) => {
     const result = await mqttClient.testConnection(req.body);
+    res.json(result);
+  });
+
+  // --- Systemweite Datenbank ----------------------------------------------
+  // Zeitreihen-Datenbank für Diagramme und Auswertungen. Die Konfiguration ist
+  // eine eigenständige Kopie; ein Adapter kann sie über seinen Übernahme-Knopf
+  // füllen (siehe /adapter/instance/:id/system-database).
+  router.post('/settings/database', requireAuth, async (req, res, next) => {
+    try {
+      // Eine Übernahme aus einem Adapter setzt sourceLabel; wird das Formular
+      // von Hand gespeichert, gilt die Konfiguration als selbst gepflegt.
+      // Abgewählte Kontrollkästchen überträgt der Browser nicht — sie müssen
+      // hier ausdrücklich als „aus" gelesen werden, sonst ließen sie sich nie
+      // ausschalten.
+      const saved = await systemDatabase.save(db, {
+        ...req.body,
+        enabled: req.body.enabled === '1' || req.body.enabled === 'on',
+        verifyTls: req.body.verifyTls === '1' || req.body.verifyTls === 'on',
+        sourceLabel: '',
+        sourceInstanceId: null,
+      });
+      return sendSettings(res, {
+        activeTab: 'allgemein',
+        databaseMessage: saved.enabled
+          ? 'Datenbankeinstellungen gespeichert.'
+          : 'Datenbankeinstellungen gespeichert. Die Anbindung ist ausgeschaltet.',
+      });
+    } catch (error) {
+      return sendSettings(res, { activeTab: 'allgemein', databaseError: 'Fehler beim Speichern der Datenbankeinstellungen.' })
+        .catch(next);
+    }
+  });
+
+  // Verbindungstest mit den Formularwerten, ohne sie zu speichern.
+  router.post('/settings/database/test', requireAuth, async (req, res) => {
+    const candidate = normalizeDatabaseInput({ ...req.body, enabled: true });
+    const result = await systemDatabase.testConnection(db, candidate);
     res.json(result);
   });
 

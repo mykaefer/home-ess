@@ -44,6 +44,16 @@ const WIDGET_TYPE_DEFS = [
     supportsColor: false,
     mobileMinWidth: 'full',
   },
+  {
+    // Zeitreihen aus der systemweiten Datenbank (siehe src/database/). Braucht
+    // die volle Breite, damit die Zeitachse lesbar bleibt.
+    type: 'chart',
+    label: 'Diagramm',
+    needsSource: false,
+    supportsSize: false,
+    supportsColor: false,
+    mobileMinWidth: 'full',
+  },
 ];
 
 const WIDGET_TYPES = WIDGET_TYPE_DEFS.map((def) => def.type);

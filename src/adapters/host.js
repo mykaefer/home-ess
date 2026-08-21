@@ -479,6 +479,29 @@ async function reloadInstance(instanceId) {
   if (instance && instance.enabled) startInstance(instance);
 }
 
+// Einen einzelnen Adapter neu starten, ohne homeESS anzufassen: Registry neu
+// einlesen (geändertes Manifest greift sofort) und anschließend alle Instanzen
+// dieses Adapters neu laden. Der Adaptercode selbst wird in jedem Kindprozess
+// beim Start frisch geladen – ein neuer Fork genügt also, um aktualisierten
+// Adaptercode zu übernehmen.
+async function restartAdapter(adapterId) {
+  const id = String(adapterId || '').toLowerCase();
+  reloadRegistry();
+  if (!db) return { total: 0, started: 0, missing: true };
+  const instances = await instancesRepo.listInstancesForAdapter(db, id);
+  for (const instance of instances) {
+    // Bewusst nacheinander: parallele Neustarts würden bei vielen Instanzen
+    // gleichzeitig forken und die Verbindungsaufbauten kollidieren lassen.
+    // eslint-disable-next-line no-await-in-loop
+    await reloadInstance(instance.id);
+  }
+  return {
+    total: instances.length,
+    started: instances.filter((instance) => instance.enabled).length,
+    missing: !registry.getManifest(id),
+  };
+}
+
 async function reloadAllForLanguage() {
   const ids = Array.from(running.keys());
   await Promise.all(ids.map((id) => stopInstance(id)));
@@ -551,6 +574,7 @@ module.exports = {
   initAdapters,
   reloadRegistry,
   reloadInstance,
+  restartAdapter,
   reloadAllForLanguage,
   startInstance,
   stopInstance,

@@ -228,6 +228,59 @@ test('Host startet Instanz als (Fake-)Kindprozess und verarbeitet IPC', async ()
   db.close();
 });
 
+test('Adapter-Neustart liest das Manifest neu und forkt die Instanzen neu', async () => {
+  const db = await freshDb();
+  writeAdapter('restartdemo', 'restartdemo');
+  registry.loadRegistry();
+  const id = await instancesRepo.createInstance(db, 'restartdemo', 'simrestart');
+  await instancesRepo.setEnabled(db, id, true);
+
+  const children = [];
+  host._setForkImpl(() => {
+    const child = new EventEmitter();
+    child.sent = [];
+    child.send = (msg) => {
+      child.sent.push(msg);
+      if (msg.type === 'stop') setImmediate(() => child.emit('exit', 0));
+    };
+    child.kill = () => child.emit('exit', 0);
+    children.push(child);
+    return child;
+  });
+
+  await host.initAdapters(db);
+  assert.equal(children.length, 1);
+
+  // Adapter auf der Platte aktualisieren – homeESS läuft dabei weiter.
+  const manifestPath = path.join(ADAPTER_DIR, 'restartdemo', 'adapter.json');
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  manifest.version = '9.9.9';
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+
+  const result = await host.restartAdapter('restartdemo');
+  assert.deepEqual({ total: result.total, started: result.started, missing: result.missing },
+    { total: 1, started: 1, missing: false });
+  assert.equal(registry.getManifest('restartdemo').version, '9.9.9', 'geändertes Manifest wirkt ohne Serverneustart');
+  assert.equal(children.length, 2, 'Instanz wurde neu geforkt');
+  assert.ok(children[1].sent.some((message) => message.type === 'init'), 'neues Kind erhält init');
+
+  await host.stopInstance(id);
+  db.close();
+});
+
+test('Registry behält den geladenen Stand, wenn das Adapterverzeichnis unlesbar ist', () => {
+  writeAdapter('scandemo', 'scandemo');
+  assert.ok(registry.loadRegistry().some((entry) => entry.id === 'scandemo'));
+  const readdirSync = fs.readdirSync;
+  fs.readdirSync = () => { throw new Error('EACCES'); };
+  try {
+    assert.ok(registry.loadRegistry().some((entry) => entry.id === 'scandemo'),
+      'ein vorübergehend unlesbares Verzeichnis verwirft die Manifeste nicht');
+  } finally {
+    fs.readdirSync = readdirSync;
+  }
+});
+
 test('Host persistiert dynamische Adapter-Instanzdaten via storage-IPC', async () => {
   const db = await freshDb();
   registry.loadRegistry();

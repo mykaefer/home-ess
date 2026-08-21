@@ -6,6 +6,7 @@ const { getHdpNavItems } = require('../adapters/navigation');
 const { statePickerModal, statePickerScript, statePickerAutoAttach } = require('./state-picker');
 const { currentAccess, canSeePage, pageForPath } = require('../auth/access');
 const i18n = require('../i18n');
+const systemWarning = require('../system-warning');
 
 let pkgVersion = '—';
 try {
@@ -247,6 +248,14 @@ function renderLiveScript() {
           if (numNode) numNode.textContent = String(level);
         }
 
+        var warnNode = document.getElementById('system-warning-banner');
+        if (warnNode && data.warning) {
+          var warnText = document.getElementById('system-warning-text');
+          var active = !!data.warning.active && !!data.warning.text;
+          if (warnText) warnText.textContent = data.warning.text || '';
+          warnNode.hidden = !active;
+        }
+
         var skyNode = document.getElementById('header-sky');
         if (skyNode && data.sky) {
           if (data.sky === 'sun') {
@@ -277,6 +286,21 @@ function renderLiveScript() {
           refreshTimer = null;
           refreshHeaderData();
         }, 50);
+      }
+
+      var ackButton = document.getElementById('system-warning-ack');
+      if (ackButton) {
+        ackButton.addEventListener('click', function () {
+          ackButton.disabled = true;
+          fetch('/live/warnung/quittieren', { method: 'POST', headers: { Accept: 'application/json' } })
+            .then(function (response) { return response.ok ? response.json() : null; })
+            .then(function () {
+              var banner = document.getElementById('system-warning-banner');
+              if (banner) banner.hidden = true;
+            })
+            .catch(function () {})
+            .then(function () { ackButton.disabled = false; });
+        });
       }
 
       refreshHeaderData();
@@ -465,6 +489,24 @@ function renderUpdateScript() {
   </script>`;
 }
 
+// Seitenübergreifendes Warnband für die systemweite Warnung
+// (siehe src/system-warning.js). Es erscheint ausschließlich bei Fehlern, die
+// ein Eingreifen erfordern; sporadische Aussetzer einer Automatik erreichen es
+// nicht. Der Anfangszustand wird serverseitig gesetzt, die Live-Abfrage
+// aktualisiert ihn danach ohne Neuladen.
+function renderWarningBanner(access) {
+  const warning = systemWarning.getState();
+  const hidden = warning.active && warning.text ? '' : ' hidden';
+  const button = access.canOperate
+    ? '<button type="button" class="system-warning-ack" id="system-warning-ack">Quittieren</button>'
+    : '';
+  return `<div class="system-warning-banner" id="system-warning-banner" role="alert"${hidden}>
+      <span class="system-warning-icon" aria-hidden="true">⚠️</span>
+      <span class="system-warning-text" id="system-warning-text">${escapeHtml(warning.text || '')}</span>
+      ${button}
+    </div>`;
+}
+
 // renderLayout({ title, activePath, body, script, stylesheets })
 function renderLayout({
   title, activePath = '', body = '', script = '', stylesheets = [],
@@ -540,6 +582,7 @@ ${extraStylesheets}
         <span class="header-sky" id="header-sky" title="Himmelszustand">🌙</span>
       </div>
     </header>
+    ${renderWarningBanner(access)}
     ${access.isAdmin ? `<dialog class="update-confirm-dialog" id="update-confirm-dialog">
       <form method="dialog">
         <h2>homeESS aktualisieren?</h2>

@@ -97,3 +97,37 @@ test('Kompakte Ansicht ist umschaltbar, browserlokal gespeichert und reduziert d
   assert.match(html, /<span class="adapter-desc muted">Kurzbeschreibung ·<\/span>/);
   assert.match(html, /<span class="adapter-version muted">v1\.0\.0<\/span>/);
 });
+
+test('Jeder Adapter trägt in der Titelzeile einen Neustart-Knopf', () => {
+  const adapter = { id: 'demo', name: 'Demo', prefix: 'demo', description: '', version: '1.0.0' };
+  const html = renderAdapters({ registry: [adapter] });
+  assert.match(html, /<form action="\/adapter\/demo\/restart" method="POST" class="adapter-restart-form">/);
+  // Nur der Pfeil; die Beschriftung liefert der Tooltip beim Verweilen.
+  assert.match(html, /class="module-toggle-btn adapter-restart-btn" title="Neu starten" aria-label="Adapter neu starten">↻</);
+  assert.doesNotMatch(html, />↻ Neu starten</);
+  // Er liegt außerhalb der Aktionsgruppe und damit in beiden Ansichten oben
+  // rechts – auch dort, wo die kompakte Ansicht die Aktionen ausblendet.
+  assert.ok(html.indexOf('adapter-restart-form') > html.indexOf('adapter-add-form'));
+  assert.ok(html.indexOf('adapter-restart-form') < html.indexOf('adapter-rows'));
+});
+
+test('Instanzen ohne Adapterverzeichnis bleiben löschbar sichtbar', () => {
+  const html = renderAdapters({
+    registry: [],
+    orphanedByAdapter: new Map([['weg', [{ id: 7, name: 'alt', enabled: true }]]]),
+    statusById: { 7: { running: false, connected: false, detail: '' } },
+  });
+  assert.match(html, /class="adapter-block adapter-block--orphan"/);
+  assert.match(html, /Adapterverzeichnis nicht mehr vorhanden/);
+  assert.match(html, /action="\/adapter\/instance\/7\/disable"/);
+  assert.match(html, /action="\/adapter\/instance\/7\/delete"/);
+  // Der Statuspoller lässt diese Zeilen und den Block in Ruhe.
+  assert.match(html, /data-instance="7" data-orphaned="1"/);
+  assert.match(html, /\[data-instance="' \+ id \+ '"\]:not\(\[data-orphaned\]\)/);
+  assert.match(html, /block\.classList\.contains\('adapter-block--orphan'\)/);
+  // Ohne Manifest gibt es keine Einstellungs- oder Verwaltungsseite.
+  assert.doesNotMatch(html, /href="\/adapter\/instance\/7/);
+
+  // Ist kein Adapter verwaist, entsteht auch kein Block.
+  assert.doesNotMatch(renderAdapters({ registry: [] }), /class="adapter-block adapter-block--orphan"/);
+});

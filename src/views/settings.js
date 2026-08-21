@@ -119,6 +119,10 @@ function renderSettings({
   },
   updateStatus = null,
   updateMessage = '',
+  database = null,
+  databaseStatus = null,
+  databaseMessage = '',
+  databaseError = '',
   languages = [],
   currentLanguage = { code: 'de' },
   languageMessage = '',
@@ -135,6 +139,8 @@ function renderSettings({
     mqtt: { available: false, fresh: false, display: '' }, offsetSeconds: 0,
   };
   const update = updateStatus || { currentVersion: '—', availableVersion: null, checkedAt: null, nextCheckAt: null, checkError: null, supported: false };
+  const dbConfig = database || { enabled: 0, protocol: 'http', host: '', port: 8086, database: 'homeess', username: '', password: '', verifyTls: 1, sourceLabel: '', updatedAt: 0 };
+  const dbStatus = databaseStatus || { ok: false, checkedAt: 0, message: '' };
   const automaticChecked = updateConfig.automaticEnabled ? ' checked' : '';
   const intervalOptions = Object.entries(INTERVAL_LABELS)
     .map(([value, label]) => `<option value="${value}"${updateConfig.checkInterval === value ? ' selected' : ''}>${escapeHtml(label)}</option>`)
@@ -285,6 +291,66 @@ ${tabBar}
               ${mqttMessage ? `<p class="settings-card-hint settings-card-hint-strong">${escapeHtml(mqttMessage)}</p>` : ''}
               <label for="mqttLog">MQTT Protokoll</label>
               <textarea id="mqttLog" readonly class="mqtt-log" placeholder="Protokollausgabe">${escapeHtml(mqttMessage)}</textarea>
+            </section>
+          </form>
+
+          <form action="/settings/database" method="POST" class="settings-form settings-card-form database-form">
+            <section class="settings-card">
+              <div class="settings-card-head">
+                <h2>Datenbank</h2>
+                <p class="settings-card-hint">Zentrale Zeitreihen-Datenbank für Diagramme und Auswertungen (InfluxDB 1.x). Das kann die Datenbank sein, in die der InfluxDB-Adapter schreibt, oder eine beliebige andere — auch auf einem anderen Server. Auf der Einstellungsseite einer InfluxDB-Adapterinstanz genügt der Knopf „Als Standard-Datenbank für homeESS übernehmen“, um die dortigen Angaben hierher zu kopieren.</p>
+              </div>
+              ${databaseMessage ? statusText(databaseMessage, 'success') : ''}
+              ${databaseError ? statusText(databaseError) : ''}
+              <div class="field">
+                <label style="display:flex; gap:8px; align-items:center;">
+                  <input type="checkbox" id="databaseEnabled" name="enabled" value="1"${dbConfig.enabled ? ' checked' : ''}>
+                  Datenbankanbindung verwenden
+                </label>
+                <p class="settings-card-hint">Ohne Häkchen fragen Diagramme keine Daten ab.</p>
+              </div>
+              <div class="field-grid">
+                <div class="field">
+                  <label for="databaseProtocol">Protokoll</label>
+                  <select id="databaseProtocol" name="protocol">
+                    <option value="http"${dbConfig.protocol === 'https' ? '' : ' selected'}>http</option>
+                    <option value="https"${dbConfig.protocol === 'https' ? ' selected' : ''}>https</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="databaseHost">Server</label>
+                  <input type="text" id="databaseHost" name="host" placeholder="z.B. 127.0.0.1" value="${escapeHtml(dbConfig.host)}">
+                </div>
+                <div class="field">
+                  <label for="databasePort">Port</label>
+                  <input type="number" id="databasePort" name="port" placeholder="8086" value="${escapeHtml(dbConfig.port)}">
+                </div>
+                <div class="field">
+                  <label for="databaseName">Datenbank</label>
+                  <input type="text" id="databaseName" name="database" placeholder="homeess" value="${escapeHtml(dbConfig.database)}">
+                </div>
+                <div class="field">
+                  <label for="databaseUser">Benutzername</label>
+                  <input type="text" id="databaseUser" name="username" placeholder="optional" value="${escapeHtml(dbConfig.username)}">
+                </div>
+                <div class="field">
+                  <label for="databasePassword">Kennwort</label>
+                  <input type="password" id="databasePassword" name="password" placeholder="optional" value="${escapeHtml(dbConfig.password)}">
+                </div>
+              </div>
+              <div class="field">
+                <label style="display:flex; gap:8px; align-items:center;">
+                  <input type="checkbox" id="databaseVerifyTls" name="verifyTls" value="1"${dbConfig.verifyTls ? ' checked' : ''}>
+                  TLS-Zertifikat prüfen
+                </label>
+                <p class="settings-card-hint">Nur bei https. Ausschalten, wenn der Server ein selbst ausgestelltes Zertifikat verwendet.</p>
+              </div>
+              ${dbConfig.sourceLabel ? `<p class="settings-card-hint">Übernommen aus: <strong>${escapeHtml(dbConfig.sourceLabel)}</strong>${dbConfig.updatedAt ? ` am ${escapeHtml(new Date(dbConfig.updatedAt).toLocaleString(locale))}` : ''}. Spätere Änderungen am Adapter wirken hier erst nach einer erneuten Übernahme.</p>` : ''}
+              <div class="button-row">
+                <button type="submit">Datenbank speichern</button>
+                <button type="button" class="button-secondary" onclick="testDatabase()">Verbindung testen</button>
+              </div>
+              <p class="settings-card-hint settings-card-hint-strong" id="databaseTestResult" aria-live="polite">${escapeHtml(dbStatus.checkedAt ? dbStatus.message : '')}</p>
             </section>
           </form>
 
@@ -568,6 +634,33 @@ ${remote.body}
         var errBox = document.getElementById('userDialogError');
         errBox.innerHTML = '<p class="error-text"></p>';
         errBox.querySelector('.error-text').textContent = initialUserDialog.error;
+      }
+    }
+
+    // Verbindungstest der Systemdatenbank mit den aktuell im Formular
+    // stehenden Werten — ohne sie vorher speichern zu müssen.
+    async function testDatabase() {
+      var result = document.getElementById('databaseTestResult');
+      result.textContent = 'Teste Verbindung...';
+      var payload = {
+        protocol: document.getElementById('databaseProtocol').value,
+        host: document.getElementById('databaseHost').value,
+        port: document.getElementById('databasePort').value,
+        database: document.getElementById('databaseName').value,
+        username: document.getElementById('databaseUser').value,
+        password: document.getElementById('databasePassword').value,
+        verifyTls: document.getElementById('databaseVerifyTls').checked,
+      };
+      try {
+        var response = await fetch('/settings/database/test', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        var data = await response.json();
+        result.textContent = data.message || 'Unbekanntes Ergebnis.';
+      } catch (error) {
+        result.textContent = 'Fehler: ' + error.message;
       }
     }
 

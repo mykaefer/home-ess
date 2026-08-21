@@ -533,9 +533,24 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   - **Geschlossene Regelschleife** (`grid-control/automation.js`): jeder Tick (2 s
     + bei MQTT-Änderung) gleicht den Soll-Wert gegen die **tatsächliche
     Broker-Rückmeldung** der Befehls-Topics ab und schreibt bei Abweichung erneut
-    (selbstheilend nach verlorenem Write/Reconnect); bleibt die Bestätigung > 20 s
-    aus, wird gewarnt. Bestätigt gilt nur, wenn verbunden **und** der Broker den
-    Soll-Wert (`ack:true`/Rohwert) zurückmeldet. Status je Befehl im UI als Badge.
+    (selbstheilend nach verlorenem Write/Reconnect; eine frisch erkannte
+    Divergenz wird sofort nachgesetzt, danach gedrosselt alle 10 s). Bestätigt
+    gilt nur, wenn verbunden **und** der Broker den Soll-Wert (`ack:true`/Rohwert)
+    zurückmeldet. Status je Befehl im UI als Badge.
+  - **Warnung erst bei persistenter Divergenz** (bewusst träge): bis 90 s
+    (`COMMAND_GRACE_MS`) ist die ausbleibende Bestätigung ein normaler Roundtrip,
+    danach gilt sie intern als Störung. **Gewarnt** (Warntopic, systemweite
+    Warnung, roter Protokolleintrag) wird erst nach 5 Minuten durchgehender
+    Abweichung (`COMMAND_WARN_AFTER_MS`) **und** mindestens 10 erfolglosen
+    Wiederholungen. Ohne Broker-Verbindung läuft diese Uhr **nicht** weiter — ein
+    Verbindungsabriss ist kein Schaltfehler. Grund: Netzaussetzer und ein spät
+    antwortendes Cerbo-GX sind normale „Huster" einer Automatik; das Warntopic
+    ist ausschließlich für Fehler, die ein Eingreifen des Nutzers erfordern.
+  - **Plausibilität der Einspeise-Warnung**: Bei Soll **ein** warnt jede
+    anhaltende Abweichung. Bei Soll **aus** nur ein aktiver Widerspruch (Broker
+    meldet weiter `1`) — die Überschusseinspeisung ist erst oberhalb der oberen
+    SoC-Offset-Schwelle gefordert; schaltet das Netz nur wegen der
+    Wechselrichtergrenzen, gibt es gar keinen Überschuss zu bestätigen.
   - **Ist-Übernahme nach Neustart** (Schützschonung): erst Ist-Werte kennen,
     dann steuern. (1) **Kein Aus-Befehl**, solange die Broker-Rückmeldung des
     Ziel-Schützes unbekannt ist (Ein-Befehle bleiben erlaubt —
@@ -554,10 +569,11 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
     (rot), einzeilig mit Zeitstempel + Werte-Schnappschuss; paginiert
     (100/Seite, `/grid-control/log`), Seite 1 live, ab Seite 2 statisch. Reine
     Wertänderungen werden bewusst **nicht** protokolliert. Das kritische
-    „nicht bestätigt“ erscheint erst nach **tatsächlich anhaltender** Divergenz
-    (≥ 20 s, dieselbe Bedingung wie die MQTT-Warnung) — nicht schon im Schalt-Tick,
-    in dem der Broker den Soll-Wert unmöglich zurückmelden kann; der Live-Status-
-    Badge im UI bleibt davon unberührt momentan.
+    „dauerhaft nicht bestätigt“ erscheint erst bei **als persistent bestätigter**
+    Divergenz (dieselbe Bedingung wie die MQTT-Warnung, siehe oben) — nicht schon
+    im Schalt-Tick, in dem der Broker den Soll-Wert unmöglich zurückmelden kann;
+    der Live-Status-Badge im UI bleibt davon unberührt momentan. Die Auflösung
+    („wird wieder bestätigt“) wird neutral protokolliert.
 - **Output** (`/output`): beliebige berechnete Werte (Wert-Katalog) an
   ioBroker-**Ziel-Topics** zurückgeben. Die **Engine** (`output/engine.js`)
   arbeitet als geschlossene Regelschleife: Ziel-States werden abonniert und in
@@ -745,13 +761,67 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
       Start von homeESS; ein unbekannter Wert gilt als nicht erfüllt. Geprüft wird
       nur die Folge, die zum **aktuellen** Kinomodus gehört — sonst würden „an"
       und „aus" einander dauerhaft überschreiben.
+- **Diagramm-Kachel** (`dashboard/chart-config.js`, `dashboard/chart-svg.js`):
+  Widget-Typ `chart`, zeichnet bis zu vier Messreihen der Systemdatenbank. Die
+  Konfiguration (Linien mit Messreihe, Legendenname und Farbe, dazu Zeitraum,
+  Verdichtung, Überschrift, Einheit) liegt im `config`-JSON des Widgets
+  (`series: [{ measurement, label, color }]`; der Dialog schickt drei parallele
+  Feldlisten, ältere Konfigurationen mit reiner `measurements`-Namensliste werden
+  weiterhin gelesen); je Zeitraum ist eine Rasterweite hinterlegt, die
+  ~150–300 Punkte je Linie ergibt. Das **SVG wird serverseitig gezeichnet** und
+  über `/dashboard/widgets/:id/chart` als fertiges Markup geliefert (Legende
+  getrennt); die Kachel rendert zunächst nur einen Platzhalter und lädt danach
+  im Minutentakt nach — eine langsame oder fehlende Datenbank hält das Dashboard
+  damit nie auf, sondern zeigt einen Hinweis in der Kachel. Farben: feste,
+  geprüfte Reihenfolge (`dashboard/chart-palette.js`: Blau/Gold/Violett/Grün;
+  benachbarte Paare ΔE ≥ 8 bei Deuteranopie, alle ≥ 3:1 Kontrast) als
+  **Vorbelegung** neuer Linien; gespeichert wird die Farbe je Linie, damit das
+  Entfernen einer Linie die übrigen nicht umfärbt. Die Legende trägt Name **und** aktuellen Wert, damit kein Wert nur
+  über das Fadenkreuz erreichbar ist. Achsenzahlen werden ab 10.000 einheitlich
+  auf k/M gekürzt, Messlücken (> 2,5 × Rasterweite) brechen die Linie.
+- **Systemweite Datenbank** (`src/database/`, Tabelle `system_database`):
+  zentrale Zeitreihen-Datenbank (InfluxDB 1.x) für Diagramme und Auswertungen.
+  homeESS selbst bleibt bei SQLite; hier geht es ausschließlich um Zeitreihen.
+  Konfiguriert in *Einstellungen → Allgemein → Datenbank* (unterhalb der
+  MQTT-Karten, eigenes Formular `/settings/database`, Verbindungstest über
+  `/settings/database/test`). `config.js` hält die Konfiguration (Cache,
+  Normalisierung; ohne Server bleibt die Anbindung aus), `influx-reader.js` ist
+  ein **rein lesender** Client (`/ping`, `/query`) — bewusst eigenständig und
+  **nicht** aus `adapter/influxdb/` importiert, damit die Anbindung auch ohne
+  installierten Adapter funktioniert (externe Datenbank). `index.js` ist die
+  Dienstschicht: `testConnection`, `listMeasurements`, `readSeries`,
+  `readSeriesSet` (Serien nacheinander, um eine einzelne Datenbank nicht mit
+  parallelen Abfragen zu überfahren). Bezeichner und Literale werden für
+  InfluxQL maskiert, Aggregate gegen eine feste Liste geprüft.
+  JSON-Schnittstelle: `/database/status` (ohne Zugangsdaten),
+  `/database/measurements`, `/database/series` (`measurement` kommagetrennt,
+  `from`/`to` in ms, `interval`, `aggregate`). Der Browser spricht **nie** direkt
+  mit der Datenbank. Datenbank-Adapter können ihre Verbindungsdaten über das
+  Manifest-Feld `systemDatabase` anbieten (siehe [ADAPTER.md](ADAPTER.md)); der
+  Knopf auf der Instanzseite kopiert sie **einmalig** hierher
+  (`/adapter/instance/:id/system-database`, Herkunft in `source_label`/
+  `source_instance_id`). Speichern von Hand löscht die Herkunft wieder.
+- **Systemweite Warnung** (`system-warning.js`, Tabelle `system_warning`):
+  ein Warntext (`operating.warnungText`) und ein Aktiv-Flag
+  (`operating.warnungAktiv`) unter *System → Betrieb*. Jede Automatik, die einen
+  Warntext an ihr MQTT-Warntopic schreibt, meldet ihn zusätzlich hier an; das
+  Flag geht dabei automatisch auf `true`. Solange es steht, rendert
+  `views/layout.js` auf **jeder** Seite ein rotes Warnband (Anfangszustand
+  serverseitig, Aktualisierung über `/live/header`). Der Nutzer quittiert über
+  `POST /live/warnung/quittieren` (Bedienrecht genügt): Flag auf `false`,
+  Warntext leer — und angemeldete Zuhörer (`onAcknowledged`) räumen ihre eigenen
+  Warntopics auf; die Netzsteuerung leert dabei zusätzlich ihre
+  Persistenzzählung, ein weiterhin bestehender Fehler muss also erst wieder die
+  volle Persistenzzeit durchlaufen. Der Zustand überdauert Neustarts. Grundsatz:
+  Hier landen **nur** Fehler, die ein Eingreifen des Nutzers erfordern.
 - **Wert-Katalog** (`output/internal-values.js`): berechnete und gemessene Werte
   für Outputs und Dashboard-Widgets. Enthält PV, Stromverbrauch, Sonnenintensität,
   **PV-Prognose** (erwarteter Tagesertrag heute/morgen/+2/+3 sowie heute bisher /
   heute noch erwartet), **Systemprognose** (`prognose.*`) **sowie Batterie-Werte** (SoC, Leistung, Spannung,
   Temperatur) und **Pool-Werte** (Wassertemperatur, Pumpen-Status, pH, Chlor — nur
-  wenn Modul aktiv) sowie **Betrieb** (`operating.*`, u. a. Autark und
-  `operating.notstrom` = Notstrombetrieb). Die Kalibrierfaktoren sind bewusst
+  wenn Modul aktiv) sowie **Betrieb** (`operating.*`, u. a. Autark,
+  `operating.notstrom` = Notstrombetrieb sowie die systemweite Warnung
+  `operating.warnungText`/`operating.warnungAktiv`, siehe unten). Die Kalibrierfaktoren sind bewusst
   **nicht** im Katalog (reine Diagnose). Zusätzlich **statistische Jahreswerte** je
   Kennzahl (PV, Netzbezug, Eigenverbrauch, E-Auto gesamt): gestern,
   Minimum/Maximum inkl. Datum, Jahres-/Vorjahressumme aus `history/daily-metrics.js`

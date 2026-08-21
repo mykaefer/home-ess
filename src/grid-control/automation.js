@@ -6,6 +6,7 @@ const { loadBatterieConfig, readBatterieData } = require('../batterie/config');
 const { loadGridControlConfig, STATE_IDS } = require('./config');
 const gridControlLog = require('./log');
 const operatingState = require('../operating-state');
+const systemWarning = require('../system-warning');
 const {
   EIGENVERBRAUCH_L1_STATE_ID,
   EIGENVERBRAUCH_L2_STATE_ID,
@@ -20,11 +21,30 @@ const metrics = require('../runtime-metrics');
 const FREQUENCY_MAX_AGE_MS = 60000;
 
 // Bestätigung der Ziel-Topics (geschlossene Regelschleife): Nach dem Schreiben
-// eines Schaltbefehls muss der Broker den Soll-Wert zurückmelden. Tut er das
-// nicht innerhalb des Timeouts, gilt die Schaltung als NICHT durchgeführt → der
-// Befehl wird wiederholt und eine Warnung gesetzt (sicherheitskritisch).
-const COMMAND_CONFIRM_TIMEOUT_MS = 20000;
-const COMMAND_REPUBLISH_MS = 4000;
+// eines Schaltbefehls muss der Broker den Soll-Wert zurückmelden. Bleibt das
+// aus, wird der Befehl wiederholt, bis er bestätigt ist.
+//
+// Die Meldung an den Nutzer ist bewusst träge gestaffelt. Kurze Netzaussetzer
+// und ein spät antwortendes Cerbo-GX sind normale „Huster" einer Automatik und
+// dürfen niemanden alarmieren; das Warntopic ist ausschließlich für Fehler
+// gedacht, bei denen der Nutzer tatsächlich eingreifen muss.
+//   • bis COMMAND_GRACE_MS      – normaler Roundtrip, kein Fehler
+//   • ab  COMMAND_GRACE_MS      – gilt intern als Störung (Anzeige/Diagnose)
+//   • ab  COMMAND_WARN_AFTER_MS – und erst nach mindestens
+//                                 COMMAND_WARN_MIN_ATTEMPTS erfolglosen
+//                                 Wiederholungen gilt der Fehler als persistent
+//                                 → Warntopic, systemweite Warnung und roter
+//                                 Protokolleintrag.
+// Ohne Broker-Verbindung läuft die Uhr NICHT weiter: dort kann weder ein Befehl
+// ankommen noch eine Bestätigung zurückkommen. Das ist ein Verbindungsproblem
+// und kein Fehler der Schaltung.
+const COMMAND_GRACE_MS = 90000;
+const COMMAND_REPUBLISH_MS = 10000;
+const COMMAND_WARN_AFTER_MS = 300000;
+const COMMAND_WARN_MIN_ATTEMPTS = 10;
+// Zeitsprünge (ausgesetzte Timer, Standby) dürfen die Persistenzzählung nicht
+// überspringen: pro Durchlauf wird höchstens dieses Fenster angerechnet.
+const COMMAND_MAX_STEP_MS = 15000;
 
 const state = {
   socLow: false, socHigh: false, voltageLow: false, voltageHigh: false,
@@ -32,6 +52,7 @@ const state = {
   gridPublished: null, feedInPublished: null,
   gridConfirmed: null, feedInConfirmed: null,
   gridWarned: false, feedInWarned: false,
+  gridFault: false, feedInFault: false,
   gridZeroSince: 0,
   loadOffSince: 0,
   gridFrequencies: [null, null, null],
@@ -101,19 +122,24 @@ function recordLog(db, snap) {
   if (snap.load && !prev.load && !snap.gridByOther) appendLog(db, 'critical', 'Wechselrichterlast zu hoch', vals);
   if (snap.socLow && !prev.socLow) appendLog(db, 'critical', 'Akku-SoC am unteren Limit', vals);
   if (snap.emergency && !prev.emergency) appendLog(db, 'critical', 'Notstrombetrieb aktiviert (kein Netz erkannt)', vals);
-  // Erst nach Ablauf des Bestätigungs-Timeouts (COMMAND_CONFIRM_TIMEOUT_MS) als
-  // kritisch protokollieren, nicht schon im selben Tick wie die Schaltung. Der
-  // Broker kann den Soll-Wert unmöglich innerhalb desselben 2-Sekunden-Zyklus
-  // zurückmelden; ein Log direkt auf den momentan-„nicht bestätigt"-Zustand
-  // erzeugte sonst zu jeder normalen, wenige Sekunden später bestätigten
-  // Schaltung einen roten Fehlalarm. `warned` markiert die tatsächlich
-  // anhaltende Divergenz (≥ 20 s) – dieselbe Bedingung, die auch die
-  // MQTT-Warnung auslöst.
+  // Nur die als persistent bestätigte Divergenz wird rot protokolliert, nicht
+  // schon der momentane „noch nicht bestätigt"-Zustand: Der Broker kann den
+  // Soll-Wert unmöglich innerhalb desselben 2-Sekunden-Zyklus zurückmelden, und
+  // sporadische Aussetzer sind normal. `warned` markiert die anhaltende
+  // Divergenz (≥ COMMAND_WARN_AFTER_MS trotz Wiederholungen) – dieselbe
+  // Bedingung, die auch die MQTT-Warnung auslöst.
   if (snap.gridWarned && !prev.gridWarned) {
-    appendLog(db, 'critical', 'Netzschaltung vom Broker nicht bestätigt – wird wiederholt', vals);
+    appendLog(db, 'critical', 'Netzschaltung dauerhaft nicht bestätigt – Anlage prüfen', vals);
   }
   if (snap.feedInWarned && !prev.feedInWarned) {
-    appendLog(db, 'critical', 'Überschusseinspeisung vom Broker nicht bestätigt – wird wiederholt', vals);
+    appendLog(db, 'critical', 'Überschusseinspeisung dauerhaft nicht bestätigt – Anlage prüfen', vals);
+  }
+  // Auflösung eines gemeldeten Dauerfehlers ebenfalls festhalten (neutral).
+  if (!snap.gridWarned && prev.gridWarned && snap.gridConfirmed === true) {
+    appendLog(db, 'info', 'Netzschaltung wird wieder bestätigt', vals);
+  }
+  if (!snap.feedInWarned && prev.feedInWarned && snap.feedInConfirmed === true) {
+    appendLog(db, 'info', 'Überschusseinspeisung wird wieder bestätigt', vals);
   }
 
   // Ausgeführte Schaltaktionen (gelb).
@@ -252,9 +278,14 @@ function currentDayKey(cache, now = new Date()) {
   return localCalendar(cache, 'Europe/Berlin', now).dateKey;
 }
 
-function publishWarning(cfg, text) {
+// Warntopic und systemweite Warnung gemeinsam bedienen: Was über das
+// Warntext-Topic hinausgeht, steht auch im System-State `operating.warnungText`
+// und setzt `operating.warnungAktiv` – die Oberfläche zeigt es dann auf jeder
+// Seite an, bis der Nutzer quittiert.
+function publishWarning(cfg, text, db = null) {
   if (cfg.warningTextTopic) mqttClient.publish(cfg.warningTextTopic, text);
   if (cfg.warningActiveTopic) mqttClient.publish(cfg.warningActiveTopic, true);
+  systemWarning.raise(db, text, { source: 'Netzsteuerung' }).catch(() => {});
 }
 
 function publishSwitch(topic, enabled) {
@@ -270,7 +301,8 @@ async function updateMinimumSoc(db, batteryCfg, currentSoc, gridCfg) {
   if (batteryCfg.minSocTopic) mqttClient.publish(batteryCfg.minSocTopic, adjusted);
   publishWarning(
     gridCfg,
-    `Batterie war unerwartet frühzeitig leer. Mindest-SoC wurde von ${batteryCfg.minSoc} % auf ${adjusted} % angepasst.`
+    `Batterie war unerwartet frühzeitig leer. Mindest-SoC wurde von ${batteryCfg.minSoc} % auf ${adjusted} % angepasst.`,
+    db
   );
   if (adjusted !== Number(batteryCfg.minSoc)) {
     appendLog(
@@ -286,9 +318,10 @@ async function updateMinimumSoc(db, batteryCfg, currentSoc, gridCfg) {
 // gegen den TATSÄCHLICH vom Broker zurückgemeldeten Wert (nicht gegen einen
 // optimistisch gemerkten Eigenwert). Stimmt er nicht überein – oder ist die
 // Verbindung getrennt, sodass keine Bestätigung vorliegt –, wird der Befehl
-// (gedrosselt) erneut geschrieben und nach einem Timeout eine Warnung gesetzt.
+// (gedrosselt) erneut geschrieben. Gewarnt wird erst, wenn die Abweichung als
+// persistent gilt (siehe Konstanten oben).
 function reconcileCommand(key, topic, stateId, desired, ctx) {
-  const { cache, connected, cfg, now, hasMeasurement, label } = ctx;
+  const { cache, connected, cfg, now, hasMeasurement, label, db } = ctx;
   if (!topic) {
     commandTracks.delete(key);
     return null;
@@ -297,37 +330,69 @@ function reconcileCommand(key, topic, stateId, desired, ctx) {
 
   let track = commandTracks.get(key);
   if (!track || track.topic !== topic) {
-    track = { topic, desired: null, lastPublishAt: 0, unconfirmedSince: 0, warned: false, confirmed: null };
+    track = { topic, desired: null, lastPublishAt: 0, unconfirmedMs: 0, attempts: 0, lastSeenAt: 0, lastBrokerCmp: undefined, faulted: false, warned: false, confirmed: null };
   }
 
   const desiredCmp = desired ? '1' : '0';
   const brokerRaw = cache.get(stateId)?.value;
   const brokerCmp = brokerRaw == null ? null : comparable(brokerRaw);
   const confirmed = connected && brokerCmp === desiredCmp;
+  // Seit dem letzten Durchlauf vergangene Zeit, gedeckelt gegen Zeitsprünge.
+  const elapsed = track.lastSeenAt ? Math.min(Math.max(0, now - track.lastSeenAt), COMMAND_MAX_STEP_MS) : 0;
+  track.lastSeenAt = now;
+  // Frisch erkannte Divergenz (verlorener Write, externe Änderung am Ziel):
+  // sofort nachsetzen statt erst im nächsten Wiederholungsfenster. Die
+  // Drosselung greift danach wieder.
+  const brokerChanged = track.lastBrokerCmp !== undefined && track.lastBrokerCmp !== brokerCmp;
+  track.lastBrokerCmp = brokerCmp;
+  if (brokerChanged && !confirmed) track.lastPublishAt = 0;
+  // Springt die Systemzeit zurück (Zeitkorrektur), läge der letzte Schreibzeit-
+  // punkt in der Zukunft und würde die Wiederholungen blockieren.
+  if (track.lastPublishAt > now) track.lastPublishAt = 0;
 
   // Soll-Wechsel: Bestätigungs-Tracking zurücksetzen und sofort senden.
   if (track.desired !== desired) {
     track.desired = desired;
-    track.unconfirmedSince = 0;
+    track.unconfirmedMs = 0;
+    track.attempts = 0;
+    track.faulted = false;
     track.warned = false;
     track.lastPublishAt = 0;
   }
 
   if (confirmed) {
-    track.unconfirmedSince = 0;
+    track.unconfirmedMs = 0;
+    track.attempts = 0;
+    track.faulted = false;
     track.warned = false;
   } else {
-    if (!track.unconfirmedSince) track.unconfirmedSince = now;
+    // Nur mit Broker-Verbindung zählt die Abweichung als Fehlerzeit — ohne
+    // Verbindung kann die Anlage weder antworten noch den Befehl empfangen.
+    if (connected) track.unconfirmedMs += elapsed;
     // (Re-)Publish gedrosselt – schreibt den Befehl wiederholt, bis der Broker
     // den Soll-Wert bestätigt (selbstheilend nach verlorenem Write/Reconnect).
     if (now - track.lastPublishAt >= COMMAND_REPUBLISH_MS) {
-      if (publishSwitch(topic, desired)) track.lastPublishAt = now;
+      if (publishSwitch(topic, desired)) {
+        track.lastPublishAt = now;
+        track.attempts += 1;
+      }
     }
-    // Bleibt die Bestätigung zu lange aus → Warnung (Schaltung greift nicht).
-    if (!track.warned && now - track.unconfirmedSince >= COMMAND_CONFIRM_TIMEOUT_MS) {
+    track.faulted = track.unconfirmedMs >= COMMAND_GRACE_MS;
+    // Persistent = lange genug, trotz genügend Wiederholungen, bei bestehender
+    // Verbindung und nur, wenn die Abweichung überhaupt eine Bedeutung hat.
+    const persistent = connected
+      && track.unconfirmedMs >= COMMAND_WARN_AFTER_MS
+      && track.attempts >= COMMAND_WARN_MIN_ATTEMPTS
+      && warningRelevant(desired, brokerCmp);
+    if (!track.warned && persistent) {
       const reported = brokerCmp == null ? 'keinen Wert' : brokerCmp;
-      const reason = connected ? `Broker meldet ${reported}` : 'keine Broker-Verbindung';
-      publishWarning(cfg, `${label} nicht bestätigt: Ziel-Topic „${topic}" sollte ${desiredCmp} sein (${reason}). Der Befehl wird wiederholt.`);
+      const minutes = Math.max(1, Math.round(track.unconfirmedMs / 60000));
+      publishWarning(
+        cfg,
+        `${label} nicht bestätigt: Ziel-Topic „${topic}" sollte ${desiredCmp} sein, Broker meldet ${reported}. `
+        + `Seit ${minutes} Minuten trotz ${track.attempts} Wiederholungen ohne Bestätigung – bitte Anlage prüfen.`,
+        db
+      );
       track.warned = true;
     }
   }
@@ -335,6 +400,38 @@ function reconcileCommand(key, topic, stateId, desired, ctx) {
   track.confirmed = confirmed;
   commandTracks.set(key, track);
   return confirmed;
+}
+
+// Darf eine anhaltende Abweichung überhaupt gemeldet werden?
+// Soll EIN: ja – die Schaltung wird gebraucht und greift nicht.
+// Soll AUS: nur bei aktivem Widerspruch, wenn der Broker also weiterhin 1
+// meldet. Eine fehlende Rückmeldung ist hier bedeutungslos: Die
+// Überschusseinspeisung ist z. B. erst oberhalb der oberen SoC-Offset-Schwelle
+// gefordert; schaltet das Netz nur wegen der Wechselrichtergrenzen, gibt es gar
+// keinen Überschuss und damit auch nichts zu bestätigen.
+function warningRelevant(desired, brokerCmp) {
+  return desired ? true : brokerCmp === '1';
+}
+
+// Quittiert der Nutzer die systemweite Warnung, wird auch das MQTT-Warntopic
+// geleert und die Persistenzzählung zurückgesetzt: Ein weiterhin bestehender
+// Fehler muss die volle Persistenzzeit erneut durchlaufen, bevor er wieder
+// meldet.
+function acknowledgeWarnings(db) {
+  for (const track of commandTracks.values()) {
+    track.unconfirmedMs = 0;
+    track.attempts = 0;
+    track.faulted = false;
+    track.warned = false;
+    track.lastSeenAt = 0;
+  }
+  state.gridWarned = false;
+  state.feedInWarned = false;
+  if (!db) return;
+  loadGridControlConfig(db, (cfg) => {
+    if (cfg.warningTextTopic) mqttClient.publish(cfg.warningTextTopic, '');
+    if (cfg.warningActiveTopic) mqttClient.publish(cfg.warningActiveTopic, false);
+  });
 }
 
 async function tick(db) {
@@ -443,7 +540,7 @@ async function tick(db) {
     await updateMinimumSoc(db, batteryCfg, soc, cfg);
   }
   if (!oldTemperature && state.temperature && gridBeforeTemperature) {
-    publishWarning(cfg, 'Wechselrichter meldet eine Temperaturwarnung, obwohl das Netz bereits durch einen anderen Auslöser zugeschaltet war.');
+    publishWarning(cfg, 'Wechselrichter meldet eine Temperaturwarnung, obwohl das Netz bereits durch einen anderen Auslöser zugeschaltet war.', db);
   }
 
   let hasMeasurement = socWindows.available || voltageWindows.available || warningValue != null || loads.some((value) => value != null) || state.gridPublished !== null;
@@ -490,7 +587,7 @@ async function tick(db) {
     if (!state.gridZeroSince) state.gridZeroSince = now;
     if (now - state.gridZeroSince >= Number(cfg.gridDetectionSeconds) * 1000) {
       await operatingState.setEmergencyMode(db, true);
-      publishWarning(cfg, 'Kein Netz erkannt. Es wurde in den Notstrombetrieb gewechselt.');
+      publishWarning(cfg, 'Kein Netz erkannt. Es wurde in den Notstrombetrieb gewechselt.', db);
       globalState = operatingState.getState();
       state.gridActual = true;
       state.feedInActual = false;
@@ -508,7 +605,7 @@ async function tick(db) {
 
   // Geschlossene Regelschleife: Soll-Werte gegen die tatsächliche Broker-Rückmeldung
   // abgleichen und bei Abweichung erneut schreiben (statt fire-and-forget).
-  const ctx = { cache, connected, cfg, now, hasMeasurement };
+  const ctx = { cache, connected, cfg, now, hasMeasurement, db };
   // Kein Aus-Befehl, solange der Ist-Zustand des Ziel-Schützes unbekannt ist
   // (Broker-Rückmeldung z. B. direkt nach einem Neustart noch nicht
   // eingetroffen): erst Ist-Werte abfragen, dann steuern. Ein-Befehle bleiben
@@ -518,9 +615,13 @@ async function tick(db) {
   const feedInHasMeasurement = hasMeasurement && !(brokerFeedInValue == null && !state.feedInActual);
   state.gridConfirmed = reconcileCommand('grid', cfg.gridCommandTopic, STATE_IDS.gridCommand, state.gridActual, { ...ctx, hasMeasurement: gridHasMeasurement, label: 'Netzschaltung' });
   state.feedInConfirmed = reconcileCommand('feedIn', cfg.feedInCommandTopic, STATE_IDS.feedInCommand, state.feedInActual, { ...ctx, hasMeasurement: feedInHasMeasurement, label: 'Überschusseinspeisung' });
-  // Anhaltende (≥ Timeout) Divergenz für das Audit-Log – siehe recordLog.
+  // Als persistent bestätigte Divergenz für das Audit-Log – siehe recordLog.
   state.gridWarned = !!commandTracks.get('grid')?.warned;
   state.feedInWarned = !!commandTracks.get('feedIn')?.warned;
+  // Störung (≥ Kulanzfrist), aber noch nicht als persistent gemeldet: nur für
+  // Anzeige und Diagnose, ohne Warnung.
+  state.gridFault = !!commandTracks.get('grid')?.faulted;
+  state.feedInFault = !!commandTracks.get('feedIn')?.faulted;
   // Für die hasMeasurement-Heuristik: sobald ein Netz-Topic konfiguriert ist und
   // wir hier ankommen, gilt die Steuerung als aktiv.
   if (hasMeasurement && cfg.gridCommandTopic) state.gridPublished = state.gridActual;
@@ -570,6 +671,10 @@ function getState() {
     feedInActual: state.feedInActual,
     gridCommandConfirmed: state.gridConfirmed,
     feedInCommandConfirmed: state.feedInConfirmed,
+    gridCommandFault: !!state.gridFault,
+    feedInCommandFault: !!state.feedInFault,
+    gridCommandWarned: !!state.gridWarned,
+    feedInCommandWarned: !!state.feedInWarned,
     mqttConnected: mqttClient.getStatus().connected,
     gridFrequencies: [...state.gridFrequencies],
     inverterLoads: [...state.inverterLoads],
@@ -579,6 +684,8 @@ function getState() {
 
 let timer = null;
 let unsubscribe = null;
+let warningHookAttached = false;
+let warningHookDb = null;
 let running = false;
 let rerunRequested = false;
 let activeRun = Promise.resolve();
@@ -617,6 +724,14 @@ function runNow(db) {
 }
 function init(db) {
   gridControlLog.initLog(db).catch(() => {});
+  // Quittiert der Nutzer die systemweite Warnung, räumt die Netzsteuerung ihr
+  // eigenes Warntopic auf. Nur einmal anmelden, aber immer mit der zuletzt
+  // initialisierten Datenbank arbeiten.
+  warningHookDb = db;
+  if (!warningHookAttached) {
+    warningHookAttached = true;
+    systemWarning.onAcknowledged(() => acknowledgeWarnings(warningHookDb));
+  }
   if (!unsubscribe) unsubscribe = mqttClient.onValuesChanged((event) => {
     metrics.counter('bus.events');
     if (isRelevantEvent(event)) runNow(db).catch(() => {});
@@ -626,4 +741,4 @@ function init(db) {
   runNow(db).catch(() => {});
 }
 
-module.exports = { init, runNow, getState, isRelevantEvent, updateExtremeWindows, updateLoadSwitch, updateLoadSwitchDelayed, hasPhaseFailure, allPhasesPresent, currentDayKey };
+module.exports = { init, runNow, getState, acknowledgeWarnings, isRelevantEvent, updateExtremeWindows, updateLoadSwitch, updateLoadSwitchDelayed, hasPhaseFailure, allPhasesPresent, currentDayKey };

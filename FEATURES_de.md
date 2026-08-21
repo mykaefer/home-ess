@@ -58,11 +58,22 @@ eigenständige Desktop- und Mobilansichten.
   verschachtelte Verbrauchergruppen einschließlich öffentlicher Nur-Lese-Exporte.
 - Schaltgruppen mit Drag-and-drop-Zuordnung, gemeinsamem Schalten,
   Remote-Topics und optionalen Timern.
+- Dashboard-Kachel „Diagramm": bis zu vier Messreihen aus der Datenbank als
+  Zeitreihe, Zeitraum 6 Stunden bis 30 Tage, mit frei wählbarer Farbe und
+  Legendenbezeichnung je Linie, aktuellem Wert und Fadenkreuz zum Ablesen.
+- Zentrale Datenbankanbindung für Diagramme und Auswertungen: eine InfluxDB 1.x
+  wird in den Einstellungen eingetragen oder per Knopf aus dem InfluxDB-Adapter
+  übernommen; auch eine externe Datenbank lässt sich einbinden.
+- Systemweite Warnung: Fehler, die ein Eingreifen erfordern, erscheinen als
+  rotes Warnband auf jeder Seite und stehen als States „Warnungstext" und
+  „Warnung aktiv" unter System / Betrieb bereit, bis sie quittiert werden.
 
 ## Optionale Steuerungsmodule
 
 - Grid-Control schaltet Netz- und Wechselrichterpfade mit verifizierter
   Rückmeldung, konfigurierbaren Schwellen, Hysteresen und Audit-Protokoll.
+  Gemeldet wird nur ein über Minuten und trotz Wiederholungen bestehender
+  Dauerfehler — sporadische Aussetzer bleiben ohne Warnung.
 - Poolsteuerung verwaltet Solar- und Filterpumpen anhand von Zeitplänen,
   Temperaturen, Sonnenbedingungen, Prioritäten und gelerntem Energiebedarf.
 - Wallboxsteuerung unterstützt mehrere Ladegeräte, die Modi Privat, Beruflich

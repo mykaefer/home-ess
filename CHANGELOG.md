@@ -5,6 +5,86 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 
 ## [Unreleased]
 
+## [1.5.1] — 2026-08-21
+
+### Hinzugefügt
+
+- **Diagramm-Kachel fürs Dashboard.** Neuer Widget-Typ **Diagramm**: zeichnet bis
+  zu vier Messreihen aus der Systemdatenbank als Zeitreihe — Zeitraum 6 Stunden
+  bis 30 Tage, Verdichtung wahlweise Mittelwert, Minimum, Maximum, Summe oder
+  letzter Wert. Je Linie sind **Farbe und Name für die Legende frei wählbar**
+  (ohne Namen steht die Messreihe dort); die Farbe hängt an der Linie, sodass
+  das Entfernen einer anderen Linie die übrigen nicht umfärbt. Das SVG entsteht
+  wie alle Ansichten **serverseitig**; die Kachel lädt es nach dem Seitenaufbau und danach im Minutentakt nach, sodass eine
+  langsame oder nicht erreichbare Datenbank das Dashboard nie ausbremst. Die
+  Legende nennt jede Linie samt aktuellem Wert, ein Fadenkreuz mit Werteanzeige
+  (auch per Fingertipp) liest jeden Zeitpunkt ab, Messlücken brechen die Linie,
+  statt quer darüber zu ziehen. Die vier Linienfarben sind auf
+  Farbfehlsichtigkeit und Kontrast geprüft und in fester Reihenfolge vergeben.
+
+- **Systemweite Datenbankanbindung.** homeESS kann eine InfluxDB 1.x als
+  zentrale Zeitreihen-Datenbank für Diagramme und Auswertungen nutzen —
+  entweder die Datenbank, in die der InfluxDB-Adapter schreibt, oder eine
+  beliebige externe. Konfiguriert wird sie in *Einstellungen → Allgemein* in
+  der neuen Karte **Datenbank** unterhalb der MQTT-Einstellungen, mit
+  Verbindungstest. Auf der Einstellungsseite einer InfluxDB-Adapterinstanz
+  übernimmt der Knopf **„Als Standard-Datenbank für homeESS übernehmen"** die
+  dortigen Verbindungsdaten (einmalige Kopie; die Herkunft wird in den
+  Einstellungen angezeigt). Serverseitig steht die Abfrage-API
+  `src/database/` bereit (Messreihen auflisten, Zeitreihen je Zeitfenster,
+  Raster und Aggregat lesen), als JSON erreichbar über `/database/status`,
+  `/database/measurements` und `/database/series`. Der Browser spricht nie
+  direkt mit der Datenbank; Zugangsdaten bleiben auf dem Server.
+
+- **Systemweite Warnfunktion.** Unter *System → Betrieb* gibt es zwei neue
+  States: `operating.warnungText` („Warnungstext") und `operating.warnungAktiv`
+  („Warnung aktiv"). Meldet eine Automatik einen Warntext, steht er im
+  Text-State und das Aktiv-Flag geht auf `true`. Solange das Flag steht, zeigt
+  homeESS auf **jeder** Seite ein rotes Warnband mit dem Text und einem
+  Knopf „Quittieren"; Quittieren setzt das Flag auf `false`, leert den Warntext
+  und räumt zusätzlich das MQTT-Warntopic der Netzsteuerung auf. Die Warnung
+  überdauert einen Neustart. Quittieren zählt als Bedienhandlung (Rolle
+  „bedienen" genügt).
+
+- **Adapterseite: Neustart je Adapter.** In der Titelzeile jedes Adapters sitzt
+  oben rechts ein schmaler Knopf „↻“; die Beschriftung „Neu starten“ erscheint
+  als Tooltip beim Verweilen mit der Maus. Er liest das Manifest neu ein und
+  startet alle Instanzen dieses Adapters neu, sodass ausgetauschter Adaptercode
+  übernommen wird, ohne homeESS neu zu starten. Der Knopf ist in der normalen
+  wie in der kompakten Ansicht fest oben rechts verankert.
+
+### Geändert
+
+- **Netzsteuerung: Bestätigungsüberwachung deutlich träger und plausibler.**
+  Sporadische „Huster" — kurze Netzwerkaussetzer oder ein spät antwortendes
+  Cerbo-GX — haben bisher schon nach 20 Sekunden eine Warnung auf dem Warntopic
+  und einen roten Protokolleintrag erzeugt. Neu gilt: Bis 90 Sekunden ist die
+  ausbleibende Bestätigung ein normaler Roundtrip, wiederholt wird der Befehl
+  alle 10 Sekunden, und **gewarnt wird erst**, wenn die Abweichung 5 Minuten
+  durchgehend besteht und dabei mindestens 10 Wiederholungen erfolglos blieben.
+  Ohne Broker-Verbindung läuft diese Uhr gar nicht erst weiter — ein
+  Verbindungsabriss ist kein Schaltfehler. Erst der so bestätigte Dauerfehler
+  erreicht Warntopic, systemweites Warnband und Protokoll; die Auflösung wird
+  ebenfalls protokolliert. Eine frisch erkannte Abweichung (verlorener Write,
+  externe Änderung am Ziel-Topic) wird weiterhin sofort nachgesetzt, und ein
+  Rückwärtssprung der Systemzeit blockiert die Wiederholungen nicht mehr.
+
+- **Netzsteuerung: keine unplausiblen Einspeise-Warnungen mehr.** Die
+  Überschusseinspeisung wird erst oberhalb der oberen SoC-Offset-Schwelle
+  gefordert. Schaltet das Netz nur wegen der Wechselrichtergrenzen, liegt gar
+  kein Überschuss vor — eine fehlende Bestätigung ist dort bedeutungslos und
+  warnt nicht mehr. Bei Soll „aus" meldet die Netzsteuerung nur noch einen
+  aktiven Widerspruch (Broker meldet weiterhin `1`); bei Soll „ein" gilt
+  unverändert jede anhaltende Abweichung.
+
+- **Adapterseite scannt das Adapterverzeichnis bei jedem Aufruf.** Nachträglich
+  abgelegte Adapter erscheinen dadurch sofort, entfernte verschwinden aus der
+  Liste — bisher war dafür ein Neustart von homeESS nötig. Instanzen eines
+  entfernten Adapters bleiben als eigener, rot markierter Block sichtbar und
+  lassen sich weiterhin deaktivieren und löschen, statt unerreichbar
+  zurückzubleiben. Ein vorübergehend unlesbares Adapterverzeichnis (etwa während
+  eines Updates) verwirft den geladenen Stand nicht mehr.
+
 ## [1.5.0] — 2026-08-20
 
 ### Hinzugefügt

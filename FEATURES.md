@@ -56,11 +56,22 @@ desktop and mobile layouts.
   nested consumer groups, including public read-only exports.
 - Switch groups with drag-and-drop assignment, common switching, remote topics
   and optional timers.
+- Dashboard "chart" tile: up to four measurement series from the database as a
+  time series, covering 6 hours to 30 days, with a freely chosen color and legend
+  name per line, current value and a crosshair readout.
+- Central database connection for charts and analyses: an InfluxDB 1.x is
+  configured in the settings or adopted from the InfluxDB adapter with one
+  click; external databases can be used as well.
+- System-wide warning: faults that require user action appear as a red banner on
+  every page and are exposed as the states "Warnungstext" and "Warnung aktiv"
+  under System / Betrieb until they are acknowledged.
 
 ## Optional control modules
 
 - Grid Control switches grid and inverter paths using verified readback,
-  configurable thresholds, hysteresis and an audit log.
+  configurable thresholds, hysteresis and an audit log. Only a fault that
+  persists for minutes despite repeated retries is reported — sporadic dropouts
+  raise no warning.
 - Pool Control manages solar and filter pumps using schedules, temperatures,
   solar conditions, priorities and learned energy demand.
 - Wallbox Control supports multiple chargers, private, work and always-full

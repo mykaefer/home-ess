@@ -3263,12 +3263,13 @@ a.secondary-button {
     overflow: hidden;
 }
 .adapter-block-head {
+    position: relative;
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 12px;
     flex-wrap: wrap;
-    padding: 10px 14px;
+    padding: 10px 44px 10px 14px;
     background: #f8fafc;
     border-bottom: 1px solid #e5e7eb;
 }
@@ -3284,6 +3285,22 @@ a.secondary-button {
 /* Copyright je Adapter – eigenständige Anwendung, daher eigener Vermerk. */
 .adapter-copyright { flex-basis: 100%; font-size: 12px; }
 .adapter-block-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.adapter-restart-form { position: absolute; top: 8px; right: 10px; display: flex; }
+.adapters-compact .adapter-restart-form { top: 5px; }
+.adapter-restart-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    font-size: 15px;
+    line-height: 1;
+}
+/* Instanzen ohne Adapterverzeichnis: deutlich als Rest markieren. */
+.adapter-block--orphan { border-color: #fca5a5; }
+.adapter-block--orphan .adapter-block-head { background: #fef2f2; border-bottom-color: #fecaca; padding-right: 14px; }
+.adapter-orphan-note { flex-basis: 100%; font-size: 12px; color: #991b1b; }
 .adapter-add-form { display: flex; gap: 6px; }
 .adapter-add-form input { padding: 5px 8px; }
 .adapter-delete-dialog { width: min(520px, calc(100vw - 32px)); padding: 20px; border: 0; border-radius: 12px; }
@@ -3339,7 +3356,8 @@ a.secondary-button {
 }
 /* Kompakte Ansicht: nur das Nötigste – Adapter einzeilig (Name, Prefix,
    Version), darunter die Instanzen. Beschreibungen, Seiten-Kurzinfo sowie die
-   Adapteraktionen (Feld „Neue Instanz“, „Adapter löschen“) entfallen.
+   Adapteraktionen (Feld „Neue Instanz“, „Adapter löschen“) entfallen; der
+   Neustart-Knopf bleibt als einziger oben rechts stehen.
    Umschaltbar oben rechts, browserlokal gespeichert. */
 .adapters-compact .adapter-page-intro,
 .adapters-compact .adapter-desc,
@@ -3350,7 +3368,7 @@ a.secondary-button {
 .adapters-compact .adapter-block-head {
     flex-wrap: nowrap;
     gap: 8px;
-    padding: 6px 12px;
+    padding: 6px 42px 6px 12px;
 }
 .adapters-compact .adapter-block-title {
     flex-wrap: nowrap;
@@ -6211,3 +6229,283 @@ body,
 }
 
 .settings-panel[hidden] { display: none; }
+
+/* Systemweites Warnband (src/system-warning.js): erscheint auf jeder Seite,
+   sobald eine Warnung aktiv ist, und bleibt bis zur Quittierung stehen. */
+.system-warning-banner {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px;
+    background-color: var(--color-danger, #c53030);
+    color: #fff;
+    font-size: 0.95rem;
+    line-height: 1.35;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+
+.system-warning-banner[hidden] { display: none; }
+
+.system-warning-icon { font-size: 1.1rem; }
+
+.system-warning-text {
+    flex: 1;
+    font-weight: 600;
+    word-break: break-word;
+}
+
+.system-warning-ack {
+    flex: 0 0 auto;
+    padding: 6px 14px;
+    border: 1px solid rgba(255, 255, 255, 0.7);
+    border-radius: 4px;
+    background-color: transparent;
+    color: #fff;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.system-warning-ack:hover { background-color: rgba(255, 255, 255, 0.18); }
+.system-warning-ack:disabled { opacity: 0.6; cursor: default; }
+
+@media (max-width: 768px) {
+    .system-warning-banner {
+        align-items: flex-start;
+        flex-wrap: wrap;
+        padding: 8px 12px;
+        font-size: 0.88rem;
+    }
+}
+
+/* Diagramm-Kachel (Zeitreihen aus der Systemdatenbank). Das SVG kommt fertig
+   vom Server; hier stehen nur Rahmen, Achsenfarben und die Ablese-Hilfe. */
+.widget-card--chart {
+    position: relative;
+    grid-column: 1 / -1;
+}
+
+.widget-card--chart .widget-body {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.chart-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.chart-range {
+    color: var(--color-text-soft, #68746f);
+    font-size: 0.78rem;
+    white-space: nowrap;
+}
+
+.chart-canvas {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 720 / 260;
+    min-height: 160px;
+}
+
+.chart-svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+    overflow: visible;
+    touch-action: pan-y;
+}
+
+/* Achsen und Raster bleiben zurückhaltend — die Linien tragen die Aussage. */
+.chart-grid {
+    stroke: var(--color-border, #dce3df);
+    stroke-width: 1;
+}
+
+.chart-axis-label {
+    fill: var(--color-text-soft, #68746f);
+    font-size: 11px;
+    font-family: Arial, sans-serif;
+}
+
+.chart-axis-label--y { text-anchor: end; }
+.chart-axis-label--unit { font-size: 10px; }
+
+.chart-line {
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+/* Der letzte Messpunkt bekommt einen Ring in Flächenfarbe, damit er sich auch
+   dort abhebt, wo mehrere Linien dicht beieinander enden. */
+.chart-last {
+    stroke: var(--color-surface, #ffffff);
+    stroke-width: 2;
+}
+
+.chart-cursor-line {
+    stroke: var(--color-text-soft, #68746f);
+    stroke-width: 1;
+    stroke-dasharray: 3 3;
+}
+
+.chart-legend,
+.chart-legend-slot:empty { margin: 0; }
+
+.chart-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 16px;
+    font-size: 0.8rem;
+    color: var(--color-text-soft, #68746f);
+}
+
+.chart-legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.chart-legend-swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 3px;
+    flex: 0 0 auto;
+}
+
+.chart-notice {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    min-height: 120px;
+    padding: 12px;
+    text-align: center;
+    font-size: 0.85rem;
+    color: var(--color-text-soft, #68746f);
+}
+
+.chart-notice--error { color: var(--color-danger, #c53030); }
+
+.chart-tooltip {
+    position: absolute;
+    top: 8px;
+    z-index: 2;
+    min-width: 140px;
+    padding: 8px 10px;
+    border: 1px solid var(--color-border, #dce3df);
+    border-radius: 6px;
+    background: var(--color-surface, #ffffff);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+    font-size: 0.78rem;
+    pointer-events: none;
+}
+
+.chart-tooltip[hidden] { display: none; }
+
+.chart-tooltip-time {
+    display: block;
+    margin-bottom: 4px;
+    color: var(--color-text-soft, #68746f);
+}
+
+.chart-tooltip-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 2px;
+}
+
+.chart-tooltip-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.chart-tooltip-value { font-weight: 600; }
+
+/* Messreihen-Auswahl im Widget-Dialog */
+.chart-series-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.chart-series-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px;
+    border: 1px solid var(--color-border, #dce3df);
+    border-radius: 6px;
+}
+
+/* Farbwähler je Linie: Die gewählte Farbe füllt den ganzen Knopf, damit die
+   Zuordnung Linie → Farbe schon in der Liste ablesbar ist. Dafür muss die
+   innere Farbfläche des nativen Wählers ihren Rahmen und ihr Polster abgeben. */
+.chart-series-color {
+    flex: 0 0 auto;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: 1px solid var(--color-border-strong, #c8d2cd);
+    border-radius: 6px;
+    background: none;
+    overflow: hidden;
+    cursor: pointer;
+}
+
+.chart-series-color::-webkit-color-swatch-wrapper { padding: 0; }
+.chart-series-color::-webkit-color-swatch { border: none; border-radius: 5px; }
+.chart-series-color::-moz-color-swatch { border: none; border-radius: 5px; }
+
+.chart-series-texts {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.chart-series-label { width: 100%; }
+
+/* Herkunft der Linie — die Messreihe steht klein unter dem Anzeigenamen. */
+.chart-series-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.72rem;
+    color: var(--color-text-soft, #68746f);
+}
+
+.chart-series-add {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.chart-series-add[hidden] { display: none; }
+.chart-series-add select { flex: 1; min-width: 0; }
+
+@media (max-width: 768px) {
+    .chart-canvas { aspect-ratio: 4 / 3; }
+    .chart-tooltip { font-size: 0.72rem; min-width: 120px; }
+}
+
+.chart-legend-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 14ch;
+}
+
+.chart-legend-value {
+    color: var(--color-text, #1d2925);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}

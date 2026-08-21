@@ -5,6 +5,7 @@ const { requireAuth } = require('../auth/session');
 const mqttClient = require('../mqtt/client');
 const {
   listWidgets,
+  getWidget,
   createWidget,
   updateWidget,
   deleteWidget,
@@ -35,10 +36,23 @@ const {
   resolveStates,
 } = require('../states/catalog');
 const { INFO_FIELDS, readSystemInfo } = require('../dashboard/system-info');
+const systemDatabase = require('../database');
+const { chartWindow, CHART_RANGES, AGGREGATE_OPTIONS, MAX_SERIES } = require('../dashboard/chart-config');
+const { renderChartSvg, renderChartLegend, renderNotice } = require('../dashboard/chart-svg');
 const renderDashboard = require('../views/dashboard');
 
 function enrichWidget(widget, valuesById, switchStates) {
   if (widget.type === 'info') return { ...widget, label: 'System' };
+  // Diagramme werden ohne Daten gerendert und laden ihren Inhalt sofort danach
+  // nach (/dashboard/widgets/:id/chart). So hängt der Aufbau des Dashboards
+  // nicht an der Erreichbarkeit einer externen Datenbank.
+  if (widget.type === 'chart') {
+    const chart = widget.chart || {};
+    return {
+      ...widget,
+      label: chart.title || (chart.measurements || []).join(', ') || 'Diagramm',
+    };
+  }
   if (widget.type === 'switch') {
     const state = switchStates.get(widget.id) || { on: null, label: 'Kein Ziel' };
     return {
@@ -104,6 +118,9 @@ async function renderPage(db, res, options = {}) {
       infoFields: INFO_FIELDS,
       systemInfo: readSystemInfo(),
       maxTabTitleLength: MAX_TAB_TITLE_LENGTH,
+      chartRanges: CHART_RANGES,
+      chartAggregates: AGGREGATE_OPTIONS,
+      maxChartSeries: MAX_SERIES,
       formMessage: options.formMessage || '',
       formError: options.formError || '',
       dialogMode: options.dialogMode || '',
@@ -158,6 +175,58 @@ function dashboardRoutes(db) {
       });
     } catch (err) {
       next(err);
+    }
+  });
+
+  // Inhalt einer Diagramm-Kachel: fertiges SVG samt Legende. Serverseitig
+  // gezeichnet (src/dashboard/chart-svg.js) — der Browser setzt es nur ein.
+  router.get('/dashboard/widgets/:id/chart', requireAuth, async (req, res, next) => {
+    try {
+      const widget = await getWidget(db, Number(req.params.id));
+      if (!widget || widget.type !== 'chart') {
+        return res.status(404).json({ error: 'Diagramm nicht gefunden.' });
+      }
+      const chart = widget.chart || {};
+      const config = await systemDatabase.load(db);
+      if (!systemDatabase.isConfigured(config)) {
+        return res.json({
+          ok: false,
+          html: renderNotice('Es ist keine Datenbank eingerichtet. Einstellungen → Allgemein → Datenbank.', 'hint'),
+        });
+      }
+      const window = chartWindow(chart);
+      const data = await systemDatabase.readSeriesSet(db, chart.measurements, {
+        from: window.from,
+        to: window.to,
+        intervalMs: window.intervalMs,
+        aggregate: chart.aggregate,
+      });
+      // Gelesene Punkte mit der Konfiguration der Linie zusammenführen (Name
+      // für die Legende, Farbe). Die Reihenfolge entspricht der Konfiguration.
+      const series = (chart.series || []).map((entry, index) => ({
+        ...entry,
+        points: (data[index] && data[index].points) || [],
+      }));
+      return res.json({
+        ok: true,
+        updatedAt: Date.now(),
+        rangeLabel: window.range.label,
+        html: renderChartSvg(series, {
+          from: window.from,
+          to: window.to,
+          intervalMs: window.intervalMs,
+          unit: chart.unit,
+        }),
+        legend: renderChartLegend(series, { unit: chart.unit }),
+      });
+    } catch (error) {
+      if (error && error.validation) return res.status(400).json({ error: error.message });
+      // Ein Datenbankfehler darf das Dashboard nicht kippen — die Kachel zeigt
+      // ihn an, alles andere läuft weiter.
+      return res.json({
+        ok: false,
+        html: renderNotice(error && error.message ? error.message : 'Die Datenbank ist nicht erreichbar.', 'error'),
+      });
     }
   });
 

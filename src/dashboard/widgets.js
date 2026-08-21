@@ -17,6 +17,7 @@ const {
   normalizeColor,
 } = require('./widget-types');
 const { normalizeSwitchTarget } = require('./switches');
+const { normalizeChartConfig, chartConfigForStorage, validateChartConfig } = require('./chart-config');
 const { topicForId } = require('../states/system-topics');
 
 const schemaReady = new WeakMap();
@@ -108,6 +109,7 @@ function normalizeWidgetRow(row = {}) {
     widget.onColor = normalizeColor(config.onColor);
     widget.offColor = normalizeColor(config.offColor);
   }
+  if (type === 'chart') widget.chart = normalizeChartConfig(config.chart || config);
   return widget;
 }
 
@@ -192,6 +194,22 @@ function normalizeWidgetInput(input = {}) {
     normalized.onColor = normalizeColor(input.onColor);
     normalized.offColor = normalizeColor(input.offColor);
   }
+  if (type === 'chart') {
+    // Die Linien kommen aus dem Dialog als drei parallele Feldlisten
+    // (Messreihe, Name, Farbe) — oder bereits als fertige Liste (Tests, API).
+    normalized.chart = normalizeChartConfig({
+      series: Array.isArray(input.chartSeries) ? input.chartSeries : undefined,
+      seriesMeasurements: input.chartSeriesMeasurements != null
+        ? input.chartSeriesMeasurements
+        : (input.chartMeasurements != null ? input.chartMeasurements : input.measurements),
+      seriesLabels: input.chartSeriesLabels,
+      seriesColors: input.chartSeriesColors,
+      range: input.chartRange != null ? input.chartRange : input.range,
+      aggregate: input.chartAggregate != null ? input.chartAggregate : input.aggregate,
+      title: input.chartTitle != null ? input.chartTitle : input.title,
+      unit: input.chartUnit != null ? input.chartUnit : input.unit,
+    });
+  }
   return normalized;
 }
 
@@ -201,6 +219,7 @@ function validateWidgetInput(input) {
   if (input.type === 'switch' && !input.sourceId) {
     errors.push('Bitte ein schaltbares Gerät, eine Schaltgruppe oder einen Kinomodus auswählen.');
   }
+  if (input.type === 'chart') errors.push(...validateChartConfig(input.chart || {}));
   return errors;
 }
 
@@ -216,6 +235,7 @@ function configFor(widget) {
     if (widget.onColor) config.onColor = widget.onColor;
     if (widget.offColor) config.offColor = widget.offColor;
   }
+  if (widget.type === 'chart') config.chart = chartConfigForStorage(widget.chart);
   return Object.keys(config).length ? JSON.stringify(config) : null;
 }
 
