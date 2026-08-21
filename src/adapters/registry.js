@@ -255,8 +255,33 @@ function readManifest(dir, folderName, options = {}) {
     stateOptions: normalizeStateOptions(parsed.stateOptions),
     devicePage: normalizeDevicePage(parsed.devicePage),
     managementPage: normalizeManagementPage(parsed.managementPage, path.join(dir, folderName)),
+    systemDatabase: normalizeSystemDatabase(parsed.systemDatabase),
     publicFiles: normalizePublicFiles(parsed.publicFiles),
     presetsDir: path.join(dir, folderName, 'presets'),
+  };
+}
+
+// Datenbank-Adapter dürfen ihre Verbindungsdaten als systemweite Datenbank
+// anbieten (Knopf auf der Instanz-Einstellungsseite). Das Manifest bildet dazu
+// seine eigenen Einstellungsschlüssel auf die Felder der Systemdatenbank ab;
+// nur diese Zielfelder sind erlaubt, damit ein Manifest nichts anderes in die
+// Systemeinstellungen schreiben kann.
+const SYSTEM_DATABASE_TARGETS = ['protocol', 'host', 'port', 'database', 'username', 'password', 'verifyTls'];
+
+function normalizeSystemDatabase(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const fields = {};
+  const source = raw.fields && typeof raw.fields === 'object' ? raw.fields : {};
+  for (const target of SYSTEM_DATABASE_TARGETS) {
+    const key = source[target] == null ? '' : String(source[target]).trim();
+    if (key) fields[target] = key;
+  }
+  if (!fields.host) return null;
+  return {
+    type: raw.type ? String(raw.type).trim() : 'influxdb1',
+    label: raw.label ? String(raw.label) : 'Als Standard-Datenbank für homeESS übernehmen',
+    hint: raw.hint ? String(raw.hint) : '',
+    fields,
   };
 }
 
@@ -269,8 +294,12 @@ function loadRegistry() {
   let entries = [];
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch (_) {
-    manifests = [];
+  } catch (error) {
+    // Die Adapterseite liest das Verzeichnis bei jedem Aufruf neu ein. Ein
+    // vorübergehend unlesbares Verzeichnis (etwa während eines Updates) darf
+    // deshalb den bereits geladenen Stand nicht verwerfen – sonst verlören
+    // laufende Instanzen ihr Schema und ihre Routen.
+    console.error(`[adapters] Adapterverzeichnis nicht lesbar: ${error.message}`);
     return manifests;
   }
   for (const entry of entries) {

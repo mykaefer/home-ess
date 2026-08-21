@@ -7,11 +7,16 @@ const { currentAccess } = require('../auth/access');
 // Adapter-Verwaltungsseite: listet die im /adapter-Verzeichnis gefundenen Adapter,
 // je Adapter die angelegten Instanzen als kompakte, volle-Breite-Tabelle mit
 // Status (aktiv) UND Verbindungszustand sowie Aktionen. Status wird live gepollt.
-function renderAdapters({ registry = [], instancesByAdapter = new Map(), statusById = {}, message = '', error = '' } = {}) {
+function renderAdapters({ registry = [], instancesByAdapter = new Map(), orphanedByAdapter = new Map(), statusById = {}, message = '', error = '' } = {}) {
   const isAdmin = currentAccess().isAdmin;
   const blocks = registry.length
     ? registry.map((adapter) => renderAdapterBlock(adapter, instancesByAdapter.get(adapter.id) || [], statusById, isAdmin)).join('\n')
     : '<div class="info-card"><p class="muted">Keine Adapter gefunden. Lege einen Adapter unter <code>/adapter/&lt;name&gt;/</code> mit einer <code>adapter.json</code> an (siehe ADAPTER.md).</p></div>';
+  // Adapterverzeichnis entfernt, Instanzen aber noch in der Datenbank: die
+  // Instanzen bleiben sichtbar, damit sie nicht unerreichbar zurückbleiben.
+  const orphanBlocks = Array.from(orphanedByAdapter.entries())
+    .map(([adapterId, instances]) => renderOrphanedBlock(adapterId, instances, statusById))
+    .join('\n');
 
   const body = `        <div class="page-head page-head--split">
           <div>
@@ -44,6 +49,7 @@ function renderAdapters({ registry = [], instancesByAdapter = new Map(), statusB
         </section>` : ''}
         <div class="adapter-list">
 ${blocks}
+${orphanBlocks}
         </div>
         ${isAdmin ? `        <dialog id="adapter-delete-dialog" class="adapter-delete-dialog" aria-labelledby="adapter-delete-title">
           <form id="adapter-delete-form">
@@ -180,7 +186,10 @@ ${blocks}
       });
     }
     function updateBlockState(block) {
-      if (!block) return;
+      // Der Warnblock verwaister Instanzen bleibt immer sichtbar – er fordert
+      // zum Aufräumen auf und hat keinen aktiven Adapter, an dem sich das
+      // messen ließe.
+      if (!block || block.classList.contains('adapter-block--orphan')) return;
       var hasActive = Array.prototype.some.call(block.querySelectorAll('.adapter-row[data-running]'), function (row) {
         return row.getAttribute('data-running') === '1';
       });
@@ -192,7 +201,7 @@ ${blocks}
         .then(function (data) {
           if (!data || !data.instances) return;
           Object.keys(data.instances).forEach(function (id) {
-            var row = document.querySelector('.adapter-row[data-instance="' + id + '"]');
+            var row = document.querySelector('.adapter-row[data-instance="' + id + '"]:not([data-orphaned])');
             if (!row) return;
             var st = adapterStateOf(data.instances[id]);
             adapterBadge(row.querySelector('[data-role="active"]'), st.active[0], st.active[1]);
@@ -270,9 +279,49 @@ ${adapter.copyright ? `                <span class="adapter-copyright muted">${e
                 </form>
                 ${isAdmin ? `<button type="button" class="module-toggle-btn button-danger" data-delete-adapter data-adapter-id="${escapeHtml(adapter.id)}" data-adapter-name="${escapeHtml(adapter.name)}"${instances.length ? ` disabled title="Zuerst ${instances.length === 1 ? 'die vorhandene Instanz' : 'alle vorhandenen Instanzen'} löschen"` : ''}>Adapter löschen</button>` : ''}
               </div>
+              <form action="/adapter/${escapeHtml(adapter.id)}/restart" method="POST" class="adapter-restart-form">
+                <button type="submit" class="module-toggle-btn adapter-restart-btn" title="Neu starten" aria-label="Adapter neu starten">↻</button>
+              </form>
             </div>
             <div class="adapter-rows">
 ${header}
+${rows}
+            </div>
+          </div>`;
+}
+
+// Instanzen eines nicht mehr vorhandenen Adapters. Ohne Einstellungs- oder
+// Verwaltungsseiten – dort gibt es kein Manifest mehr – aber weiterhin
+// deaktivier- und löschbar.
+function renderOrphanedBlock(adapterId, instances, statusById) {
+  const rows = instances.map((inst) => {
+    const status = statusById[inst.id] || {};
+    const running = !!status.running;
+    const active = running ? ['warn', 'Läuft noch'] : inst.enabled ? ['warn', 'Ohne Adapter'] : ['off', 'Inaktiv'];
+    return `            <div class="adapter-row" data-instance="${inst.id}" data-orphaned="1" data-enabled="${inst.enabled ? '1' : '0'}" data-running="${running ? '1' : '0'}">
+              <span class="adapter-col-name"><strong>${escapeHtml(inst.name)}</strong></span>
+              <span class="adapter-col-addr muted">—</span>
+              <span>${badge('active', active[0], active[1])}</span>
+              <span>${badge('conn', 'off', '—')}</span>
+              <span class="adapter-row-actions">
+                ${inst.enabled ? `<form action="/adapter/instance/${inst.id}/disable" method="POST">
+                  <button type="submit" class="module-toggle-btn button-danger">Deaktivieren</button>
+                </form>` : ''}
+                <form action="/adapter/instance/${inst.id}/delete" method="POST" onsubmit="return confirm('Instanz „${escapeHtml(inst.name)}“ wirklich löschen?');">
+                  <button type="submit" class="module-toggle-btn button-danger">Löschen</button>
+                </form>
+              </span>
+            </div>`;
+  }).join('\n');
+
+  return `          <div class="adapter-block adapter-block--orphan" data-has-active="1">
+            <div class="adapter-block-head">
+              <div class="adapter-block-title">
+                <strong>${escapeHtml(adapterId)}</strong>
+                <span class="adapter-orphan-note">Adapterverzeichnis nicht mehr vorhanden – bitte die verbliebenen Instanzen löschen.</span>
+              </div>
+            </div>
+            <div class="adapter-rows">
 ${rows}
             </div>
           </div>`;
@@ -327,7 +376,7 @@ function renderInstanceRow(adapter, inst, status) {
 // Generische Einstellungsseite einer Instanz: rendert das Schema aus dem Manifest.
 // Ist das Schema leer, bleibt die Seite (bis auf Namen/Umbenennen) leer – der
 // Adapter bestimmt selbst, was hier erscheint.
-function renderAdapterInstance({ adapter, instance, message = '', error = '', hints = [] } = {}) {
+function renderAdapterInstance({ adapter, instance, message = '', error = '', hints = [], databaseMessage = '', databaseError = '' } = {}) {
   const fields = (adapter.settings || []).map((field) => renderSettingField(field, instance.settings)).join('\n');
   const settingsBlock = fields
     ? `          <div class="settings-card">
@@ -374,9 +423,34 @@ ${settingsBlock}
             <a href="/adapter" class="module-toggle-btn">Zurück</a>
             ${fields ? '<button type="submit">Einstellungen speichern</button>' : ''}
           </div>
-        </form>`;
+        </form>
+${systemDatabaseBlock(adapter, instance, databaseMessage, databaseError)}`;
 
   return renderLayout({ title: `Adapter – ${instance.name}`, activePath: '/adapter', body });
+}
+
+// Datenbank-Adapter (Manifest `systemDatabase`) bieten ihre Verbindungsdaten
+// als systemweite Datenbank an. Der Knopf kopiert die **gespeicherten**
+// Einstellungen dieser Instanz in die Systemeinstellungen; ein eigenes Formular,
+// damit er das Speichern der Einstellungen nicht absendet.
+function systemDatabaseBlock(adapter, instance, message, error) {
+  if (!adapter.systemDatabase) return '';
+  const hint = adapter.systemDatabase.hint
+    ? `<p class="settings-card-hint">${escapeHtml(adapter.systemDatabase.hint)}</p>`
+    : '';
+  return `        <form action="/adapter/instance/${instance.id}/system-database" method="POST" class="settings-form" style="margin-top:16px;">
+          <div class="settings-card">
+            <div class="settings-card-head">
+              <h2>homeESS-Datenbank</h2>
+              ${hint}
+            </div>
+            ${message ? statusText(message, 'success') : ''}
+            ${error ? statusText(error) : ''}
+            <div class="button-row">
+              <button type="submit">${escapeHtml(adapter.systemDatabase.label)}</button>
+            </div>
+          </div>
+        </form>`;
 }
 
 function renderSettingField(field, values) {

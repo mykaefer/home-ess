@@ -5,6 +5,20 @@ wird unabhängig von homeESS versioniert; die Version steht in
 [adapter.json](adapter.json). Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [1.0.1] — 2026-08-21
+
+### Hinzugefügt
+
+- **Knopf „Als Standard-Datenbank für homeESS übernehmen".** Auf der
+  Einstellungsseite einer Instanz kopiert er Protokoll, Server, Port,
+  Datenbank und Zugangsdaten in die zentrale Datenbankanbindung von homeESS
+  (Einstellungen → Allgemein → Datenbank) und schaltet sie ein. Diagramme und
+  Auswertungen lesen danach aus dieser Datenbank. Die Übernahme ist eine
+  einmalige Kopie der **gespeicherten** Instanz-Einstellungen; spätere
+  Änderungen wirken erst nach erneuter Übernahme. Umgesetzt über das neue
+  Manifest-Feld `systemDatabase`, das homeESS für beliebige Datenbank-Adapter
+  auswertet.
+
 ## [1.0.0] — 2026-08-11
 
 ### Hinzugefügt

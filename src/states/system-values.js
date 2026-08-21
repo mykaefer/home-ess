@@ -43,6 +43,7 @@ const { localCalendar } = require('../local-time');
 const { computeYearStats, getDailyMetricValue, statsFromRows, dayKeyOffset } = require('../history/daily-metrics');
 const metrics = require('../runtime-metrics');
 const timeHandler = require('../time-handler');
+const systemWarning = require('../system-warning');
 
 // Kategorien entsprechen der Herkunft des Wertes (Seite, von der er stammt) und
 // werden anhand des stabilen id-Präfix zugeordnet. Die Reihenfolge bestimmt die
@@ -276,6 +277,11 @@ async function buildCalculatedInternalValues(db, cache) {
   const clock = timeHandler.snapshot();
   entries.push(textEntry(timeHandler.TIME_STATE_ID, 'Interne Uhrzeit', clock.internal.time));
   entries.push(textEntry(timeHandler.DATE_STATE_ID, 'Internes Datum', clock.internal.date));
+  // Systemweite Warnung: Der Text steht, solange das Flag aktiv ist. Quittiert
+  // der Nutzer die Warnung, wird das Flag false und der Text leer.
+  const warning = systemWarning.getState();
+  entries.push(textEntry('operating.warnungText', 'Warnungstext', warning.text));
+  entries.push(boolEntry('operating.warnungAktiv', 'Warnung aktiv', warning.active));
   entries.push(numberEntry('prognose.autarkeTageJahr', 'Prognose autarke Tage im Jahr', operatingState.getState().autarkDaysCount));
   entries.push(numberEntry(
     'prognose.autarkeTageVorjahr',

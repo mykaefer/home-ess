@@ -18,6 +18,7 @@ const systemStatesRuntime = require('./states/system-runtime');
 const customStates = require('./states/custom');
 const stateProperties = require('./states/properties');
 const timeHandler = require('./time-handler');
+const systemWarning = require('./system-warning');
 
 const authRoutes = require('./auth/routes');
 const dashboardRoutes = require('./routes/dashboard');
@@ -34,6 +35,7 @@ const messenSchaltenRoutes = require('./routes/messen-schalten');
 const heimkinoRoutes = require('./routes/heimkino');
 const adapterRoutes = require('./routes/adapters');
 const statesRoutes = require('./routes/states');
+const databaseRoutes = require('./routes/database');
 const conditionsRoutes = require('./routes/conditions');
 const remoteAccessRoutes = require('./routes/remote-access');
 const updateRoutes = require('./routes/update');
@@ -126,6 +128,7 @@ function createApp() {
   app.use(heimkinoRoutes(db));
   app.use(adapterRoutes(db));
   app.use(statesRoutes(db));
+  app.use(databaseRoutes(db));
   app.use(conditionsRoutes(db));
   app.use(remoteAccessRoutes());
   app.use(updateRoutes());
@@ -173,6 +176,9 @@ function createApp() {
   // laden, bevor die ersten Seiten gerendert werden.
   const statePropertiesReady = stateProperties.init(db).catch((err) => {
     console.error('[state-properties] Init fehlgeschlagen:', err && err.message);
+  });
+  systemWarning.init(db).catch((err) => {
+    console.error('[system-warning] Init fehlgeschlagen:', err && err.message);
   });
   const timeReady = timeHandler.init(db).catch((err) => {
     console.error('[time-handler] Init fehlgeschlagen:', err && err.message);

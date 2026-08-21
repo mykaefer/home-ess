@@ -103,6 +103,8 @@ const OPERATE_POST_PATTERNS = [
   /^\/wallbox\/box\/\d+\/mode\/[^/]+\/?$/,
   /^\/wallbox\/box\/\d+\/control\/[^/]+\/?$/,
   /^\/pool\/pump\/[^/]+\/[^/]+\/?$/,
+  // Systemweite Warnung quittieren (Warnband im Layout) – Bedienen genügt.
+  /^\/live\/warnung\/quittieren\/?$/,
 ];
 
 // Reine Lese-POSTs (Diagnose ohne Zustandsänderung), die auch Lesern erlaubt
@@ -181,4 +183,4 @@ function authorize(options = {}) {
   };
 }
 
-module.exports = { sessionMiddleware, createSession, destroySession, requireAuth, authorize };
+module.exports = { sessionMiddleware, createSession, destroySession, requireAuth, authorize, isOperatePost };

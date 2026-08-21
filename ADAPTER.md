@@ -350,6 +350,45 @@ Ansicht nach [MOBILE.md](MOBILE.md) mitliefern.
 
 Der **Display-Dashboard-Adapter** ist die Referenz für dieses Muster.
 
+### Optional: `systemDatabase` (Datenbank für homeESS bereitstellen)
+
+Adapter, die eine Zeitreihen-Datenbank ansprechen, können ihre Verbindungsdaten
+als **systemweite Datenbank** von homeESS anbieten (Diagramme, Auswertungen —
+siehe [PROJECT_CONTEXT.md](PROJECT_CONTEXT.md)):
+
+```json
+"systemDatabase": {
+  "type": "influxdb1",
+  "label": "Als Standard-Datenbank für homeESS übernehmen",
+  "hint": "Kopiert Server, Port, Datenbank und Zugangsdaten in die Systemeinstellungen.",
+  "fields": {
+    "protocol": "protocol",
+    "host": "host",
+    "port": "port",
+    "database": "database",
+    "username": "username",
+    "password": "password",
+    "verifyTls": "verifyTls"
+  }
+}
+```
+
+`fields` bildet die **eigenen** Einstellungsschlüssel des Adapters (rechts) auf
+die Felder der Systemdatenbank (links) ab. Nur die oben gezeigten Zielfelder
+sind erlaubt; `host` ist Pflicht, alles andere optional. `type` muss ein von
+homeESS unterstützter Datenbanktyp sein — derzeit ausschließlich `influxdb1`.
+
+Auf der Einstellungsseite der Instanz erscheint daraufhin ein Knopf mit dem
+angegebenen `label`. Er kopiert die **gespeicherten** Instanz-Einstellungen
+einmalig in die Systemeinstellungen und schaltet die Anbindung ein; homeESS
+merkt sich Adapter und Instanz als Herkunft und zeigt sie an. Spätere Änderungen
+am Adapter wirken erst nach einer erneuten Übernahme — die Systemdatenbank
+bleibt jederzeit von Hand editierbar. Gelesen wird ausschließlich vom homeESS-
+Kern (`src/database/`); der Adapter selbst wird dafür nicht benötigt und darf
+auch fehlen (externe Datenbank).
+
+Der **InfluxDB-Adapter** ist die Referenz für dieses Muster.
+
 ## Capability-gesteuerte Hardwaredialoge
 
 Adapter mit eigener `managementPage` dürfen Geräte unterstützen, deren
@@ -624,6 +663,20 @@ Adapters wird automatisch und fortlaufend an alle Bezüge dieses Topics verteilt
   nichts — sie nutzen ausschließlich die `host`-API.
 - **Blockiere den Event-Loop nicht** dauerhaft; nutze Timer/async für Polling.
   Räume in `stop()` Timer und Verbindungen auf.
+
+### Adapter aktualisieren, ohne homeESS neu zu starten
+
+Die Adapterseite liest `/adapter/` bei **jedem Aufruf** neu ein: neu abgelegte
+Adapterverzeichnisse erscheinen sofort in der Liste, entfernte verschwinden
+wieder. Instanzen eines entfernten Adapters bleiben als eigener, rot markierter
+Block sichtbar, damit sie sich noch deaktivieren und löschen lassen.
+
+Nach dem Austauschen von Adaptercode genügt der Knopf **„↻"** oben rechts in der
+Titelzeile des jeweiligen Adapters (`POST /adapter/<id>/restart`; Tooltip „Neu
+starten"). Er liest das
+Manifest neu ein und forkt alle Instanzen dieses Adapters neu — der neue
+Kindprozess lädt den Adaptercode frisch. Ein Neustart von homeESS ist dafür
+nicht nötig und auch nicht vorgesehen.
 
 ## Zugriffsrechte des angemeldeten Nutzers (`GET /me/access`)
 

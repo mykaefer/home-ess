@@ -349,6 +349,39 @@ function openDatabase() {
       )`
     );
     db.run('INSERT OR IGNORE INTO grid_control_runtime (id) VALUES (1)');
+    // Systemweite Warnung (siehe src/system-warning.js): ein Warntext und ein
+    // Aktiv-Flag, die jede Automatik melden kann und die der Nutzer quittiert.
+    db.run(
+      `CREATE TABLE IF NOT EXISTS system_warning (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        active INTEGER NOT NULL DEFAULT 0,
+        text TEXT NOT NULL DEFAULT '',
+        raised_at INTEGER NOT NULL DEFAULT 0,
+        source TEXT NOT NULL DEFAULT ''
+      )`
+    );
+    db.run("INSERT OR IGNORE INTO system_warning (id) VALUES (1)");
+    // Systemweite Datenbankanbindung (siehe src/database/): Zeitreihen für
+    // Diagramme und Auswertungen. Wird zentral in den Einstellungen gepflegt
+    // oder per Knopf aus einem Datenbank-Adapter übernommen.
+    db.run(
+      `CREATE TABLE IF NOT EXISTS system_database (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        enabled INTEGER NOT NULL DEFAULT 0,
+        type TEXT NOT NULL DEFAULT 'influxdb1',
+        protocol TEXT NOT NULL DEFAULT 'http',
+        host TEXT NOT NULL DEFAULT '',
+        port INTEGER NOT NULL DEFAULT 8086,
+        database_name TEXT NOT NULL DEFAULT 'homeess',
+        username TEXT NOT NULL DEFAULT '',
+        password TEXT NOT NULL DEFAULT '',
+        verify_tls INTEGER NOT NULL DEFAULT 1,
+        source_label TEXT NOT NULL DEFAULT '',
+        source_instance_id INTEGER,
+        updated_at INTEGER NOT NULL DEFAULT 0
+      )`
+    );
+    db.run("INSERT OR IGNORE INTO system_database (id) VALUES (1)");
     db.run(
       `CREATE TABLE IF NOT EXISTS operating_state (
         id INTEGER PRIMARY KEY CHECK (id = 1),

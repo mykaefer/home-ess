@@ -12,6 +12,7 @@ const sqlite3 = require('sqlite3').verbose();
 const mqttClient = require('../src/mqtt/client');
 const modulesState = require('../src/modules');
 const operatingState = require('../src/operating-state');
+const systemWarning = require('../src/system-warning');
 
 test('SoC remains off between the two independent switching windows', () => {
   assert.deepEqual(
@@ -769,6 +770,263 @@ test('Wechselrichterlast als alleiniger Auslöser wird weiterhin als kritisch pr
       'Last als alleiniger Schaltgrund bleibt kritisch protokolliert'
     );
   } finally {
+    mqttClient.publish = originalPublish;
+    mqttClient.getStatus = originalGetStatus;
+    await new Promise((resolve) => db.close(resolve));
+  }
+});
+
+// ── Trägheit der Bestätigungsüberwachung ───────────────────────────────────
+// Sporadische Aussetzer (Netzwerk, spät antwortendes Cerbo-GX) dürfen den
+// Nutzer nicht alarmieren. Gewarnt wird erst, wenn der Fehler über Minuten und
+// trotz mehrfacher Wiederholungen bestehen bleibt.
+
+// Gemeinsames Grundgerüst für die Persistenztests: SoC unter der unteren
+// Schwelle → Netz soll ein; der Broker bestätigt bewusst nie.
+async function setupConfirmScenario({ feedInTopic = '' } = {}) {
+  const db = new sqlite3.Database(':memory:');
+  const exec = (sql) => new Promise((resolve, reject) => db.exec(sql, (err) => err ? reject(err) : resolve()));
+  await exec(`
+    CREATE TABLE modules (key TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE operating_state (id INTEGER PRIMARY KEY, operating_level INTEGER, emergency_mode INTEGER);
+    INSERT INTO operating_state VALUES (1, 2, 0);
+    CREATE TABLE batterie_config (
+      id INTEGER PRIMARY KEY, soc_topic TEXT, power_topic TEXT, voltage_topic TEXT,
+      temperatur_topic TEXT, min_soc_topic TEXT, min_soc INTEGER, battery_type TEXT,
+      cell_count INTEGER, lower_voltage REAL, upper_voltage REAL
+    );
+    INSERT INTO batterie_config VALUES (1, 'battery.soc', '', '', '', '', 20, 'lifepo4', 16, 44.8, 55.2);
+    CREATE TABLE grid_control_config (
+      id INTEGER PRIMARY KEY, grid_command_topic TEXT, feed_in_command_topic TEXT,
+      temperature_warning_topic TEXT, temperature_warning_value TEXT,
+      warning_text_topic TEXT, warning_active_topic TEXT, soc_enabled INTEGER,
+      voltage_enabled INTEGER, temperature_enabled INTEGER, feed_in_allowed INTEGER,
+      soc_lower_offset INTEGER, soc_upper_offset INTEGER, soc_hysteresis INTEGER,
+      voltage_hysteresis REAL, grid_frequency_l1_topic TEXT,
+      grid_frequency_l2_topic TEXT, grid_frequency_l3_topic TEXT,
+      grid_detection_seconds INTEGER
+    );
+    INSERT INTO grid_control_config VALUES
+      (1, 'grid.command', '${feedInTopic}', '', '1', 'warning.text', 'warning.active', 1, 0, 0,
+       ${feedInTopic ? 1 : 0}, 0, 5, 2, 0.5,
+       'grid.frequency.l1', 'grid.frequency.l2', 'grid.frequency.l3', 30);
+    CREATE TABLE grid_control_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, category TEXT NOT NULL,
+      message TEXT NOT NULL, values_text TEXT
+    );
+  `);
+  await operatingState.init(db);
+  await operatingState.setEmergencyMode(db, false);
+  await modulesState.setEnabled(db, 'grid-control', true);
+  require('../src/grid-control/config').invalidateGridControlConfig();
+  systemWarning.resetForTests();
+  // Die Bestätigungs-Tracks leben modulweit; ohne Rücksetzen schleppte ein
+  // vorheriger Test seinen Warnzustand in den nächsten.
+  automation.acknowledgeWarnings(null);
+  return db;
+}
+
+// Zeitgesteuerte Ticks: Date.now() wird vorgespult, damit Minuten ohne echte
+// Wartezeit vergehen. Der Deckel je Durchlauf (15 s) verlangt entsprechend
+// viele Ticks — genau wie im Betrieb.
+async function advanceTicks(db, { steps, stepMs, cache, base }) {
+  let current = base;
+  for (let i = 0; i < steps; i += 1) {
+    current += stepMs;
+    Date.now = () => current;
+    cache.set('batterie.soc', { value: 10, receivedAt: current });
+    await automation.runNow(db);
+  }
+  return current;
+}
+
+test('ein kurzer Bestätigungsaussetzer erzeugt weder Warntopic noch systemweite Warnung', async () => {
+  const db = await setupConfirmScenario();
+  const cache = mqttClient.getCache();
+  cache.clear();
+  const originalNow = Date.now;
+  const originalPublish = mqttClient.publish;
+  const originalGetStatus = mqttClient.getStatus;
+  const published = [];
+  mqttClient.publish = (topic, value) => { published.push([topic, value]); return true; };
+  mqttClient.getStatus = () => ({ connected: true });
+
+  try {
+    let base = originalNow();
+    Date.now = () => base;
+    cache.set('mqtt.clockDate', { value: '2026-08-21', receivedAt: base });
+    cache.set('batterie.soc', { value: 10, receivedAt: base });
+    await automation.runNow(db);
+
+    // Zwei Minuten ohne Bestätigung: über der Kulanzfrist, aber weit unter der
+    // Persistenzschwelle.
+    await advanceTicks(db, { steps: 8, stepMs: 15000, cache, base });
+
+    assert.equal(published.some(([t]) => t === 'warning.text'), false, 'kein Warntext auf dem Warntopic');
+    assert.equal(systemWarning.getState().active, false, 'keine systemweite Warnung');
+    const rows = await new Promise((resolve, reject) => db.all('SELECT message FROM grid_control_log', (err, r) => err ? reject(err) : resolve(r || [])));
+    assert.equal(rows.some((r) => /nicht bestätigt/.test(r.message)), false, 'kein roter Protokolleintrag');
+  } finally {
+    Date.now = originalNow;
+    mqttClient.publish = originalPublish;
+    mqttClient.getStatus = originalGetStatus;
+    await new Promise((resolve) => db.close(resolve));
+  }
+});
+
+test('erst eine über Minuten anhaltende Abweichung gilt als persistent und warnt', async () => {
+  const db = await setupConfirmScenario();
+  const cache = mqttClient.getCache();
+  cache.clear();
+  const originalNow = Date.now;
+  const originalPublish = mqttClient.publish;
+  const originalGetStatus = mqttClient.getStatus;
+  const published = [];
+  mqttClient.publish = (topic, value) => { published.push([topic, value]); return true; };
+  mqttClient.getStatus = () => ({ connected: true });
+
+  try {
+    const base = originalNow();
+    Date.now = () => base;
+    cache.set('mqtt.clockDate', { value: '2026-08-21', receivedAt: base });
+    cache.set('batterie.soc', { value: 10, receivedAt: base });
+    await automation.runNow(db);
+
+    // Gut sechs Minuten ohne Bestätigung, jeder Durchlauf schreibt den Befehl erneut.
+    await advanceTicks(db, { steps: 25, stepMs: 15000, cache, base });
+
+    const warningText = published.filter(([t]) => t === 'warning.text');
+    assert.equal(warningText.length, 1, 'genau eine Warnung, keine Wiederholung');
+    assert.match(String(warningText[0][1]), /Netzschaltung nicht bestätigt/);
+    assert.match(String(warningText[0][1]), /Wiederholungen/);
+    assert.ok(published.some(([t, v]) => t === 'warning.active' && v === true), 'Warnung-aktiv wird gesetzt');
+    assert.equal(systemWarning.getState().active, true, 'systemweite Warnung steht');
+    assert.equal(automation.getState().gridCommandWarned, true);
+
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    const rows = await new Promise((resolve, reject) => db.all('SELECT category, message FROM grid_control_log', (err, r) => err ? reject(err) : resolve(r || [])));
+    assert.ok(rows.some((r) => r.category === 'critical' && /Netzschaltung dauerhaft nicht bestätigt/.test(r.message)), 'roter Protokolleintrag');
+  } finally {
+    Date.now = originalNow;
+    mqttClient.publish = originalPublish;
+    mqttClient.getStatus = originalGetStatus;
+    await new Promise((resolve) => db.close(resolve));
+  }
+});
+
+test('ohne Broker-Verbindung läuft die Persistenzzeit nicht weiter', async () => {
+  const db = await setupConfirmScenario();
+  const cache = mqttClient.getCache();
+  cache.clear();
+  const originalNow = Date.now;
+  const originalPublish = mqttClient.publish;
+  const originalGetStatus = mqttClient.getStatus;
+  const published = [];
+  // Ohne Verbindung schlägt das Schreiben fehl – wie im Betrieb.
+  let connected = true;
+  mqttClient.publish = (topic, value) => {
+    if (!connected) return false;
+    published.push([topic, value]);
+    return true;
+  };
+  mqttClient.getStatus = () => ({ connected });
+
+  try {
+    const base = originalNow();
+    Date.now = () => base;
+    cache.set('mqtt.clockDate', { value: '2026-08-21', receivedAt: base });
+    cache.set('batterie.soc', { value: 10, receivedAt: base });
+    await automation.runNow(db);
+    cache.set('gridcontrol.gridCommand', { value: 1, receivedAt: base });
+    await automation.runNow(db);
+    assert.equal(automation.getState().gridCommandConfirmed, true);
+
+    // Verbindungsabriss über eine Viertelstunde: Der zuletzt bestätigte Stand
+    // bleibt stehen, gewarnt wird nicht.
+    connected = false;
+    await advanceTicks(db, { steps: 60, stepMs: 15000, cache, base });
+
+    assert.equal(published.some(([t]) => t === 'warning.text'), false, 'ein Verbindungsabriss ist kein Schaltfehler');
+    assert.equal(systemWarning.getState().active, false, 'keine systemweite Warnung');
+  } finally {
+    Date.now = originalNow;
+    mqttClient.publish = originalPublish;
+    mqttClient.getStatus = originalGetStatus;
+    await new Promise((resolve) => db.close(resolve));
+  }
+});
+
+test('die Überschusseinspeisung warnt nicht, solange sie gar nicht gefordert ist', async () => {
+  const db = await setupConfirmScenario({ feedInTopic: 'feedin.command' });
+  const cache = mqttClient.getCache();
+  cache.clear();
+  const originalNow = Date.now;
+  const originalPublish = mqttClient.publish;
+  const originalGetStatus = mqttClient.getStatus;
+  const published = [];
+  mqttClient.publish = (topic, value) => { published.push([topic, value]); return true; };
+  mqttClient.getStatus = () => ({ connected: true });
+
+  try {
+    const base = originalNow();
+    Date.now = () => base;
+    cache.set('mqtt.clockDate', { value: '2026-08-21', receivedAt: base });
+    // SoC unter der unteren Schwelle: Netz soll ein, Einspeisung ausdrücklich
+    // aus (es gibt keinen Überschuss). Der Broker meldet für die Einspeisung
+    // einen unbrauchbaren Wert – bestätigt ist damit nichts.
+    cache.set('batterie.soc', { value: 10, receivedAt: base });
+    cache.set('gridcontrol.feedInCommand', { value: 'unbekannt', receivedAt: base });
+    await automation.runNow(db);
+
+    await advanceTicks(db, { steps: 25, stepMs: 15000, cache, base });
+
+    const warnings = published.filter(([t]) => t === 'warning.text').map(([, v]) => String(v));
+    assert.equal(warnings.some((text) => /Überschusseinspeisung/.test(text)), false,
+      'keine Warnung über eine Einspeisung, die nicht gefordert ist');
+    // Die Netzschaltung selbst wird sehr wohl gemeldet.
+    assert.equal(warnings.some((text) => /Netzschaltung nicht bestätigt/.test(text)), true);
+    assert.equal(automation.getState().feedInCommandWarned, false);
+  } finally {
+    Date.now = originalNow;
+    mqttClient.publish = originalPublish;
+    mqttClient.getStatus = originalGetStatus;
+    await new Promise((resolve) => db.close(resolve));
+  }
+});
+
+test('das Quittieren der Warnung leert das Warntopic und setzt die Persistenzzählung zurück', async () => {
+  const db = await setupConfirmScenario();
+  const cache = mqttClient.getCache();
+  cache.clear();
+  const originalNow = Date.now;
+  const originalPublish = mqttClient.publish;
+  const originalGetStatus = mqttClient.getStatus;
+  const published = [];
+  mqttClient.publish = (topic, value) => { published.push([topic, value]); return true; };
+  mqttClient.getStatus = () => ({ connected: true });
+
+  try {
+    const base = originalNow();
+    Date.now = () => base;
+    cache.set('mqtt.clockDate', { value: '2026-08-21', receivedAt: base });
+    cache.set('batterie.soc', { value: 10, receivedAt: base });
+    await automation.runNow(db);
+    const end = await advanceTicks(db, { steps: 25, stepMs: 15000, cache, base });
+    assert.equal(systemWarning.getState().active, true);
+
+    published.length = 0;
+    automation.acknowledgeWarnings(db);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.ok(published.some(([t, v]) => t === 'warning.text' && v === ''), 'Warntext wird geleert');
+    assert.ok(published.some(([t, v]) => t === 'warning.active' && v === false), 'Warnung-aktiv wird zurückgesetzt');
+    assert.equal(automation.getState().gridCommandWarned, false);
+
+    // Der Fehler besteht weiter, muss die Persistenzzeit aber erneut durchlaufen.
+    published.length = 0;
+    await advanceTicks(db, { steps: 8, stepMs: 15000, cache, base: end });
+    assert.equal(published.some(([t]) => t === 'warning.text'), false, 'keine sofortige Wiederholung der Warnung');
+  } finally {
+    Date.now = originalNow;
     mqttClient.publish = originalPublish;
     mqttClient.getStatus = originalGetStatus;
     await new Promise((resolve) => db.close(resolve));

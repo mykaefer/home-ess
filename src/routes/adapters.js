@@ -20,6 +20,8 @@ const { buildSchemeTopic } = require('../mqtt/topics');
 const { renderLayout } = require('../views/layout');
 const adapterSecrets = require('../adapters/secrets');
 const adapterData = require('../adapters/data-store');
+const systemDatabase = require('../database');
+const { SUPPORTED_TYPES } = require('../database/config');
 const adapterNavigation = require('../adapters/navigation');
 const adapterPackages = require('../adapters/package-installer');
 const adapterSelection = require('../adapters/selection-policy');
@@ -90,17 +92,28 @@ function adapterRoutes(db) {
   const deletingAdapters = new Set();
   const refreshNavigation = () => adapterNavigation.refresh(db).catch(() => {});
 
+  // Die Adapterseite liest das Adapterverzeichnis bei jedem Aufruf neu ein.
+  // Dadurch erscheinen nachträglich hinzugefügte Adapter sofort und entfernte
+  // verschwinden wieder – ohne homeESS neu zu starten.
   async function sendOverview(res, { message = '', error = '' } = {}) {
-    const reg = registry.getRegistry();
+    const reg = host.reloadRegistry();
+    const known = new Set(reg.map((manifest) => manifest.id));
     const all = await instancesRepo.listInstances(db);
     const byAdapter = new Map();
+    // Instanzen, deren Adapterverzeichnis nicht mehr existiert. Sie werden
+    // getrennt ausgewiesen, damit sie nicht unsichtbar zurückbleiben und weiter
+    // deaktiviert bzw. gelöscht werden können.
+    const orphanedByAdapter = new Map();
     const statusById = {};
     for (const inst of all) {
-      if (!byAdapter.has(inst.adapterId)) byAdapter.set(inst.adapterId, []);
-      byAdapter.get(inst.adapterId).push(inst);
+      const target = known.has(inst.adapterId) ? byAdapter : orphanedByAdapter;
+      if (!target.has(inst.adapterId)) target.set(inst.adapterId, []);
+      target.get(inst.adapterId).push(inst);
       statusById[inst.id] = host.getStatus(inst.id);
     }
-    res.send(renderAdapters({ registry: reg, instancesByAdapter: byAdapter, statusById, message, error }));
+    res.send(renderAdapters({
+      registry: reg, instancesByAdapter: byAdapter, orphanedByAdapter, statusById, message, error,
+    }));
   }
 
   // ── Öffentliche Adapterdateien (ohne Anmeldung) ───────────────────────────
@@ -346,6 +359,29 @@ function adapterRoutes(db) {
     }
   });
 
+  // Adapter neu starten: Manifest neu einlesen und alle Instanzen dieses
+  // Adapters neu forken. Damit wird aktualisierter Adaptercode übernommen, ohne
+  // homeESS selbst neu zu starten.
+  router.post('/adapter/:adapterId/restart', requireAuth, async (req, res) => {
+    const adapterId = String(req.params.adapterId || '').trim().toLowerCase();
+    if (deletingAdapters.has(adapterId)) {
+      return sendOverview(res, { error: 'Dieser Adapter wird gerade gelöscht.' });
+    }
+    try {
+      const result = await host.restartAdapter(adapterId);
+      await refreshNavigation();
+      const manifest = registry.getManifest(adapterId);
+      if (!manifest) return sendOverview(res, { error: 'Unbekannter Adapter.' });
+      const label = manifest.name;
+      const message = result.total
+        ? `Adapter „${label}" neu gestartet – ${result.started} von ${result.total} Instanz${result.total === 1 ? '' : 'en'} wieder aktiviert.`
+        : `Adapter „${label}" neu eingelesen (Version ${manifest.version}). Es ist noch keine Instanz angelegt.`;
+      return sendOverview(res, { message });
+    } catch (_) {
+      return sendOverview(res, { error: 'Neustart des Adapters fehlgeschlagen.' });
+    }
+  });
+
   // Neue Instanz eines Adapters anlegen.
   router.post('/adapter/:adapterId/instances', requireAuth, (req, res) => {
     const adapterId = String(req.params.adapterId || '').trim().toLowerCase();
@@ -455,6 +491,55 @@ function adapterRoutes(db) {
       }));
     } catch (_) {
       res.status(500).send('Speichern fehlgeschlagen.');
+    }
+  });
+
+  // Verbindungsdaten einer Datenbank-Instanz als systemweite Datenbank
+  // übernehmen (Manifest-Feld `systemDatabase`). Es werden die gespeicherten
+  // Instanz-Einstellungen kopiert, nicht die gerade im Formular stehenden —
+  // deshalb der Hinweis, vorher zu speichern. Die Kopie ist einmalig: spätere
+  // Adapteränderungen wirken erst bei erneuter Übernahme.
+  router.post('/adapter/instance/:id/system-database', requireAuth, async (req, res) => {
+    try {
+      const instance = await instancesRepo.getInstance(db, Number(req.params.id));
+      if (!instance) return res.status(404).send('Instanz nicht gefunden.');
+      const manifest = registry.getManifest(instance.adapterId);
+      if (!manifest || !manifest.systemDatabase) {
+        return res.status(404).send('Dieser Adapter stellt keine Systemdatenbank bereit.');
+      }
+      if (!SUPPORTED_TYPES.has(manifest.systemDatabase.type)) {
+        return res.send(renderAdapterInstance({
+          adapter: manifest,
+          instance,
+          databaseError: `Datenbanktyp „${manifest.systemDatabase.type}" wird von homeESS nicht unterstützt.`,
+        }));
+      }
+      const mapped = {};
+      for (const [target, key] of Object.entries(manifest.systemDatabase.fields)) {
+        mapped[target] = instance.settings[key];
+      }
+      if (!String(mapped.host || '').trim()) {
+        return res.send(renderAdapterInstance({
+          adapter: manifest,
+          instance,
+          databaseError: 'Diese Instanz hat noch keinen Server eingetragen. Bitte zuerst die Einstellungen ausfüllen und speichern.',
+        }));
+      }
+      const saved = await systemDatabase.save(db, {
+        ...mapped,
+        type: manifest.systemDatabase.type,
+        enabled: true,
+        sourceLabel: `${manifest.name} – ${instance.name}`,
+        sourceInstanceId: instance.id,
+      });
+      return res.send(renderAdapterInstance({
+        adapter: manifest,
+        instance,
+        databaseMessage: `Übernommen: ${saved.protocol}://${saved.host}:${saved.port}/${saved.database}. `
+          + 'Die Systemdatenbank ist eingeschaltet (Einstellungen → Allgemein → Datenbank).',
+      }));
+    } catch (_) {
+      return res.status(500).send('Übernahme fehlgeschlagen.');
     }
   });
 

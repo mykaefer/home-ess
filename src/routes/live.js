@@ -10,6 +10,7 @@ const { readLivePowerValues } = require('../stromverbrauch/aggregation');
 const { readBatterieData } = require('../batterie/config');
 const operatingState = require('../operating-state');
 const timeHandler = require('../time-handler');
+const systemWarning = require('../system-warning');
 const i18n = require('../i18n');
 
 function renderEvent(name, data) {
@@ -62,7 +63,23 @@ function liveRoutes(db) {
         battery: formatHeaderPower(Number.isFinite(batteryPower) ? batteryPower : null),
       },
       ...operatingState.getState(),
+      // Systemweite Warnung für das Warnband im Layout. Sie steht erst, wenn
+      // ein Fehler als persistent gilt, und bleibt bis zur Quittierung.
+      warning: (() => {
+        const current = systemWarning.getState();
+        return { active: current.active, text: current.text, source: current.source, raisedAt: current.raisedAt || null };
+      })(),
     });
+  });
+
+  // Quittierung der systemweiten Warnung: Flag auf false, Warntext leeren.
+  router.post('/live/warnung/quittieren', requireAuth, async (req, res) => {
+    try {
+      const result = await systemWarning.acknowledge(db);
+      res.json({ ok: true, warning: { active: result.active, text: result.text } });
+    } catch (error) {
+      res.status(500).json({ error: 'Warnung konnte nicht quittiert werden.' });
+    }
   });
 
   router.get('/live/events', requireAuth, (req, res) => {
