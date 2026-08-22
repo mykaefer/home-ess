@@ -4,7 +4,7 @@ const { escapeHtml } = require('./components');
 const { getEnabledNavItems } = require('../modules');
 const { getHdpNavItems } = require('../adapters/navigation');
 const { statePickerModal, statePickerScript, statePickerAutoAttach } = require('./state-picker');
-const { currentAccess, canSeePage, pageForPath } = require('../auth/access');
+const { currentAccess, canSeePage, pageForPath, themeBodyClass } = require('../auth/access');
 const i18n = require('../i18n');
 const systemWarning = require('../system-warning');
 
@@ -523,6 +523,10 @@ function renderLayout({
     : access.canOperate
       ? 'access-operate'
       : 'access-read';
+  // Farbthema des Benutzers. Es färbt ausschließlich die Seitenfläche ein;
+  // Titelleiste und Seitenmenü bleiben in jedem Thema unverändert. Bei der
+  // Auswahl „Nur Dashboard dunkel" greift die Klasse nur auf der Dashboard-Seite.
+  const themeClass = themeBodyClass(access.theme, activePath);
   const extraStylesheets = (Array.isArray(stylesheets) ? stylesheets : [])
     .filter((href) => typeof href === 'string' && href.startsWith('/') && !href.startsWith('//'))
     .map((href) => `  <link rel="stylesheet" href="${escapeHtml(href)}">`)
@@ -539,7 +543,7 @@ function renderLayout({
   <link rel="stylesheet" href="/styles.css">
 ${extraStylesheets}
 </head>
-<body class="page-dashboard ${accessClass}" data-access="${access.canWrite ? 'write' : access.canOperate ? 'operate' : 'read'}" data-admin="${access.isAdmin ? 'true' : 'false'}">
+<body class="page-dashboard ${accessClass}${themeClass ? ` ${themeClass}` : ''}" data-theme="${escapeHtml(access.theme || 'hell')}" data-access="${access.canWrite ? 'write' : access.canOperate ? 'operate' : 'read'}" data-admin="${access.isAdmin ? 'true' : 'false'}">
   <div class="app-shell">
     <header class="dashboard-header">
       <button type="button" class="header-logo-button" id="mobile-menu-button" aria-controls="mobile-nav-sheet" aria-label="Menü öffnen">

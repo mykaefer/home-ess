@@ -19,9 +19,9 @@
     flex-wrap: wrap;
     gap: 10px 24px;
     padding: 14px 16px;
-    border: 1px solid var(--color-border, #e5e7eb);
+    border: 1px solid var(--color-border, #e2e6ea);
     border-radius: 10px;
-    background: var(--color-surface, #fff);
+    background: var(--color-surface, #ffffff);
     font-size: 14px;
 }
 
@@ -34,7 +34,7 @@
 .mqttbroker-table th,
 .mqttbroker-table td {
     padding: 8px 10px;
-    border-bottom: 1px solid var(--color-border, #e5e7eb);
+    border-bottom: 1px solid var(--color-border, #e2e6ea);
     text-align: left;
     vertical-align: middle;
 }
@@ -43,7 +43,7 @@
     font-size: 12px;
     text-transform: uppercase;
     letter-spacing: 0.04em;
-    color: #6b7280;
+    color: var(--color-ink-muted);
 }
 
 .mqttbroker-table code {
@@ -73,15 +73,15 @@
 }
 
 .mqttbroker-button--danger {
-    background: #b91c1c;
+    background: var(--color-bad-ink-bright);
 }
 
 .mqttbroker-button--danger:hover {
-    background: #991b1b;
+    background: var(--color-bad-ink);
 }
 
 .mqttbroker-empty {
-    color: #6b7280;
+    color: var(--color-ink-muted);
 }
 
 /* Topic-Browser: aufklappbare Verzeichnisebenen mit Kopierknopf je Zeile. */
@@ -97,15 +97,15 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    color: #6b7280;
+    color: var(--color-ink-muted);
     font-size: 13px;
 }
 
 .mqttbroker-group select {
     padding: 6px 8px;
-    border: 1px solid var(--color-border, #e5e7eb);
+    border: 1px solid var(--color-border, #e2e6ea);
     border-radius: 8px;
-    background: var(--color-surface, #fff);
+    background: var(--color-surface, #ffffff);
     color: inherit;
     font-size: 13px;
 }
@@ -114,25 +114,25 @@
     flex: 1 1 220px;
     min-width: 0;
     padding: 7px 10px;
-    border: 1px solid var(--color-border, #e5e7eb);
+    border: 1px solid var(--color-border, #e2e6ea);
     border-radius: 8px;
-    background: var(--color-surface, #fff);
+    background: var(--color-surface, #ffffff);
     color: inherit;
     font-size: 14px;
 }
 
 .mqttbroker-browser-count {
     margin-left: auto;
-    color: #6b7280;
+    color: var(--color-ink-muted);
     font-size: 13px;
     white-space: nowrap;
 }
 
 .mqttbroker-tree {
     padding: 6px 4px;
-    border: 1px solid var(--color-border, #e5e7eb);
+    border: 1px solid var(--color-border, #e2e6ea);
     border-radius: 10px;
-    background: var(--color-surface, #fff);
+    background: var(--color-surface, #ffffff);
     max-height: 60vh;
     overflow: auto;
 }
@@ -163,7 +163,7 @@
 .mqttbroker-summary .mqttbroker-row::before {
     content: "▸";
     width: 12px;
-    color: #6b7280;
+    color: var(--color-ink-muted);
     font-size: 12px;
 }
 
@@ -198,13 +198,13 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    color: #6b7280;
+    color: var(--color-ink-muted);
     font-size: 12px;
 }
 
 .mqttbroker-row-value {
     margin-left: auto;
-    color: #6b7280;
+    color: var(--color-ink-muted);
     font-size: 13px;
     white-space: nowrap;
 }
@@ -213,7 +213,7 @@
     padding: 1px 7px;
     border-radius: 999px;
     background: rgba(148, 163, 184, 0.22);
-    color: #4b5563;
+    color: var(--color-ink-mid, #475569);
     font-size: 11px;
     font-weight: 700;
 }
@@ -225,14 +225,14 @@
 
 .mqttbroker-children {
     margin-left: 14px;
-    border-left: 1px solid var(--color-border, #e5e7eb);
+    border-left: 1px solid var(--color-border, #e2e6ea);
     padding-left: 4px;
 }
 
 .mqttbroker-copy {
     flex: none;
     padding: 2px 7px;
-    border: 1px solid var(--color-border, #e5e7eb);
+    border: 1px solid var(--color-border, #e2e6ea);
     border-radius: 6px;
     background: transparent;
     color: inherit;
@@ -247,13 +247,13 @@
 
 .mqttbroker-copy.is-copied {
     border-color: var(--color-action, #39705f);
-    color: var(--color-action, #39705f);
+    color: var(--color-action-ink, #39705f);
     font-weight: 700;
 }
 
 .mqttbroker-button--quiet {
     background: transparent;
-    border-color: var(--color-border, #e5e7eb);
+    border-color: var(--color-border, #e2e6ea);
     color: inherit;
     font-weight: 600;
 }
@@ -264,7 +264,7 @@
 
 .mqttbroker-hint {
     margin: 8px 0 0;
-    color: #6b7280;
+    color: var(--color-ink-muted);
     font-size: 13px;
 }
 
@@ -282,7 +282,7 @@
     .mqttbroker-table thead th,
     .mqttbroker-empty,
     .mqttbroker-hint {
-        color: #94a3b8;
+        color: var(--color-ink-faint);
     }
 
     .mqttbroker-filter,
@@ -293,7 +293,7 @@
     }
 
     .mqttbroker-group {
-        color: #94a3b8;
+        color: var(--color-ink-faint);
     }
 
     .mqttbroker-children,
@@ -305,7 +305,7 @@
     .mqttbroker-row-path,
     .mqttbroker-row-value,
     .mqttbroker-summary .mqttbroker-row::before {
-        color: #94a3b8;
+        color: var(--color-ink-faint);
     }
 
     .mqttbroker-badge {

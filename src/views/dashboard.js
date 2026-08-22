@@ -8,6 +8,9 @@ const {
   mobileMinWidthFor,
 } = require('../dashboard/widget-types');
 const { SERIES_COLORS, CHART_WIDTH } = require('../dashboard/chart-svg');
+const {
+  DEFAULT_AREA_OPACITY, MIN_AREA_OPACITY, MAX_AREA_OPACITY,
+} = require('../dashboard/chart-palette');
 
 // Dashboard mit frei konfigurierbaren Widgets, Gruppen und Tabs. Widgets zeigen
 // einen zentralen State, schalten ein Gerät /
@@ -38,6 +41,7 @@ function renderDashboard({
   selectTabId = null,
   chartRanges = [],
   chartAggregates = [],
+  chartFills = [],
   maxChartSeries = 4,
 } = {}) {
   const ctx = { infoFields, systemInfo, chartRanges };
@@ -75,7 +79,7 @@ ${tabs.map((tab) => renderTabButton(tab, tab.id === initialTabId)).join('\n')}
 ${tabs.map((tab) => renderTabPanel(tab, ctx, tab.id === initialTabId)).join('\n')}
         </div>
 
-        ${renderWidgetDialog({ switchTargets, infoFields, tabs, groupsForSelect, tabTitleById, dialogError, chartRanges, chartAggregates, maxChartSeries })}
+        ${renderWidgetDialog({ switchTargets, infoFields, tabs, groupsForSelect, tabTitleById, dialogError, chartRanges, chartAggregates, chartFills, maxChartSeries })}
         ${renderGroupDialog({ groupWidths, tabs })}
         ${renderTabDialog({ maxTabTitleLength, tabDialogError })}
         ${renderDeleteTabDialog()}
@@ -136,6 +140,9 @@ ${tabs.map((tab) => renderTabPanel(tab, ctx, tab.id === initialTabId)).join('\n'
     // gezeichnetes Diagramm dieselbe Reihenfolge verwenden.
     var CHART_COLORS = ${JSON.stringify(SERIES_COLORS)};
     var MAX_CHART_SERIES = ${Number(maxChartSeries) || 4};
+    var CHART_AREA_OPACITY = ${Math.round(DEFAULT_AREA_OPACITY * 100)};
+    var CHART_AREA_OPACITY_MIN = ${Math.round(MIN_AREA_OPACITY * 100)};
+    var CHART_AREA_OPACITY_MAX = ${Math.round(MAX_AREA_OPACITY * 100)};
 
     var EDIT_STORAGE_KEY = 'homeess.dashboard.editing';
     var TAB_STORAGE_KEY = 'homeess.dashboard.activeTab';
@@ -342,16 +349,18 @@ ${tabs.map((tab) => renderTabPanel(tab, ctx, tab.id === initialTabId)).join('\n'
         });
     }
 
-    // Gewählte Linien als Zeilen mit Farbe, Anzeigename und Messreihe. Genau
-    // diese Felder schickt das Formular ab (chartSeriesMeasurements,
-    // chartSeriesLabels, chartSeriesColors — parallele Listen in Zeilenreihenfolge).
+    // Gewählte Linien als Zeilen mit Farbe, Anzeigename, Messreihe und
+    // Flächenfüllung. Genau diese Felder schickt das Formular ab
+    // (chartSeriesMeasurements, chartSeriesLabels, chartSeriesColors,
+    // chartSeriesAreas, chartSeriesAreaOpacities — parallele Listen in
+    // Zeilenreihenfolge).
     function setChartSeries(series) {
       var list = document.getElementById('widgetChartSeriesList');
       list.innerHTML = '';
       for (var i = 0; i < (series || []).length; i++) {
         var entry = series[i];
         if (typeof entry === 'string') entry = { measurement: entry, label: '', color: '' };
-        addChartSeriesRow(entry.measurement, entry.label || '', entry.color || '');
+        addChartSeriesRow(entry.measurement, entry.label || '', entry.color || '', entry);
       }
       syncChartSeriesHint();
     }
@@ -363,7 +372,8 @@ ${tabs.map((tab) => renderTabPanel(tab, ctx, tab.id === initialTabId)).join('\n'
       return names;
     }
 
-    function addChartSeriesRow(measurement, label, color) {
+    function addChartSeriesRow(measurement, label, color, options) {
+      options = options || {};
       var list = document.getElementById('widgetChartSeriesList');
       var index = list.children.length;
       var row = document.createElement('div');
@@ -401,6 +411,55 @@ ${tabs.map((tab) => renderTabPanel(tab, ctx, tab.id === initialTabId)).join('\n'
       hidden.name = 'chartSeriesMeasurements';
       hidden.value = measurement;
 
+      // Flächenfüllung: Schalter und Deckkraft in Prozent. Der Schalter selbst
+      // wird nicht abgeschickt — ein nicht angehaktes Kästchen fiele aus dem
+      // Formular heraus und die parallelen Listen verschöben sich. Stattdessen
+      // trägt ein verstecktes Feld je Zeile immer „1" oder „0".
+      var area = document.createElement('label');
+      area.className = 'chart-series-area';
+      area.title = 'Fläche zwischen Linie und Nulllinie in der Linienfarbe füllen';
+
+      var areaBox = document.createElement('input');
+      areaBox.type = 'checkbox';
+      areaBox.checked = options.area === true;
+
+      var areaFlag = document.createElement('input');
+      areaFlag.type = 'hidden';
+      areaFlag.name = 'chartSeriesAreas';
+      areaFlag.value = areaBox.checked ? '1' : '0';
+
+      var areaText = document.createElement('span');
+      areaText.textContent = 'Füllen';
+
+      var opacity = document.createElement('input');
+      opacity.type = 'number';
+      opacity.name = 'chartSeriesAreaOpacities';
+      opacity.className = 'chart-series-opacity';
+      opacity.min = CHART_AREA_OPACITY_MIN;
+      opacity.max = CHART_AREA_OPACITY_MAX;
+      opacity.step = 5;
+      opacity.value = options.areaOpacity
+        ? Math.round(Number(options.areaOpacity) * 100)
+        : CHART_AREA_OPACITY;
+      opacity.title = 'Deckkraft der Fläche in Prozent';
+      opacity.setAttribute('aria-label', 'Deckkraft der Fläche in Prozent für ' + measurement);
+      // Ohne Füllung ist die Deckkraft gegenstandslos — aber nur schreibgeschützt,
+      // nicht deaktiviert: ein deaktiviertes Feld schickt der Browser nicht mit,
+      // und die parallelen Listen des Formulars gerieten aus dem Tritt.
+      function syncOpacityState() {
+        opacity.readOnly = !areaBox.checked;
+        opacity.classList.toggle('is-inactive', !areaBox.checked);
+      }
+      syncOpacityState();
+
+      areaBox.addEventListener('change', function () {
+        areaFlag.value = areaBox.checked ? '1' : '0';
+        syncOpacityState();
+      });
+
+      area.appendChild(areaBox);
+      area.appendChild(areaText);
+
       var remove = document.createElement('button');
       remove.type = 'button';
       remove.className = 'widget-icon-btn';
@@ -415,8 +474,11 @@ ${tabs.map((tab) => renderTabPanel(tab, ctx, tab.id === initialTabId)).join('\n'
       texts.appendChild(source);
       row.appendChild(colorInput);
       row.appendChild(texts);
+      row.appendChild(area);
+      row.appendChild(opacity);
       row.appendChild(remove);
       row.appendChild(hidden);
+      row.appendChild(areaFlag);
       list.appendChild(row);
     }
 
@@ -473,6 +535,7 @@ ${tabs.map((tab) => renderTabPanel(tab, ctx, tab.id === initialTabId)).join('\n'
       document.getElementById('widgetChartTitle').value = chart.title || '';
       document.getElementById('widgetChartRange').value = chart.range || '24h';
       document.getElementById('widgetChartAggregate').value = chart.aggregate || 'mean';
+      document.getElementById('widgetChartFill').value = chart.fill || 'none';
       document.getElementById('widgetChartUnit').value = chart.unit || '';
       setChartSeries(chart.series || chart.measurements || []);
       if (values.type === 'chart') loadChartMeasurements();
@@ -1340,7 +1403,7 @@ function renderColorChoice({ fieldId, name, label, defaultPicker }) {
               </div>`;
 }
 
-function renderWidgetDialog({ switchTargets, infoFields = [], tabs = [], groupsForSelect = [], tabTitleById = new Map(), dialogError = '', chartRanges = [], chartAggregates = [], maxChartSeries = 4 }) {
+function renderWidgetDialog({ switchTargets, infoFields = [], tabs = [], groupsForSelect = [], tabTitleById = new Map(), dialogError = '', chartRanges = [], chartAggregates = [], chartFills = [], maxChartSeries = 4 }) {
   const typeTabs = WIDGET_TYPE_DEFS
     .map((def, index) => `              <button type="button" class="dialog-tab${index === 0 ? ' is-active' : ''}" data-tab="${def.type}" onclick="setWidgetType('${def.type}')">${escapeHtml(def.label)}</button>`)
     .join('\n');
@@ -1456,6 +1519,13 @@ ${typeTabs}
                   </select>
                 </label>
               </div>
+              <label class="field-block" for="widgetChartFill">
+                <span>Aufzeichnungslücken</span>
+                <select id="widgetChartFill" name="chartFill">
+                  ${chartFills.map((entry) => `<option value="${escapeHtml(entry.key)}">${escapeHtml(entry.label)}</option>`).join('')}
+                </select>
+                <small class="muted">Was passiert, wenn für einen Zeitabschnitt keine Werte in der Datenbank stehen — etwa weil der Server aus war. „Lücke lassen" zeigt den Ausfall; die anderen Einstellungen ergänzen Punkte, die so nicht gemessen wurden.</small>
+              </label>
               <label class="field-block" for="widgetChartUnit">
                 <span>Einheit <span class="pool-optional">(optional)</span></span>
                 <input type="text" id="widgetChartUnit" name="chartUnit" maxlength="12" placeholder="z.B. W">

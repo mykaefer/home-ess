@@ -2,7 +2,7 @@
   "id": "influxdb",
   "name": "InfluxDB",
   "prefix": "influxdb",
-  "version": "1.0.1",
+  "version": "1.0.3",
   "description": "Schreibt die Werte ausgewählter States als Historie in eine InfluxDB 1.x. Die Auswahl erfolgt je State über den Eigenschaften-Dialog auf der States-Seite. Eine lokale Datenbank lässt sich über die Ersteinrichtung anlegen; ebenso kann eine bereits vorhandene Installation auf diesem oder einem anderen Server eingebunden werden.",
   "copyright": "Copyright (C) 2026 Kevin Käfer",
   "multiInstance": true,
@@ -56,6 +56,10 @@
           {
             "value": "interval",
             "label": "In festen Abständen"
+          },
+          {
+            "value": "both",
+            "label": "In festen Abständen und bei Änderung"
           }
         ]
       },
@@ -64,14 +68,14 @@
         "label": "Abstand (Sekunden)",
         "type": "number",
         "default": 60,
-        "hint": "Nur bei festen Abständen. Es wird der zuletzt bekannte Wert geschrieben."
+        "hint": "Nur mit festen Abständen. Es wird der zuletzt bekannte Wert geschrieben."
       },
       {
         "key": "debounceSeconds",
         "label": "Entprellzeit (Sekunden)",
         "type": "number",
         "default": 5,
-        "hint": "Mindestabstand zwischen zwei Schreibvorgängen dieses States. 0 = keine Entprellung."
+        "hint": "Mindestabstand zwischen zwei Schreibvorgängen dieses States bei Wertänderung. 0 = keine Entprellung."
       },
       {
         "key": "retentionDays",

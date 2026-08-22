@@ -27,6 +27,16 @@ function numberSetting(value, fallback, min, max) {
   return Math.min(max == null ? Number.MAX_SAFE_INTEGER : max, Math.max(min == null ? 0 : min, number));
 }
 
+// Speichermodus: bei Wertänderung, in festen Abständen oder beides. Alles
+// Unbekannte fällt auf „bei Änderung" zurück — so bleibt eine ältere oder
+// fehlerhafte Auswahl harmlos.
+const MODES = new Set(['change', 'interval', 'both']);
+
+function modeSetting(value) {
+  const text = String(value == null ? '' : value).trim();
+  return MODES.has(text) ? text : 'change';
+}
+
 function boolSetting(value, fallback) {
   if (value === undefined || value === null || value === '') return fallback;
   if (typeof value === 'boolean') return value;
@@ -277,10 +287,12 @@ module.exports = function createInfluxAdapter(host) {
 
   // Wertänderung mit Entprellung: der erste Wert geht sofort, weitere frühestens
   // nach Ablauf der Entprellzeit — dann mit dem zuletzt gemeldeten Wert.
+  // Im Modus „nur feste Abstände" wird der Wert lediglich gemerkt; geschrieben
+  // wird er dort allein vom Intervall-Zeitgeber.
   function onValueChanged(entry, value) {
     entry.lastValue = value;
     entry.lastValueAt = Date.now();
-    if (entry.mode !== 'change') return;
+    if (entry.mode === 'interval') return;
     const debounceMs = entry.debounceSeconds * 1000;
     const now = Date.now();
     if (!debounceMs || now - entry.lastWriteAt >= debounceMs) {
@@ -312,7 +324,7 @@ module.exports = function createInfluxAdapter(host) {
     const entry = {
       topic,
       alias: String(options.alias || '').trim() || aliasFromTopic(topic),
-      mode: options.mode === 'interval' ? 'interval' : 'change',
+      mode: modeSetting(options.mode),
       intervalSeconds: numberSetting(options.intervalSeconds, 60, 1, 86400),
       debounceSeconds: numberSetting(options.debounceSeconds, 5, 0, 3600),
       retentionDays: Math.max(0, Math.round(numberSetting(options.retentionDays, 730, 0, 36500))),
@@ -330,7 +342,10 @@ module.exports = function createInfluxAdapter(host) {
       host.warn(`State ${topic} konnte nicht abonniert werden: ${error.message}`);
       return null;
     }
-    if (entry.mode === 'interval') {
+    // Fester Abstand: auch im Modus „beides" läuft der Zeitgeber, damit die
+    // Messreihe selbst dann Stützpunkte bekommt, wenn sich der Wert lange nicht
+    // ändert.
+    if (entry.mode !== 'change') {
       entry.intervalTimer = setInterval(() => {
         if (entry.lastValue === undefined) return;
         enqueue(entry, entry.lastValue, Date.now());
@@ -363,7 +378,7 @@ module.exports = function createInfluxAdapter(host) {
       const options = wanted.get(topic);
       const unchanged = options
         && (String(options.alias || '').trim() || aliasFromTopic(topic)) === entry.alias
-        && (options.mode === 'interval' ? 'interval' : 'change') === entry.mode
+        && modeSetting(options.mode) === entry.mode
         && numberSetting(options.intervalSeconds, 60, 1, 86400) === entry.intervalSeconds
         && numberSetting(options.debounceSeconds, 5, 0, 3600) === entry.debounceSeconds
         && Math.max(0, Math.round(numberSetting(options.retentionDays, 730, 0, 36500))) === entry.retentionDays;
@@ -406,11 +421,12 @@ module.exports = function createInfluxAdapter(host) {
         { key: 'mode', label: t('opt_mode', 'Speichern'), type: 'select', default: 'change', options: [
           { value: 'change', label: t('on_change', 'Bei Änderung') },
           { value: 'interval', label: t('opt_interval_mode', 'In festen Abständen') },
+          { value: 'both', label: t('opt_both_mode', 'In festen Abständen und bei Änderung') },
         ] },
         { key: 'intervalSeconds', label: t('opt_interval', 'Abstand (Sekunden)'), type: 'number', default: 60,
-          hint: t('opt_interval_hint', 'Nur bei festen Abständen. Es wird der zuletzt bekannte Wert geschrieben.') },
+          hint: t('opt_interval_hint', 'Nur mit festen Abständen. Es wird der zuletzt bekannte Wert geschrieben.') },
         { key: 'debounceSeconds', label: t('opt_debounce', 'Entprellzeit (Sekunden)'), type: 'number', default: 5,
-          hint: t('opt_debounce_hint', 'Mindestabstand zwischen zwei Schreibvorgängen. 0 = keine Entprellung.') },
+          hint: t('opt_debounce_hint', 'Mindestabstand zwischen zwei Schreibvorgängen bei Wertänderung. 0 = keine Entprellung.') },
         { key: 'retentionDays', label: t('opt_retention', 'Keepalive (Tage)'), type: 'select', default: '730',
           options: days.map((value) => ({
             value: String(value),
@@ -442,6 +458,14 @@ module.exports = function createInfluxAdapter(host) {
     };
   }
 
+  // Beschriftung des Speichermodus für die Verwaltungstabelle.
+  function modeLabel(entry) {
+    const interval = `${t('interval', 'Abstand')} ${entry.intervalSeconds} s`;
+    if (entry.mode === 'interval') return interval;
+    if (entry.mode === 'both') return `${interval} + ${t('on_change', 'Bei Änderung')}`;
+    return t('on_change', 'Bei Änderung');
+  }
+
   function managementView(basePath, access) {
     const state = setupState();
     const rows = Array.from(tracked.values())
@@ -450,9 +474,7 @@ module.exports = function createInfluxAdapter(host) {
         <tr>
           <td><code>${escapeHtml(entry.topic)}</code></td>
           <td><code>${escapeHtml(entry.alias)}</code></td>
-          <td>${entry.mode === 'interval'
-    ? `${escapeHtml(t('interval', 'Abstand'))} ${entry.intervalSeconds} s`
-    : escapeHtml(t('on_change', 'Bei Änderung'))}</td>
+          <td>${escapeHtml(modeLabel(entry))}</td>
           <td>${entry.debounceSeconds} s</td>
           <td>${entry.retentionDays ? `${entry.retentionDays} ${escapeHtml(t('days', 'Tage'))}` : escapeHtml(t('forever', 'unbegrenzt'))}</td>
           <td>${escapeHtml(formatTime(entry.lastWriteAt))}</td>

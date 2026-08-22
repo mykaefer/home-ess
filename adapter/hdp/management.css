@@ -20,7 +20,7 @@
 
 .hdp-overview-head p {
     margin: 0;
-    color: #64748b;
+    color: var(--color-ink-muted);
 }
 
 .hdp-device-page button,
@@ -43,8 +43,8 @@
 .hdp-device-page button.button-secondary,
 .hdp-overview button.button-secondary {
     border-color: var(--color-action, #39705f);
-    background: var(--color-surface, #fff);
-    color: var(--color-action, #39705f);
+    background: var(--color-surface, #ffffff);
+    color: var(--color-action-ink, #39705f);
 }
 
 .hdp-device-page button.button-secondary:hover,
@@ -70,18 +70,18 @@
 .hdp-overview-summary > span {
     padding: 6px 10px;
     border-radius: 999px;
-    background: #eef6ff;
-    color: #334155;
+    background: var(--color-info-wash);
+    color: var(--color-ink-soft);
     font-size: 12px;
     font-weight: 650;
 }
 
 .hdp-overview-summary > span.has-offline {
-    background: #f1f5f9;
+    background: var(--color-surface-muted);
 }
 
 .hdp-overview-summary strong {
-    color: #0f172a;
+    color: var(--color-ink);
     font-size: 14px;
 }
 
@@ -89,10 +89,10 @@
     width: min(280px, 38vw);
     box-sizing: border-box;
     padding: 9px 12px;
-    border: 1px solid #cbd5e1;
+    border: 1px solid var(--color-line-strong);
     border-radius: 8px;
-    background: #fff;
-    color: #0f172a;
+    background: var(--color-surface);
+    color: var(--color-ink);
     font: inherit;
 }
 
@@ -120,7 +120,7 @@
 .hdp-list-head {
     margin: 0;
     padding: 19px 22px 15px;
-    border-bottom: 1px solid #e8edf2;
+    border-bottom: 1px solid var(--color-line);
 }
 
 .hdp-device-list {
@@ -135,7 +135,7 @@
     align-items: center;
     min-width: 0;
     padding: 16px 22px;
-    border-top: 1px solid #eef2f6;
+    border-top: 1px solid var(--color-line-soft);
 }
 
 .hdp-device-row:first-child {
@@ -143,15 +143,15 @@
 }
 
 .hdp-device-row:hover {
-    background: #fbfdff;
+    background: var(--color-surface);
 }
 
 .hdp-device-row.is-offline {
-    background: #fafbfc;
+    background: var(--color-surface-subtle);
 }
 
 .hdp-device-row--found {
-    background: #fbfefc;
+    background: var(--color-ok-wash);
 }
 
 .hdp-device-identity {
@@ -169,7 +169,7 @@
     overflow: hidden;
     min-width: 0;
     margin: 0;
-    color: #0f172a;
+    color: var(--color-ink);
     font-size: 16px;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -181,7 +181,7 @@
     height: 9px;
     border-radius: 50%;
     background: #22c55e;
-    box-shadow: 0 0 0 3px #dcfce7;
+    box-shadow: 0 0 0 3px var(--color-ok-tint);
 }
 
 .is-offline .hdp-status-dot {
@@ -191,7 +191,7 @@
 
 .has-critical-signal .hdp-status-dot {
     background: #eab308;
-    box-shadow: 0 0 0 3px #fef9c3;
+    box-shadow: 0 0 0 3px var(--color-warn-tint);
 }
 
 .hdp-overview .status-badge,
@@ -207,20 +207,20 @@
 
 .hdp-overview .status-badge.status-ok,
 .hdp-device-page .status-badge.status-ok {
-    background: #dcfce7;
-    color: #166534;
+    background: var(--color-ok-tint);
+    color: var(--color-ok-ink);
 }
 
 .hdp-overview .status-badge.status-off,
 .hdp-device-page .status-badge.status-off {
-    background: #e2e8f0;
-    color: #475569;
+    background: var(--color-surface-sunken);
+    color: var(--color-ink-mid);
 }
 
 .hdp-overview .status-badge.status-warn,
 .hdp-device-page .status-badge.status-warn {
-    background: #fef9c3;
-    color: #854d0e;
+    background: var(--color-warn-tint);
+    color: var(--color-warn-ink);
 }
 
 .hdp-device-subtitle {
@@ -229,7 +229,7 @@
     align-items: center;
     gap: 7px;
     margin: 7px 0 0 18px;
-    color: #64748b;
+    color: var(--color-ink-muted);
     font-size: 12px;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -259,7 +259,7 @@
 }
 
 .hdp-fact-label {
-    color: #64748b;
+    color: var(--color-ink-muted);
     font-size: 10px;
     font-weight: 750;
     letter-spacing: .04em;
@@ -270,14 +270,14 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    color: #1e293b;
+    color: var(--color-ink);
     font-size: 13px;
     font-weight: 700;
     white-space: nowrap;
 }
 
 .hdp-fact-value small {
-    color: #64748b;
+    color: var(--color-ink-muted);
     font-size: 11px;
     font-weight: 600;
 }
@@ -294,7 +294,7 @@
     display: block;
     width: 3px;
     border-radius: 2px 2px 0 0;
-    background: #cbd5e1;
+    background: var(--color-surface-strong);
 }
 
 .hdp-signal-bars i:nth-child(1) { height: 4px; }
@@ -339,8 +339,10 @@
     margin: -4px 0 0 18px;
     padding: 8px 10px;
     border-radius: 7px;
-    background: #fff7ed;
-    color: #9a3412;
+    background: var(--color-warn-wash);
+    /* Grund und Schrift kommen aus derselben Hinweisfamilie; damit kehrt sich
+       das Paar im dunklen Thema geschlossen um. */
+    color: var(--color-warn-ink, #854d0e);
     font-size: 12px;
 }
 
@@ -350,17 +352,17 @@
     flex-direction: column;
     gap: 4px;
     padding: 38px 20px;
-    color: #64748b;
+    color: var(--color-ink-muted);
     text-align: center;
 }
 
 .hdp-empty-state strong {
-    color: #334155;
+    color: var(--color-ink-soft);
 }
 
 .hdp-filter-empty {
     margin: 20px 0;
-    color: #64748b;
+    color: var(--color-ink-muted);
     text-align: center;
 }
 
@@ -413,7 +415,7 @@
     place-items: center;
     border-radius: 999px;
     background: var(--color-action-tint, #e9f1ee);
-    color: var(--color-action, #39705f);
+    color: var(--color-action-ink, #39705f);
     font-size: 13px;
     font-weight: 800;
 }
@@ -421,9 +423,9 @@
 .hdp-ir-code-list {
     margin-bottom: 22px;
     overflow: hidden;
-    border: 1px solid #dbe3e1;
+    border: 1px solid var(--color-line);
     border-radius: 10px;
-    background: #fff;
+    background: var(--color-surface);
 }
 
 .hdp-ir-code-list-head,
@@ -436,8 +438,8 @@
 
 .hdp-ir-code-list-head {
     padding: 8px 12px;
-    background: #f1f5f4;
-    color: #64748b;
+    background: var(--color-surface-muted);
+    color: var(--color-ink-muted);
     font-size: 11px;
     font-weight: 750;
     text-transform: uppercase;
@@ -446,7 +448,7 @@
 .hdp-ir-code-row {
     margin: 0;
     padding: 7px 12px;
-    border-top: 1px solid #e8eeec;
+    border-top: 1px solid var(--color-line);
 }
 
 .hdp-ir-code-name,
@@ -464,14 +466,14 @@
 .hdp-ir-state-path {
     display: block;
     overflow: hidden;
-    color: #475569;
+    color: var(--color-ink-mid);
     font-size: 11px;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 
 .hdp-ir-code-row time {
-    color: #64748b;
+    color: var(--color-ink-muted);
     font-size: 12px;
     white-space: nowrap;
 }
@@ -509,11 +511,11 @@
 .hdp-ir-facts > div {
     padding: 12px 14px;
     border-radius: 9px;
-    background: #f8fafc;
+    background: var(--color-surface-subtle);
 }
 
 .hdp-ir-facts dt {
-    color: #64748b;
+    color: var(--color-ink-muted);
     font-size: 11px;
     font-weight: 750;
     text-transform: uppercase;
@@ -521,18 +523,18 @@
 
 .hdp-ir-facts dd {
     margin: 4px 0 0;
-    color: #0f172a;
+    color: var(--color-ink);
     font-weight: 750;
 }
 
 .hdp-ir-empty {
-    color: #64748b;
+    color: var(--color-ink-muted);
     text-align: center;
 }
 
 .hdp-ir-empty h3 {
     margin: 0 0 5px;
-    color: #334155;
+    color: var(--color-ink-soft);
 }
 
 .hdp-device-page[data-hdp-ir-page] .field label {
@@ -545,21 +547,21 @@
     width: 100%;
     box-sizing: border-box;
     padding: 10px 12px;
-    border: 1px solid #cbd5e1;
+    border: 1px solid var(--color-line-strong);
     border-radius: 8px;
-    background: #fff;
-    color: #0f172a;
+    background: var(--color-surface);
+    color: var(--color-ink);
     font: inherit;
 }
 
 .hdp-device-page button.button-danger {
-    border-color: #fecaca;
-    background: #fff;
-    color: #b91c1c;
+    border-color: var(--color-bad-line);
+    background: var(--color-surface);
+    color: var(--color-bad-ink-bright);
 }
 
 .hdp-device-page button.button-danger:hover {
-    background: #fee2e2;
+    background: var(--color-bad-tint);
 }
 
 .hdp-device-head {
@@ -575,14 +577,14 @@
 }
 
 .hdp-back-link {
-    color: #64748b;
+    color: var(--color-ink-muted);
     font-size: 13px;
     font-weight: 650;
     text-decoration: none;
 }
 
 .hdp-back-link:hover {
-    color: var(--color-action, #39705f);
+    color: var(--color-action-ink, #39705f);
 }
 
 .hdp-device-meta {
@@ -591,7 +593,7 @@
     flex-wrap: wrap;
     gap: 7px 14px;
     margin: 0;
-    color: #64748b;
+    color: var(--color-ink-muted);
     font-size: 13px;
 }
 
@@ -636,7 +638,7 @@
 .hdp-status-grid > div {
     min-width: 0;
     padding: 3px 16px;
-    border-left: 1px solid #e5e7eb;
+    border-left: 1px solid var(--color-line);
 }
 
 .hdp-status-grid > div:first-child {
@@ -646,7 +648,7 @@
 
 .hdp-status-grid dt {
     margin-bottom: 5px;
-    color: #64748b;
+    color: var(--color-ink-muted);
     font-size: 11px;
     font-weight: 750;
     letter-spacing: .045em;
@@ -656,7 +658,7 @@
 .hdp-status-grid dd {
     overflow: hidden;
     margin: 0;
-    color: #0f172a;
+    color: var(--color-ink);
     font-size: 17px;
     font-weight: 750;
     text-overflow: ellipsis;
@@ -667,7 +669,7 @@
     display: block;
     overflow: hidden;
     margin-top: 4px;
-    color: #64748b;
+    color: var(--color-ink-muted);
     font-size: 11px;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -676,8 +678,8 @@
 .hdp-runtime-line {
     margin: 18px 0 0;
     padding-top: 13px;
-    border-top: 1px solid #eef2f6;
-    color: #64748b;
+    border-top: 1px solid var(--color-line-soft);
+    color: var(--color-ink-muted);
     font-size: 12px;
 }
 
@@ -694,7 +696,7 @@
 .hdp-section-kicker {
     display: block;
     margin-bottom: 5px;
-    color: var(--color-action, #39705f);
+    color: var(--color-action-ink, #39705f);
     font-size: 11px;
     font-weight: 800;
     letter-spacing: .07em;
@@ -710,7 +712,7 @@
 .hdp-device-page .field > label,
 .hdp-range-field legend,
 .hdp-time-field legend {
-    color: #334155;
+    color: var(--color-ink-soft);
     font-size: 13px;
     font-weight: 700;
 }
@@ -723,10 +725,10 @@
     width: 100%;
     box-sizing: border-box;
     padding: 10px 12px;
-    border: 1px solid #cbd5e1;
+    border: 1px solid var(--color-line-strong);
     border-radius: 8px;
-    background: #fff;
-    color: #0f172a;
+    background: var(--color-surface);
+    color: var(--color-ink);
     font: inherit;
 }
 
@@ -759,9 +761,9 @@
     min-width: 0;
     margin: 0;
     padding: 13px;
-    border: 1px solid #e2e8f0;
+    border: 1px solid var(--color-line);
     border-radius: 10px;
-    background: #f8fafc;
+    background: var(--color-surface-subtle);
 }
 
 .hdp-range-field legend,
@@ -775,7 +777,7 @@
     flex-direction: column;
     gap: 5px;
     min-width: 0;
-    color: #64748b;
+    color: var(--color-ink-muted);
     font-size: 11px;
     font-weight: 650;
 }
@@ -787,14 +789,14 @@
     gap: 10px 20px;
     margin-top: 16px;
     padding-top: 15px;
-    border-top: 1px solid #eef2f6;
+    border-top: 1px solid var(--color-line-soft);
 }
 
 .hdp-toggle-row label {
     display: inline-flex;
     align-items: center;
     gap: 8px;
-    color: #334155;
+    color: var(--color-ink-soft);
     font-size: 13px;
     font-weight: 650;
 }
@@ -816,7 +818,7 @@
     display: flex;
     flex-direction: column;
     gap: 3px;
-    color: #64748b;
+    color: var(--color-ink-muted);
     font-size: 10px;
     font-weight: 750;
 }
@@ -825,7 +827,7 @@
     width: 100%;
     box-sizing: border-box;
     padding: 10px 7px;
-    border: 1px solid #cbd5e1;
+    border: 1px solid var(--color-line-strong);
     border-radius: 8px;
 }
 
@@ -844,7 +846,7 @@
     padding: 5px 9px;
     border-radius: 999px;
     background: var(--color-action-tint, #e9f1ee);
-    color: var(--color-action, #39705f);
+    color: var(--color-action-ink, #39705f);
     font-size: 11px;
     font-weight: 750;
 }
@@ -863,7 +865,7 @@
 
 .hdp-save-bar p {
     margin: 0;
-    color: #475569;
+    color: var(--color-ink-mid);
     font-size: 13px;
 }
 
@@ -875,8 +877,8 @@
     margin-bottom: 16px;
     padding: 12px 14px;
     border-radius: 10px;
-    background: #f8fafc;
-    color: #475569;
+    background: var(--color-surface-subtle);
+    color: var(--color-ink-mid);
     font-size: 13px;
 }
 
@@ -898,8 +900,8 @@
 }
 
 .hdp-danger-card {
-    border-color: #fecaca;
-    background: #fffafa;
+    border-color: var(--color-bad-line);
+    background: var(--color-bad-wash);
 }
 
 /* Die Breite gehört dem Dialog, nicht dem Formular darin. Vorher setzten beide
@@ -1055,9 +1057,9 @@
     width: 100%;
     box-sizing: border-box;
     padding: 9px 10px;
-    border: 1px dashed #cbd5e1;
+    border: 1px dashed var(--color-line-strong);
     border-radius: 8px;
-    background: #f8fafc;
+    background: var(--color-surface-subtle);
     font: inherit;
     font-size: 13px;
 }
@@ -1077,9 +1079,9 @@
     gap: 10px;
     min-width: 0;
     padding: 14px 16px;
-    border: 1px solid #e2e8f0;
+    border: 1px solid var(--color-line);
     border-radius: 12px;
-    background: #f8fafc;
+    background: var(--color-surface-subtle);
 }
 
 .hdp-channel-card.is-empty {
@@ -1102,7 +1104,7 @@
 
 .hdp-channel-version {
     margin: 0;
-    color: #0f172a;
+    color: var(--color-ink);
     font-size: 22px;
     font-weight: 700;
     font-variant-numeric: tabular-nums;
@@ -1124,7 +1126,7 @@
 }
 
 .hdp-channel-facts dt {
-    color: #64748b;
+    color: var(--color-ink-muted);
     font-size: 12px;
     font-weight: 700;
 }
@@ -1132,7 +1134,7 @@
 .hdp-channel-facts dd {
     margin: 0;
     min-width: 0;
-    color: #334155;
+    color: var(--color-ink-soft);
     font-size: 12px;
     overflow-wrap: anywhere;
 }
@@ -1160,7 +1162,7 @@
     min-width: 0;
     padding: 8px 10px;
     border-radius: 8px;
-    background: #fff;
+    background: var(--color-surface);
     box-shadow: inset 0 0 0 1px #e8edf2;
 }
 
@@ -1173,14 +1175,14 @@
 }
 
 .hdp-artifact-meta {
-    color: #64748b;
+    color: var(--color-ink-muted);
     font-size: 12px;
     overflow-wrap: anywhere;
 }
 
 .hdp-artifact-list .is-missing {
-    box-shadow: inset 0 0 0 1px #fecaca;
-    background: #fffafa;
+    box-shadow: inset 0 0 0 1px var(--color-bad-line);
+    background: var(--color-bad-wash);
 }
 
 #hdp-release-result:empty {
@@ -1218,7 +1220,7 @@
     display: none;
     content: attr(data-label);
     margin-bottom: 4px;
-    color: #64748b;
+    color: var(--color-ink-muted);
     font-size: 12px;
     font-weight: 700;
 }
@@ -1228,10 +1230,10 @@
     width: 100%;
     box-sizing: border-box;
     padding: 8px 10px;
-    border: 1px solid #cbd5e1;
+    border: 1px solid var(--color-line-strong);
     border-radius: 8px;
-    background: #fff;
-    color: #0f172a;
+    background: var(--color-surface);
+    color: var(--color-ink);
     font: inherit;
 }
 
@@ -1239,23 +1241,23 @@
     width: 100%;
     height: 36px;
     padding: 2px;
-    border: 1px solid #cbd5e1;
+    border: 1px solid var(--color-line-strong);
     border-radius: 8px;
-    background: #fff;
+    background: var(--color-surface);
     cursor: pointer;
 }
 
 .hdp-argb-head {
     padding-bottom: 2px;
-    border-bottom: 1px solid #e2e8f0;
-    color: #64748b;
+    border-bottom: 1px solid var(--color-line);
+    color: var(--color-ink-muted);
     font-size: 12px;
     font-weight: 700;
     letter-spacing: .02em;
 }
 
 .hdp-argb-index {
-    color: #64748b;
+    color: var(--color-ink-muted);
     font-size: 13px;
     font-variant-numeric: tabular-nums;
     text-align: right;
@@ -1367,7 +1369,7 @@
     .hdp-argb-row {
         grid-template-columns: 1fr;
         padding: 12px;
-        border: 1px solid #e2e8f0;
+        border: 1px solid var(--color-line);
         border-radius: 10px;
     }
 

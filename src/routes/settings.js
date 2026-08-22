@@ -5,7 +5,7 @@ const { requireAuth } = require('../auth/session');
 const { loadMqttConfig, saveMqttConfig } = require('../mqtt/config');
 const mqttClient = require('../mqtt/client');
 const { loadAllStateDefinitions } = require('../mqtt/state-definitions');
-const { listUsers, createUser, updateUser, deleteUser, getUser } = require('../auth/users');
+const { listUsers, createUser, updateUser, setUserTheme, deleteUser, getUser } = require('../auth/users');
 const modulesState = require('../modules');
 const renderSettings = require('../views/settings');
 const timeHandler = require('../time-handler');
@@ -113,6 +113,23 @@ function settingsRoutes(db) {
   // Alter Direktlink -> Einstellungen, Tab „Module".
   router.get('/module', requireAuth, (req, res) => res.redirect('/settings?tab=module'));
 
+  // --- Darstellung (Farbthema je Benutzer) ---------------------------------
+  // Jeder angemeldete Benutzer darf sein eigenes Farbthema wählen – unabhängig
+  // von der Rolle, da es keine Anlagendaten verändert.
+  router.post('/settings/theme', requireAuth, async (req, res, next) => {
+    const userId = req.session && req.session.userId;
+    try {
+      await setUserTheme(db, userId, req.body.theme);
+      // Neu laden, damit die Seite sofort im gewählten Thema erscheint.
+      return res.redirect('/settings?tab=allgemein');
+    } catch (err) {
+      if (err.validation) {
+        return sendSettings(res, { activeTab: 'allgemein', themeError: err.message }).catch(next);
+      }
+      return next(err);
+    }
+  });
+
   // --- Benutzerverwaltung --------------------------------------------------
   router.post('/settings/users', requireAuth, async (req, res, next) => {
     try {
@@ -121,6 +138,7 @@ function settingsRoutes(db) {
         password: req.body.password,
         role: req.body.role,
         visiblePages: req.body.pages,
+        theme: req.body.theme,
       });
       await sendSettings(res, { activeTab: 'benutzer', userMessage: 'Benutzer angelegt.' });
     } catch (err) {
@@ -133,6 +151,7 @@ function settingsRoutes(db) {
           userDialogValues: {
             name: req.body.name || '',
             role: req.body.role || 'read',
+            theme: req.body.theme || 'hell',
             pages: normalizePagesEcho(req.body.pages),
           },
         });
@@ -148,6 +167,7 @@ function settingsRoutes(db) {
         password: req.body.password,
         role: req.body.role,
         visiblePages: req.body.pages,
+        theme: req.body.theme,
       });
       await sendSettings(res, { activeTab: 'benutzer', userMessage: 'Benutzer gespeichert.' });
     } catch (err) {
@@ -162,6 +182,7 @@ function settingsRoutes(db) {
             id: Number(req.params.id),
             name: req.body.name || '',
             role: req.body.role || 'read',
+            theme: req.body.theme || 'hell',
             isAdmin: existing ? existing.isAdmin : false,
             pages: normalizePagesEcho(req.body.pages),
           },

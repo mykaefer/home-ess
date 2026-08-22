@@ -2,7 +2,7 @@
 
 const { renderLayout } = require('./layout');
 const { escapeHtml, statusText } = require('./components');
-const { PAGES, ROLES, ROLE_LABELS } = require('../auth/access');
+const { PAGES, ROLES, ROLE_LABELS, THEMES, THEME_LABELS, currentAccess } = require('../auth/access');
 const { modulesPanel } = require('./modules');
 const { remoteAccessPanel } = require('./remote-access');
 const { INTERVAL_LABELS } = require('../update/settings');
@@ -16,6 +16,19 @@ const SETTINGS_TABS = [
   { key: 'fernzugriff', label: 'Fernzugriff' },
 ];
 const SETTINGS_TAB_KEYS = new Set(SETTINGS_TABS.map((tab) => tab.key));
+
+// Kurzbeschreibung je Farbthema für die Auswahl unter „Darstellung".
+const THEME_HINTS = {
+  hell: 'Helle Arbeitsfläche wie bisher.',
+  dunkel: 'Alle Seiten auf dunklem Grund.',
+  dashboard: 'Nur das Dashboard dunkel, alle übrigen Seiten hell.',
+};
+
+function renderThemeOptions(selected) {
+  return THEMES
+    .map((theme) => `<option value="${escapeHtml(theme)}"${theme === selected ? ' selected' : ''}>${escapeHtml(THEME_LABELS[theme] || theme)}</option>`)
+    .join('\n                    ');
+}
 
 // Auswahl gängiger Zeitzonen (IANA). Die erste Gruppe deckt den DACH-Raum ab,
 // danach folgen weitere europäische und internationale Zonen.
@@ -128,7 +141,11 @@ function renderSettings({
   languageMessage = '',
   languageError = '',
   activeTab = 'allgemein',
+  themeError = '',
+  themeMessage = '',
 } = {}) {
+  // Farbthema ist eine persönliche Einstellung des angemeldeten Benutzers.
+  const currentTheme = currentAccess().theme || 'hell';
   const locale = i18n.current().locale;
   const dstChecked = mqtt.dstEnabled === undefined || mqtt.dstEnabled ? ' checked' : '';
   const currentTab = SETTINGS_TAB_KEYS.has(activeTab) ? activeTab : 'allgemein';
@@ -179,6 +196,29 @@ ${tabBar}
 
         <div ${panelAttr('allgemein')}>
           <div class="settings-layout">
+          <form action="/settings/theme" method="POST" class="settings-form settings-card-form theme-form">
+            <section class="settings-card">
+              <div class="settings-card-head">
+                <h2>Darstellung</h2>
+                <p class="settings-card-hint">Das Farbthema gilt nur für den angemeldeten Benutzer und färbt allein die Arbeitsfläche der Seiten. Titelleiste und Seitenmenü behalten in jedem Thema ihre Farben.</p>
+              </div>
+              ${statusText(themeError)}
+              ${statusText(themeMessage, 'success')}
+              <div class="field-grid">
+                <div class="field">
+                  <label for="userTheme">Farbthema</label>
+                  <select id="userTheme" name="theme" onchange="previewTheme(this.value)">
+                    ${renderThemeOptions(currentTheme)}
+                  </select>
+                  <small class="muted" id="userThemeHint">${escapeHtml(THEME_HINTS[currentTheme] || '')}</small>
+                </div>
+              </div>
+              <div class="button-row">
+                <button type="submit">Darstellung speichern</button>
+              </div>
+            </section>
+          </form>
+
           <form action="/settings/mqtt" method="POST" class="settings-form mqtt-form settings-card-form">
             <section class="settings-card">
               <div class="settings-card-head">
@@ -422,12 +462,24 @@ ${remote.body}
     id: user.id,
     name: user.name,
     role: user.role,
+    theme: user.theme || 'hell',
     isAdmin: user.isAdmin,
     // null (alle Seiten) im Dialog als „alle angehakt" darstellen.
     pages: user.visiblePages == null ? PAGES.map((p) => p.key) : user.visiblePages,
   }));
 
   const script = `    var settingsUsers = ${JSON.stringify(clientUsers)};
+    // Sofortige Vorschau der Auswahl. Die Einstellungsseite ist keine
+    // Dashboard-Seite, deshalb wirkt hier nur die Auswahl „dunkel"; „Nur
+    // Dashboard dunkel" lässt sie bewusst hell.
+    var themeHints = ${JSON.stringify(THEME_HINTS)};
+    function previewTheme(value) {
+      document.body.classList.toggle('theme-dark', value === 'dunkel');
+      document.body.setAttribute('data-theme', value);
+      var hint = document.getElementById('userThemeHint');
+      if (hint) hint.textContent = themeHints[value] || '';
+    }
+
     function uploadLanguageFile() {
       var input = document.getElementById('languageFile');
       var button = document.getElementById('languageUploadButton');
@@ -601,6 +653,7 @@ ${remote.body}
         title.textContent = 'Benutzer bearbeiten';
         document.getElementById('userName').value = user.name;
         document.getElementById('userRole').value = user.role;
+        document.getElementById('userThemeDialog').value = user.theme || 'hell';
         document.getElementById('userPassword').value = '';
         if (passHint) passHint.hidden = false;
         setUserPages(user.pages);
@@ -610,6 +663,7 @@ ${remote.body}
         title.textContent = 'Benutzer hinzufügen';
         document.getElementById('userName').value = '';
         document.getElementById('userRole').value = 'read';
+        document.getElementById('userThemeDialog').value = 'hell';
         document.getElementById('userPassword').value = '';
         if (passHint) passHint.hidden = true;
         setUserPages(allPageKeys);
@@ -628,6 +682,7 @@ ${remote.body}
       var v = initialUserDialog.values || {};
       if (v.name != null) document.getElementById('userName').value = v.name;
       if (v.role) document.getElementById('userRole').value = v.role;
+      if (v.theme) document.getElementById('userThemeDialog').value = v.theme;
       if (v.pages) setUserPages(v.pages);
       if (v.isAdmin != null) applyAdminLock(v.isAdmin);
       if (initialUserDialog.error) {
@@ -707,6 +762,9 @@ function renderUserDialog() {
   const roleOptions = ROLES
     .map((role) => `<option value="${escapeHtml(role)}">${escapeHtml(ROLE_LABELS[role] || role)}</option>`)
     .join('\n                ');
+  const themeOptions = THEMES
+    .map((theme) => `<option value="${escapeHtml(theme)}">${escapeHtml(THEME_LABELS[theme] || theme)}</option>`)
+    .join('\n                ');
   const pageChecks = PAGES
     .map(
       (page) => `                <label class="user-page-check">
@@ -735,6 +793,13 @@ function renderUserDialog() {
                 ${roleOptions}
                 </select>
                 <small class="muted">Lesen: nur ansehen · Bedienen: zusätzlich schalten · Schreiben: Vollzugriff.</small>
+              </label>
+              <label class="field-block" for="userThemeDialog">
+                <span>Farbthema</span>
+                <select id="userThemeDialog" name="theme">
+                ${themeOptions}
+                </select>
+                <small class="muted">Färbt nur die Arbeitsfläche der Seiten; Titelleiste und Menü bleiben gleich.</small>
               </label>
             </div>
             <div class="field-block" id="userPagesBlock">

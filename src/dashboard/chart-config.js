@@ -4,8 +4,10 @@
 // Datenbank (siehe src/database/) über welchen Zeitraum und mit welcher
 // Verdichtung gezeichnet werden.
 
-const { AGGREGATES } = require('../database/influx-reader');
-const { SERIES_COLORS } = require('./chart-palette');
+const { AGGREGATES, FILL_MODES } = require('../database/influx-reader');
+const {
+  SERIES_COLORS, DEFAULT_AREA_OPACITY, MIN_AREA_OPACITY, MAX_AREA_OPACITY,
+} = require('./chart-palette');
 
 // Höchstens vier Linien je Kachel: darüber wird ein Dashboard-Diagramm
 // unlesbar, und die Farbzuordnung wäre nicht mehr eindeutig unterscheidbar.
@@ -14,6 +16,7 @@ const MAX_TITLE_LENGTH = 60;
 const MAX_LABEL_LENGTH = 40;
 const MAX_UNIT_LENGTH = 12;
 const MAX_MEASUREMENT_LENGTH = 200;
+
 
 // Zeiträume mit passender Rasterweite. Die Rasterweite bestimmt, wie viele
 // Punkte die Datenbank liefert — grob 150 bis 300 Punkte je Linie, genug für
@@ -28,6 +31,10 @@ const CHART_RANGES = [
 const RANGE_BY_KEY = new Map(CHART_RANGES.map((range) => [range.key, range]));
 const DEFAULT_RANGE = '24h';
 const DEFAULT_AGGREGATE = 'mean';
+// Standard ist die ehrliche Darstellung: eine Aufzeichnungslücke bleibt eine
+// sichtbare Lücke. Alles andere erfindet Werte, die so nie gemessen wurden —
+// das soll man bewusst auswählen.
+const DEFAULT_FILL = 'none';
 
 // Auswahlliste für den Dialog.
 const AGGREGATE_OPTIONS = [
@@ -37,6 +44,23 @@ const AGGREGATE_OPTIONS = [
   { key: 'sum', label: 'Summe' },
   { key: 'last', label: 'Letzter Wert' },
 ];
+
+// Wie Lücken in der Aufzeichnung im Diagramm behandelt werden. „Lücke lassen"
+// und „Linie durchziehen" fragen dieselben Daten ab und unterscheiden sich nur
+// in der Zeichnung; „Letzten Wert halten" und „Auf Null setzen" lassen bereits
+// die Datenbank Stützpunkte einsetzen (siehe FILL_MODES im Lese-Client).
+const FILL_OPTIONS = [
+  { key: 'none', label: 'Lücke lassen (Linie unterbrechen)' },
+  { key: 'connect', label: 'Linie durchziehen' },
+  { key: 'previous', label: 'Letzten Wert halten' },
+  { key: 'zero', label: 'Auf Null setzen' },
+];
+
+// Bei „Lücke lassen" bricht die Linie an einer Lücke ab; sonst wird
+// durchgezeichnet.
+function breaksAtGaps(fill) {
+  return String(fill || DEFAULT_FILL) === 'none';
+}
 
 function rangeByKey(key) {
   return RANGE_BY_KEY.get(String(key || '')) || RANGE_BY_KEY.get(DEFAULT_RANGE);
@@ -56,16 +80,42 @@ function normalizeSeriesColor(value, index) {
   return SERIES_COLORS[index % SERIES_COLORS.length];
 }
 
+// Wahrheitswert aus Formular („1"/„on") oder gespeicherter Konfiguration.
+function normalizeFlag(value) {
+  if (typeof value === 'boolean') return value;
+  const text = String(value == null ? '' : value).trim().toLowerCase();
+  return text === '1' || text === 'true' || text === 'on' || text === 'ja';
+}
+
+// Deckkraft der Fläche, gespeichert als Anteil zwischen 0 und 1. Das Formular
+// liefert Prozent, die gespeicherte Konfiguration den Anteil — beides landet
+// hier. Die Grenze ist eindeutig: alles über 1 ist Prozent, 1 und darunter ist
+// bereits ein Anteil (1 also „vollflächig", nicht ein Prozent).
+function normalizeAreaOpacity(value) {
+  const number = Number(String(value == null ? '' : value).replace(',', '.'));
+  if (!Number.isFinite(number) || number <= 0) return DEFAULT_AREA_OPACITY;
+  const share = number > 1 ? number / 100 : number;
+  const clamped = Math.min(MAX_AREA_OPACITY, Math.max(MIN_AREA_OPACITY, share));
+  return Math.round(clamped * 100) / 100;
+}
+
 // Eine Linie: Messreihe (Pflicht), Anzeigename für die Legende (optional, sonst
-// der Messreihenname) und Farbe. Die Farbe hängt bewusst an der Linie und nicht
-// an ihrer Position — entfernt man eine Linie, behalten die übrigen ihre Farbe.
+// der Messreihenname), Farbe und Flächenfüllung. Farbe und Füllung hängen
+// bewusst an der Linie und nicht an ihrer Position — entfernt man eine Linie,
+// behalten die übrigen ihr Aussehen.
 function normalizeSeriesEntry(entry, index) {
   const source = entry && typeof entry === 'object' ? entry : { measurement: entry };
   const measurement = String(source.measurement == null ? '' : source.measurement)
     .trim().slice(0, MAX_MEASUREMENT_LENGTH);
   if (!measurement) return null;
   const label = String(source.label == null ? '' : source.label).trim().slice(0, MAX_LABEL_LENGTH);
-  return { measurement, label, color: normalizeSeriesColor(source.color, index) };
+  return {
+    measurement,
+    label,
+    color: normalizeSeriesColor(source.color, index),
+    area: normalizeFlag(source.area),
+    areaOpacity: normalizeAreaOpacity(source.areaOpacity),
+  };
 }
 
 // Aus Formularfeldern kommen drei parallele Listen (Messreihe, Name, Farbe);
@@ -78,6 +128,8 @@ function collectSeriesInput(input = {}) {
   );
   const labels = toArray(input.seriesLabels);
   const colors = toArray(input.seriesColors);
+  const areas = toArray(input.seriesAreas);
+  const opacities = toArray(input.seriesAreaOpacities);
   const entries = [];
   measurements.forEach((measurement, index) => {
     // Ein Feld darf mehrere kommagetrennte Namen enthalten; die Namens- und
@@ -87,6 +139,8 @@ function collectSeriesInput(input = {}) {
         measurement: part,
         label: offset === 0 ? labels[index] : '',
         color: offset === 0 ? colors[index] : '',
+        area: offset === 0 ? areas[index] : false,
+        areaOpacity: offset === 0 ? opacities[index] : '',
       });
     });
   });
@@ -114,6 +168,7 @@ function normalizeChartConfig(input = {}) {
     measurements: series.map((entry) => entry.measurement),
     range: RANGE_BY_KEY.has(String(input.range)) ? String(input.range) : DEFAULT_RANGE,
     aggregate: AGGREGATES.has(String(input.aggregate)) ? String(input.aggregate) : DEFAULT_AGGREGATE,
+    fill: FILL_MODES.has(String(input.fill)) ? String(input.fill) : DEFAULT_FILL,
     title: String(input.title == null ? '' : input.title).trim().slice(0, MAX_TITLE_LENGTH),
     unit: String(input.unit == null ? '' : input.unit).trim().slice(0, MAX_UNIT_LENGTH),
   };
@@ -126,9 +181,12 @@ function chartConfigForStorage(config) {
       measurement: entry.measurement,
       label: entry.label,
       color: entry.color,
+      area: entry.area,
+      areaOpacity: entry.areaOpacity,
     })),
     range: config.range,
     aggregate: config.aggregate,
+    fill: config.fill,
     title: config.title,
     unit: config.unit,
   };
@@ -144,12 +202,24 @@ function validateChartConfig(config) {
 // Zeitfenster der Kachel zum Abfragezeitpunkt.
 function chartWindow(config, now = Date.now()) {
   const range = rangeByKey(config.range);
-  return { from: now - range.durationMs, to: now, intervalMs: range.intervalMs, range };
+  return {
+    from: now - range.durationMs,
+    to: now,
+    intervalMs: range.intervalMs,
+    range,
+    fill: FILL_MODES.has(String(config.fill)) ? String(config.fill) : DEFAULT_FILL,
+  };
 }
 
 module.exports = {
   CHART_RANGES,
   AGGREGATE_OPTIONS,
+  FILL_OPTIONS,
+  DEFAULT_FILL,
+  DEFAULT_AREA_OPACITY,
+  MIN_AREA_OPACITY,
+  MAX_AREA_OPACITY,
+  breaksAtGaps,
   MAX_SERIES,
   DEFAULT_RANGE,
   DEFAULT_AGGREGATE,

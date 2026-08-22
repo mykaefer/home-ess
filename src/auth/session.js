@@ -107,10 +107,12 @@ const OPERATE_POST_PATTERNS = [
   /^\/live\/warnung\/quittieren\/?$/,
 ];
 
-// Reine Lese-POSTs (Diagnose ohne Zustandsänderung), die auch Lesern erlaubt
-// sind. Aktuell nur der MQTT-Verbindungstest.
+// POSTs ohne Wirkung auf die Anlage, die auch Lesern erlaubt sind: der
+// MQTT-Verbindungstest (reine Diagnose) und das Farbthema, das ausschliesslich
+// die eigene Darstellung betrifft.
 const READ_POST_PATTERNS = [
   /^\/settings\/mqtt\/test\/?$/,
+  /^\/settings\/theme\/?$/,
 ];
 
 function isOperatePost(pathname) {

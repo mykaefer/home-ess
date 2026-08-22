@@ -5,6 +5,21 @@ wird unabhängig von homeESS versioniert; die Version steht in
 [adapter.json](adapter.json). Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [1.3.4] — 2026-08-22
+
+### Geändert
+
+- **Die Verwaltungsseite folgt dem Farbthema des Benutzers.** homeESS bietet je
+  Benutzer ein helles oder dunkles Farbthema an. Die Festfarben dieses Adapters
+  laufen dafür jetzt über die Design-Tokens von homeESS (Flächen, Linien, Text
+  und Zustandsfarben), sodass die Seite im dunklen Thema mitzieht, statt weiße
+  Kästen mit dunkler Schrift stehen zu lassen. Im hellen Thema bleibt die
+  Darstellung unverändert — die Tokens tragen dort dieselben Werte.
+
+- **Der Koordinator in der Netzkarte bleibt sichtbar.** Sein Knoten trägt die
+  Farbe der homeESS-Hülle, die auf dunklem Grund verschwand; im dunklen Thema
+  übernimmt dort die Haupttextfarbe.
+
 ## [1.3.3] — 2026-08-19
 
 ### Behoben

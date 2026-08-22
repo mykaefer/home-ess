@@ -35,6 +35,26 @@ function timeLiteral(ms) {
 // Abfrage durchzureichen.
 const AGGREGATES = new Set(['mean', 'min', 'max', 'sum', 'last', 'first', 'count']);
 
+// Umgang mit Rasterpunkten ohne Messwert (Lücken in der Aufzeichnung). Der
+// Schlüssel kommt aus der Diagrammkonfiguration, der Wert ist das InfluxQL-
+// Argument von `fill(...)`:
+//   none/connect – die Datenbank liefert nur vorhandene Punkte; ob die Linie
+//                  über die Lücke gezogen oder unterbrochen wird, entscheidet
+//                  allein die Zeichnung (src/dashboard/chart-svg.js).
+//   previous     – der letzte bekannte Wert wird gehalten.
+//   zero         – die Lücke wird als 0 gewertet.
+// Alles Unbekannte fällt auf `none` zurück, statt in die Abfrage zu gelangen.
+const FILL_MODES = new Map([
+  ['none', 'none'],
+  ['connect', 'none'],
+  ['previous', 'previous'],
+  ['zero', '0'],
+]);
+
+function fillArgument(value) {
+  return FILL_MODES.get(String(value == null ? '' : value)) || 'none';
+}
+
 class InfluxReader {
   constructor(options = {}) {
     this.protocol = options.protocol === 'https' ? 'https' : 'http';
@@ -161,6 +181,7 @@ class InfluxReader {
   //   intervalMs     – Rasterweite; 0 = Rohwerte ohne Verdichtung
   //   aggregate      – mean/min/max/sum/last/first/count (nur mit Raster)
   //   field          – Feldname, Standard `value` (so schreibt der Adapter)
+  //   fill           – Lückenbehandlung (siehe FILL_MODES; nur mit Raster)
   //   tags           – zusätzliche Gleichheitsfilter, z. B. { instance: 'Haus' }
   //   limit          – Obergrenze der zurückgegebenen Punkte
   async readSeries(options = {}) {
@@ -183,7 +204,10 @@ class InfluxReader {
     const selection = intervalMs > 0
       ? `${aggregate}(${quoteIdentifier(field)})`
       : quoteIdentifier(field);
-    const grouping = intervalMs > 0 ? ` GROUP BY time(${timeLiteral(intervalMs)}) fill(none)` : '';
+    const fill = fillArgument(options.fill);
+    const grouping = intervalMs > 0
+      ? ` GROUP BY time(${timeLiteral(intervalMs)}) fill(${fill})`
+      : '';
     const statement = `SELECT ${selection} FROM ${quoteIdentifier(measurement)}`
       + ` WHERE ${filters.join(' AND ')}${grouping} LIMIT ${limit}`;
 
@@ -197,8 +221,8 @@ class InfluxReader {
       const numeric = typeof raw === 'number' ? raw : Number(String(raw).replace(',', '.'));
       points.push({ t: timestamp, v: Number.isFinite(numeric) ? numeric : raw });
     }
-    return { measurement, field, from, to, intervalMs, aggregate, points };
+    return { measurement, field, from, to, intervalMs, aggregate, fill, points };
   }
 }
 
-module.exports = { InfluxReader, AGGREGATES, quoteIdentifier, quoteLiteral, timeLiteral };
+module.exports = { InfluxReader, AGGREGATES, FILL_MODES, quoteIdentifier, quoteLiteral, timeLiteral };

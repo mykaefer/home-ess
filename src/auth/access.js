@@ -25,6 +25,24 @@ const ROLE_LABELS = {
   write: 'Schreiben',
 };
 
+// Farbthema je Benutzer. Es betrifft ausschliesslich die Seitenflaeche
+// (Arbeitsbereich); Titelleiste und Seitenmenue behalten in jedem Thema ihre
+// Farben, damit die Wiedererkennung erhalten bleibt.
+//   hell      – bisherige helle Oberflaeche (Standard)
+//   dunkel    – alle Seiten auf dunklem Grund
+//   dashboard – nur das Dashboard dunkel, alle anderen Seiten hell
+const THEMES = ['hell', 'dunkel', 'dashboard'];
+const DEFAULT_THEME = 'hell';
+
+const THEME_LABELS = {
+  hell: 'Hell',
+  dunkel: 'Dunkel',
+  dashboard: 'Nur Dashboard dunkel',
+};
+
+// Body-Klasse, die styles.css auswertet. Leer = helles Thema.
+const DARK_BODY_CLASS = 'theme-dark';
+
 // Katalog der über das Menü erreichbaren Seiten. `key` ist der stabile
 // Persistenz-Schlüssel (visible_pages), `prefix`/`prefixes` decken die Seite
 // samt ihrer Unterrouten ab. Module-Seiten (pool/grid-control/wallbox) sind nur
@@ -57,6 +75,28 @@ function normalizeRole(value) {
   return ROLES.includes(role) ? role : DEFAULT_ROLE;
 }
 
+// Farbthema normalisieren. Unbekannte oder fehlende Werte fallen auf „hell"
+// zurueck, damit bestehende Installationen unveraendert aussehen.
+function normalizeTheme(value) {
+  const theme = String(value || '').trim().toLowerCase();
+  return THEMES.includes(theme) ? theme : DEFAULT_THEME;
+}
+
+// Gilt das dunkle Thema fuer diesen Seitenpfad? Bei „dashboard" nur auf der
+// Dashboard-Seite, bei „dunkel" ueberall, bei „hell" nirgends.
+function isDarkForPath(theme, pathname) {
+  const value = normalizeTheme(theme);
+  if (value === 'dunkel') return true;
+  if (value !== 'dashboard') return false;
+  const path = String(pathname || '');
+  return path === '/dashboard' || path.startsWith('/dashboard/');
+}
+
+// Body-Klasse fuer renderLayout: leerer String oder die Dunkel-Klasse.
+function themeBodyClass(theme, pathname) {
+  return isDarkForPath(theme, pathname) ? DARK_BODY_CLASS : '';
+}
+
 // Sichtbare Seiten normalisieren: null/leer bedeutet „alle Seiten sichtbar".
 function normalizeVisiblePages(value) {
   let list = value;
@@ -85,6 +125,9 @@ function accessForUser(user) {
     userName: user.name || 'Administrator',
     isAdmin,
     role,
+    // Farbthema gilt auch fuer den Administrator – es ist eine reine
+    // Darstellungseinstellung und keine Rechtefrage.
+    theme: normalizeTheme(user.theme),
     // Jeder angemeldete Benutzer darf lesen; erst Bedienen und Schreiben sind
     // an die Rolle gebunden. Das Feld gehört zum dokumentierten Vertrag von
     // GET /me/access und wird auch an Adapter-Verwaltungsseiten durchgereicht.
@@ -104,6 +147,7 @@ function fullAccess() {
     userName: '',
     isAdmin: true,
     role: 'write',
+    theme: DEFAULT_THEME,
     canRead: true,
     canWrite: true,
     canOperate: true,
@@ -154,6 +198,13 @@ module.exports = {
   ROLES,
   ROLE_LABELS,
   DEFAULT_ROLE,
+  THEMES,
+  THEME_LABELS,
+  DEFAULT_THEME,
+  DARK_BODY_CLASS,
+  normalizeTheme,
+  isDarkForPath,
+  themeBodyClass,
   PAGES,
   PAGE_KEYS,
   PAGE_KEY_SET,

@@ -37,7 +37,9 @@ const {
 } = require('../states/catalog');
 const { INFO_FIELDS, readSystemInfo } = require('../dashboard/system-info');
 const systemDatabase = require('../database');
-const { chartWindow, CHART_RANGES, AGGREGATE_OPTIONS, MAX_SERIES } = require('../dashboard/chart-config');
+const {
+  chartWindow, breaksAtGaps, CHART_RANGES, AGGREGATE_OPTIONS, FILL_OPTIONS, MAX_SERIES,
+} = require('../dashboard/chart-config');
 const { renderChartSvg, renderChartLegend, renderNotice } = require('../dashboard/chart-svg');
 const renderDashboard = require('../views/dashboard');
 
@@ -120,6 +122,7 @@ async function renderPage(db, res, options = {}) {
       maxTabTitleLength: MAX_TAB_TITLE_LENGTH,
       chartRanges: CHART_RANGES,
       chartAggregates: AGGREGATE_OPTIONS,
+      chartFills: FILL_OPTIONS,
       maxChartSeries: MAX_SERIES,
       formMessage: options.formMessage || '',
       formError: options.formError || '',
@@ -200,6 +203,7 @@ function dashboardRoutes(db) {
         to: window.to,
         intervalMs: window.intervalMs,
         aggregate: chart.aggregate,
+        fill: window.fill,
       });
       // Gelesene Punkte mit der Konfiguration der Linie zusammenführen (Name
       // für die Legende, Farbe). Die Reihenfolge entspricht der Konfiguration.
@@ -216,6 +220,7 @@ function dashboardRoutes(db) {
           to: window.to,
           intervalMs: window.intervalMs,
           unit: chart.unit,
+          breakAtGaps: breaksAtGaps(window.fill),
         }),
         legend: renderChartLegend(series, { unit: chart.unit }),
       });
