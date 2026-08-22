@@ -5,6 +5,31 @@ wird unabhängig von homeESS versioniert; die Version steht in
 [adapter.json](adapter.json). Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [1.0.3] — 2026-08-22
+
+### Geändert
+
+- **Die Verwaltungsseite folgt dem Farbthema des Benutzers.** homeESS bietet je
+  Benutzer ein helles oder dunkles Farbthema an. Die Festfarben dieses Adapters
+  laufen dafür jetzt über die Design-Tokens von homeESS (Flächen, Linien, Text
+  und Zustandsfarben), sodass die Seite im dunklen Thema mitzieht, statt weiße
+  Kästen mit dunkler Schrift stehen zu lassen. Im hellen Thema bleibt die
+  Darstellung unverändert — die Tokens tragen dort dieselben Werte.
+
+## [1.0.2] — 2026-08-22
+
+### Hinzugefügt
+
+- **Speichermodus „In festen Abständen und bei Änderung".** Bisher schloss die
+  Auswahl je State einander aus: entweder ein fester Abstand oder — entprellt —
+  jede Wertänderung. Der neue dritte Modus macht beides zugleich: Änderungen
+  gehen weiterhin entprellt sofort in die Datenbank, und zusätzlich schreibt der
+  Zeitgeber im eingestellten Abstand den zuletzt bekannten Wert. Damit hat eine
+  Messreihe auch dann durchgehende Stützpunkte, wenn sich der Wert über Stunden
+  nicht ändert, ohne dass eine Änderung bis zum nächsten Rasterpunkt wartet.
+  Die Entprellzeit wirkt wie bisher nur auf die änderungsgetriebenen Schreib-
+  vorgänge, nicht auf den Zeitgeber.
+
 ## [1.0.1] — 2026-08-21
 
 ### Hinzugefügt

@@ -17,6 +17,9 @@ eigenständige Desktop- und Mobilansichten.
   anordnen.
 - Systemweite Sprachwahl mit deutschen und englischen Katalogen. Adapter können
   eigene Sprachdateien mitbringen.
+- Farbthema je Benutzer: hell, dunkel oder nur das Dashboard dunkel. Eingefärbt
+  wird allein die Arbeitsfläche der Seiten — Titelleiste und Seitenmenü behalten
+  in jedem Thema ihre Farben.
 
 ## Energiemessung
 

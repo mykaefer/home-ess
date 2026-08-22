@@ -7,7 +7,7 @@
 // noch gelöscht werden.
 
 const { hashPassword } = require('./password');
-const { normalizeRole, normalizeVisiblePages, PAGE_KEYS, accessForUser } = require('./access');
+const { normalizeRole, normalizeVisiblePages, normalizeTheme, PAGE_KEYS, accessForUser } = require('./access');
 
 function dbAll(db, sql, params = []) {
   return new Promise((resolve, reject) => {
@@ -47,11 +47,13 @@ function toPublicUser(row = {}) {
     isAdmin,
     // null = alle Seiten sichtbar.
     visiblePages: isAdmin ? null : normalizeVisiblePages(row.visible_pages),
+    // Farbthema der Seitenfläche – gilt für jeden Benutzer, auch den Administrator.
+    theme: normalizeTheme(row.theme),
   };
 }
 
 async function listUsers(db) {
-  const rows = await dbAll(db, 'SELECT id, name, role, is_admin, visible_pages FROM users ORDER BY is_admin DESC, name COLLATE NOCASE ASC, id ASC');
+  const rows = await dbAll(db, 'SELECT id, name, role, is_admin, visible_pages, theme FROM users ORDER BY is_admin DESC, name COLLATE NOCASE ASC, id ASC');
   return rows.map(toPublicUser);
 }
 
@@ -62,20 +64,20 @@ async function listUsersForLogin(db) {
 }
 
 async function getUser(db, id) {
-  const row = await dbGet(db, 'SELECT id, name, role, is_admin, visible_pages FROM users WHERE id = ?', [id]);
+  const row = await dbGet(db, 'SELECT id, name, role, is_admin, visible_pages, theme FROM users WHERE id = ?', [id]);
   return row ? toPublicUser(row) : null;
 }
 
 // Vollständige Zeile inkl. Passwort-Hash (für die Anmeldung).
 async function getUserWithSecret(db, id) {
-  return dbGet(db, 'SELECT id, name, password, role, is_admin, visible_pages FROM users WHERE id = ?', [id]);
+  return dbGet(db, 'SELECT id, name, password, role, is_admin, visible_pages, theme FROM users WHERE id = ?', [id]);
 }
 
 // Zugriff (Rechte) zu einer Session auflösen: über die in der Session
 // hinterlegte user_id. Ohne gültigen Nutzer wird null zurückgegeben.
 async function accessForUserId(db, userId) {
   if (userId == null) return null;
-  const row = await dbGet(db, 'SELECT id, name, role, is_admin, visible_pages FROM users WHERE id = ?', [userId]);
+  const row = await dbGet(db, 'SELECT id, name, role, is_admin, visible_pages, theme FROM users WHERE id = ?', [userId]);
   return row ? accessForUser(row) : null;
 }
 
@@ -111,10 +113,11 @@ async function createUser(db, input = {}) {
   await ensureNameUnique(db, name, null);
   const role = normalizeRole(input.role);
   const pages = normalizePagesInput(input.visiblePages);
+  const theme = normalizeTheme(input.theme);
   const result = await dbRun(
     db,
-    'INSERT INTO users (name, password, role, is_admin, visible_pages) VALUES (?, ?, ?, 0, ?)',
-    [name, hashPassword(password), role, JSON.stringify(pages)]
+    'INSERT INTO users (name, password, role, is_admin, visible_pages, theme) VALUES (?, ?, ?, 0, ?, ?)',
+    [name, hashPassword(password), role, JSON.stringify(pages), theme]
   );
   return getUser(db, result.lastID);
 }
@@ -129,12 +132,16 @@ async function updateUser(db, id, input = {}) {
   const name = normalizeName(input.name);
   await ensureNameUnique(db, name, id);
   const password = String(input.password == null ? '' : input.password);
+  // Das Farbthema wird nur angefasst, wenn das Formular es mitschickt – sonst
+  // bliebe eine Auswahl bei jedem Speichern aus anderem Anlass zurückgesetzt.
+  const themeSql = input.theme === undefined ? '' : ', theme = ?';
+  const themeParam = input.theme === undefined ? [] : [normalizeTheme(input.theme)];
 
   if (isAdmin) {
     if (password) {
-      await dbRun(db, 'UPDATE users SET name = ?, password = ? WHERE id = ?', [name, hashPassword(password), id]);
+      await dbRun(db, `UPDATE users SET name = ?, password = ?${themeSql} WHERE id = ?`, [name, hashPassword(password), ...themeParam, id]);
     } else {
-      await dbRun(db, 'UPDATE users SET name = ? WHERE id = ?', [name, id]);
+      await dbRun(db, `UPDATE users SET name = ?${themeSql} WHERE id = ?`, [name, ...themeParam, id]);
     }
     return getUser(db, id);
   }
@@ -142,12 +149,23 @@ async function updateUser(db, id, input = {}) {
   const role = normalizeRole(input.role);
   const pages = normalizePagesInput(input.visiblePages);
   if (password) {
-    await dbRun(db, 'UPDATE users SET name = ?, password = ?, role = ?, visible_pages = ? WHERE id = ?',
-      [name, hashPassword(password), role, JSON.stringify(pages), id]);
+    await dbRun(db, `UPDATE users SET name = ?, password = ?, role = ?, visible_pages = ?${themeSql} WHERE id = ?`,
+      [name, hashPassword(password), role, JSON.stringify(pages), ...themeParam, id]);
   } else {
-    await dbRun(db, 'UPDATE users SET name = ?, role = ?, visible_pages = ? WHERE id = ?',
-      [name, role, JSON.stringify(pages), id]);
+    await dbRun(db, `UPDATE users SET name = ?, role = ?, visible_pages = ?${themeSql} WHERE id = ?`,
+      [name, role, JSON.stringify(pages), ...themeParam, id]);
   }
+  return getUser(db, id);
+}
+
+// Farbthema des angemeldeten Benutzers setzen. Bewusst getrennt von updateUser:
+// jeder Benutzer darf seine eigene Darstellung ändern, unabhängig von Rolle und
+// Benutzerverwaltung.
+async function setUserTheme(db, id, theme) {
+  if (id == null) throw validationError('Kein angemeldeter Benutzer.');
+  const current = await dbGet(db, 'SELECT id FROM users WHERE id = ?', [id]);
+  if (!current) throw validationError('Benutzer nicht gefunden.');
+  await dbRun(db, 'UPDATE users SET theme = ? WHERE id = ?', [normalizeTheme(theme), id]);
   return getUser(db, id);
 }
 
@@ -169,6 +187,7 @@ module.exports = {
   accessForUserId,
   createUser,
   updateUser,
+  setUserTheme,
   deleteUser,
   toPublicUser,
 };

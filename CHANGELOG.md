@@ -5,6 +5,59 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 
 ## [Unreleased]
 
+## [1.5.2] — 2026-08-22
+
+### Hinzugefügt
+
+- **Dunkles Farbthema je Benutzer.** Neue Einstellung **Darstellung** unter
+  *Einstellungen → Allgemeine Einstellungen*: **Hell** (wie bisher, Vorgabe),
+  **Dunkel** oder **Nur Dashboard dunkel**. Die Wahl gilt je Benutzer und darf
+  von jeder Rolle getroffen werden — auch von „Lesen", da sie nur die eigene
+  Darstellung betrifft und nichts an der Anlage ändert. Zusätzlich lässt sich
+  das Thema im Benutzerdialog der Benutzerverwaltung setzen, damit ein
+  Administrator es auch für Zugänge ohne Einstellungsseite vergeben kann.
+  Eingefärbt wird ausschließlich die Arbeitsfläche der Seiten: **Titelleiste und
+  Seitenmenü behalten in jedem Thema ihre Farben**. Das Corporate Design bleibt
+  erhalten — dieselbe grün-graue Familie wie das Seitenmenü, dasselbe
+  Aktionsgrün (nur so weit aufgehellt, dass es auf dunklem Grund trägt) und
+  dieselbe fachliche Zuordnung der Energiearten (Batterie blau, Netz rot,
+  Eigenverbrauch lila, Photovoltaik gelb) über die bereits vorhandenen
+  aufgehellten Varianten. Die Anmeldeseite bleibt hell, da das Thema erst mit
+  dem angemeldeten Benutzer feststeht.
+
+  Die Verwaltungsseiten der mitgelieferten Adapter ziehen mit: hDP, Zigbee,
+  MQTT-Broker und InfluxDB beziehen ihre Farben jetzt aus denselben Tokens.
+  Adapter werden eigenständig versioniert — Einzelheiten stehen in deren
+  CHANGELOG.
+
+- **Flächenfüllung je Diagrammlinie.** Jede Linie einer Diagramm-Kachel lässt
+  sich einzeln auf **Füllen** stellen: Der Bereich zwischen Linie und Nulllinie
+  wird dann in der Linienfarbe hinterlegt, mit einer je Linie einstellbaren
+  **Deckkraft** (5–80 %, Vorgabe 20 %). Alle Flächen liegen unter allen Linien,
+  damit keine Fläche eine andere Linie verdeckt; Aufzeichnungslücken
+  unterbrechen die Fläche genauso wie die Linie. Sobald eine Linie füllt, reicht
+  die Werteachse bis zur Null — eine Fläche „bis 0" auf einer Grundlinie, die
+  keine Null ist, würde die Größenverhältnisse vortäuschen.
+
+- **Lückenbehandlung in der Diagramm-Kachel.** Neue Einstellung
+  **Aufzeichnungslücken** im Diagramm-Dialog: Zeitabschnitte ohne Messwerte —
+  etwa weil der Server aus war — können als **Lücke** stehen bleiben (die Linie
+  bricht ab, wie bisher und weiterhin Standard), mit einer **durchgezogenen
+  Linie** überbrückt, auf dem **letzten bekannten Wert gehalten** oder **auf
+  Null gesetzt** werden. Die beiden letzten Varianten lässt bereits die Datenbank
+  auffüllen (`fill(previous)` bzw. `fill(0)`), sodass auch das Fadenkreuz
+  durchgehend Werte anzeigt.
+
+### Geändert
+
+- **Farben in `public/styles.css` laufen über Design-Tokens.** Flächen-, Linien-,
+  Text- und Zustandsfarben sind als benannte Tokens im `:root` hinterlegt; die
+  Regeln greifen darauf zu, statt Festwerte zu wiederholen. Das helle Thema
+  bleibt dabei unverändert — die Tokens tragen exakt die bisherigen Werte, nur
+  einzelne beinahe gleiche Grautöne sind zu einer Stufe zusammengefasst. Erst
+  dadurch genügt für das dunkle Thema ein einziger Block, der die Tokens
+  umdefiniert, statt hunderte Regeln zu doppeln.
+
 ## [1.5.1] — 2026-08-21
 
 ### Hinzugefügt

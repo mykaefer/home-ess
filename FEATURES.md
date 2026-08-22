@@ -16,6 +16,9 @@ desktop and mobile layouts.
   widgets. Groups and widgets can be arranged using drag and drop.
 - System-wide language selection with German and English catalogs. Adapters can
   provide their own language files.
+- Per-user color theme: light, dark or dark dashboard only. Only the page work
+  area changes color — the title bar and side menu keep their colors in every
+  theme.
 
 ## Energy monitoring
 

@@ -32,7 +32,8 @@ function openDatabase() {
         password TEXT NOT NULL,
         role TEXT NOT NULL DEFAULT 'write',
         is_admin INTEGER NOT NULL DEFAULT 0,
-        visible_pages TEXT
+        visible_pages TEXT,
+        theme TEXT NOT NULL DEFAULT 'hell'
       )`
     );
     db.run(
@@ -1074,6 +1075,11 @@ function migrateUsers(db) {
     }
     if (!existing.has('visible_pages')) {
       db.run('ALTER TABLE users ADD COLUMN visible_pages TEXT');
+    }
+    // Farbthema je Benutzer (hell/dunkel/dashboard). Bestehende Zugänge bleiben
+    // mit „hell" bei der bisherigen Darstellung.
+    if (!existing.has('theme')) {
+      db.run("ALTER TABLE users ADD COLUMN theme TEXT NOT NULL DEFAULT 'hell'");
     }
     // Einige Zwischenstände hatten die Spalte bereits mit dem Default 0
     // angelegt, ohne einen bestehenden Zugang zum Administrator zu machen.

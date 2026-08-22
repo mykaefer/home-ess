@@ -202,6 +202,64 @@ test('Die Entprellzeit begrenzt die Schreibrate je State', async (t) => {
   assert.ok(entry.debounceTimer, 'ein Nachzügler ist eingeplant');
 });
 
+test('Der Modus „beides" schreibt entprellt bei Änderung und zusätzlich im Takt', async (t) => {
+  const config = { host: '127.0.0.1', port: 1, database: 'homeess' };
+  const { host, record, directory } = createHost(config, {
+    stateOptions: [{
+      topic: 'demo://x/wert',
+      options: { enabled: true, mode: 'both', intervalSeconds: 60, debounceSeconds: 5, retentionDays: 30 },
+    }],
+  });
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const adapter = createInfluxAdapter(host);
+  await adapter.start(config);
+  t.after(async () => adapter.stop());
+  const internals = adapter._internals();
+  const entry = internals.tracked().get('demo://x/wert');
+
+  // Anders als bei „nur feste Abstände" landet die Änderung sofort in der
+  // Warteschlange — und wie bei „bei Änderung" bremst die Entprellzeit weitere.
+  deliver(record, 'demo://x/wert', 1);
+  deliver(record, 'demo://x/wert', 2);
+  assert.equal(internals.queue().length, 1);
+  assert.ok(entry.debounceTimer, 'der zweite Wert wartet auf die Entprellzeit');
+  // Zusätzlich läuft der Zeitgeber, damit unveränderte Werte Stützpunkte bekommen.
+  assert.ok(entry.intervalTimer, 'der feste Abstand ist eingeplant');
+  assert.equal(entry.intervalSeconds, 60);
+});
+
+test('Im Modus „feste Abstände" schreibt allein der Zeitgeber', async (t) => {
+  const config = { host: '127.0.0.1', port: 1, database: 'homeess' };
+  const { host, record, directory } = createHost(config, {
+    stateOptions: [{ topic: 'demo://x/wert', options: { enabled: true, mode: 'interval', intervalSeconds: 60 } }],
+  });
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const adapter = createInfluxAdapter(host);
+  await adapter.start(config);
+  t.after(async () => adapter.stop());
+  const internals = adapter._internals();
+
+  deliver(record, 'demo://x/wert', 7);
+  assert.equal(internals.queue().length, 0, 'die Änderung wird nur gemerkt');
+  assert.equal(internals.tracked().get('demo://x/wert').lastValue, 7);
+});
+
+test('Ein unbekannter Speichermodus fällt auf „bei Änderung" zurück', async (t) => {
+  const config = { host: '127.0.0.1', port: 1, database: 'homeess' };
+  const { host, record, directory } = createHost(config, {
+    stateOptions: [{ topic: 'demo://x/wert', options: { enabled: true, mode: 'unsinn', debounceSeconds: 0 } }],
+  });
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const adapter = createInfluxAdapter(host);
+  await adapter.start(config);
+  t.after(async () => adapter.stop());
+  const internals = adapter._internals();
+
+  assert.equal(internals.tracked().get('demo://x/wert').mode, 'change');
+  deliver(record, 'demo://x/wert', 3);
+  assert.equal(internals.queue().length, 1);
+});
+
 test('Ohne Verbindung bleiben Messpunkte begrenzt in der Warteschlange', async (t) => {
   const config = { host: '127.0.0.1', port: 1, database: 'homeess', queueLimit: 100 };
   const { host, record, directory } = createHost(config, {

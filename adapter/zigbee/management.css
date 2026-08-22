@@ -45,7 +45,7 @@
 
 .zb-map-teaser:hover {
     border-color: var(--color-action-hover, #2c594b);
-    background: var(--color-surface, #fff);
+    background: var(--color-surface, #ffffff);
 }
 
 .zb-map-teaser-icon {
@@ -55,8 +55,8 @@
     display: grid;
     place-items: center;
     border-radius: 50%;
-    background: var(--color-surface, #fff);
-    color: var(--color-action, #39705f);
+    background: var(--color-surface, #ffffff);
+    color: var(--color-action-ink, #39705f);
 }
 
 .zb-map-teaser-icon svg { width: 24px; height: 24px; }
@@ -72,7 +72,7 @@
 
 .zb-map-teaser-arrow {
     margin-left: auto;
-    color: var(--color-action, #39705f);
+    color: var(--color-action-ink, #39705f);
     font-size: 20px;
 }
 
@@ -85,7 +85,7 @@
     padding: 14px 16px;
     border: 1px solid var(--color-border, #dce3df);
     border-radius: 10px;
-    background: var(--color-surface, #fff);
+    background: var(--color-surface, #ffffff);
     font-size: 14px;
 }
 
@@ -179,8 +179,8 @@
 }
 
 .zb-button--secondary {
-    background: var(--color-surface, #fff);
-    color: var(--color-action, #39705f);
+    background: var(--color-surface, #ffffff);
+    color: var(--color-action-ink, #39705f);
 }
 
 .zb-button--secondary:hover:not(:disabled) {
@@ -208,7 +208,7 @@
 .zb-permit {
     font-size: 14px;
     font-weight: 600;
-    color: var(--color-action, #39705f);
+    color: var(--color-action-ink, #39705f);
 }
 
 .zb-upload input[type="file"] {
@@ -219,7 +219,7 @@
     padding: 7px 10px;
     border: 1px solid var(--color-border-strong, #c8d2cd);
     border-radius: 8px;
-    background: var(--color-surface, #fff);
+    background: var(--color-surface, #ffffff);
     color: var(--color-text, #1d2925);
     font-size: 14px;
 }
@@ -232,7 +232,7 @@
     overflow-x: auto;
     border: 1px solid var(--color-border, #dce3df);
     border-radius: 10px;
-    background: var(--color-surface, #fff);
+    background: var(--color-surface, #ffffff);
 }
 
 .zb-table {
@@ -273,7 +273,7 @@
 
 .zb-badge--ok {
     background: var(--color-action-tint, #e9f1ee);
-    color: var(--color-action, #39705f);
+    color: var(--color-action-ink, #39705f);
 }
 
 .zb-badge--off {
@@ -302,7 +302,7 @@
 .zb-page-head .zb-back:last-child { margin-left: auto; }
 
 .zb-back {
-    color: var(--color-action, #39705f);
+    color: var(--color-action-ink, #39705f);
     font-size: 14px;
     font-weight: 600;
     text-decoration: none;
@@ -335,7 +335,7 @@ a.zb-button {
     border-radius: 12px;
     background:
         radial-gradient(circle at 1px 1px, var(--color-border, #dce3df) 1px, transparent 0) 0 0 / 26px 26px,
-        var(--color-surface, #fff);
+        var(--color-surface, #ffffff);
     overflow: hidden;
 }
 
@@ -386,7 +386,7 @@ a.zb-button {
 
 .zb-node {
     cursor: pointer;
-    color: var(--color-action, #39705f);
+    color: var(--color-action-ink, #39705f);
 }
 
 .zb-node:focus { outline: none; }
@@ -405,8 +405,11 @@ a.zb-button {
 .zb-node-icon { color: currentColor; }
 
 .zb-node--coordinator { color: var(--color-shell, #18211f); }
+/* Der Koordinator trägt die Farbe der Hülle. Auf dunklem Grund wäre sie nicht
+   mehr zu sehen, deshalb übernimmt dort die Haupttextfarbe. */
+.theme-dark .zb-node--coordinator { color: var(--color-ink); }
 .zb-node--coordinator .zb-node-body { fill: var(--color-action-tint, #e9f1ee); stroke-width: 2.6; }
-.zb-node--online  { color: var(--color-action, #39705f); }
+.zb-node--online  { color: var(--color-action-ink, #39705f); }
 .zb-node--offline { color: var(--color-danger, #c53030); }
 .zb-node--offline .zb-node-body { stroke-dasharray: 4 4; }
 .zb-node--unknown { color: var(--color-text-soft, #68746f); }
@@ -454,7 +457,7 @@ a.zb-button {
     padding: 12px 14px;
     border: 1px solid var(--color-border-strong, #c8d2cd);
     border-radius: 12px;
-    background: var(--color-surface, #fff);
+    background: var(--color-surface, #ffffff);
     box-shadow: 0 10px 28px rgba(24, 33, 31, .18);
     font-size: 14px;
 }
@@ -474,7 +477,7 @@ a.zb-button {
     place-items: center;
     border: 2px solid var(--color-action, #39705f);
     border-radius: 50%;
-    color: var(--color-action, #39705f);
+    color: var(--color-action-ink, #39705f);
 }
 
 .zb-hover-icon svg { width: 19px; height: 19px; }
@@ -494,7 +497,7 @@ a.zb-button {
     height: 26px;
     border: 1px solid var(--color-border, #dce3df);
     border-radius: 7px;
-    background: var(--color-surface, #fff);
+    background: var(--color-surface, #ffffff);
     color: var(--color-text-soft, #68746f);
     font-size: 16px;
     line-height: 1;
@@ -521,7 +524,7 @@ a.zb-button {
     border: 1px solid var(--color-border, #dce3df);
     border-radius: 8px;
     background: var(--color-surface-subtle, #f7f9f8);
-    color: var(--color-action, #39705f);
+    color: var(--color-action-ink, #39705f);
     font-size: 13px;
     font-weight: 600;
     cursor: pointer;
@@ -565,7 +568,7 @@ a.zb-button {
     padding: 14px 16px;
     border: 1px solid var(--color-border, #dce3df);
     border-radius: 12px;
-    background: var(--color-surface, #fff);
+    background: var(--color-surface, #ffffff);
 }
 
 .zb-detail-head {
@@ -595,7 +598,7 @@ a.zb-button {
     height: 32px;
     border: 1px solid var(--color-border, #dce3df);
     border-radius: 8px;
-    background: var(--color-surface, #fff);
+    background: var(--color-surface, #ffffff);
     color: var(--color-text-soft, #68746f);
     font-size: 18px;
     line-height: 1;
@@ -662,7 +665,7 @@ a.zb-button {
     padding: 7px 10px;
     border: 1px solid var(--color-border-strong, #c8d2cd);
     border-radius: 8px;
-    background: var(--color-surface, #fff);
+    background: var(--color-surface, #ffffff);
     color: var(--color-text, #1d2925);
     font-size: 14px;
 }
@@ -694,7 +697,7 @@ a.zb-button {
 .zb-toggle--on {
     border-color: var(--color-action, #39705f);
     background: var(--color-action-tint, #e9f1ee);
-    color: var(--color-action, #39705f);
+    color: var(--color-action-ink, #39705f);
 }
 
 .zb-toggle--on .zb-toggle-knob { background: var(--color-action, #39705f); }
@@ -790,7 +793,7 @@ a.zb-button {
     padding: 6px 9px;
     border: 1px solid var(--color-border-strong, #c8d2cd);
     border-radius: 8px;
-    background: var(--color-surface, #fff);
+    background: var(--color-surface, #ffffff);
     color: var(--color-text, #1d2925);
     font-size: 14px;
 }
@@ -846,7 +849,7 @@ a.zb-button {
         margin-bottom: 12px;
         border: 1px solid var(--color-border, #dce3df);
         border-radius: 10px;
-        background: var(--color-surface, #fff);
+        background: var(--color-surface, #ffffff);
         overflow: hidden;
     }
 

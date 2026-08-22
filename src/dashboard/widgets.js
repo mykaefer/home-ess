@@ -204,8 +204,11 @@ function normalizeWidgetInput(input = {}) {
         : (input.chartMeasurements != null ? input.chartMeasurements : input.measurements),
       seriesLabels: input.chartSeriesLabels,
       seriesColors: input.chartSeriesColors,
+      seriesAreas: input.chartSeriesAreas,
+      seriesAreaOpacities: input.chartSeriesAreaOpacities,
       range: input.chartRange != null ? input.chartRange : input.range,
       aggregate: input.chartAggregate != null ? input.chartAggregate : input.aggregate,
+      fill: input.chartFill != null ? input.chartFill : input.fill,
       title: input.chartTitle != null ? input.chartTitle : input.title,
       unit: input.chartUnit != null ? input.chartUnit : input.unit,
     });
