@@ -33,6 +33,7 @@ const gridControlRoutes = require('./routes/grid-control');
 const wallboxRoutes = require('./routes/wallbox');
 const messenSchaltenRoutes = require('./routes/messen-schalten');
 const heimkinoRoutes = require('./routes/heimkino');
+const heizungRoutes = require('./routes/heizung');
 const adapterRoutes = require('./routes/adapters');
 const statesRoutes = require('./routes/states');
 const databaseRoutes = require('./routes/database');
@@ -67,6 +68,7 @@ const { updatePoolEnergyModel } = require('./pool/energy-model');
 const i18n = require('./i18n');
 const conditionEngine = require('./conditions/engine');
 const heimkinoRuntime = require('./heimkino/runtime');
+const heizungRuntime = require('./heizung/runtime');
 
 // Baut die Express-App zusammen: DB öffnen, Middleware, Routen registrieren,
 // MQTT-Verbindung mit gespeicherter Konfiguration starten.
@@ -126,6 +128,7 @@ function createApp() {
   app.use(wallboxRoutes(db));
   app.use(messenSchaltenRoutes(db));
   app.use(heimkinoRoutes(db));
+  app.use(heizungRoutes(db));
   app.use(adapterRoutes(db));
   app.use(statesRoutes(db));
   app.use(databaseRoutes(db));
@@ -212,6 +215,7 @@ function createApp() {
       // Erst jetzt steht fest, ob das Heimkino-Modul aktiv ist; der erneute
       // Init lädt Räume und Aktionsfolgen und meldet die Kinomodus-States.
       heimkinoRuntime.init(db).catch(() => {});
+      heizungRuntime.init(db).catch(() => {});
       systemStatesRuntime.init(db);
       operatingLevelHandler.init();
       gridControlAutomation.init(db);
@@ -220,6 +224,7 @@ function createApp() {
     })
     .catch(() => {
       heimkinoRuntime.init(db).catch(() => {});
+      heizungRuntime.init(db).catch(() => {});
       systemStatesRuntime.init(db);
       operatingLevelHandler.init();
       gridControlAutomation.init(db);

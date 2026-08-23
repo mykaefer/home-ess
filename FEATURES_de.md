@@ -91,6 +91,46 @@ eigenständige Desktop- und Mobilansichten.
   und sich andernfalls allein wiederholen. Ein optionales Sync-Topic hält den
   Kinomodus bidirektional mit einem externen Topic synchron; nach einem Neustart
   ist dessen Zustand maßgeblich und wird ohne Aktionsfolge übernommen.
+- Heizung & Klima verwaltet beliebig viele Räume mit eigener Soll-Temperatur,
+  Offsets für Heizen und Kühlen sowie eigener Schalthysterese. Je Raum sind
+  beliebig viele Temperaturquellen zuordenbar — bei mehreren zählt ihr
+  Durchschnitt; ein Thermostat hält die Soll-Temperatur bidirektional synchron.
+  Eine optionale Mindesttemperatur verhindert, dass eine Nachtabsenkung am
+  Thermostat die Klimaanlage weckt: unterhalb dieser Grenze wird nie gekühlt.
+  Offene Fenster- und Türkontakte schalten Heizen und Kühlen ab, sofort oder
+  nach einer einstellbaren Verzögerung. Heiz- und Kühlgerät werden mit denselben
+  Aktionsfolgen wie beim Heimkino geschaltet — Wertzuweisungen, Pausen und
+  Schleifen mit zyklischer Prüfung, je Gerät eine Folge für „ein" und eine für
+  „aus" —, sodass sich auch eine Splitklimaanlage mit Betriebsart,
+  Solltemperatur und Einschaltbefehl bedienen lässt. Die Geräte sowie die
+  Freigabe der Zentralheizung sind optional; ohne sie erfasst der Raum nur seine
+  Temperatur und stellt alle Werte als Systemwerte bereit — unter *System* im
+  Ordner *Räume* mit einem Unterordner je Raum, benannt nach dem Raum
+  (`system://homeess/raeume.Wohnzimmer.temperatur`) statt durchnummeriert. Ob
+  ein Raum seine Wärme vom lokalen Gerät oder von der Zentralheizung bekommt,
+  entscheidet die **Außentemperatur** (systemweit oder eigene Quelle) gegen eine
+  je Raum einstellbare Grenztemperatur. Je Raum lässt sich zusätzlich ein
+  Heizkörperlüfter hinterlegen, der läuft, solange der Raum Wärme von der
+  Zentralheizung anfordert. Beide lokalen Geräte hängen am Betriebslevel: je
+  Gerät ist eine Priorität einstellbar, und für das Heizgerät lässt sich
+  aktivieren, dass bei nicht ausreichender Priorität direkt die Zentralheizung
+  heizt — dann entfällt für diesen Raum solange die Außentemperaturgrenze. Die
+  Zentralheizung läuft über Modbus/State oder einen Schaltaktor mit zwingender
+  Vor- und Rücklaufüberwachung und kennt drei getrennte Zustände: Kessel
+  (Schaltzustand), Brenner (feuert er?) und Pumpe. Der Kessel schaltet erst ab,
+  wenn keine Anforderung mehr besteht und der Brenner als aus erkannt ist —
+  erkannt entweder an der Rückmeldung der Steuerung oder am Verlauf der
+  Vorlauftemperatur. Eine optionale Umwälzpumpe am zweiten Schaltaktor läuft
+  immer zuerst an, bevor der Kessel starten darf, und nach ihm die eingestellte
+  Nachlaufzeit weiter. Für die Heizkosten zählt allein, was der Brenner
+  tatsächlich feuert — laut seiner Rückmeldung, ersatzweise anhand der
+  steigenden Vorlauftemperatur — verrechnet mit Verbrauch je Betriebsstunde und
+  Preis je Einheit. Ein Zählwerk summiert Verbrauch und Kosten über einen
+  Abrechnungszeitraum bis zur nächsten Zählerablesung, weist den Monatsabschlag
+  aus und übernimmt beim Abschließen auf Wunsch den abgelesenen Zählerstand —
+  optional auch zum Kalibrieren der Schätzung. Der Schornsteinfeger-Modus stellt
+  alle Räume auf 28 °C, hält die dezentralen Geräte aus und lässt die
+  Zentralheizung durchlaufen.
 - Optionale Module lassen sich in den Einstellungen aktivieren, ohne parallele
   Server- oder Authentifizierungsstrukturen anzulegen.
 

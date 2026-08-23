@@ -988,22 +988,35 @@ function deviceStateCatalog(device) {
   })));
 }
 
+// Gelernte IR-Codes gehören der Adapterinstanz, nicht dem aufzeichnenden Gerät:
+// Jeder Blaster darf jeden Code senden. Die IDs sind bereits instanzweit eindeutig
+// (siehe occupiedIrRecordingIds), deshalb genügt eine flache, nach Namen sortierte
+// Liste mit dem aufzeichnenden Gerät als Herkunft.
+function irRecordingLibrary(deviceList) {
+  const library = [];
+  for (const device of deviceList) {
+    if (!device || !device.paired) continue;
+    for (const [id, entry] of Object.entries(device.irRecordings || {})) {
+      if (entry && typeof entry === 'object') library.push({ id, entry, device });
+    }
+  }
+  return library.sort((left, right) => String(left.entry.name || left.id)
+    .localeCompare(String(right.entry.name || right.id), 'de'));
+}
+
 function irRecordingStateCatalog(deviceList) {
   const used = new Set();
   const states = [];
-  for (const device of deviceList) {
-    if (!device.paired) continue;
-    for (const [id, entry] of Object.entries(device.irRecordings || {})) {
-      let stateId = id;
-      if (used.has(stateId)) stateId = `${id}_${device.deviceId}`;
-      used.add(stateId);
-      states.push(normalizePublishedState({
-        address: `ir-recordings/${encodeURIComponent(stateId)}`,
-        name: normalizeIrRecordingName(entry.name, id),
-        value: stateValue(entry.code),
-        category: 'Aufgezeichnete IR-Codes',
-      }));
-    }
+  for (const { id, entry, device } of irRecordingLibrary(deviceList)) {
+    let stateId = id;
+    if (used.has(stateId)) stateId = `${id}_${device.deviceId}`;
+    used.add(stateId);
+    states.push(normalizePublishedState({
+      address: `ir-recordings/${encodeURIComponent(stateId)}`,
+      name: normalizeIrRecordingName(entry.name, id),
+      value: stateValue(entry.code),
+      category: 'Aufgezeichnete IR-Codes',
+    }));
   }
   return states;
 }
@@ -1109,6 +1122,31 @@ function createHdpAdapter(host, dependencies = {}) {
       }
     }
     return occupied;
+  }
+
+  // Aufnahmen werden instanzweit adressiert: Welches Gerät die Seite anzeigt, ist
+  // für Senden, Umbenennen und Löschen unerheblich - die IDs sind eindeutig.
+  function findIrRecording(recordingId) {
+    for (const device of devices.values()) {
+      const entry = device.irRecordings && device.irRecordings[recordingId];
+      if (entry) return { id: recordingId, entry, device };
+    }
+    return null;
+  }
+
+  function irRecordingLiveState(device) {
+    return {
+      online: !!device.online,
+      armed: !!device.irRecordingArmed,
+      recordings: irRecordingLibrary(Array.from(devices.values()))
+        .map(({ id, entry, device: source }) =>
+          [id, entry.name, entry.recorded_at, source.deviceId]),
+    };
+  }
+
+  function irRecordingLiveRevision(device) {
+    return crypto.createHash('sha256')
+      .update(JSON.stringify(irRecordingLiveState(device))).digest('hex').slice(0, 16);
   }
 
   function publishDevice(device) {
@@ -4109,37 +4147,41 @@ hdp-flash.exe --channel development</code></pre>
     const receiver = config.receiver || {};
     const blaster = config.blaster || {};
     const settings = (device.bindings && device.bindings.ir) || {};
-    const recordingEntries = Object.entries(device.irRecordings || {});
-    const recordings = recordingEntries.map(([id, entry]) => {
+    // Die Bibliothek gehört der Adapterinstanz: Auch ein reiner Blaster sieht die
+    // Codes, die ein anderes hDP-Gerät mit Receiver aufgezeichnet hat, und kann sie
+    // senden. Umbenennen und Löschen wirken auf das aufzeichnende Gerät.
+    const library = irRecordingLibrary(Array.from(devices.values()));
+    const canRecord = receiver.enabled && receiver.mode === 'record';
+    const canSend = !!blaster.enabled;
+    const recordings = library.map(({ id, entry, device: source }) => {
       const recordedAt = entry.recorded_at && !Number.isNaN(Date.parse(entry.recorded_at))
         ? new Date(entry.recorded_at).toLocaleString('de-DE') : (entry.recorded_at || '—');
       const fieldId = `hdp-ir-name-${id.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
       const statePath = `ir_recordings/${id}`;
+      const origin = source.deviceId === device.deviceId ? '' : (source.name || source.deviceId);
       const base = `/adapter/instance/INSTANCE/manage/api/devices/${encodeURIComponent(device.deviceId)}/ir/recordings`;
       return `<form class="hdp-ir-code-row" method="post" action="${base}/rename/${encodeURIComponent(id)}">
-        <div class="hdp-ir-code-name"><input id="${esc(fieldId)}" aria-label="Lesbarer Name" name="name" maxlength="100" value="${esc(entry.name || id)}"></div>
+        <div class="hdp-ir-code-name"><input id="${esc(fieldId)}" aria-label="Lesbarer Name" name="name" maxlength="100" value="${esc(entry.name || id)}">${origin ? `<small class="hdp-ir-origin">Aufgezeichnet von ${esc(origin)}</small>` : ''}</div>
         <code class="hdp-ir-state-path" title="${esc(statePath)}">${esc(statePath)}</code>
         <time datetime="${esc(entry.recorded_at || '')}">${esc(recordedAt)}</time>
-        <div class="hdp-ir-code-actions">${blaster.enabled ? `<button class="button-secondary" formaction="${base}/send/${encodeURIComponent(id)}">Senden</button>` : ''}<button>Umbenennen</button><button class="button-danger" formaction="${base}/delete/${encodeURIComponent(id)}" onclick="return confirm('IR-Code wirklich löschen?');">Löschen</button></div>
+        <div class="hdp-ir-code-actions">${canSend ? `<button class="button-secondary" formaction="${base}/send/${encodeURIComponent(id)}">Senden</button>` : ''}<button>Umbenennen</button><button class="button-danger" formaction="${base}/delete/${encodeURIComponent(id)}" onclick="return confirm('IR-Code wirklich löschen?');">Löschen</button></div>
       </form>`;
     }).join('');
-    const recordingSection = receiver.enabled && receiver.mode === 'record'
+    const recordPanel = canRecord
       ? `<section class="settings-card hdp-config-card hdp-ir-record-panel">
           <div class="settings-card-head hdp-card-head"><div><span class="hdp-section-kicker">Receiver · Record</span><h2>IR-Code aufzeichnen</h2><p class="settings-card-hint">Per Schaltfläche oder Trigger-Taster starten. Ein zweiter Druck bricht die Aufnahme ab.</p></div><span class="status-badge ${device.irRecordingArmed ? 'status-warn' : 'status-ok'}">${device.irRecordingArmed ? 'Aufnahmebereit' : 'Bereit'}</span></div>
           <form class="hdp-ir-record-form" method="post" action="/adapter/instance/INSTANCE/manage/api/devices/${encodeURIComponent(device.deviceId)}/ir/record">
             <div class="field"><label for="hdp-ir-record-name">Name des Codes</label><input id="hdp-ir-record-name" name="name" maxlength="100" value="${esc(device.pendingIrRecordName || '')}" placeholder="z. B. Fernseher einschalten" ${device.irRecordingArmed ? 'readonly' : ''}></div>
             <div class="hdp-ir-record-action"><button ${device.irRecordingArmed ? 'class="button-danger" formaction="/adapter/instance/INSTANCE/manage/api/devices/' + encodeURIComponent(device.deviceId) + '/ir/record/cancel"' : ''} ${device.online ? '' : 'disabled'}>${device.irRecordingArmed ? 'Aufnahme beenden' : 'Aufnahme starten'}</button></div>
           </form>
-        </section>
-        <div class="hdp-ir-recordings-head"><div><span class="hdp-section-kicker">Bibliothek</span><h2>Aufgezeichnete Codes</h2></div><span class="hdp-ir-count">${recordingEntries.length}</span></div>
-        ${recordings ? `<div class="hdp-ir-code-list"><div class="hdp-ir-code-list-head"><span>Name</span><span>State</span><span>Aufgezeichnet</span><span>Aktionen</span></div>${recordings}</div>` : '<section class="settings-card hdp-ir-empty"><h3>Noch keine IR-Codes</h3><p>Starte eine Aufnahme und drücke anschließend die gewünschte Fernbedienungstaste.</p></section>'}`
+        </section>`
       : '';
-    const liveRevision = crypto.createHash('sha256').update(JSON.stringify({
-      online: !!device.online,
-      armed: !!device.irRecordingArmed,
-      recordings: Object.entries(device.irRecordings || {}).map(([id, entry]) =>
-        [id, entry.name, entry.recorded_at]),
-    })).digest('hex').slice(0, 16);
+    const recordingSection = canRecord || canSend
+      ? `${recordPanel}
+        <div class="hdp-ir-recordings-head"><div><span class="hdp-section-kicker">Bibliothek</span><h2>Aufgezeichnete Codes</h2><p class="settings-card-hint">Gelernte Codes gelten adapterweit – jeder aktive Blaster kann jeden Code senden.</p></div><span class="hdp-ir-count">${library.length}</span></div>
+        ${recordings ? `<div class="hdp-ir-code-list"><div class="hdp-ir-code-list-head"><span>Name</span><span>State</span><span>Aufgezeichnet</span><span>Aktionen</span></div>${recordings}</div>` : `<section class="settings-card hdp-ir-empty"><h3>Noch keine IR-Codes</h3><p>${canRecord ? 'Starte eine Aufnahme und drücke anschließend die gewünschte Fernbedienungstaste.' : 'Zeichne einen Code an einem hDP-Gerät mit Receiver im Record-Modus auf – er steht danach auch hier zum Senden bereit.'}</p></section>`}`
+      : '';
+    const liveRevision = irRecordingLiveRevision(device);
     return `<div class="hdp-device-page" data-hdp-ir-page data-hdp-device="${esc(device.deviceId)}" data-hdp-ir-revision="${liveRevision}"><div class="hdp-device-head"><div><a class="hdp-back-link" href="/adapter/instance/INSTANCE/manage">← Geräteverwaltung</a><h1>${esc(device.name || device.deviceId)}</h1><p class="hdp-device-meta"><code>${esc(device.deviceId)}</code><span>IR-Blaster / Receiver</span><span>Revision ${esc(device.configRevision)}</span></p></div><button type="button" class="button-secondary hdp-hardware-open" onclick="hdpOpenHardware()">Hardware einrichten</button></div>
       ${device.lastError ? `<p class="error-text">${esc(device.lastError)}</p>` : ''}
       ${commonStatusCard(device, 'ir-transceiver-v1')}
@@ -4922,48 +4964,44 @@ hdp-flash.exe --channel development</code></pre>
         if (!isIrDevice(device)) {
           throw Object.assign(new Error('Gerät ist kein IR-Transceiver.'), { status: 409 });
         }
-        const value = {
-          online: !!device.online,
-          armed: !!device.irRecordingArmed,
-          recordings: Object.entries(device.irRecordings || {}).map(([recordingId, entry]) =>
-            [recordingId, entry.name, entry.recorded_at]),
-        };
+        const value = irRecordingLiveState(device);
         return { status: 200, json: {
           online: value.online,
           armed: value.armed,
-          revision: crypto.createHash('sha256').update(JSON.stringify(value))
-            .digest('hex').slice(0, 16),
+          revision: irRecordingLiveRevision(device),
         } };
       }
       if (method === 'POST' && action.startsWith('ir/recordings/delete/')) {
-        const device = requirePaired(id);
+        requirePaired(id);
         const recordingId = action.slice('ir/recordings/delete/'.length);
-        if (device.irRecordings && Object.prototype.hasOwnProperty.call(device.irRecordings, recordingId)) {
-          delete device.irRecordings[recordingId]; publishCatalog(); persist();
+        const found = findIrRecording(recordingId);
+        if (found) {
+          delete found.device.irRecordings[recordingId]; publishCatalog(); persist();
         }
         return { status: 303, redirect: `${managementBase}/device/${encodeURIComponent(id)}` };
       }
       if (method === 'POST' && action.startsWith('ir/recordings/send/')) {
         const device = requirePaired(id);
         const recordingId = action.slice('ir/recordings/send/'.length);
-        const entry = device.irRecordings && device.irRecordings[recordingId];
-        if (!entry || !entry.code) {
+        const found = findIrRecording(recordingId);
+        if (!found || !found.entry.code) {
           throw Object.assign(new Error('IR-Aufnahme wurde nicht gefunden.'), { status: 404 });
         }
-        await writeIrBlaster(device, entry.code);
+        await writeIrBlaster(device, found.entry.code);
         return { status: 303, redirect: `${managementBase}/device/${encodeURIComponent(id)}` };
       }
       if (method === 'POST' && action.startsWith('ir/recordings/rename/')) {
-        const device = requirePaired(id);
+        requirePaired(id);
         const recordingId = action.slice('ir/recordings/rename/'.length);
-        const entry = device.irRecordings && device.irRecordings[recordingId];
+        const found = findIrRecording(recordingId);
         const name = normalizeIrRecordingName(request.body.name);
-        if (!entry || !name) throw Object.assign(new Error('Aufnahme oder Name ist ungültig.'), { status: 422 });
-        const nextId = irRecordingId(name, occupiedIrRecordingIds(device.deviceId, recordingId));
-        entry.name = name;
+        if (!found || !name) throw Object.assign(new Error('Aufnahme oder Name ist ungültig.'), { status: 422 });
+        const owner = found.device;
+        const nextId = irRecordingId(name, occupiedIrRecordingIds(owner.deviceId, recordingId));
+        found.entry.name = name;
         if (nextId !== recordingId) {
-          delete device.irRecordings[recordingId];
-          device.irRecordings[nextId] = entry;
+          delete owner.irRecordings[recordingId];
+          owner.irRecordings[nextId] = found.entry;
         }
         publishCatalog(); persist();
         return { status: 303, redirect: `${managementBase}/device/${encodeURIComponent(id)}` };
@@ -5228,6 +5266,7 @@ module.exports._test = {
   fingerprintWiring, fingerprintReadiness,
   supportedDeviceTypes, binaryPinSlots, applySensorSample, sensorUiFields,
   normalizeIrCode, irRecordingId, normalizeIrRecordingName, irRecordingStateCatalog,
+  irRecordingLibrary,
   normalizeStateToken, normalizeStateAddress, normalizeStateCategory, normalizePublishedState,
   insideMaintenanceWindow, otaInProgress, releaseInterruptedOta,
   reconcileOtaProgress,

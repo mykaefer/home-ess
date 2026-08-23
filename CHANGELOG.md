@@ -3,7 +3,165 @@
 Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
-## [Unreleased]
+## [1.6.0] — 2026-08-23
+
+### Geändert
+
+- **Aktionsfolgen sind jetzt geteilte Bausteine.** Datenschicht, Ausführung und
+  Oberfläche der Aktionsfolgen liegen unter `src/automation/` bzw.
+  `src/views/action-sequences.js` und werden vom Heimkino **und** von Heizung &
+  Klima verwendet. Am Heimkino ändert sich dadurch nichts.
+
+### Hinzugefügt
+
+- **Modul „Heizung & Klima" (optional).** Unter *Einstellungen → Module*
+  aktivierbar. Es verwaltet beliebig viele frei benannte Räume mit je eigener
+  Soll-Temperatur, eigenen Schaltschwellen und eigener Hysterese.
+
+  - **Temperaturerfassung.** Je Raum lassen sich beliebig viele
+    Temperaturquellen zuordnen (hDP-Sensoren, Thermostat-Istwerte, beliebige
+    States). Bei mehr als einer Quelle zählt ihr **Durchschnitt**; unplausible
+    Werte (Sensorausfall) fallen heraus. Jeder Raum stellt Temperatur,
+    Soll-Temperatur, Heizen, Kühlen, Wärmeanforderung und Fensterzustand als
+    States bereit. Weil Heizung & Klima ein **Modul und kein Adapter** ist, sind
+    das **Systemwerte**: sie liegen unter *System* im Ordner **Räume** mit einem
+    Unterordner je Raum, **benannt nach dem Raum** statt durchnummeriert
+    (`system://homeess/raeume.Wohnzimmer.temperatur`), und stehen damit auf der
+    States-Seite, im State-Picker und im Wertekatalog. Die Zentralheizung hat
+    daneben den Ordner **Zentralheizung**. Die Soll-Temperatur jedes Raums und
+    der Schornsteinfeger-Modus sind **beschreibbar** — die erste
+    Ausnahme von der Regel, dass berechnete Systemwerte reine Lesequellen sind.
+    Weil der Name in der id steht, ändert ein Umbenennen die States des Raums;
+    zwei Räume dürfen deshalb nicht auf dieselbe id fallen („Bad 1" und „Bad_1"
+    wären dieselbe) — das wird beim Speichern gemeldet.
+  - **Thermostat-Kopplung (optional).** Ein beliebiger schreibbarer State, z. B.
+    ein Homematic IP Wandthermostat, hält die Soll-Temperatur bidirektional
+    synchron: eine Verstellung am Thermostat übernimmt homeESS, eine Änderung in
+    homeESS wird zurückgeschrieben. Nach einem Neustart ist der retained Wert des
+    Thermostats die Ausgangsbasis.
+  - **Fenster- und Türkontakte (optional).** Beliebig viele Kontakte je Raum,
+    wahlweise invertiert. Ist einer offen, werden Heizen und Kühlen abgeschaltet
+    — **sofort oder nach einer einstellbaren Verzögerung**, damit kurzes Lüften
+    die Anlage nicht abschaltet. Das Schließen wirkt immer sofort.
+  - **Schaltschwellen.** Heizen schaltet bei Unterschreiten von *Soll minus
+    Heiz-Offset* ein, Kühlen bei Überschreiten von *Soll plus Kühl-Offset*
+    (Vorgabe 0 °C bzw. 5 °C). Die je Raum einstellbare **Schalthysterese** liegt
+    zwischen Ein- und Ausschaltpunkt und verhindert Takten.
+  - **Mindesttemperatur zum Kühlen (optional).** Je Raum lässt sich eine
+    absolute Untergrenze festlegen, unterhalb derer **nie** gekühlt wird. Damit
+    weckt eine Nachtabsenkung am Wandthermostat die Klimaanlage nicht: steht die
+    Grenze auf 28 °C, springt sie frühestens dort an, auch wenn die
+    Soll-Temperatur nachts auf 18 °C fällt. Liegt *Soll plus Kühl-Offset*
+    höher, gilt weiterhin dieser höhere Wert. Leer = keine Untergrenze.
+  - **Geräte über Aktionsfolgen (optional).** Heiz- und Kühlgerät werden mit
+    denselben **Aktionsfolgen wie beim Heimkino** geschaltet: Wertzuweisungen,
+    Pausen und beliebig verschachtelbare Schleifen mit frei verschiebbaren
+    Aktionen; eine Schleife kann zusätzlich in festem Abstand prüfen, ob der
+    gewünschte Zustand tatsächlich erreicht wurde, und sich andernfalls allein
+    wiederholen. Ein einzelnes An-/Aus-Topic reicht für echte Geräte nicht — eine
+    Splitklimaanlage will Betriebsart, Solltemperatur und Einschaltbefehl in
+    bestimmter Reihenfolge, und ein IR-Befehl kommt nicht immer an. Je Gerät gibt
+    es eine Folge **ein** und eine **aus** (vier je Raum); bei jedem Wechsel läuft
+    die passende einmal ab. Ein Raum hat ein Gerät genau dann, wenn seine
+    „ein"-Folge Aktionen enthält — ohne Folgen erfasst er nur seine Temperatur.
+  - **Priorität nach Betriebslevel je Gerät.** Heiz- und Kühlgerät bekommen je
+    eine Priorität (1–5) im Sinne des Lastmanagements: sie ist das Betriebslevel,
+    **ab dem** das Gerät laufen darf. Deckt das aktuelle Level die Priorität
+    nicht ab, bleibt das Gerät aus und wird bei einem Levelabfall **sofort**
+    abgeschaltet (die „aus"-Folge läuft unmittelbar, nicht erst im nächsten
+    Takt). Der Wärme- bzw. Kühlbedarf des Raums bleibt davon unberührt — gesperrt
+    ist nur, wer ihn deckt.
+  - **Ersatzweise die Zentralheizung (optional).** Für das Heizgerät lässt sich
+    aktivieren, dass bei nicht ausreichender Priorität **direkt die
+    Zentralheizung** heizt. Solange das Betriebslevel die Priorität nicht
+    abdeckt, **entfällt für diesen Raum die eingestellte Außentemperaturgrenze**
+    — die Zentralheizung tritt dann an die Stelle des gesperrten lokalen
+    Gerätes. Sobald das Level die Priorität wieder abdeckt, gilt die Grenze
+    unverändert weiter. Die Option setzt voraus, dass der Raum die
+    Zentralheizung anfordern darf.
+  - **Heizkörperlüfter je Raum (optional).** In der Zentralheizungs-Karte des
+    Raums lässt sich ein Schalt-State hinterlegen, der eingeschaltet wird,
+    **solange dieser Raum Wärme von der Zentralheizung anfordert**, und danach
+    wieder aus. Ein Lüfter ist ein einfacher Verbraucher — hier genügt deshalb
+    ein Topic statt einer Aktionsfolge. Er hängt bewusst **nicht** am
+    Betriebslevel: er läuft gerade dann, wenn das lokale Heizgerät gesperrt ist
+    und die Zentralheizung einspringt.
+  - **Zentralheizung je Raum freigeben (optional).** Per Häkchen darf ein Raum
+    die Zentralheizung anfordern. Ob der Raum überhaupt Wärme braucht, entscheidet
+    seine eigene Temperatur gegen die Soll-Temperatur — **wer sie liefert**,
+    entscheidet allein die **Außentemperatur**: Liegt sie unter der je Raum
+    festgelegten Grenztemperatur, versorgt die Zentralheizung den Raum
+    **anstelle** des lokalen Gerätes, mit derselben Hysterese; darüber heizt das
+    lokale Gerät. Eingestellte Werte werden nie automatisch verbogen: steht die
+    Grenze auf 4 °C Außentemperatur und die Soll-Temperatur auf 21 °C, so heizt
+    dazwischen allein ein lokales Gerät — ist keines hinterlegt, wird dort
+    bewusst nicht geheizt.
+  - **Zentralheizung zentral einrichten** (*Heizung & Klima → Zentralheizung*):
+    wahlweise über **Modbus/State** (die Anlage regelt selbst) oder über einen
+    **Schaltaktor**. Als **Außentemperatur** dient die systemweite aus
+    *Einstellungen → MQTT*; für die Heizung lässt sie sich hier eigens
+    überschreiben. Irgendeine der beiden muss vorliegen, sonst könnte kein Raum
+    die Zentralheizung je anfordern. Beim Schaltaktor sind Vor- und
+    Rücklauftemperatur zwingend zu überwachen, und optional hängt hier auch die
+    **Umwälzpumpe** an einem zweiten Schaltaktor.
+  - **Drei getrennte Zustände.** *Kessel* ist der Schaltzustand der Anlage,
+    *Brenner* sagt, ob er tatsächlich feuert, *Pumpe* zeigt die Umwälzpumpe.
+    Kessel und Brenner stehen immer als States `zentralheizung.kessel` und
+    `…brenner` bereit; `…pumpe` kommt hinzu, sobald eine Umwälzpumpe
+    eingerichtet ist. Alle drei stehen so auch in der Oberfläche.
+    - Der **Kessel** wird eingeschaltet, sobald ein Raum Wärme anfordert. Er darf
+      erst abschalten, wenn **keine Anforderung mehr besteht und der Brenner als
+      aus erkannt ist** — damit wird er nie mitten in einer Brennphase getrennt.
+    - Der **Brenner** wird aus der Rückmeldung der Steuerung gelesen. Fehlt diese
+      (optionaler State: Flammensignal, „Brenner an"-Kontakt, Register), erkennt
+      homeESS ihn an der Vorlauftemperatur: **mehrere Messwerte hintereinander
+      nach oben** bedeuten „an" — eine einzelne Schwankung ausdrücklich nicht;
+      die anschließende **Halte-Phase** zählt weiter als Brennerlauf; erst
+      **mehrere Messwerte in Folge nach unten** beenden die Brennphase. Was als
+      Messwertänderung zählt und was Rauschen ist, bestimmt die einstellbare
+      Mindest-Änderung je Messwert.
+    - Die **Pumpe** läuft immer vor dem Kessel an und nach seinem Abschalten die
+      eingestellte Nachlaufzeit weiter.
+  - **Brennerlaufzeiten und Heizkosten.** Grundlage ist genau diese
+    Brennererkennung — gezählt wird allein, was der Brenner **tatsächlich
+    feuert**, nicht die Einschaltzeit des Kessels. Ein Kessel taktet und
+    moduliert; die reine Freigabezeit würde die Kosten zu hoch ausweisen. Welche
+    Quelle gerade gilt (Rückmeldung oder Vorlauf), steht über der Auswertung.
+    Jede Brennphase ist ein eigener Eintrag und wird im laufenden Betrieb
+    fortgeschrieben, sodass ein Stromausfall höchstens den letzten Takt kostet.
+    Aus **Verbrauch je Betriebsstunde**, **Einheit** und **Preis je Einheit**
+    ergeben sich Verbrauch und Kosten für heute, 30 Tage, das laufende Jahr und
+    gesamt.
+  - **Heizkosten-Zählwerk** als eigene Kachel unten auf der Übersichtsseite. Es
+    summiert Verbrauch und Kosten über einen **Abrechnungszeitraum** hinweg —
+    bis der Betreiber ihn abschließt, in aller Regel zur jährlichen
+    Zählerablesung. Ausgewiesen werden Verbrauch, Kosten und der
+    **Monatsabschlag** (Kosten ÷ 12) sowie der zuletzt abgeschlossene Zeitraum.
+    - Ein **Startwert** deckt ab, was seit der letzten Ablesung schon
+      verbraucht wurde, bevor homeESS mitgezählt hat.
+    - **Zeitraum abschließen** fragt sicherheitshalber nach: der laufende
+      Zeitraum wandert ins Archiv, der neue beginnt bei 0. Dabei lässt sich der
+      **tatsächlich abgelesene Zählerstand** eintragen; er geht dann in die
+      Kosten des abgeschlossenen Zeitraums ein.
+    - Per Häkchen kalibriert dieser Zählerstand zusätzlich den geschätzten
+      **Verbrauch je Betriebsstunde**: verglichen wird der abgelesene Wert (ohne
+      Startwert) mit dem, was homeESS gemessen hat. Ausdrücklich optional, denn
+      das ergibt nur Sinn, wenn keine weiteren Verbraucher am selben Zähler
+      hängen. Ein völlig unplausibler Faktor wird abgelehnt statt übernommen.
+  - **Übersicht aktualisiert sich vollständig.** Hinweise je Raum, die Notiz der
+    Zentralheizung, die Marke des Schornsteinfeger-Modus und die
+    Soll-Temperatur werden im 5-Sekunden-Takt nachgeführt — bisher blieben sie
+    bis zum nächsten Seitenaufbau stehen. Ein Soll-Feld, in dem gerade getippt
+    wird, bleibt dabei unangetastet.
+  - **Schornsteinfeger-Modus.** Stellt alle Räume auf 28 °C, damit die Heizungen
+    aufdrehen, hält die dezentralen Geräte aus, damit sie nicht mitlaufen, und
+    lässt die Zentralheizung durchlaufen. Die eingestellten Soll-Temperaturen
+    bleiben dabei unverändert: beim Beenden bekommen gekoppelte Thermostate
+    ihren alten Sollwert zurückgeschrieben, und damit fallen auch die
+    Wärmeanforderungen der Räume wieder weg. Ein verspätet zurückgemeldeter
+    Thermostat-Wert gilt kurz nach einem eigenen Schreiben als Echo und **nicht**
+    als Verstellung von Hand — sonst bliebe der Nachhall der 28 °C als neue
+    Soll-Temperatur stehen.
 
 ## [1.5.2] — 2026-08-22
 

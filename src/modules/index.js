@@ -24,6 +24,12 @@ const REGISTRY = [
     description: 'Verwaltung mehrerer PKW-Wallboxen mit vorausschauender Überschuss-Ladung und Lademodi (Privat / Beruflich / Immer voll).',
   },
   {
+    key: 'heizung',
+    label: 'Heizung & Klima',
+    path: '/heizung',
+    description: 'Beliebig viele Räume mit eigener Soll-Temperatur, Durchschnitt mehrerer Temperaturquellen, Fenster-/Türkontakten mit Abschaltverzögerung, lokalen Heiz-/Kühlgeräten und einer Zentralheizung mit Vorlaufüberwachung, Laufzeitprotokoll und Schornsteinfeger-Modus.',
+  },
+  {
     key: 'heimkino',
     label: 'Heimkino',
     path: '/heimkino',

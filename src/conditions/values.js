@@ -52,6 +52,16 @@ function isNumericValue(value) {
   return toNumber(value) !== null;
 }
 
+// Formulare senden zu einer Checkbox zusätzlich ein verstecktes „0"-Feld, damit
+// auch das Abwählen ankommt. Der Browser schickt dann beide Werte, und
+// express liefert sie als Array — maßgeblich ist der letzte.
+function checkboxValue(value, fallback = false) {
+  if (Array.isArray(value)) return value.length ? checkboxValue(value[value.length - 1], fallback) : fallback;
+  if (value == null) return fallback;
+  if (typeof value === 'boolean') return value;
+  return !['', '0', 'false', 'off', 'no', 'nein'].includes(String(value).trim().toLowerCase());
+}
+
 function isMathOperator(operator) {
   return MATH_OPERATORS.includes(String(operator || '').trim().toLowerCase());
 }
@@ -77,5 +87,5 @@ function applyOperation(operation, left, right) {
 
 module.exports = {
   TOPIC_PATTERN, TRUE_WORDS, FALSE_WORDS, MATH_OPERATORS, OPERATIONS, MAX_ROUND_DIGITS,
-  isTopicReference, toNumber, isNumericValue, isMathOperator, roundTo, applyOperation,
+  isTopicReference, toNumber, isNumericValue, isMathOperator, roundTo, applyOperation, checkboxValue,
 };

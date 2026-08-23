@@ -328,8 +328,10 @@ function requestStateValue(cacheKey) {
 // als JSON mit ack:false); mqttWriteCandidates liefert dafür nur die
 // Punktnotation.
 function publish(targetTopic, value) {
-  // Berechnete Systemwerte sind lesbare Quellen, aber keine Schreibziele.
-  if (parseSystemTopic(targetTopic)) return false;
+  // Berechnete Systemwerte sind lesbare Quellen und nur dann Schreibziele, wenn
+  // ein Modul für sie ein Schreibziel angemeldet hat (z. B. die Soll-Temperatur
+  // eines Raums); sonst bleiben sie schreibgeschützt.
+  if (parseSystemTopic(targetTopic)) return systemRouter.write(targetTopic, value);
   // Adapter-Topics (prefix://) gehen an die zuständige Instanz, nicht an den Broker.
   if (isSchemeTopic(targetTopic)) return adapterRouter.write(targetTopic, value);
   if (!client) return false;

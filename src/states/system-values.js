@@ -60,9 +60,19 @@ const VALUE_CATEGORIES = [
   'Funktionen',
   'Verbrauchssummen',
   'Schaltgruppen',
+  'Räume',
+  'Zentralheizung',
   'Betrieb',
   'Sonstiges',
 ];
+
+// Optionale Module melden ihre Werte über einen Provider an, statt hier fest
+// verdrahtet zu sein (Vorbild: registerStatesProvider der Adapter). Ein
+// Provider liefert fertige Einträge; setzt er `category`, bleibt sie erhalten.
+const valueProviders = [];
+function registerValueProvider(provider) {
+  if (typeof provider === 'function' && !valueProviders.includes(provider)) valueProviders.push(provider);
+}
 
 const CATEGORY_BY_PREFIX = [
   ['pv.', 'Photovoltaik'],
@@ -707,7 +717,14 @@ async function buildCalculatedInternalValues(db, cache) {
     strom.eigenverbrauchPower == null ? null : Math.max(0, strom.eigenverbrauchPower - verbrauchssummeGroupTotal)
   ));
 
-  for (const entry of entries) entry.category = categoryForId(entry.id);
+  for (const provider of valueProviders) {
+    const extra = await Promise.resolve(provider(db, cache)).catch(() => []);
+    for (const entry of extra || []) entries.push(entry);
+  }
+
+  // Eine vom Provider gesetzte Kategorie (auch mehrstufig, „Räume/Wohnzimmer")
+  // bleibt stehen; alle übrigen leiten sie aus dem id-Präfix ab.
+  for (const entry of entries) if (!entry.category) entry.category = categoryForId(entry.id);
 
   entries.sort((a, b) => a.label.localeCompare(b.label, i18n.current().locale));
   return entries;
@@ -748,6 +765,7 @@ function invalidateInternalValues() {
 module.exports = {
   listCalculatedInternalValues,
   invalidateInternalValues,
+  registerValueProvider,
   categoryForId,
   secondsUntilNextCharge,
   VALUE_CATEGORIES,

@@ -21,10 +21,13 @@ const mqttClient = require('../mqtt/client');
 const adapterRouter = require('../adapters/router');
 const { registerStatesProvider } = require('../adapters/states');
 const { isEnabled } = require('../modules');
-const values = require('../conditions/values');
 const conditionEngine = require('../conditions/engine');
+const { createActionRunner } = require('../automation/action-runner');
 const rooms = require('./rooms');
 const actionsRepo = require('./actions');
+
+// Ausführung der Aktionsfolgen (mit „Heizung & Klima" geteilt).
+const runner = createActionRunner('heimkino');
 
 const TICK_MS = 1000;
 // Nach dem Start bekommt ein retained Sync-Wert Zeit einzutreffen, bevor
@@ -40,9 +43,6 @@ let treesByRoom = new Map();
 let loops = [];
 let subscriptions = new Set();
 const loopBaselines = new Map(); // Schleifen-ID -> Zeitpunkt der letzten Prüfung/Ausführung
-const runTokens = new Map(); // Raum-ID -> laufende Ausführung
-const busyRooms = new Set();
-const busyLoops = new Set();
 // Raum-ID -> { topic, seenOn, mirroredOn, pending }: zuletzt gesehener bzw.
 // gespiegelter Sync-Zustand und das erwartete Echo eines eigenen Schreibens.
 const remoteStates = new Map();
@@ -51,106 +51,9 @@ const remoteStates = new Map();
 let remoteEpoch = null;
 let remoteGraceFrom = Date.now();
 
-class Cancelled extends Error {}
-
-function cacheKey(actionId, slot) {
-  return `heimkino:action:${actionId}:${slot}`;
-}
-
-// Felder einer Aktion, die wahlweise einen festen Wert oder ein Topic tragen.
-function referencedSlots(action) {
-  const slots = [];
-  if (action.type === 'write') {
-    const config = action.config || {};
-    if (values.isTopicReference(config.value)) slots.push(['value', config.value]);
-    if ((config.operation || 'set') !== 'set' && values.isTopicReference(config.value2)) slots.push(['value2', config.value2]);
-  }
-  if (action.type === 'loop' && action.config && action.config.checkEnabled && action.config.check) {
-    const check = action.config.check;
-    slots.push(['check', check.topic]);
-    if (!['truthy', 'falsy'].includes(check.operator) && values.isTopicReference(check.value)) {
-      slots.push(['checkValue', check.value]);
-    }
-  }
-  return slots;
-}
-
 function clearSubscriptions() {
   for (const key of subscriptions) mqttClient.unsubscribeAdHoc(key);
   subscriptions = new Set();
-}
-
-// Aktueller Wert eines Feldes: fester Wert als Literal, Topic-Verweis aus dem
-// zuletzt bekannten Wert des Ziel-States (wie bei den Bedingungen).
-function operandValue(action, slot, raw) {
-  if (!values.isTopicReference(raw)) return { known: true, value: conditionEngine.literal(raw), topic: null };
-  const entry = bus.getCache().get(cacheKey(action.id, slot));
-  return { known: !!entry, value: entry ? entry.value : null, topic: String(raw).trim() };
-}
-
-// Zu schreibender Wert einer Wert-Zuweisung – identisch zum „Dann" der
-// Bedingungen: fester Wert, Topic-Wert oder Ergebnis der Rechenfunktion.
-function writeValue(action) {
-  const config = action.config || {};
-  const operation = config.operation || 'set';
-  const round = config.round == null ? null : Number(config.round);
-  const first = operandValue(action, 'value', config.value);
-  if (!first.known) throw new Error(`Kein Wert für ${first.topic} verfügbar.`);
-  if (operation === 'set') {
-    if (round == null) return first.value;
-    const number = values.toNumber(first.value);
-    if (number == null) throw new Error(`Wert muss zum Runden numerisch sein: ${first.topic || config.value}`);
-    return values.roundTo(number, round);
-  }
-  const second = operandValue(action, 'value2', config.value2);
-  if (!second.known) throw new Error(`Kein Wert für ${second.topic} verfügbar.`);
-  const left = values.toNumber(first.value);
-  const right = values.toNumber(second.value);
-  if (left == null) throw new Error(`Wert muss bei mathematischen Operatoren numerisch sein: ${first.topic || config.value}`);
-  if (right == null) throw new Error(`Wert muss bei mathematischen Operatoren numerisch sein: ${second.topic || config.value2}`);
-  return values.roundTo(values.applyOperation(operation, left, right), round);
-}
-
-function delay(ms, roomId, token) {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      if (roomId != null && runTokens.get(roomId) !== token) reject(new Cancelled());
-      else resolve();
-    }, ms);
-    if (typeof timer.unref === 'function') timer.unref();
-  });
-}
-
-function ensureActive(roomId, token) {
-  if (roomId != null && runTokens.get(roomId) !== token) throw new Cancelled();
-}
-
-async function runList(list, roomId, token) {
-  for (const action of list || []) {
-    ensureActive(roomId, token);
-    if (action.type === 'pause') {
-      await delay(Math.max(0, Number(action.config.seconds || 0)) * 1000, roomId, token);
-      continue;
-    }
-    if (action.type === 'write') {
-      const value = writeValue(action);
-      if (!mqttClient.publish(action.config.topic, value)) {
-        throw new Error(`Ziel-State ${action.config.topic} konnte nicht geschrieben werden.`);
-      }
-      continue;
-    }
-    await runLoop(action, roomId, token);
-  }
-}
-
-async function runLoop(loop, roomId, token) {
-  const repeats = Math.max(1, Number(loop.config.repeats) || 1);
-  for (let pass = 0; pass < repeats; pass += 1) {
-    ensureActive(roomId, token);
-    await runList(loop.children, roomId, token);
-  }
-  // Der Prüfabstand zählt ab der letzten Ausführung der Schleife.
-  loopBaselines.set(loop.id, Date.now());
 }
 
 function phaseLabel(phase) {
@@ -160,23 +63,18 @@ function phaseLabel(phase) {
 // Eine Folge komplett abarbeiten. Eine erneute Zustandsänderung desselben Raums
 // bricht sie ab (Cancelled) und startet die andere Folge.
 async function runPhase(roomId, phase) {
-  const token = (runTokens.get(roomId) || 0) + 1;
-  runTokens.set(roomId, token);
   const tree = treesByRoom.get(roomId) || { on: [], off: [] };
   const list = tree[phase] || [];
-  busyRooms.add(roomId);
   try {
-    await runList(list, roomId, token);
+    const result = await runner.run(roomId, list);
+    if (result.status === 'cancelled') return;
     if (database) {
       await rooms.markRun(database, roomId, `${phaseLabel(phase)}-Folge ausgeführt: ${list.length} Aktion${list.length === 1 ? '' : 'en'}`, '')
         .catch(() => {});
     }
   } catch (error) {
-    if (error instanceof Cancelled) return;
     const message = String((error && error.message) || error).slice(0, 1000);
     if (database) await rooms.markRun(database, roomId, `${phaseLabel(phase)}-Folge: Fehler`, message).catch(() => {});
-  } finally {
-    if (runTokens.get(roomId) === token) busyRooms.delete(roomId);
   }
 }
 
@@ -287,41 +185,22 @@ async function syncRemotes(now = Date.now()) {
   }
 }
 
-// Prüfbedingung einer Schleife bewerten. Ein unbekannter Wert gilt bewusst als
-// „nicht erfüllt": genau dieser unklare Schaltzustand soll durch das erneute
-// Abspulen der Schleife aufgelöst werden.
-function checkFulfilled(loop) {
-  const check = loop.config.check;
-  if (!check) return true;
-  const current = bus.getCache().get(cacheKey(loop.id, 'check'));
-  if (!current) return false;
-  if (['truthy', 'falsy'].includes(check.operator)) return conditionEngine.compare(current.value, check.operator);
-  const expected = operandValue(loop, 'checkValue', check.value);
-  if (!expected.known) return false;
-  if (values.isMathOperator(check.operator)) {
-    if (values.toNumber(current.value) == null || values.toNumber(expected.value) == null) return false;
-  }
-  return conditionEngine.compare(current.value, check.operator, expected.value);
-}
-
 // Nur diese eine Schleife erneut abspulen – die übrige Aktionsfolge bleibt
 // unberührt.
 async function rerunLoop(loop) {
-  if (busyLoops.has(loop.id)) return;
-  busyLoops.add(loop.id);
   try {
-    await runLoop(loop, null, null);
+    const result = await runner.runLoopOnce(loop);
+    if (result.status !== 'done') return;
     if (database) {
       await rooms.markRun(database, loop.roomId,
         `${phaseLabel(loop.phase)}-Folge: Schleife nach Prüfung wiederholt`, '').catch(() => {});
     }
   } catch (error) {
-    if (!(error instanceof Cancelled) && database) {
+    if (database) {
       await rooms.markRun(database, loop.roomId, `${phaseLabel(loop.phase)}-Folge: Fehler`,
         String((error && error.message) || error).slice(0, 1000)).catch(() => {});
     }
   } finally {
-    busyLoops.delete(loop.id);
     loopBaselines.set(loop.id, Date.now());
   }
 }
@@ -345,8 +224,8 @@ async function checkLoops(now = Date.now()) {
     if (now - baseline < intervalMs) continue;
     loopBaselines.set(loop.id, now);
     // Läuft gerade eine vollständige Folge des Raums, hat sie Vorrang.
-    if (busyRooms.has(loop.roomId) || busyLoops.has(loop.id)) continue;
-    if (checkFulfilled(loop)) continue;
+    if (runner.isBusy(loop.roomId) || runner.isLoopBusy(loop.id)) continue;
+    if (runner.checkFulfilled(loop)) continue;
     rerunLoop(loop).catch(() => {});
   }
 }
@@ -390,8 +269,8 @@ async function reload() {
     const trees = await actionsRepo.actionTree(database, room.id);
     treesByRoom.set(room.id, trees);
     for (const action of actionsRepo.collectActions(trees)) {
-      for (const [slot, topic] of referencedSlots(action)) {
-        const key = cacheKey(action.id, slot);
+      for (const [slot, topic] of runner.referencedSlots(action)) {
+        const key = runner.cacheKey(action.id, slot);
         mqttClient.subscribeAdHoc(topic, key);
         subscriptions.add(key);
       }
@@ -443,14 +322,14 @@ function stop() {
   treesByRoom = new Map();
   loops = [];
   loopBaselines.clear();
-  runTokens.clear();
-  busyRooms.clear();
-  busyLoops.clear();
+  runner.reset();
   remoteStates.clear();
   remoteEpoch = null;
   database = null;
 }
 
 module.exports = {
-  init, reload, stop, tick, setRoomState, syncRemotes, checkLoops, runPhase, checkFulfilled, writeValue,
+  init, reload, stop, tick, setRoomState, syncRemotes, checkLoops, runPhase,
+  checkFulfilled: (loop) => runner.checkFulfilled(loop),
+  writeValue: (action) => runner.writeValue(action),
 };

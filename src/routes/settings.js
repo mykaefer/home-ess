@@ -14,6 +14,7 @@ const updateService = require('../update/service');
 const i18n = require('../i18n');
 const adapterHost = require('../adapters/host');
 const heimkinoRuntime = require('../heimkino/runtime');
+const heizungRuntime = require('../heizung/runtime');
 const systemDatabase = require('../database');
 const { normalizeDatabaseInput } = require('../database/config');
 
@@ -100,6 +101,7 @@ function settingsRoutes(db) {
       // Das Heimkino stellt eigene States bereit und prüft Schleifen zyklisch;
       // beides richtet sich erst nach dem erneuten Laden nach dem Modulstatus.
       .then(() => (key === 'heimkino' ? heimkinoRuntime.reload().catch(() => {}) : null))
+      .then(() => (key === 'heizung' ? heizungRuntime.reload().catch(() => {}) : null))
       .then(() => sendSettings(res, {
         activeTab: 'module',
         moduleMessage: `Modul "${mod.label}" wurde ${enable ? 'aktiviert' : 'deaktiviert'}.`,

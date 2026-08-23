@@ -7,6 +7,10 @@ const bus = require('../state-bus');
 const { topicForId, parseSystemTopic } = require('./system-topics');
 
 const routes = new Map(); // systemTopic -> Set<cacheKey>
+// Berechnete Systemwerte sind reine Lesequellen. Module dürfen einzelne ihrer
+// Werte dennoch als Schreibziel anbieten (z. B. die Soll-Temperatur eines
+// Raums); sie melden dafür ein id-Präfix mit Schreibfunktion an.
+const writers = new Map(); // id-Präfix -> handler(id, value)
 
 function registerRoute(topic, cacheKey) {
   const parsed = parseSystemTopic(topic);
@@ -27,6 +31,32 @@ function unregisterRoute(topic, cacheKey) {
   if (!targets.size) routes.delete(parsed.topic);
 }
 
+function registerWriter(prefix, handler) {
+  if (!prefix || typeof handler !== 'function') return;
+  writers.set(String(prefix), handler);
+}
+
+function unregisterWriter(prefix) {
+  writers.delete(String(prefix));
+}
+
+// Schreibwunsch an ein system://homeess/...-Topic. Liefert false, wenn für die
+// id kein Schreibziel angemeldet ist — dann bleibt der Wert schreibgeschützt.
+function write(topic, value) {
+  const parsed = parseSystemTopic(topic);
+  if (!parsed) return false;
+  for (const [prefix, handler] of writers) {
+    if (!parsed.id.startsWith(prefix)) continue;
+    try {
+      handler(parsed.id, value);
+    } catch (_) {
+      return false;
+    }
+    return true;
+  }
+  return false;
+}
+
 function publish(values, receivedAt = Date.now()) {
   const items = [];
   for (const entry of values || []) {
@@ -44,4 +74,4 @@ function clear() {
   routes.clear();
 }
 
-module.exports = { registerRoute, unregisterRoute, publish, clear };
+module.exports = { registerRoute, unregisterRoute, registerWriter, unregisterWriter, write, publish, clear };

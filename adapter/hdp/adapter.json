@@ -2,7 +2,7 @@
   "id": "hdp",
   "name": "hDP Adapter",
   "prefix": "hdp",
-  "version": "1.2.10",
+  "version": "1.2.11",
   "description": "Direkte Einbindung hDP-kompatibler Sensoren, Aktoren und Anzeigen ohne MQTT oder manuelle Pfadkonfiguration.",
   "copyright": "Copyright (C) 2026 Kevin Käfer",
   "multiInstance": false,
