@@ -858,6 +858,124 @@ function openDatabase() {
     db.run(
       'CREATE INDEX IF NOT EXISTS idx_heimkino_actions_room ON heimkino_actions (room_id, phase, IFNULL(parent_id, -1), position, id)'
     );
+    // Heizung & Klima (optionales Modul): je Raum eine Zeile mit Soll-Temperatur,
+    // Offsets, Hysterese und den optionalen Geräten. Temperaturquellen und
+    // Fenster-/Türkontakte hängen als eigene Zeilen am Raum, damit je Raum
+    // beliebig viele möglich sind. Die Zentralheizung steht als Einzelzeile
+    // daneben, ihre Brennerlaufzeiten im Protokoll.
+    db.run(
+      `CREATE TABLE IF NOT EXISTS heizung_rooms (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+        position INTEGER NOT NULL DEFAULT 0,
+        target_temp REAL NOT NULL DEFAULT 21,
+        heat_offset REAL NOT NULL DEFAULT 0,
+        cool_offset REAL NOT NULL DEFAULT 5,
+        cool_min_temp REAL,
+        hysteresis REAL NOT NULL DEFAULT 0.5,
+        thermostat_topic TEXT NOT NULL DEFAULT '',
+        heat_topic TEXT NOT NULL DEFAULT '',
+        cool_topic TEXT NOT NULL DEFAULT '',
+        central_allowed INTEGER NOT NULL DEFAULT 0,
+        central_temp REAL,
+        fan_topic TEXT NOT NULL DEFAULT '',
+        contact_delay_seconds INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT NOT NULL DEFAULT ''
+      )`
+    );
+    db.run(
+      `CREATE TABLE IF NOT EXISTS heizung_room_sensors (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        room_id INTEGER NOT NULL,
+        name TEXT NOT NULL DEFAULT '',
+        topic TEXT NOT NULL,
+        position INTEGER NOT NULL DEFAULT 0,
+        FOREIGN KEY (room_id) REFERENCES heizung_rooms(id) ON DELETE CASCADE
+      )`
+    );
+    db.run(
+      `CREATE TABLE IF NOT EXISTS heizung_room_contacts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        room_id INTEGER NOT NULL,
+        name TEXT NOT NULL DEFAULT '',
+        topic TEXT NOT NULL,
+        inverted INTEGER NOT NULL DEFAULT 0,
+        position INTEGER NOT NULL DEFAULT 0,
+        FOREIGN KEY (room_id) REFERENCES heizung_rooms(id) ON DELETE CASCADE
+      )`
+    );
+    db.run('CREATE INDEX IF NOT EXISTS idx_heizung_sensors_room ON heizung_room_sensors (room_id, position, id)');
+    db.run('CREATE INDEX IF NOT EXISTS idx_heizung_contacts_room ON heizung_room_contacts (room_id, position, id)');
+    db.run(
+      `CREATE TABLE IF NOT EXISTS heizung_central (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        enabled INTEGER NOT NULL DEFAULT 0,
+        mode TEXT NOT NULL DEFAULT 'relais',
+        switch_topic TEXT NOT NULL DEFAULT '',
+        outdoor_topic TEXT NOT NULL DEFAULT '',
+        flow_topic TEXT NOT NULL DEFAULT '',
+        return_topic TEXT NOT NULL DEFAULT '',
+        burner_feedback_topic TEXT NOT NULL DEFAULT '',
+        pump_topic TEXT NOT NULL DEFAULT '',
+        pump_lead_seconds INTEGER NOT NULL DEFAULT 30,
+        pump_lag_seconds INTEGER NOT NULL DEFAULT 300,
+        flow_window_seconds INTEGER NOT NULL DEFAULT 120,
+        flow_drop_delta REAL NOT NULL DEFAULT 0.3,
+        max_hold_minutes INTEGER NOT NULL DEFAULT 0,
+        consumption_per_hour REAL NOT NULL DEFAULT 0,
+        unit TEXT NOT NULL DEFAULT 'l',
+        price_per_unit REAL NOT NULL DEFAULT 0,
+        sweep_enabled INTEGER NOT NULL DEFAULT 0,
+        sweep_started_at INTEGER
+      )`
+    );
+    // Jede Brennerlaufzeit: `ended_at`/`duration_ms` werden im Takt
+    // fortgeschrieben, damit ein Stromausfall höchstens den letzten Takt kostet.
+    db.run(
+      `CREATE TABLE IF NOT EXISTS heizung_burner_runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        started_at INTEGER NOT NULL,
+        ended_at INTEGER,
+        duration_ms INTEGER NOT NULL DEFAULT 0,
+        reason TEXT NOT NULL DEFAULT ''
+      )`
+    );
+    db.run('CREATE INDEX IF NOT EXISTS idx_heizung_burner_runs_started ON heizung_burner_runs (started_at)');
+    // Zählwerk der Heizkosten: ein laufender Abrechnungszeitraum bis zur
+    // nächsten Zählerablesung, dazu der zuletzt abgeschlossene Zeitraum.
+    db.run(
+      `CREATE TABLE IF NOT EXISTS heizung_billing (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        started_at INTEGER,
+        start_consumption REAL NOT NULL DEFAULT 0,
+        previous_started_at INTEGER,
+        previous_ended_at INTEGER,
+        previous_consumption REAL,
+        previous_cost REAL,
+        previous_metered REAL,
+        last_calibration_at INTEGER,
+        last_calibration_factor REAL
+      )`
+    );
+    // Aktionsfolgen der Räume: je Raum vier Folgen (Heizen/Kühlen, ein/aus) nach
+    // demselben Muster wie beim Heimkino — Wertzuweisungen, Pausen und
+    // verschachtelbare Schleifen mit zyklischer Prüfung.
+    db.run(
+      `CREATE TABLE IF NOT EXISTS heizung_actions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        room_id INTEGER NOT NULL,
+        phase TEXT NOT NULL CHECK (phase IN ('heat_on', 'heat_off', 'cool_on', 'cool_off')),
+        parent_id INTEGER,
+        type TEXT NOT NULL CHECK (type IN ('write', 'pause', 'loop')),
+        position INTEGER NOT NULL DEFAULT 0,
+        config_json TEXT NOT NULL DEFAULT '{}',
+        FOREIGN KEY (room_id) REFERENCES heizung_rooms(id) ON DELETE CASCADE,
+        FOREIGN KEY (parent_id) REFERENCES heizung_actions(id) ON DELETE CASCADE
+      )`
+    );
+    db.run(
+      'CREATE INDEX IF NOT EXISTS idx_heizung_actions_room ON heizung_actions (room_id, phase, IFNULL(parent_id, -1), position, id)'
+    );
     // Historisierte, abgeschlossene Tageswerte einzelner Kennzahlen (PV-Ertrag,
     // Netzbezug, Eigenverbrauch) für die
     // Jahres-Statistik (Durchschnitt/Minimum/Maximum inkl. Datum) im
@@ -907,9 +1025,98 @@ function openDatabase() {
     migrateConditionFolders(db);
     migrateConditionElseKind(db);
     migrateHeimkinoRooms(db);
+    seedHeizungCentral(db);
+    seedHeizungBilling(db);
+    migrateHeizungCentral(db);
+    migrateHeizungDeviceActions(db);
   });
 
   return db;
+}
+
+// Nachträglich ergänzte Raumspalten und die Umstellung der Geräte auf
+// Aktionsfolgen. Die Geräte wurden zuerst über je ein An-/Aus-Topic geschaltet.
+// Das reicht für echte Geräte nicht (Betriebsart, Solltemperatur, Wiederholung),
+// deshalb steuern jetzt Aktionsfolgen. Bereits hinterlegte Topics werden einmalig
+// in eine Folge mit einer Wertzuweisung überführt und die Spalte danach geleert,
+// damit nichts verlorengeht und die Umwandlung sich nicht wiederholt.
+function migrateHeizungDeviceActions(db) {
+  db.all('PRAGMA table_info(heizung_rooms)', (err, rows) => {
+    if (err || !Array.isArray(rows) || rows.length === 0) return;
+    const existing = new Set(rows.map((r) => r.name));
+    // Mindesttemperatur zum Kühlen und die Prioritäten nach Betriebslevel kamen
+    // nach den ersten Räumen dazu.
+    if (!existing.has('cool_min_temp')) db.run('ALTER TABLE heizung_rooms ADD COLUMN cool_min_temp REAL');
+    // Optionaler Heizkörperlüfter je Raum.
+    if (!existing.has('fan_topic')) {
+      db.run("ALTER TABLE heizung_rooms ADD COLUMN fan_topic TEXT NOT NULL DEFAULT ''");
+    }
+    if (!existing.has('heat_priority')) {
+      db.run('ALTER TABLE heizung_rooms ADD COLUMN heat_priority INTEGER NOT NULL DEFAULT 2');
+      db.run('ALTER TABLE heizung_rooms ADD COLUMN cool_priority INTEGER NOT NULL DEFAULT 4');
+      db.run('ALTER TABLE heizung_rooms ADD COLUMN heat_central_fallback INTEGER NOT NULL DEFAULT 0');
+    }
+    if (!existing.has('heat_topic') || !existing.has('cool_topic')) return;
+    db.all("SELECT id, heat_topic, cool_topic FROM heizung_rooms WHERE heat_topic <> '' OR cool_topic <> ''", (listErr, list) => {
+      if (listErr || !Array.isArray(list)) return;
+      for (const room of list) {
+        for (const [device, topic] of [['heat', room.heat_topic], ['cool', room.cool_topic]]) {
+          if (!topic) continue;
+          for (const [phase, value] of [[`${device}_on`, '1'], [`${device}_off`, '0']]) {
+            db.run(
+              `INSERT INTO heizung_actions (room_id, phase, parent_id, type, position, config_json)
+               SELECT ?, ?, NULL, 'write', 0, ?
+                WHERE NOT EXISTS (SELECT 1 FROM heizung_actions WHERE room_id = ? AND phase = ?)`,
+              [room.id, phase, JSON.stringify({ topic, operation: 'set', value, round: null }), room.id, phase]
+            );
+          }
+        }
+      }
+      db.run("UPDATE heizung_rooms SET heat_topic = '', cool_topic = '' WHERE heat_topic <> '' OR cool_topic <> ''");
+    });
+  });
+}
+
+// Grenz-Außentemperatur und Umwälzpumpe kamen nach den ersten Zentralheizungen
+// dazu; Bestandsdatenbanken bekommen die Spalten nachträglich.
+function migrateHeizungCentral(db) {
+  db.all('PRAGMA table_info(heizung_central)', (err, rows) => {
+    if (err || !Array.isArray(rows) || rows.length === 0) return;
+    const existing = new Set(rows.map((r) => r.name));
+    if (!existing.has('outdoor_topic')) {
+      db.run("ALTER TABLE heizung_central ADD COLUMN outdoor_topic TEXT NOT NULL DEFAULT ''");
+    }
+    // Rückmeldung des Brenners für die genaue Laufzeit.
+    if (!existing.has('burner_feedback_topic')) {
+      db.run("ALTER TABLE heizung_central ADD COLUMN burner_feedback_topic TEXT NOT NULL DEFAULT ''");
+    }
+    // Optionale Umwälzpumpe am zweiten Schaltaktor.
+    if (!existing.has('pump_topic')) {
+      db.run("ALTER TABLE heizung_central ADD COLUMN pump_topic TEXT NOT NULL DEFAULT ''");
+      db.run('ALTER TABLE heizung_central ADD COLUMN pump_lead_seconds INTEGER NOT NULL DEFAULT 30');
+      db.run('ALTER TABLE heizung_central ADD COLUMN pump_lag_seconds INTEGER NOT NULL DEFAULT 300');
+    }
+  });
+}
+
+// Das Zählwerk ist ebenfalls eine Einzelzeile; der Zeitraum beginnt mit dem
+// ersten Start, damit die Kachel von Anfang an einen Anfang kennt.
+function seedHeizungBilling(db) {
+  db.get('SELECT COUNT(*) AS cnt FROM heizung_billing', (err, row) => {
+    if (!err && row && row.cnt === 0) {
+      db.run('INSERT INTO heizung_billing (id, started_at) VALUES (1, ?)', [Date.now()]);
+    }
+  });
+}
+
+// Die Zentralheizung ist eine Einzelzeile; sie wird beim ersten Start angelegt,
+// damit die Oberfläche immer eine Konfiguration vorfindet.
+function seedHeizungCentral(db) {
+  db.get('SELECT COUNT(*) AS cnt FROM heizung_central', (err, row) => {
+    if (!err && row && row.cnt === 0) {
+      db.run("INSERT INTO heizung_central (id) VALUES (1)");
+    }
+  });
 }
 
 // Bedingungen gab es zuerst ohne Verzeichnisse. Bestehende Automationen bleiben

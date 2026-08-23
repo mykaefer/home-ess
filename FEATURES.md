@@ -88,6 +88,45 @@ desktop and mobile layouts.
   repeat itself alone if it was not. An optional sync topic keeps cinema mode in
   bidirectional sync with an external topic; after a restart that topic's state
   wins and is adopted without running the action sequence.
+- Heating & Climate manages any number of rooms, each with its own setpoint,
+  heating and cooling offsets and switching hysteresis. A room can have any
+  number of temperature sources — several are averaged — and an optional
+  thermostat keeps the setpoint in bidirectional sync. Open window and door
+  An optional minimum cooling temperature keeps a night setback on the
+  thermostat from waking the air conditioner: below that floor a room never
+  cools. Open window and door contacts disable heating and cooling, either
+  immediately or after a configurable delay. Heating and cooling devices are
+  driven by the same action
+  sequences as Home Cinema — value assignments, pauses and loops with cyclic
+  verification, one sequence for "on" and one for "off" per device — so a split
+  air conditioner needing mode, setpoint and power in order can be driven too.
+  The devices as well as the central heating release are optional; without them
+  the room only measures its temperature and exposes every value as a system
+  value — under *System* in the *Räume* folder with one subfolder per room,
+  named after the room (`system://homeess/raeume.Wohnzimmer.temperatur`) rather
+  than numbered. Whether a room is served by its local device or by the central
+  heating is decided by the **outdoor temperature** (system-wide or a dedicated
+  source) against a per-room threshold. Each room can also drive a radiator fan
+  that runs while the room requests heat from the central heating. Both local
+  devices honour the operating
+  level with a per-device priority; for the heating device an option lets the
+  central heating step in whenever the level does not cover that priority — the
+  outdoor threshold is then waived for that room. Central heating runs via
+  Modbus/state or via a relay with mandatory flow and return monitoring, and it
+  keeps three distinct states: boiler (the switch), burner (is it firing?) and
+  pump. The boiler may only switch off once no room asks for heat and the burner
+  is detected as off — either from the controller's feedback state or from the
+  course of the flow temperature. An
+  optional circulation pump on a second relay always starts before the boiler is
+  allowed to run and keeps running for a configurable time after it. Burner
+  runtimes count only what the burner actually fires — from its feedback state,
+  or estimated from the rising flow temperature — and are turned into heating
+  costs from consumption per operating hour and price per unit. A meter tile
+  accumulates consumption and costs across a billing period up to the next meter
+  reading, shows the monthly instalment and, on closing the period, optionally
+  takes the actual meter reading — which can also calibrate the estimate. The
+  chimney-sweep mode sets all rooms to 28 °C, keeps the local devices off and
+  lets the central heating run.
 - Optional modules can be enabled or disabled from the settings page without
   creating parallel server or authentication structures.
 

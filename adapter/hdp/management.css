@@ -463,6 +463,16 @@
     box-sizing: border-box;
 }
 
+.hdp-ir-origin {
+    display: block;
+    overflow: hidden;
+    margin-top: 2px;
+    color: var(--color-ink-muted);
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .hdp-ir-state-path {
     display: block;
     overflow: hidden;

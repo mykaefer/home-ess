@@ -51,8 +51,10 @@ function systemCategories(values) {
       name: entry.label,
       topic: topicForId(entry.id),
       unit: entry.unit || '',
-      writable: false,
-      topicSelectable: false,
+      // Fast alle Systemwerte sind berechnet und damit reine Lesequellen; ein
+      // Modul kann einzelne ausdrücklich als Schreibziel anbieten.
+      writable: entry.writable === true,
+      topicSelectable: entry.writable === true,
       sourceType: 'system',
       value: entry.value,
       display: entry.display,
@@ -187,8 +189,8 @@ async function listAllStates(db, cache = bus.getCache()) {
     ...system.map((entry) => ({
       ...entry,
       sourceType: 'system',
-      writable: false,
-      topicSelectable: false,
+      writable: entry.writable === true,
+      topicSelectable: entry.writable === true,
     })),
     ...entriesFromBlocks(decorateAdapterBlocks(adapters)),
     ...custom,

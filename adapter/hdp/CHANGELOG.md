@@ -5,6 +5,20 @@ wird unabhängig von homeESS versioniert; die Version steht in
 [adapter.json](adapter.json). Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [1.2.11] — 2026-08-22
+
+### Behoben
+
+- **Gelernte IR-Codes stehen jedem Blaster zur Verfügung.** Die Bibliothek der
+  aufgezeichneten Codes gehört der Adapterinstanz, wurde auf der Geräteseite
+  aber nur für das aufzeichnende Gerät und nur bei einem Receiver im
+  Record-Modus angezeigt. Ein Gerät mit reinem IR-Blaster sah dadurch keinen
+  einzigen Code. Jede IR-Geräteseite mit aktivem Blaster listet jetzt alle
+  gelernten Codes und kann sie senden; bei fremder Herkunft steht das
+  aufzeichnende Gerät unter dem Namen. Umbenennen und Löschen wirken auf das
+  aufzeichnende Gerät, und der Live-Refresh der Seite reagiert auf Aufnahmen
+  aller Geräte.
+
 ## [1.2.10] — 2026-08-22
 
 ### Geändert

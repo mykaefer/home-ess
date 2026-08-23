@@ -761,6 +761,166 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
       Start von homeESS; ein unbekannter Wert gilt als nicht erfüllt. Geprüft wird
       nur die Folge, die zum **aktuellen** Kinomodus gehört — sonst würden „an"
       und „aus" einander dauerhaft überschreiben.
+  - **Heizung & Klima** (`/heizung`, `src/heizung/`): beliebig viele Räume
+    (`heizung_rooms`) mit eigener Soll-Temperatur, Offsets, Hysterese und den
+    optionalen Geräten. Ein Raum öffnet — wie beim Heimkino — **keinen Dialog,
+    sondern eine eigene Seite** (`/heizung/raum/<id>`); die Zentralheizung hat
+    ihre eigene Seite (`/heizung/zentrale`). Die Regelung läuft in
+    `heizung/runtime.js` im 5-Sekunden-Takt.
+    - **States = Systemwerte.** Das Modul ist **kein Adapter** und bekommt
+      deshalb **kein eigenes Schema**: seine Werte sind homeESS-Systemwerte unter
+      `system://homeess/…`. Je Raum
+      `raeume.<Raumname>.{temperatur, soll, heizen, kuehlen, zentral, fenster}`,
+      für die Zentralheizung `zentralheizung.{brenner, anforderungen,
+      aussentemperatur, vorlauf, ruecklauf, laufzeit_heute, verbrauch_heute,
+      kosten_heute, schornsteinfeger}`. Auf der States-Seite ergibt die
+      Kategorie `Räume/<Raumname>` bzw. `Zentralheizung` die Ordner (mehrstufige
+      Kategorien werden in `repository.systemCategories` über `categoryParts`
+      zum Baum). Adressiert wird über den **Namen** (`rooms.addressFor`:
+      Leerraum, Punkt und Schrägstrich werden zu `_`, damit die id-Ebenen heil
+      bleiben); ein Umbenennen ändert daher die States, `ensureFreeAddress`
+      verhindert Kollisionen und `reload()` räumt die Topics
+      umbenannter/entfernter Räume aus dem State-Bus.
+    - **Anbindung an die Systemwerte**: `states/system-values.registerValueProvider`
+      nimmt den Provider des Moduls entgegen (Vorbild: `registerStatesProvider`
+      der Adapter) — dadurch bleibt `system-values.js` frei von einem Import des
+      Moduls. Eine vom Provider gesetzte `category` bleibt erhalten, sonst greift
+      weiter `categoryForId`. Der Takt veröffentlicht zusätzlich direkt über
+      `systemRouter.publish`, damit Schaltentscheidungen ohne Umweg im Bus
+      stehen.
+    - **Beschreibbare Systemwerte**: berechnete Systemwerte sind reine
+      Lesequellen; ein Modul kann einzelne ausdrücklich freigeben. Dafür nimmt
+      `states/system-router.registerWriter(idPräfix, handler)` ein Schreibziel
+      entgegen, `mqttClient.publish` reicht `system://`-Topics dorthin weiter
+      (ohne angemeldetes Ziel weiterhin `false`), und `repository` übernimmt
+      `writable`/`topicSelectable` aus dem Eintrag. Freigegeben sind allein
+      `raeume.<Raum>.soll` und `zentralheizung.schornsteinfeger`; der
+      Schreibzugriff löst den Raum über den Namen auf (ohne Rücksicht auf
+      Groß-/Kleinschreibung).
+    - **Abos**: `reload()` gleicht die Ad-hoc-Abos **differenziell** ab
+      (Cache-Schlüssel → Topic). Unverändertes bleibt bestehen, denn
+      `unsubscribeAdHoc` löscht den zuletzt empfangenen Wert — sonst stünde nach
+      jedem Speichern kurzzeitig keine Temperatur bereit und die Geräte würden
+      flackern.
+    - **Temperaturquellen** (`heizung_room_sensors`): beliebig viele je Raum,
+      Ist-Temperatur ist ihr **Durchschnitt**; Werte außerhalb −60…120 °C gelten
+      als Störung und fallen heraus. Ohne gültigen Wert wird **nicht** geschaltet.
+    - **Thermostat** (`thermostat_topic`, optional): bidirektionale Kopplung der
+      Soll-Temperatur nach dem Muster des Heimkino-Sync-Topics — erster
+      (retained) Wert nach Start bzw. nach jedem MQTT-Connect ist nur
+      Ausgangsbasis, spätere externe Verstellung gewinnt, lokale Änderung wird
+      zurückgeschrieben. Ein abweichender Wert innerhalb von
+      `THERMOSTAT_ECHO_MS` (15 s) nach einem eigenen Schreiben gilt als
+      verspätetes Echo des vorherigen Standes, nicht als Verstellung von Hand;
+      andernfalls würde der Nachhall des Schornsteinfeger-Modus (28 °C) als neue
+      Soll-Temperatur übernommen und die Wärmeanforderung des Raums bliebe nach
+      dem Beenden stehen.
+    - **Kontakte** (`heizung_room_contacts`, optional, je Kontakt `inverted`):
+      offener Kontakt sperrt Heizen und Kühlen nach `contact_delay_seconds`
+      (0 = sofort); die Verzögerung zählt ab dem beobachteten Öffnen, das
+      Schließen wirkt immer sofort.
+    - **Geräte = Aktionsfolgen** (`heizung_actions`, `heizung/actions.js`): je
+      Raum vier Folgen `heat_on`/`heat_off`/`cool_on`/`cool_off`. Ein einzelnes
+      An-/Aus-Topic reicht für echte Geräte nicht (Betriebsart, Solltemperatur,
+      Wiederholung bei IR). Datenschicht und Validierung kommen aus
+      `automation/action-sequences.js` (`createActionRepository`), die Ausführung
+      aus `automation/action-runner.js` (`createActionRunner`), die Oberfläche aus
+      `views/action-sequences.js` — alle drei mit dem Heimkino geteilt.
+      Ein Wechsel des Soll-Zustands startet die passende Folge **einmal**
+      (Schlüssel `<raum>:heat` bzw. `<raum>:cool`, eine neue Schaltung bricht die
+      laufende ab); die zyklische Prüfung einer Schleife läuft nur in der Folge,
+      die zum **aktuellen** Zustand des Gerätes gehört. `hasDevice(tree, kind)`
+      entscheidet, ob der Raum ein Gerät hat: maßgeblich ist die „ein"-Folge.
+      Bestandsdaten mit `heat_topic`/`cool_topic` wandern per
+      `migrateHeizungDeviceActions` einmalig in Folgen mit je einer
+      Wertzuweisung.
+    - **Heizkörperlüfter** (`fan_topic`, optional): folgt `centralDemand` des
+      Raums — an, solange er Wärme von der Zentralheizung anfordert. Geschaltet
+      wird direkt per Topic (`runtime.commandFan`: bei Änderung sowie bei
+      dauerhaft abweichendem Readback), nicht über eine Aktionsfolge, und ohne
+      Betriebslevel-Gate — er wird gerade dann gebraucht, wenn das lokale
+      Heizgerät gesperrt ist.
+    - **Betriebslevel** (LEVEL_HANDLING.md): je Gerät eine Priorität
+      (`heat_priority`, `cool_priority`; Verbraucher-IDs `heizung.<raum>.heat`
+      bzw. `.cool`). Registriert wird nur, was es gibt (vorhandene „ein"-Folge);
+      `onMustTurnOff` spult sofort die „aus"-Folge ab. Der Bedarf (`heatDemand`/
+      `coolDemand`) ist vom Gate **getrennt** — sonst würde die Hysterese beim
+      Sperren umklappen. Mit `heat_central_fallback` springt die Zentralheizung
+      ein, solange das Level das Heizgerät sperrt; dann gilt für den Raum
+      **keine Außentemperaturgrenze** (Bedingung: `central_allowed`).
+    - **Schwellen**: **Wärmebedarf** des Raums bei `Ist < Soll − heat_offset`,
+      Kühlen bei `Ist > max(Soll + cool_offset, cool_min_temp)`
+      (`runtime.coolThreshold`; `cool_min_temp` ist eine **absolute**
+      Untergrenze gegen Kühlen bei Nachtabsenkung, leer = keine),
+      Ausschaltpunkt jeweils um `hysteresis` versetzt. **Wer den Bedarf deckt, entscheidet allein die
+      Außentemperatur**: `central_temp` ist eine **Außentemperatur**-Grenze (kein
+      Raumwert). Liegt die Außentemperatur darunter (mit derselben Hysterese) und
+      hat der Raum `central_allowed`, übernimmt die Zentralheizung **anstelle**
+      des lokalen Heizgerätes; darüber heizt das lokale Gerät. Ohne bekannte
+      Außentemperatur übernimmt die Zentralheizung nicht (das lokale Gerät bleibt
+      zuständig). Eingestellte Werte werden **nie** zurechtgebogen: zwischen
+      Grenz-Außentemperatur und Soll-Temperatur heizt allein ein lokales Gerät —
+      ist keines hinterlegt, bleibt dieser Bereich bewusst ungeheizt.
+    - **Zentralheizung** (`heizung_central`, Einzelzeile): `outdoor_topic` ist
+      eine **optionale eigene Außentemperatur-Quelle**; ohne sie zählt die
+      systemweite (`mqtt_config.outdoor_temperature_topic` über
+      `buildEnvironmentSnapshot`). Bei `enabled` muss eine der beiden vorliegen,
+      sonst könnte kein Raum die Zentralheizung anfordern
+      (`central.readOutdoorTemperature`). `mode` = `modbus` (Anlage regelt
+      selbst) oder `relais` (Schaltaktor).
+    - **Drei Zustände, klar getrennt** (`runtime.js`):
+      * `boiler` — Schaltzustand der Anlage (State `zentralheizung.kessel`). Ein
+        vom Schaltaktor zurückgemeldeter Zustand gilt als Wahrheit
+        (Echo-Fenster `READBACK_GRACE_MS`).
+      * `burner` — feuert der Brenner? (State `zentralheizung.brenner`,
+        `runtime.detectFiring`).
+      * `pump` — Umwälzpumpe mit Vor-/Nachlauf (State `zentralheizung.pumpe`).
+    - **Brennererkennung** (`detectFiring`): erste Quelle ist
+      `burner_feedback_topic`. Fehlt sie, wird der Vorlauf ausgewertet —
+      `FIRING_SAMPLES` (3) Messwerte **hintereinander** über `flow_drop_delta`
+      hinaus nach oben ⇒ „an"; Werte innerhalb dieses Rauschbandes halten den
+      Stand (die **Halte-Phase** zählt als Brennerlauf); `FIRING_SAMPLES`
+      Messwerte in Folge nach unten ⇒ „aus". Ohne Rückmeldung **und** ohne
+      Vorlauf bleibt nur der Kesselzustand (`source = 'switch'`).
+    - **Abschalten des Kessels** (`mayStopBoiler`): nur wenn keine Anforderung
+      mehr besteht **und** der Brenner als aus erkannt ist. Ohne
+      Erkennungsmöglichkeit greift `flow_window_seconds` als Zeitfenster,
+      `max_hold_minutes` (0 = keine) als Notabschaltung. Der Rücklauf wird
+      überwacht und angezeigt, entscheidet aber **nichts** — er hinkt einen
+      Kreislauf hinterher (im Betrieb beobachtet: als Bedingung hielt er den
+      Kessel endlos fest).
+    - **Umwälzpumpe** (`pump_topic`, optional, nur bei `relais`): sie läuft,
+      solange Wärme gebraucht wird oder der Kessel an ist. Der Kessel startet
+      erst, wenn die Pumpe läuft — `pump_lead_seconds` Vorlauf und, sofern der
+      State zurückmeldet, bestätigter Lauf (`runtime.pumpReady`). Nach dem
+      Abschalten des Kessels beginnt der Nachlauf `pump_lag_seconds`.
+    - **Laufzeiten/Kosten** (`heizung_burner_runs`): protokolliert wird die Zeit,
+      in der der Brenner **feuert**, nicht die Einschaltzeit des Kessels
+      (`trackFiring` folgt der Brennererkennung). Die verwendete Quelle steht in
+      `centralSnapshot().firingSource`
+      (`central.FIRING_SOURCES`) und über der Auswertung. `ended_at`/`duration_ms`
+      werden im Takt fortgeschrieben (Stromausfall kostet höchstens einen Takt),
+      offene Läufe schließt der Start. Verbrauch = Laufzeit ×
+      `consumption_per_hour`, Kosten = Verbrauch × `price_per_unit`; ausgewertet
+      für heute, 30 Tage, laufendes Jahr und gesamt.
+    - **Zählwerk** (`heizung_billing`, Einzelzeile, `src/heizung/billing.js`):
+      laufender Abrechnungszeitraum ab `started_at` plus `start_consumption`
+      (was vor dem Mitzählen anfiel). `billingStatistics` summiert die
+      Brennerlaufzeit seit `started_at`, rechnet sie mit
+      `consumption_per_hour`/`price_per_unit` um und weist den Monatsabschlag
+      als Kosten ÷ 12 aus. `closePeriod` schiebt den Zeitraum in die
+      `previous_*`-Spalten (mit optional abgelesenem `previous_metered`, das
+      dann die Kosten bestimmt) und startet bei 0. Mit `calibrate` wird
+      `consumption_per_hour` um den Faktor
+      `(abgelesen − Startwert) / gemessen` nachgezogen; außerhalb von
+      `MIN/MAX_CALIBRATION_FACTOR` (0,2–5) wird abgelehnt, weil dann
+      Fremdverbraucher am Zähler hängen oder der Startwert nicht stimmt.
+    - **Schornsteinfeger-Modus** (`sweep_enabled`, persistiert): ignoriert die
+      Außentemperatur und die Betriebslevel-Prioritäten, schreibt allen
+      gekoppelten Thermostaten 28 °C, hält die dezentralen Geräte aus und lässt
+      die Zentralheizung durchlaufen. Die gespeicherten Soll-Temperaturen
+      bleiben unverändert und werden beim Beenden wieder auf die Thermostate
+      geschrieben.
 - **Diagramm-Kachel** (`dashboard/chart-config.js`, `dashboard/chart-svg.js`):
   Widget-Typ `chart`, zeichnet bis zu vier Messreihen der Systemdatenbank. Die
   Konfiguration (Linien mit Messreihe, Legendenname und Farbe, dazu Zeitraum,
