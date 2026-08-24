@@ -26,6 +26,12 @@ function validateManifest(input) {
   return { schema_version: 1, release: { ...release }, artifacts };
 }
 
+function schemaNumber(value) {
+  if (value == null || String(value).trim() === '') return null;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
+}
+
 function selectArtifact(manifest, firmwareInfo) {
   const valid = validateManifest(manifest);
   const artifact = valid.artifacts.find((item) =>
@@ -51,13 +57,26 @@ function checkCompatibility(manifest, artifact, firmwareInfo, options = {}) {
   // Ziel nicht hinter dem aktuellen Schema zurückfällt — eine Gleichheitsprüfung
   // würde jedes Update über eine Schemagrenze dauerhaft verhindern, obwohl die
   // Firmware genau dafür eine Migration mitbringt.
-  const targetSchema = Number(release.config_schema_version);
-  const deviceSchema = Number(firmwareInfo.config_schema_version);
-  if (!Number.isInteger(targetSchema) || !Number.isInteger(deviceSchema)) {
+  //
+  // Der Online-Firmwarekatalog nennt kein Schema und lässt das Feld deshalb
+  // `null`. Dann entfällt die Vorprüfung ganz: Das Gerät prüft die Metadaten
+  // beim Empfang und lehnt einen unpassenden Stand mit
+  // OTA_CONFIG_SCHEMA_INCOMPATIBLE ab.
+  // Nicht über Number() prüfen: `null` und `''` würden dort zu 0 und damit als
+  // gültiges Schema durchgehen. Das Geräteschema muss bestimmbar sein, weil es
+  // bei einem offenen Release in den OTA-Header wandert.
+  const deviceSchema = schemaNumber(firmwareInfo.config_schema_version);
+  if (deviceSchema === null) {
     throw new Error('Konfigurationsschema ist nicht bestimmbar.');
   }
-  if (targetSchema < deviceSchema && !options.allowDowngrade) {
-    throw new Error(`Konfigurationsschema ${deviceSchema} lässt sich nicht auf ${targetSchema} zurücksetzen.`);
+  if (release.config_schema_version != null) {
+    const targetSchema = schemaNumber(release.config_schema_version);
+    if (targetSchema === null) {
+      throw new Error('Konfigurationsschema ist nicht bestimmbar.');
+    }
+    if (targetSchema < deviceSchema && !options.allowDowngrade) {
+      throw new Error(`Konfigurationsschema ${deviceSchema} lässt sich nicht auf ${targetSchema} zurücksetzen.`);
+    }
   }
   if (compareSemVer(release.version, firmwareInfo.version) < 0 && !options.allowDowngrade) {
     throw new Error('Firmware-Downgrade ist nicht freigegeben.');
@@ -136,7 +155,11 @@ function otaHeaders(manifest, artifact, firmwareInfo, credentials, allowDowngrad
     'X-hDP-Board': artifact.board,
     'X-hDP-Variant': artifact.variant,
     'X-hDP-Protocol-Version': firmwareInfo.protocol_version,
-    'X-hDP-Config-Schema-Version': String(release.config_schema_version),
+    // Pflichtheader nach hDP 15.3. Nennt das Release kein Schema, wird das des
+    // Geräts gespiegelt: Der Adapter maßt sich keine Migrationsaussage an, das
+    // Gerät prüft ohnehin selbst.
+    'X-hDP-Config-Schema-Version': String(release.config_schema_version == null
+      ? firmwareInfo.config_schema_version : release.config_schema_version),
     'X-hDP-Firmware-Size': String(artifact.size_bytes),
     'X-hDP-Firmware-SHA256': artifact.sha256,
     'X-hDP-Restart-After-Success': 'false',

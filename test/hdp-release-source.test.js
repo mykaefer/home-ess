@@ -26,48 +26,38 @@ function release(version, channel, filename, image, signature = null) {
   };
 }
 
-function writeBundle(root, manifest, image) {
+function writeChannel(root, manifest, image) {
   const directory = path.join(root, manifest.release.channel);
   fs.mkdirSync(directory, { recursive: true });
   fs.writeFileSync(path.join(directory, 'manifest.json'), JSON.stringify(manifest));
   fs.writeFileSync(path.join(directory, manifest.artifacts[0].filename), image);
 }
 
-test('Gebündelte Stable-Firmware initialisiert und aktualisiert nur den verwalteten Kanal', async (t) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hdp-bundle-'));
+test('Der Firmwarespeicher startet leer und liest nur vorhandene Kanäle ein', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hdp-store-'));
   const data = path.join(root, 'data');
-  const bundled = path.join(root, 'bundled');
   fs.mkdirSync(data);
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const image = Buffer.alloc(2048, 7);
   const filename = 'hdp-firmware.bin';
-  writeBundle(bundled, release('0.7.3', 'stable', filename, image), image);
 
-  const store = new ReleaseStore({ bundledDirectory: bundled });
-  assert.deepEqual(await store.attach(data), [{ channel: 'stable', installed: true, version: '0.7.3' }]);
+  // Mit der Installation kommt keine Firmware mehr mit: Ein frisches
+  // Datenverzeichnis bleibt leer, bis der Katalog oder ein Upload es füllt.
+  const store = new ReleaseStore();
+  assert.deepEqual(store.attach(data), []);
+  assert.equal(store.release('stable'), null);
+  assert.equal(store.complete('stable'), false);
+
+  writeChannel(path.join(data, 'firmware'), release('0.7.3', 'stable', filename, image), image);
+  store.load();
+  assert.equal(store.release('stable').release.version, '0.7.3');
   assert.equal(store.complete('stable'), true);
-  assert.equal(store.origin('stable').kind, 'bundled');
-  assert.deepEqual(fs.readFileSync(store.artifactPath('stable', filename)), image);
   const candidate = store.candidateFor({
     name: 'hdp-firmware', version: '0.7.2', platform: 'esp8266', board: 'd1_mini',
     variant: 'generic', protocol_version: '1.0-draft', config_schema_version: 7,
     ota_supported: true, maximum_image_size_bytes: 1044464, free_update_space_bytes: 1044464,
   }, 'stable');
   assert.equal(candidate.available, true);
-  assert.equal(candidate.origin.kind, 'bundled');
-
-  writeBundle(bundled, release('0.7.4', 'stable', filename, image), image);
-  assert.equal((await store.seedBundled())[0].installed, true);
-  assert.equal(store.release('stable').release.version, '0.7.4');
-
-  // Ein manueller Upload entfernt die Herkunftsmarkierung. Danach darf ein
-  // Paketupdate den bewusst selbst verwalteten Stable-Kanal nicht ersetzen.
-  store.saveManifest(release('0.6.0', 'stable', filename, image));
-  await store.saveArtifact({ path: path.join(bundled, 'stable', filename), filename });
-  assert.equal(store.origin('stable'), null);
-  const preserved = await store.seedBundled();
-  assert.deepEqual(preserved, [{ channel: 'stable', installed: false, reason: 'locally-managed' }]);
-  assert.equal(store.release('stable').release.version, '0.6.0');
 });
 
 test('Online-Releases benötigen HTTPS, Prüfschlüssel und gültige Ed25519-Signaturen', async (t) => {
@@ -98,11 +88,11 @@ test('Online-Releases benötigen HTTPS, Prüfschlüssel und gültige Ed25519-Sig
     },
   });
 
-  const withoutKey = new ReleaseStore({ directory, bundledDirectory: null, source: 'https://updates.example.test/hdp/', sourceFactory });
+  const withoutKey = new ReleaseStore({ directory, catalogUrl: '', source: 'https://updates.example.test/hdp/', sourceFactory });
   await assert.rejects(() => withoutKey.syncFromSource(['stable']), /Prüfschlüssel/);
 
   const store = new ReleaseStore({
-    directory, bundledDirectory: null, source: 'https://updates.example.test/hdp/',
+    directory, catalogUrl: '', source: 'https://updates.example.test/hdp/',
     sourceFactory, publicKey: keys.publicKey,
   });
   store.load();

@@ -61,11 +61,28 @@ zieht ausschließlich den Kanal aus seinen Updateeinstellungen. Ein Kanal gilt
 erst als installierbar, wenn zu jedem deklarierten Artefakt auch die Datei
 vorliegt.
 
-Der Adapter bringt einen geprüften Stable-Stand unter
-`bundled-firmware/stable/` mit. Beim ersten Start wird er in den beschreibbaren
-Firmwarespeicher übernommen. Bei späteren Adapterupdates wird nur ein weiterhin
-als gebündelt markierter, älterer Stable-Stand ersetzt; sobald der Betreiber den
-Kanal manuell befüllt, bleibt er vollständig unter seiner Kontrolle.
+Mit der Installation kommt keine Firmware mehr mit. Stattdessen fragt der
+Adapter den **Online-Firmwarekatalog** von homeESS ab
+(`firmwareCatalogUrl`, Vorgabe
+`https://www.homeess.de/wp-json/hdp-firmware/v1/firmware`): beim ersten
+Aktivieren der Instanz, danach täglich und jederzeit über „Jetzt auf neue
+Firmware-Versionen prüfen“ in der Firmwarekachel. Der Katalog nennt je Plattform
+und Branch (development, beta, stable) die neueste Version mit Download-URL,
+Dateiname, Dateigröße, SHA-256, Veröffentlichungszeit und Release Notes; nicht
+belegte Branches kommen als `null` und bleiben leer. Geladen wird nur, wenn der
+Katalog eine höhere Version führt als der lokale Kanal oder dieser unvollständig
+ist. Vor der Installation prüft der Adapter Größe und SHA-256 der Datei; erst
+dann wird der Kanal atomar ersetzt. Downloads sind auf HTTPS beim Kataloghost
+beschränkt, und die Geräte greifen nie selbst auf den Katalog zu. Ein leerer
+Wert schaltet den Abruf ab.
+
+Board und Variante stehen nicht im Katalog, sondern im Dateinamen
+(`hdp-firmware-<version>-<plattform>-<board>-<variante>.bin`) und werden dort
+gelesen. Ein Konfigurationsschema nennt der Katalog nicht; das Release lässt es
+offen, der Adapter überspringt dann die Vorprüfung und das Gerät entscheidet beim
+Empfang — es ist dafür ohnehin die normative Instanz. Der Katalog liefert keine
+Signaturen: Ist ein `firmwarePublicKey` hinterlegt, bleibt er deshalb ungenutzt,
+statt diese Vertrauensankerentscheidung still zu unterlaufen.
 
 Optional kann `releaseSource` auf eine HTTPS-Basis-URL zeigen. Darunter erwartet
 der Adapter je Kanal `<kanal>/manifest.json` und die im Manifest genannten

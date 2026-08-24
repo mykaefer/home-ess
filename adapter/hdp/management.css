@@ -1038,11 +1038,37 @@
 }
 
 .hdp-firmware-head-actions {
+    display: flex;
     flex: 0 0 auto;
+    flex-wrap: wrap;
+    gap: 8px;
 }
 
-#hdp-update-all-result:empty {
+#hdp-update-all-result:empty,
+#hdp-firmware-check-result:empty {
     display: none;
+}
+
+#hdp-firmware-check-result {
+    margin: 0 22px 12px;
+    white-space: pre-wrap;
+}
+
+/* Release Notes des Online-Katalogs: eingeklappt, damit die Kanalkarte kurz
+   bleibt, und mit Zeilenumbruch, weil der Text beliebig lang sein kann. */
+.hdp-release-notes summary {
+    color: var(--color-ink-muted);
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.hdp-release-notes p {
+    margin: 6px 0 0;
+    color: var(--color-ink-soft);
+    font-size: 12px;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
 }
 
 #hdp-update-all-result {

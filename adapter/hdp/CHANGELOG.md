@@ -5,6 +5,45 @@ wird unabhängig von homeESS versioniert; die Version steht in
 [adapter.json](adapter.json). Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [1.2.12] — 2026-08-24
+
+### Hinzugefügt
+
+- **Online-Firmwarekatalog.** homeESS bezieht die aktuellen hDP-Firmwarestände
+  jetzt über die öffentliche Schnittstelle
+  `https://www.homeess.de/wp-json/hdp-firmware/v1/firmware`. Geprüft wird beim
+  ersten Aktivieren der Instanz und danach täglich; führt der Katalog in einem
+  Kanal eine höhere Version, wird sie geholt, gegen die dort deklarierte
+  Dateigröße und SHA-256 geprüft und der Kanal atomar ersetzt. Die neue
+  Einstellung `firmwareCatalogUrl` gibt die Quelle vor, ein leerer Wert schaltet
+  den Abruf ab. Downloads sind auf HTTPS beim Kataloghost beschränkt; die Geräte
+  greifen nie selbst auf den Katalog zu und erhalten ihr Image weiterhin über den
+  authentifizierten hDP-OTA-Pfad.
+- **Knopf „Jetzt auf neue Firmware-Versionen prüfen“.** Die Firmwarekachel prüft
+  auf Wunsch sofort, meldet je Kanal geholt/aktuell/Fehler und nennt den
+  Zeitpunkt der letzten Prüfung. Die Kanalkarten zeigen zusätzlich die Herkunft
+  des Stands und die Release Notes aus dem Katalog.
+
+### Geändert
+
+- **Mit der Installation kommt keine Firmware mehr mit.** Das mitgelieferte
+  `bundled-firmware/`-Verzeichnis und dessen Übernahme beim ersten Start
+  entfallen; der Firmwarespeicher startet leer und wird aus dem Online-Katalog
+  oder von Hand befüllt. Das spart eine mit jedem Adapterupdate veraltende Kopie
+  im Installationspaket.
+- **Ein Release darf sein Konfigurationsschema offen lassen.** Der Katalog nennt
+  keines. Ist es `null`, entfällt die Vorprüfung des Adapters und der OTA-Header
+  spiegelt das Schema des Geräts — das Gerät prüft die Metadaten beim Empfang
+  selbst und lehnt einen unpassenden Stand mit
+  `OTA_CONFIG_SCHEMA_INCOMPATIBLE` ab.
+
+### Behoben
+
+- **Ein Gerät ohne bestimmbares Konfigurationsschema wird nicht mehr als
+  Schema 0 behandelt.** `null` und Leerstrings liefen durch `Number()` still auf
+  0 und ließen damit jedes Update passieren; sie gelten jetzt korrekt als nicht
+  bestimmbar.
+
 ## [1.2.11] — 2026-08-22
 
 ### Behoben

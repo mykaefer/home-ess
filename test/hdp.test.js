@@ -2059,7 +2059,7 @@ async function createOtaHarness(t, adapterConfig = {}) {
   const adapter = createHdpAdapter(host, {
     Discovery: FakeDiscovery, HdpClient: FakeClient, RuntimeConnection: FakeConnection,
   });
-  await adapter.start({ updateChannel: 'development', ...adapterConfig });
+  await adapter.start({ updateChannel: 'development', firmwareCatalogUrl: '', ...adapterConfig });
   FakeDiscovery.last.emit('found', {
     deviceId: DEVICE_ID, address: '127.0.0.1', hostname: 'badge.local',
     apiPort: port, wsPort: 81, otaPort: port, protocolVersion: '1.0-draft',
@@ -2117,8 +2117,8 @@ test('Ein-Klick-Update installiert aus dem zentralen Speicher', async (t) => {
 
   // Ohne hinterlegtes Release wird kein Update angeboten.
   const empty = await call('GET', '/api/firmware');
-  assert.deepEqual(empty.json.channels.map((entry) => entry.present), [true, false, false],
-    'der gebündelte Stable-Stand wird beim ersten Start automatisch bereitgestellt');
+  assert.deepEqual(empty.json.channels.map((entry) => entry.present), [false, false, false],
+    'mit der Installation kommt keine Firmware mehr mit; der Speicher startet leer');
   const before = (await call('GET', `/device/${DEVICE_ID}`)).view.body;
   assert.match(before, /Kein Update verfügbar/);
   await assert.rejects(async () => {
@@ -2187,6 +2187,30 @@ test('Geräteverwaltung bietet ein Sammelupdate nur für veraltete Firmware an',
 
   const after = await call('GET', '/');
   assert.doesNotMatch(after.view.body, /id="hdp-update-all-button"/);
+});
+
+test('Die Firmwarekachel bietet eine Prüfung auf neue Versionen an', async (t) => {
+  const { call } = await createOtaHarness(t, { firmwareCatalogUrl: 'https://katalog.invalid/firmware' });
+
+  const page = await call('GET', '/');
+  assert.match(page.view.body,
+    /id="hdp-firmware-check-button"[\s\S]*Jetzt auf neue Firmware-Versionen prüfen/);
+  assert.match(page.view.body, /täglich bei homeESS geprüft/);
+  assert.match(page.view.script, /function hdpCheckFirmware/);
+  assert.match(page.view.script, /api\/firmware\/check/);
+  assert.doesNotThrow(() => new Function(page.view.script));
+});
+
+test('Ohne Online-Katalog verschwindet der Prüfknopf und die Route lehnt ab', async (t) => {
+  const { call } = await createOtaHarness(t, { firmwareCatalogUrl: '' });
+
+  const page = await call('GET', '/');
+  assert.doesNotMatch(page.view.body, /id="hdp-firmware-check-button"/);
+  assert.match(page.view.body, /Online-Firmwarekatalog ist abgeschaltet/);
+
+  const rejected = await call('POST', '/api/firmware/check', { json: true });
+  assert.equal(rejected.status, 400);
+  assert.match(rejected.json.error, /abgeschaltet/);
 });
 
 test('Ein abgelehntes Update meldet den Gerätefehler und lässt den Button bedienbar', async (t) => {
@@ -2390,7 +2414,7 @@ test('Geräteverwaltung schaltet Seite und Hardwaredialog exklusiv auf den Gerä
   const adapter = createHdpAdapter(host, {
     Discovery: FakeDiscovery, HdpClient: FakeClient, RuntimeConnection: FakeConnection,
   });
-  await adapter.start({});
+  await adapter.start({ firmwareCatalogUrl: '' });
   FakeDiscovery.last.emit('found', {
     deviceId: DEVICE_ID, address: '127.0.0.1', hostname: 'badge.local',
     apiPort: 80, wsPort: 81, otaPort: 8080, protocolVersion: '1.0-draft',
@@ -2623,7 +2647,7 @@ test('Geräteverwaltung schaltet Seite und Hardwaredialog exklusiv auf den Gerä
   const legacyAdapter = createHdpAdapter(host, {
     Discovery: FakeDiscovery, HdpClient: FakeClient, RuntimeConnection: FakeConnection,
   });
-  await legacyAdapter.start({});
+  await legacyAdapter.start({ firmwareCatalogUrl: '' });
   FakeDiscovery.last.emit('found', {
     deviceId: DEVICE_ID, address: '127.0.0.1', hostname: 'badge.local',
     apiPort: 80, wsPort: 81, otaPort: 8080, protocolVersion: '1.0-draft',
@@ -2854,7 +2878,7 @@ test('Nachverifikation nach dem OTA-Neustart wartet das Hochfahren ab', async (t
   const adapter = createHdpAdapter(host, {
     Discovery: FakeDiscovery, HdpClient: FakeClient, RuntimeConnection: FakeConnection,
   });
-  await adapter.start({});
+  await adapter.start({ firmwareCatalogUrl: '' });
   t.after(() => adapter.stop());
   FakeDiscovery.last.emit('found', {
     deviceId: DEVICE_ID, address: '127.0.0.1', hostname: 'badge.local',
@@ -3111,7 +3135,7 @@ test('ARGB-Ausgang verknüpft einzelne LEDs über Einschaltkriterien mit States'
   const adapter = createHdpAdapter(host, {
     Discovery: FakeDiscovery, HdpClient: FakeClient, RuntimeConnection: FakeConnection,
   });
-  await adapter.start({});
+  await adapter.start({ firmwareCatalogUrl: '' });
   FakeDiscovery.last.emit('found', {
     deviceId: DEVICE_ID, address: '127.0.0.1', hostname: 'badge.local',
     apiPort: 80, wsPort: 81, otaPort: 8080, protocolVersion: '1.0-draft',
@@ -3435,7 +3459,7 @@ test('hDP Adapter persistiert Pairing-Secrets und gruppiert die Gerätekonfigura
   const adapter = createHdpAdapter(host, {
     Discovery: FakeDiscovery, HdpClient: FakeClient, RuntimeConnection: FakeConnection,
   });
-  await adapter.start({});
+  await adapter.start({ firmwareCatalogUrl: '' });
   FakeDiscovery.last.emit('found', {
     deviceId: DEVICE_ID, address: '127.0.0.1', hostname: 'badge.local',
     apiPort: 80, wsPort: 81, otaPort: 8080, protocolVersion: '1.0-draft',
@@ -3522,6 +3546,7 @@ test('hDP Adapter persistiert Pairing-Secrets und gruppiert die Gerätekonfigura
   });
   t.after(() => restoredAdapter.stop());
   await restoredAdapter.start({
+    firmwareCatalogUrl: '',
     hdpDevices: storage.hdpDevices.map((record) => ({
       ...record, paired: false, rssi: -42, connectionState: 'connected',
     })),
