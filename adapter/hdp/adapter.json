@@ -2,7 +2,7 @@
   "id": "hdp",
   "name": "hDP Adapter",
   "prefix": "hdp",
-  "version": "1.2.11",
+  "version": "1.2.12",
   "description": "Direkte Einbindung hDP-kompatibler Sensoren, Aktoren und Anzeigen ohne MQTT oder manuelle Pfadkonfiguration.",
   "copyright": "Copyright (C) 2026 Kevin Käfer",
   "multiInstance": false,
@@ -37,6 +37,13 @@
       "type": "number",
       "default": 90,
       "hint": "Nicht erneut gemeldete Geräte werden danach als nicht erreichbar markiert."
+    },
+    {
+      "key": "firmwareCatalogUrl",
+      "label": "Online-Firmwarekatalog",
+      "type": "text",
+      "default": "https://www.homeess.de/wp-json/hdp-firmware/v1/firmware",
+      "hint": "homeESS prüft hier täglich und beim Aktivieren der Instanz, ob es neuere Firmware gibt, und holt sie automatisch. Geprüft wird die im Katalog genannte SHA-256. Leer lassen schaltet den Abruf ab; die Geräte greifen nie selbst auf den Katalog zu."
     },
     {
       "key": "releaseSource",

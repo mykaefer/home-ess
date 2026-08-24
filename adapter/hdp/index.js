@@ -24,6 +24,7 @@ const {
   validateArtifactFile, uploadFirmware,
 } = require('./firmware');
 const { ReleaseStore, CHANNELS: releaseChannels } = require('./release-store');
+const { DEFAULT_CATALOG_URL } = require('./firmware-catalog');
 const crypto = require('crypto');
 
 const PROTOCOL_VERSION = '1.0-draft';
@@ -1053,8 +1054,10 @@ function createHdpAdapter(host, dependencies = {}) {
   let firmwarePoll = null;
   let rolloutPoll = null;
   let releaseSourcePoll = null;
+  let catalogPoll = null;
   let rolloutRunning = false;
   let releaseSourceRunning = false;
+  let catalogRunning = false;
   let managementBase = '';
   const devices = new Map();
   const discovered = new Map();
@@ -2794,6 +2797,34 @@ function createHdpAdapter(host, dependencies = {}) {
     }
   }
 
+  // Täglicher Blick in den Online-Firmwarekatalog von homeess.de. Neuere Stände
+  // werden gleich geholt, damit die Geräte sie im Wartungsfenster ziehen können.
+  // Der Katalog wird ausschließlich vom Adapter über HTTPS gelesen; die Geräte
+  // bleiben lokal und bekommen ihr Image weiterhin über den authentifizierten
+  // hDP-OTA-Pfad.
+  async function syncFirmwareCatalog() {
+    if (stopped || catalogRunning || !String(releaseStore.catalogUrl || '').trim()) {
+      return { skipped: true, results: [] };
+    }
+    catalogRunning = true;
+    try {
+      const results = await releaseStore.syncFromCatalog();
+      let changed = false;
+      for (const result of results) {
+        if (result.updated) {
+          changed = true;
+          host.log(`hDP Firmwarekatalog: ${result.channel} auf ${result.version} aktualisiert.`);
+        } else if (result.error) {
+          host.warn(`hDP Firmwarekatalog${result.channel ? ` (${result.channel})` : ''}: ${result.error}`);
+        }
+      }
+      if (changed) await runRollout();
+      return { skipped: false, results, changed, lastCheck: releaseStore.lastCatalogCheck };
+    } finally {
+      catalogRunning = false;
+    }
+  }
+
   function deviceFromForm(body, existing) {
     const requestedType = String(body.device_type || deviceTypeOf(existing));
     const available = supportedDeviceTypes(existing.manifest);
@@ -3413,12 +3444,28 @@ function createHdpAdapter(host, dependencies = {}) {
   // Zentrale Firmwareablage. Ein Release-Manifest beschreibt dieselbe Firmware
   // für alle Plattformen und Boards; hochgeladen wird deshalb einmal hier und
   // nicht mehr je Gerät.
+  function formatTimestamp(value) {
+    const date = new Date(String(value || ''));
+    return Number.isNaN(date.getTime()) ? String(value || '—') : date.toLocaleString('de-DE');
+  }
+
+  const ORIGIN_LABELS = Object.freeze({
+    catalog: 'Online-Katalog', remote: 'Eigene Releasequelle', bundled: 'Mitgeliefert',
+  });
+
   function renderFirmwareSection(store = releaseStore.summary()) {
     const updates = availableFirmwareUpdates();
-    const updateAll = updates.length
-      ? `<div class="hdp-firmware-head-actions"><button type="button" id="hdp-update-all-button"
+    const catalogEnabled = !!String(releaseStore.catalogUrl || '').trim();
+    const checkButton = catalogEnabled
+      ? `<button type="button" id="hdp-firmware-check-button" onclick="hdpCheckFirmware(this)">Jetzt auf neue Firmware-Versionen prüfen</button>`
+      : '';
+    const updateAllButton = updates.length
+      ? `<button type="button" id="hdp-update-all-button"
           data-armed="0" data-label="Alle aktualisieren (${updates.length})" data-count="${updates.length}"
-          onclick="hdpRunUpdateAll(this)">Alle aktualisieren (${updates.length})</button></div>`
+          onclick="hdpRunUpdateAll(this)">Alle aktualisieren (${updates.length})</button>`
+      : '';
+    const updateAll = checkButton || updateAllButton
+      ? `<div class="hdp-firmware-head-actions">${checkButton}${updateAllButton}</div>`
       : '';
     // Eine Karte je Kanal statt einer sechsspaltigen Tabelle: Die Tabelle war
     // schon auf dem Notebook nur mit Querscrollen lesbar und auf dem Telefon
@@ -3440,19 +3487,32 @@ function createHdpAdapter(host, dependencies = {}) {
       return `<article class="hdp-channel-card">${title}
         <p class="hdp-channel-version">${esc(entry.release.version)}</p>
         <dl class="hdp-channel-facts">
-          <div><dt>Veröffentlicht</dt><dd>${esc(entry.release.published_at || '—')}</dd></div>
-          <div><dt>Build</dt><dd>${esc(entry.release.build_id || '—')}</dd></div>
+          <div><dt>Veröffentlicht</dt><dd>${entry.release.published_at ? esc(formatTimestamp(entry.release.published_at)) : '—'}</dd></div>
+          <div><dt>Herkunft</dt><dd>${esc(entry.origin && ORIGIN_LABELS[entry.origin.kind] ? ORIGIN_LABELS[entry.origin.kind] : 'Hochgeladen')}</dd></div>
         </dl>
+        ${String(entry.release.release_notes || '').trim()
+          ? `<details class="hdp-release-notes"><summary>Release Notes</summary><p>${esc(String(entry.release.release_notes).trim())}</p></details>` : ''}
         <ul class="hdp-artifact-list">${artifacts}</ul>
         <form method="post" action="/adapter/instance/INSTANCE/manage/api/firmware/channel/${encodeURIComponent(entry.channel)}" onsubmit="return confirm('Release im Kanal ${esc(entry.channel)} wirklich entfernen?');"><button class="button-danger">Entfernen</button></form>
       </article>`;
     }).join('');
+    // Der Zustand der Katalogprüfung gehört sichtbar in die Kachel: Wer nichts
+    // hochgeladen hat, soll erkennen, woher die Stände kommen und ob der
+    // letzte Blick nach draußen gelungen ist.
+    const lastCheck = releaseStore.lastCatalogCheck;
+    const catalogStatus = !catalogEnabled
+      ? '<p class="settings-card-hint">Der Online-Firmwarekatalog ist abgeschaltet. Releases lassen sich nur von Hand hinterlegen.</p>'
+      : `<p class="settings-card-hint">Neue Versionen werden täglich bei homeESS geprüft und automatisch geholt.${
+        !lastCheck ? ' Die erste Prüfung steht noch aus.'
+          : lastCheck.error ? ` Letzte Prüfung ${esc(formatTimestamp(lastCheck.checkedAt))} fehlgeschlagen: ${esc(lastCheck.error)}`
+            : ` Zuletzt geprüft: ${esc(formatTimestamp(lastCheck.checkedAt))}.`}</p>`;
     const channelOptions = ['<option value="">Nach Vorgabe im Manifest</option>'].concat(
       releaseChannels.map((channel) =>
         `<option value="${channel}">${esc(CHANNEL_LABELS[channel] || channel)}</option>`),
     ).join('');
     return `<section class="settings-card hdp-device-section hdp-firmware-store">
-      <div class="settings-card-head hdp-list-head hdp-firmware-head"><div><h2>Firmware</h2><p class="settings-card-hint">Eine universelle Firmware für alle hDP-Geräte. Release-Manifest und die zugehörigen Artefakte werden hier einmal hinterlegt; die Geräte ziehen daraus den Kanal, der in ihren Updateeinstellungen steht.</p></div>${updateAll}</div>
+      <div class="settings-card-head hdp-list-head hdp-firmware-head"><div><h2>Firmware</h2><p class="settings-card-hint">Eine universelle Firmware für alle hDP-Geräte. Die Geräte ziehen daraus den Kanal, der in ihren Updateeinstellungen steht.</p>${catalogStatus}</div>${updateAll}</div>
+      <pre id="hdp-firmware-check-result"></pre>
       <pre id="hdp-update-all-result"></pre>
       <div class="hdp-firmware-body">
         <div class="hdp-upload-grid">
@@ -4666,6 +4726,40 @@ hdp-flash.exe --channel development</code></pre>
             button.textContent = label;
           }
         }
+        // Fragt den Online-Firmwarekatalog sofort ab. Neuere Stände werden dabei
+        // gleich geholt, deshalb kann der Aufruf einige Sekunden dauern.
+        async function hdpCheckFirmware(button) {
+          var out = document.getElementById('hdp-firmware-check-result');
+          var label = button.textContent;
+          button.disabled = true;
+          button.textContent = 'Wird geprüft …';
+          if (out) { out.className = ''; out.textContent = 'Firmwarekatalog wird abgefragt …'; }
+          try {
+            var response = await fetch(location.pathname.replace(/\\/+$/, '') + '/api/firmware/check', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+              body: JSON.stringify({ json: true })
+            });
+            var result = await response.json();
+            if (!response.ok) throw new Error(result.error || 'Prüfung fehlgeschlagen');
+            var lines = [];
+            (result.results || []).forEach(function (entry) {
+              var channel = entry.channel || 'Katalog';
+              if (entry.updated) lines.push('✓ ' + channel + ': Version ' + entry.version + ' geholt.');
+              else if (entry.error) lines.push('✗ ' + channel + ': ' + entry.error);
+              else lines.push('• ' + channel + ': bereits aktuell (' + entry.version + ').');
+            });
+            if (!lines.length) lines.push('Der Katalog führt derzeit kein Release.');
+            if (out) out.textContent = lines.join('\\n') + (result.changed ? '\\nSeite wird neu geladen …' : '');
+            button.disabled = false;
+            button.textContent = label;
+            if (result.changed) setTimeout(function () { location.reload(); }, 2000);
+          } catch (err) {
+            if (out) { out.className = 'error-text'; out.textContent = 'Fehler: ' + err.message; }
+            button.disabled = false;
+            button.textContent = label;
+          }
+        }
         async function hdpRunUpdateAll(button) {
           var out = document.getElementById('hdp-update-all-result');
           var count = Number(button.getAttribute('data-count')) || 0;
@@ -4833,6 +4927,32 @@ hdp-flash.exe --channel development</code></pre>
       // genau eine Datei liefert.
       if (method === 'GET' && path === '/api/firmware') {
         return { status: 200, json: { channels: releaseStore.summary() } };
+      }
+      // Prüfung von Hand. Sie macht dasselbe wie der tägliche Lauf, nur sofort,
+      // und meldet je Kanal zurück, was dabei herauskam.
+      if (method === 'POST' && path === '/api/firmware/check') {
+        if (!String(releaseStore.catalogUrl || '').trim()) {
+          return { status: 400, json: { error: 'Der Online-Firmwarekatalog ist in den Instanzeinstellungen abgeschaltet.' } };
+        }
+        if (catalogRunning) {
+          return { status: 409, json: { error: 'Eine Prüfung läuft bereits.' } };
+        }
+        let outcome;
+        try {
+          outcome = await syncFirmwareCatalog();
+        } catch (error) {
+          // Ein nicht erreichbarer Katalog ist keine Fehlbedienung: Der Knopf
+          // soll den Grund nennen statt einen Serverfehler zu zeigen.
+          return { status: 502, json: { error: `Firmwarekatalog nicht erreichbar: ${error.message}` } };
+        }
+        return {
+          status: 200,
+          json: {
+            checkedAt: releaseStore.lastCatalogCheck && releaseStore.lastCatalogCheck.checkedAt,
+            changed: !!outcome.changed,
+            results: outcome.results,
+          },
+        };
       }
       if (method === 'POST' && path === '/api/firmware/update-all') {
         return { status: 200, json: await updateAllFirmware() };
@@ -5154,6 +5274,11 @@ hdp-flash.exe --channel development</code></pre>
         channel: ['stable','beta','development'].includes(config.updateChannel) ? config.updateChannel : 'stable',
       };
       releaseStore.source = String(config.releaseSource || '');
+      // Leerer Wert schaltet den Online-Katalog ab; fehlt der Schlüssel ganz
+      // (Bestandsinstanz ohne die neue Einstellung), gilt der offizielle
+      // Endpunkt.
+      releaseStore.catalogUrl = config.firmwareCatalogUrl === undefined
+        ? DEFAULT_CATALOG_URL : String(config.firmwareCatalogUrl || '').trim();
       if (String(config.firmwarePublicKey || '').trim()) {
         const publicKey = crypto.createPublicKey({
           key: Buffer.from(String(config.firmwarePublicKey).trim(), 'base64'),
@@ -5171,10 +5296,7 @@ hdp-flash.exe --channel development</code></pre>
       // Firmwareimage den bei jedem Persistieren neu geschriebenen Blob sonst
       // um Größenordnungen aufblähen würde.
       try {
-        const seeded = await releaseStore.attach(await host.getDataDirectory());
-        for (const result of seeded) {
-          if (result.installed) host.log(`hDP Firmware: gebündelter ${result.channel}-Stand ${result.version} bereitgestellt.`);
-        }
+        releaseStore.attach(await host.getDataDirectory());
       } catch (error) {
         host.warn(`Firmwarespeicher nicht verfügbar: ${error.message}`);
       }
@@ -5213,6 +5335,13 @@ hdp-flash.exe --channel development</code></pre>
       releaseSourcePoll = setInterval(() => {
         syncReleaseSource().catch((error) => host.warn(`hDP Firmwarequelle: ${error.message}`));
       }, 6 * 60 * 60 * 1000);
+      // Beim ersten Aktivieren der Instanz ist der Firmwarespeicher leer — mit
+      // der Installation kommt keine Firmware mehr mit. Der erste Katalogabruf
+      // füllt ihn, blockiert den Start aber nicht; danach wird täglich geprüft.
+      syncFirmwareCatalog().catch((error) => host.warn(`hDP Firmwarekatalog: ${error.message}`));
+      catalogPoll = setInterval(() => {
+        syncFirmwareCatalog().catch((error) => host.warn(`hDP Firmwarekatalog: ${error.message}`));
+      }, 24 * 60 * 60 * 1000);
       host.setConnected(true, 'hDP-Discovery aktiv');
       persist();
       host.log(`hDP Adapter gestartet (${identity.instanceId}).`);
@@ -5228,6 +5357,8 @@ hdp-flash.exe --channel development</code></pre>
       rolloutPoll = null;
       if (releaseSourcePoll) clearInterval(releaseSourcePoll);
       releaseSourcePoll = null;
+      if (catalogPoll) clearInterval(catalogPoll);
+      catalogPoll = null;
       for (const device of devices.values()) {
         if (device.connection) device.connection.stop();
         stopSubscriptions(device);

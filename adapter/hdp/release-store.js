@@ -10,6 +10,10 @@
 //
 // Ablage: <datenverzeichnis>/firmware/<kanal>/manifest.json plus die Artefakte
 // unter ihrem im Manifest deklarierten Dateinamen.
+//
+// Mit der Installation kommt keine Firmware mehr mit. Beim ersten Start holt
+// der Adapter die aktuellen Stände über den Online-Firmwarekatalog und prüft
+// danach täglich nach; bis dahin sind die Kanäle schlicht leer.
 
 const fs = require('fs');
 const path = require('path');
@@ -17,6 +21,7 @@ const crypto = require('crypto');
 const { validateManifest, selectArtifact, checkCompatibility, validateArtifactFile } = require('./firmware');
 const { compareSemVer } = require('./validation');
 const { ReleaseSource } = require('./release-source');
+const { FirmwareCatalog, DEFAULT_CATALOG_URL } = require('./firmware-catalog');
 
 const CHANNELS = Object.freeze(['stable', 'beta', 'development']);
 const FILENAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/;
@@ -38,19 +43,22 @@ function validFilename(value) {
 class ReleaseStore {
   constructor(options = {}) {
     this.directory = options.directory || null;
-    this.bundledDirectory = options.bundledDirectory === undefined
-      ? path.join(__dirname, 'bundled-firmware') : options.bundledDirectory;
     this.publicKey = options.publicKey || null;
     this.source = options.source || '';
     this.sourceFactory = options.sourceFactory || ((url) => new ReleaseSource(url));
+    this.catalogUrl = options.catalogUrl === undefined ? DEFAULT_CATALOG_URL : options.catalogUrl;
+    this.catalogFactory = options.catalogFactory || ((url) => new FirmwareCatalog(url));
+    // Letztes Ergebnis der Katalogprüfung, damit die Oberfläche sagen kann,
+    // wann zuletzt gesucht wurde und was dabei herauskam.
+    this.lastCatalogCheck = null;
     // kanal -> { manifest, storedAt }
     this.releases = new Map();
   }
 
-  async attach(directory) {
+  attach(directory) {
     this.directory = directory;
     this.load();
-    return this.seedBundled();
+    return [];
   }
 
   channelDirectory(channel) {
@@ -152,33 +160,82 @@ class ReleaseStore {
     return { channel, manifest, origin, missing: this.missingArtifacts(channel) };
   }
 
-  async seedBundled() {
+  // Prüft den Online-Firmwarekatalog und holt neuere Stände. Ein Kanal wird nur
+  // angefasst, wenn der Katalog dort eine höhere Version führt oder der lokale
+  // Kanal unvollständig ist; alles andere bleibt unberührt.
+  //
+  // Der Katalog liefert keine Signaturen. Hat der Betreiber einen Prüfschlüssel
+  // hinterlegt, hat er sich für Signaturen als Vertrauensanker entschieden —
+  // dann wird der Katalog nicht verwendet, statt die Entscheidung still zu
+  // unterlaufen. Ohne Schlüssel bürgen HTTPS und die im Katalog deklarierte
+  // SHA-256, die vor der Installation gegen die Datei geprüft wird.
+  async syncFromCatalog(channels = CHANNELS) {
+    const url = String(this.catalogUrl || '').trim();
+    const checkedAt = new Date().toISOString();
+    if (!url) {
+      this.lastCatalogCheck = { checkedAt, url: '', results: [], error: null, disabled: true };
+      return [];
+    }
+    if (!this.directory) throw new Error('Firmwarespeicher ist nicht initialisiert.');
+    const wanted = channels.map(validChannel);
+    const client = this.catalogFactory(url);
+    let catalog;
+    try {
+      catalog = await client.fetch();
+    } catch (error) {
+      this.lastCatalogCheck = { checkedAt, url, results: [], error: error.message };
+      throw error;
+    }
     const results = [];
-    if (!this.directory || !this.bundledDirectory) return results;
-    for (const channel of CHANNELS) {
-      const bundledChannel = path.join(this.bundledDirectory, channel);
-      const bundledManifestFile = path.join(bundledChannel, 'manifest.json');
-      if (!fs.existsSync(bundledManifestFile)) continue;
-      const manifest = validateManifest(JSON.parse(fs.readFileSync(bundledManifestFile, 'utf8')));
-      if (manifest.release.channel !== channel) throw new Error(`Gebündeltes Manifest ist nicht dem Kanal ${channel} zugeordnet.`);
-      const files = new Map(manifest.artifacts.map((artifact) =>
-        [artifact.filename, path.join(bundledChannel, validFilename(artifact.filename))]));
-      await this.validateReleaseFiles(manifest, files, { requireSignature: false });
-
-      const current = this.release(channel);
-      const currentOrigin = this.origin(channel);
-      const managedBundle = currentOrigin && currentOrigin.kind === 'bundled'
-        && current && currentOrigin.version === current.release.version;
-      if (current && (!managedBundle
-          || compareSemVer(manifest.release.version, current.release.version) <= 0)) {
-        results.push({ channel, installed: false, reason: managedBundle ? 'not-newer' : 'locally-managed' });
+    for (const problem of catalog.problems) results.push({ channel: null, updated: false, error: problem });
+    for (const entry of catalog.releases) {
+      if (!wanted.includes(entry.channel)) continue;
+      if (this.publicKey) {
+        results.push({
+          channel: entry.channel,
+          updated: false,
+          error: 'Der Online-Firmwarekatalog liefert keine Signaturen; bei gesetztem Prüfschlüssel bleibt er ungenutzt.',
+        });
         continue;
       }
-      this.installRelease(manifest, files, {
-        kind: 'bundled', version: manifest.release.version,
-      });
-      results.push({ channel, installed: true, version: manifest.release.version });
+      let temporaryDirectory = null;
+      try {
+        const manifest = validateManifest(entry.manifest);
+        const current = this.release(entry.channel);
+        if (current && this.complete(entry.channel)
+            && compareSemVer(manifest.release.version, current.release.version) <= 0) {
+          results.push({ channel: entry.channel, updated: false, version: current.release.version });
+          continue;
+        }
+        temporaryDirectory = fs.mkdtempSync(path.join(this.directory, '.firmware-catalog-'));
+        fs.chmodSync(temporaryDirectory, 0o700);
+        const files = new Map();
+        for (const artifact of manifest.artifacts) {
+          const filename = validFilename(artifact.filename);
+          const target = path.join(temporaryDirectory, filename);
+          const downloadUrl = entry.downloads.get(artifact.filename);
+          if (!downloadUrl) throw new Error(`Zu ${filename} nennt der Katalog keine Download-URL.`);
+          fs.writeFileSync(target, await client.artifact(downloadUrl, artifact.size_bytes), { mode: 0o600 });
+          files.set(filename, target);
+        }
+        await this.validateReleaseFiles(manifest, files, { requireSignature: false });
+        this.installRelease(manifest, files, {
+          kind: 'catalog',
+          version: manifest.release.version,
+          source: url,
+          published_at: manifest.release.published_at,
+          release_notes: manifest.release.release_notes || '',
+        });
+        results.push({ channel: entry.channel, updated: true, version: manifest.release.version });
+      } catch (error) {
+        results.push({ channel: entry.channel, updated: false, error: error.message });
+      } finally {
+        if (temporaryDirectory) fs.rmSync(temporaryDirectory, { recursive: true, force: true });
+      }
     }
+    this.lastCatalogCheck = {
+      checkedAt, url, generatedAt: catalog.generatedAt, results, error: null,
+    };
     return results;
   }
 
@@ -256,6 +313,7 @@ class ReleaseStore {
         present: true,
         complete: this.complete(channel),
         storedAt: entry.storedAt,
+        origin: this.origin(channel),
         release: manifest.release,
         artifacts: manifest.artifacts.map((artifact) => ({
           filename: artifact.filename,
