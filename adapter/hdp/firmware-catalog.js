@@ -12,6 +12,10 @@
 // belegten Branch wird ein Manifest mit genau den Artefakten, die zur Version
 // dieses Branches gehören.
 //
+// Seit Schema 2 führt jeder Eintrag zusätzlich Signatur, Verfahren, Schlüssel-ID
+// und Signaturzeitpunkt, dazu ein `signing`-Block mit dem öffentlichen
+// Schlüssel. Sind die Felder leer, verhält sich der Katalog wie unter Schema 1.
+//
 // Nicht im Katalog enthalten sind Board, Variante, Protokollgrenzen und das
 // Konfigurationsschema. Board und Variante stecken im Dateinamen und werden
 // dort gelesen; die Protokollgrenzen sind die einzige vom Adapter gesprochene
@@ -24,6 +28,12 @@ const { PROTOCOL_VERSION, parseSemVer, compareSemVer } = require('./validation')
 
 const DEFAULT_CATALOG_URL = 'https://www.homeess.de/wp-json/hdp-firmware/v1/firmware';
 const FIRMWARE_NAME = 'hdp-firmware';
+// Schema 1 kannte keine Signaturen, Schema 2 führt sie je Eintrag plus einen
+// `signing`-Block ein. Beide werden gelesen, damit ein Rückbau der Gegenstelle
+// die Firmwareversorgung nicht abreißen lässt.
+const SUPPORTED_SCHEMAS = Object.freeze([1, 2]);
+const SIGNATURE_ALGORITHM = 'ed25519-sha256';
+const SIGNATURE_RE = /^[A-Za-z0-9+/]{86}==$/;
 // Die Branch-Namen des Katalogs sind zugleich die Kanalnamen des Speichers.
 const BRANCHES = Object.freeze(['stable', 'beta', 'development']);
 const CATALOG_MAX_BYTES = 512 * 1024;
@@ -87,6 +97,47 @@ function parseArtifactName(fileName, platform, version) {
   return { board, variant };
 }
 
+// Eine vorhandene Signatur muss gültig aussehen und zum vereinbarten Verfahren
+// gehören. Fehlt sie, ist das zulässig (Schema 1 kannte sie gar nicht). Ist sie
+// aber defekt oder mit fremdem Verfahren ausgezeichnet, wird der Eintrag
+// verworfen statt sie stillschweigend fallen zu lassen — sonst genügte das
+// Entfernen eines Feldes, um die Signaturprüfung zu umgehen.
+function branchSignature(entry, label) {
+  const signature = entry.signature == null ? null : String(entry.signature);
+  const algorithm = entry.signature_algorithm == null ? null : String(entry.signature_algorithm);
+  if (signature === null) {
+    if (algorithm) throw new Error(`${label} nennt ein Signaturverfahren ohne Signatur.`);
+    return { signature: null, keyId: null, signedAt: null };
+  }
+  if (!SIGNATURE_RE.test(signature)) {
+    throw new Error(`${label} führt keine gültige Ed25519-Signatur (Base64, 64 Byte).`);
+  }
+  if (algorithm !== SIGNATURE_ALGORITHM) {
+    throw new Error(`${label} nutzt das Signaturverfahren ${algorithm || '(keines)'} statt ${SIGNATURE_ALGORITHM}.`);
+  }
+  return {
+    signature,
+    keyId: text(entry.signature_key_id) || null,
+    signedAt: text(entry.signed_at) || null,
+  };
+}
+
+// Der Katalog nennt seit Schema 2 seinen öffentlichen Schlüssel. Der wird
+// bewusst NICHT zum Vertrauensanker: Schlüssel und Artefakt kämen aus derselben
+// Quelle, die Signatur wäre dann bloße Zierde. Er wird nur mitgeführt, damit die
+// Oberfläche ihn anzeigen und der Betreiber ihn vergleichen kann; geprüft wird
+// ausschließlich gegen den selbst hinterlegten `firmwarePublicKey`.
+function signingInfo(payload) {
+  const signing = payload.signing;
+  if (!signing || typeof signing !== 'object') return null;
+  return {
+    algorithm: text(signing.algorithm) || null,
+    keyId: text(signing.key_id) || null,
+    publicKey: text(signing.public_key) || null,
+    publicKeyFormat: text(signing.public_key_format) || null,
+  };
+}
+
 function branchArtifact(entry, platform, catalogUrl) {
   const version = text(entry.version);
   parseSemVer(version);
@@ -98,6 +149,7 @@ function branchArtifact(entry, platform, catalogUrl) {
   const sha256 = text(entry.sha256).toLowerCase();
   if (!/^[a-f0-9]{64}$/.test(sha256)) throw new Error(`SHA-256 von ${fileName || platform} ist ungültig.`);
   const { board, variant } = parseArtifactName(fileName, platform, version);
+  const signing = branchSignature(entry, fileName || platform);
   return {
     version,
     releasedAt: text(entry.released_at) || null,
@@ -105,7 +157,10 @@ function branchArtifact(entry, platform, catalogUrl) {
     downloadUrl: normalizeDownloadUrl(entry.download_url, catalogUrl),
     artifact: {
       platform, board, variant, filename: fileName,
-      size_bytes: size, sha256, signature: null,
+      size_bytes: size, sha256,
+      signature: signing.signature,
+      signature_key_id: signing.keyId,
+      signed_at: signing.signedAt,
     },
   };
 }
@@ -117,8 +172,14 @@ function branchArtifact(entry, platform, catalogUrl) {
 function catalogManifests(payload, options = {}) {
   const catalogUrl = options.catalogUrl instanceof URL
     ? options.catalogUrl : normalizeCatalogUrl(options.catalogUrl || DEFAULT_CATALOG_URL);
-  if (!payload || payload.schema_version !== 1 || !Array.isArray(payload.platforms)) {
-    throw new Error('Firmwarekatalog liefert kein bekanntes Schema (Version 1 erwartet).');
+  if (!payload || typeof payload !== 'object' || !Array.isArray(payload.platforms)) {
+    throw new Error('Firmwarekatalog liefert keine Plattformliste.');
+  }
+  // Die Schemaversion nennen statt nur „unbekannt“ zu melden: Eine angehobene
+  // Gegenstelle soll aus der Fehlermeldung selbst hervorgehen.
+  if (!SUPPORTED_SCHEMAS.includes(payload.schema_version)) {
+    throw new Error(`Firmwarekatalog liefert Schema-Version ${JSON.stringify(payload.schema_version)};`
+      + ` unterstützt werden ${SUPPORTED_SCHEMAS.join(' und ')}.`);
   }
   const branches = new Map(BRANCHES.map((branch) => [branch, []]));
   const problems = [];
@@ -188,7 +249,13 @@ function catalogManifests(payload, options = {}) {
       })),
     });
   }
-  return { generatedAt: text(payload.generated_at) || null, releases, problems };
+  return {
+    generatedAt: text(payload.generated_at) || null,
+    schemaVersion: payload.schema_version,
+    signing: signingInfo(payload),
+    releases,
+    problems,
+  };
 }
 
 class FirmwareCatalog {
@@ -233,6 +300,7 @@ class FirmwareCatalog {
 
 module.exports = {
   FirmwareCatalog, catalogManifests, normalizeCatalogUrl, normalizeDownloadUrl,
-  parseArtifactName, DEFAULT_CATALOG_URL, FIRMWARE_NAME, BRANCHES,
+  parseArtifactName, signingInfo, DEFAULT_CATALOG_URL, FIRMWARE_NAME, BRANCHES,
+  SUPPORTED_SCHEMAS, SIGNATURE_ALGORITHM,
   CATALOG_MAX_BYTES, ARTIFACT_MAX_BYTES,
 };

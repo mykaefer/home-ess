@@ -16,21 +16,30 @@ const { checkCompatibility, otaHeaders } = require('../adapter/hdp/firmware');
 const image = Buffer.alloc(4096, 5);
 const sha256 = crypto.createHash('sha256').update(image).digest('hex');
 
-function branch(version, name = `${version}-hdp-firmware-${version}-esp8266-d1-mini-generic.bin`) {
+function branch(version, name = `${version}-hdp-firmware-${version}-esp8266-d1-mini-generic.bin`, signing = {}) {
   return {
     version,
     download_url: `https://www.homeess.de/wp-content/uploads/hdp-firmware/esp8266/development/${name}`,
     file_name: name,
     file_size: image.length,
     sha256,
+    signature: signing.signature || null,
+    signature_algorithm: signing.signature ? 'ed25519-sha256' : null,
+    signature_key_id: signing.signature ? 'hdp-2026' : null,
+    signed_at: signing.signature ? '2026-08-24T18:00:00+00:00' : null,
     released_at: '2026-08-23T14:00:52+00:00',
     release_notes: `Notizen zu ${version}`,
   };
 }
 
-function payload(branches) {
+function payload(branches, extra = {}) {
   return {
-    schema_version: 1,
+    schema_version: 2,
+    signing: {
+      algorithm: 'ed25519-sha256', key_id: null,
+      public_key: null, public_key_format: 'ed25519-raw-base64',
+    },
+    ...extra,
     generated_at: '2026-08-24T04:15:57+00:00',
     platforms: [{
       id: 1, name: 'ESP8266', slug: 'esp8266',
@@ -59,7 +68,8 @@ test('Katalogantwort wird in Release-Manifeste je Branch übersetzt', () => {
   assert.deepEqual(development.manifest.artifacts, [{
     platform: 'esp8266', board: 'd1_mini', variant: 'generic',
     filename: '0.7.6-hdp-firmware-0.7.6-esp8266-d1-mini-generic.bin',
-    size_bytes: image.length, sha256, signature: null,
+    size_bytes: image.length, sha256,
+    signature: null, signature_key_id: null, signed_at: null,
   }]);
   assert.deepEqual(development.platforms, [{ platform: 'esp8266', chip_family: 'ESP8266', flash_offset: '0x0' }]);
 });
@@ -77,7 +87,9 @@ test('Nicht belegte Branches und fehlerhafte Einträge fallen sauber heraus', ()
   assert.deepEqual(broken.releases, []);
   assert.match(broken.problems[0], /esp8266\/development: SHA-256/);
 
-  assert.throws(() => catalogManifests({ schema_version: 2, platforms: [] }), /Schema/);
+  assert.throws(() => catalogManifests({ schema_version: 3, platforms: [] }),
+    /Schema-Version 3; unterstützt werden 1 und 2/);
+  assert.throws(() => catalogManifests({ schema_version: 2 }), /Plattformliste/);
 });
 
 test('Board und Variante werden aus dem Dateinamen gelesen', () => {
@@ -91,7 +103,7 @@ test('Board und Variante werden aus dem Dateinamen gelesen', () => {
 
 test('Führt ein Kanal mehrere Plattformversionen, gilt die höchste', () => {
   const two = {
-    schema_version: 1,
+    schema_version: 2,
     platforms: [
       { slug: 'esp8266', chip_family: 'ESP8266', flash_offset: '0x0', branches: { stable: branch('0.7.5') } },
       {
@@ -173,6 +185,124 @@ test('Eine falsche Prüfsumme verhindert die Installation', async (t) => {
   assert.equal(store.release('stable'), null);
 });
 
+test('Schema 1 ohne Signaturfelder wird weiterhin gelesen', () => {
+  const { releases, schemaVersion, signing } = catalogManifests({
+    schema_version: 1,
+    platforms: [{
+      slug: 'esp8266',
+      chip_family: 'ESP8266',
+      flash_offset: '0x0',
+      branches: {
+        stable: {
+          version: '0.7.5',
+          download_url: 'https://www.homeess.de/f/hdp-firmware-0.7.5-esp8266-d1-mini-generic.bin',
+          file_name: 'hdp-firmware-0.7.5-esp8266-d1-mini-generic.bin',
+          file_size: image.length,
+          sha256,
+          released_at: '2026-08-23T14:00:52+00:00',
+          release_notes: '',
+        },
+      },
+    }],
+  });
+  assert.equal(schemaVersion, 1);
+  assert.equal(signing, null);
+  assert.equal(releases[0].manifest.artifacts[0].signature, null);
+});
+
+test('Signaturfelder aus Schema 2 landen im Manifest', () => {
+  const signature = `${'A'.repeat(86)}==`;
+  const { signing, releases } = catalogManifests(payload({
+    development: null, beta: null, stable: branch('0.7.5', undefined, { signature }),
+  }, {
+    signing: {
+      algorithm: 'ed25519-sha256', key_id: 'hdp-2026',
+      public_key: 'Ns0k…', public_key_format: 'ed25519-raw-base64',
+    },
+  }));
+  const artifact = releases[0].manifest.artifacts[0];
+  assert.equal(artifact.signature, signature);
+  assert.equal(artifact.signature_key_id, 'hdp-2026');
+  assert.equal(artifact.signed_at, '2026-08-24T18:00:00+00:00');
+  // Der Schlüssel des Katalogs wird mitgeführt, aber nie zum Vertrauensanker.
+  assert.deepEqual(signing, {
+    algorithm: 'ed25519-sha256', keyId: 'hdp-2026',
+    publicKey: 'Ns0k…', publicKeyFormat: 'ed25519-raw-base64',
+  });
+});
+
+test('Eine defekte oder fremd ausgezeichnete Signatur verwirft den Eintrag', () => {
+  const kaputt = catalogManifests(payload({
+    development: null, beta: null,
+    stable: { ...branch('0.7.5'), signature: 'zu-kurz', signature_algorithm: 'ed25519-sha256' },
+  }));
+  assert.deepEqual(kaputt.releases, []);
+  assert.match(kaputt.problems[0], /keine gültige Ed25519-Signatur/);
+
+  const fremd = catalogManifests(payload({
+    development: null, beta: null,
+    stable: { ...branch('0.7.5', undefined, { signature: `${'A'.repeat(86)}==` }), signature_algorithm: 'rsa-sha256' },
+  }));
+  assert.deepEqual(fremd.releases, []);
+  assert.match(fremd.problems[0], /statt ed25519-sha256/);
+
+  // Ein Verfahren ohne Signatur ist ebenfalls ein Fehler: Sonst genügte das
+  // Weglassen des Signaturfeldes, um die Prüfung zu umgehen.
+  const halb = catalogManifests(payload({
+    development: null, beta: null,
+    stable: { ...branch('0.7.5'), signature_algorithm: 'ed25519-sha256' },
+  }));
+  assert.match(halb.problems[0], /Signaturverfahren ohne Signatur/);
+});
+
+test('Mit Prüfschlüssel wird eine echte Katalogsignatur akzeptiert', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'hdp-catalog-signed-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const keys = crypto.generateKeyPairSync('ed25519');
+  // Signiert werden die 32 rohen Bytes des SHA-256-Digests, wie in hDP 15.3.
+  const digest = crypto.createHash('sha256').update(image).digest();
+  const signature = crypto.sign(null, digest, keys.privateKey).toString('base64');
+  const store = new ReleaseStore({
+    directory,
+    publicKey: keys.publicKey,
+    catalogFactory: () => ({
+      async fetch() {
+        return catalogManifests(payload({
+          development: null, beta: null, stable: branch('0.7.5', undefined, { signature }),
+        }));
+      },
+      async artifact() { return image; },
+    }),
+  });
+  store.load();
+  assert.deepEqual(await store.syncFromCatalog(), [{ channel: 'stable', updated: true, version: '0.7.5' }]);
+  assert.equal(store.origin('stable').signed, true);
+  assert.equal(store.release('stable').artifacts[0].signature, signature);
+});
+
+test('Eine Signatur von fremdem Schlüssel wird abgewiesen', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'hdp-catalog-wrongkey-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const digest = crypto.createHash('sha256').update(image).digest();
+  const foreign = crypto.sign(null, digest, crypto.generateKeyPairSync('ed25519').privateKey).toString('base64');
+  const store = new ReleaseStore({
+    directory,
+    publicKey: crypto.generateKeyPairSync('ed25519').publicKey,
+    catalogFactory: () => ({
+      async fetch() {
+        return catalogManifests(payload({
+          development: null, beta: null, stable: branch('0.7.5', undefined, { signature: foreign }),
+        }));
+      },
+      async artifact() { return image; },
+    }),
+  });
+  store.load();
+  const results = await store.syncFromCatalog();
+  assert.match(results[0].error, /Signatur ist ungültig/);
+  assert.equal(store.release('stable'), null);
+});
+
 test('Mit hinterlegtem Prüfschlüssel bleibt der signaturlose Katalog ungenutzt', async (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'hdp-catalog-key-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
@@ -186,7 +316,7 @@ test('Mit hinterlegtem Prüfschlüssel bleibt der signaturlose Katalog ungenutzt
   });
   store.load();
   const results = await store.syncFromCatalog();
-  assert.match(results[0].error, /keine Signaturen/);
+  assert.match(results[0].error, /keine Signatur/);
   assert.equal(store.release('stable'), null);
 });
 

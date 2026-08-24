@@ -164,11 +164,15 @@ class ReleaseStore {
   // angefasst, wenn der Katalog dort eine höhere Version führt oder der lokale
   // Kanal unvollständig ist; alles andere bleibt unberührt.
   //
-  // Der Katalog liefert keine Signaturen. Hat der Betreiber einen Prüfschlüssel
-  // hinterlegt, hat er sich für Signaturen als Vertrauensanker entschieden —
-  // dann wird der Katalog nicht verwendet, statt die Entscheidung still zu
-  // unterlaufen. Ohne Schlüssel bürgen HTTPS und die im Katalog deklarierte
-  // SHA-256, die vor der Installation gegen die Datei geprüft wird.
+  // Signaturpolitik: Ohne hinterlegten Prüfschlüssel bürgen HTTPS und die im
+  // Katalog deklarierte SHA-256, die vor der Installation gegen die Datei
+  // geprüft wird. Mit Prüfschlüssel hat der Betreiber sich für Signaturen als
+  // Vertrauensanker entschieden — dann muss jedes Artefakt eine tragen und gegen
+  // genau diesen Schlüssel aufgehen. Führt der Katalog keine, bleibt er
+  // ungenutzt, statt die Entscheidung still zu unterlaufen.
+  //
+  // Der im Katalog genannte öffentliche Schlüssel wird dabei nie verwendet: Er
+  // käme aus derselben Quelle wie das Artefakt und würde nichts absichern.
   async syncFromCatalog(channels = CHANNELS) {
     const url = String(this.catalogUrl || '').trim();
     const checkedAt = new Date().toISOString();
@@ -190,11 +194,13 @@ class ReleaseStore {
     for (const problem of catalog.problems) results.push({ channel: null, updated: false, error: problem });
     for (const entry of catalog.releases) {
       if (!wanted.includes(entry.channel)) continue;
-      if (this.publicKey) {
+      const signed = entry.manifest.artifacts.every((artifact) => artifact.signature);
+      if (this.publicKey && !signed) {
         results.push({
           channel: entry.channel,
           updated: false,
-          error: 'Der Online-Firmwarekatalog liefert keine Signaturen; bei gesetztem Prüfschlüssel bleibt er ungenutzt.',
+          error: 'Der Online-Firmwarekatalog führt für diesen Kanal keine Signatur;'
+            + ' bei gesetztem Prüfschlüssel bleibt er ungenutzt.',
         });
         continue;
       }
@@ -218,13 +224,16 @@ class ReleaseStore {
           fs.writeFileSync(target, await client.artifact(downloadUrl, artifact.size_bytes), { mode: 0o600 });
           files.set(filename, target);
         }
-        await this.validateReleaseFiles(manifest, files, { requireSignature: false });
+        await this.validateReleaseFiles(manifest, files, this.publicKey
+          ? { publicKey: this.publicKey, requireSignature: true }
+          : { requireSignature: false });
         this.installRelease(manifest, files, {
           kind: 'catalog',
           version: manifest.release.version,
           source: url,
           published_at: manifest.release.published_at,
           release_notes: manifest.release.release_notes || '',
+          signed,
         });
         results.push({ channel: entry.channel, updated: true, version: manifest.release.version });
       } catch (error) {

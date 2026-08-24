@@ -76,13 +76,26 @@ dann wird der Kanal atomar ersetzt. Downloads sind auf HTTPS beim Kataloghost
 beschränkt, und die Geräte greifen nie selbst auf den Katalog zu. Ein leerer
 Wert schaltet den Abruf ab.
 
+Der Katalog wird in **Schema 1 und 2** gelesen. Schema 2 führt je Eintrag
+`signature`, `signature_algorithm`, `signature_key_id` und `signed_at` sowie
+einen `signing`-Block mit dem öffentlichen Schlüssel. Trägt ein Artefakt eine
+Signatur, muss sie eine gültige Ed25519-Signatur nach hDP 15.3 sein — Base64
+über die 32 rohen Bytes des SHA-256-Digests — und mit
+`signature_algorithm: ed25519-sha256` ausgezeichnet werden; ein defektes oder
+halbes Signaturfeld verwirft den Eintrag, statt die Signatur stillschweigend zu
+verlieren. Der im Katalog genannte öffentliche Schlüssel wird **nie** zum
+Vertrauensanker: Er käme aus derselben Quelle wie das Artefakt. Geprüft wird
+ausschließlich gegen den selbst hinterlegten `firmwarePublicKey`; ohne diesen
+bürgen HTTPS und die SHA-256.
+
 Board und Variante stehen nicht im Katalog, sondern im Dateinamen
 (`hdp-firmware-<version>-<plattform>-<board>-<variante>.bin`) und werden dort
 gelesen. Ein Konfigurationsschema nennt der Katalog nicht; das Release lässt es
 offen, der Adapter überspringt dann die Vorprüfung und das Gerät entscheidet beim
 Empfang — es ist dafür ohnehin die normative Instanz. Der Katalog liefert keine
-Signaturen: Ist ein `firmwarePublicKey` hinterlegt, bleibt er deshalb ungenutzt,
-statt diese Vertrauensankerentscheidung still zu unterlaufen.
+Signaturen noch keine Werte: Solange die Felder leer sind und ein
+`firmwarePublicKey` hinterlegt ist, bleibt der Katalog ungenutzt, statt diese
+Vertrauensankerentscheidung still zu unterlaufen.
 
 Optional kann `releaseSource` auf eine HTTPS-Basis-URL zeigen. Darunter erwartet
 der Adapter je Kanal `<kanal>/manifest.json` und die im Manifest genannten
