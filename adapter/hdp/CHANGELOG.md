@@ -31,6 +31,16 @@ wird unabhängig von homeESS versioniert; die Version steht in
   entfallen; der Firmwarespeicher startet leer und wird aus dem Online-Katalog
   oder von Hand befüllt. Das spart eine mit jedem Adapterupdate veraltende Kopie
   im Installationspaket.
+- **Katalogschema 1 und 2.** Die Schnittstelle wurde am 24.08.2026 auf
+  `schema_version: 2` gehoben und führt seither je Eintrag `signature`,
+  `signature_algorithm`, `signature_key_id` und `signed_at` sowie einen
+  `signing`-Block. Beide Schemata werden gelesen. Trägt ein Artefakt eine
+  Signatur, wird sie gegen den hinterlegten `firmwarePublicKey` geprüft; ein
+  defektes oder halbes Signaturfeld verwirft den Eintrag, damit das Weglassen
+  eines Feldes die Prüfung nicht umgeht. Der vom Katalog selbst genannte
+  öffentliche Schlüssel wird nie zum Vertrauensanker — er käme aus derselben
+  Quelle wie das Artefakt. Meldet der Katalog eine unbekannte Schemaversion,
+  nennt die Fehlermeldung sie jetzt beim Namen.
 - **Ein Release darf sein Konfigurationsschema offen lassen.** Der Katalog nennt
   keines. Ist es `null`, entfällt die Vorprüfung des Adapters und der OTA-Header
   spiegelt das Schema des Geräts — das Gerät prüft die Metadaten beim Empfang
