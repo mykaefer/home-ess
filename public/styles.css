@@ -2260,6 +2260,11 @@ body.dash-dragging * {
     margin: 0;
 }
 
+/* Ausgeblendete Auswahl (Wetter-Kachel: Groessen, die es in der gewaehlten
+   Anzeigeart nicht gibt). Ohne diese Regel bliebe die Zeile sichtbar — das
+   display:flex oben ist staerker als das [hidden] des Browsers. */
+.info-check[hidden] { display: none; }
+
 .widget-groups {
     display: flex;
     flex-wrap: wrap;
@@ -7049,3 +7054,815 @@ body.theme-dark {
 /* Der QR-Code der Gerätekopplung muss weiss bleiben, sonst ist er nicht
    mehr scannbar. */
 .theme-dark .remote-access-qr { background: #ffffff; }
+
+/* ---------------------------------------------------------------------------
+   Wetterprognose
+   Die Seite arbeitet ausschliesslich mit den Farbtoken der Oberflaeche, damit
+   sie das helle wie das dunkle Thema ohne eigene Regeln mittraegt. Die
+   Piktogramme sind Emoji und skalieren mit der Schriftgroesse.
+   --------------------------------------------------------------------------- */
+.wetter-refresh {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.wetter-stand {
+    color: var(--color-ink-muted);
+    font-size: 13px;
+    white-space: nowrap;
+}
+
+.wetter-source {
+    margin: 18px 0 0;
+    color: var(--color-ink-muted);
+    font-size: 12px;
+}
+
+/* Aktuelle Lage: grosses Symbol links, Messgroessen rechts darunter. */
+.wetter-now,
+.wetter-trend,
+.wetter-day,
+.wetter-short {
+    margin-bottom: 18px;
+    padding: 18px 20px;
+}
+
+.wetter-now-main {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--color-line);
+}
+
+.wetter-now-icon { font-size: 56px; line-height: 1; }
+
+.wetter-now-temp {
+    font-size: 34px;
+    font-weight: 700;
+    color: var(--color-ink);
+    line-height: 1.1;
+}
+
+.wetter-now-label {
+    font-size: 16px;
+    color: var(--color-ink-soft);
+    margin-top: 2px;
+}
+
+.wetter-now-sub {
+    font-size: 13px;
+    color: var(--color-ink-muted);
+    margin-top: 4px;
+}
+
+/* Die Messgroessen eines Tages stehen in thematischen Bloecken. Ein Block traegt
+   eine kleine Ueberschrift und darunter sein eigenes Kachelraster — das ist
+   deutlich leichter zu ueberfliegen als eine einzige lange Kachelreihe. */
+.wetter-groups {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    margin-top: 16px;
+}
+
+.wetter-group {
+    padding: 12px 14px;
+    border: 1px solid var(--color-line);
+    border-radius: 10px;
+    background: var(--color-surface);
+}
+
+.wetter-group-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 10px;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    color: var(--color-ink-muted);
+}
+
+/* Raster der Einzelgroessen; passt sich der Breite an. */
+.wetter-metrics {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+    gap: 10px;
+}
+
+.wetter-metric {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 12px;
+    border: 1px solid var(--color-line-soft);
+    border-radius: 8px;
+    background: var(--color-surface-muted);
+}
+
+.wetter-metric-icon { font-size: 20px; line-height: 1.2; }
+.wetter-metric-body { display: flex; flex-direction: column; min-width: 0; }
+.wetter-metric-figure { display: flex; flex-direction: column; min-width: 0; }
+
+.wetter-metric-label {
+    font-size: 12px;
+    color: var(--color-ink-muted);
+    line-height: 1.3;
+}
+
+.wetter-metric-value {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--color-ink);
+}
+
+.wetter-metric-hint {
+    font-size: 11px;
+    color: var(--color-ink-muted);
+}
+
+/* Einordnende Faerbung (UV-Stufe): gleiche Paare wie im Rest der Oberflaeche. */
+.wetter-metric--good { border-color: var(--color-ok-line); background: var(--color-ok-wash); }
+.wetter-metric--good .wetter-metric-hint { color: var(--color-ok-ink); }
+.wetter-metric--warn { border-color: var(--color-warn-tint); background: var(--color-warn-wash); }
+.wetter-metric--warn .wetter-metric-hint { color: var(--color-warn-ink); }
+.wetter-metric--bad { border-color: var(--color-bad-line); background: var(--color-bad-wash); }
+.wetter-metric--bad .wetter-metric-hint { color: var(--color-bad-ink); }
+
+/* Kopfzeile einer ausfuehrlichen Tageskachel. */
+.wetter-day-head {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--color-line);
+}
+
+.wetter-day-icon { font-size: 42px; line-height: 1; }
+.wetter-day-title { flex: 1 1 auto; min-width: 0; }
+.wetter-day-title h2 { margin: 0; font-size: 20px; color: var(--color-ink); }
+
+.wetter-day-date,
+.wetter-day-label {
+    margin: 2px 0 0;
+    font-size: 13px;
+    color: var(--color-ink-muted);
+}
+
+.wetter-day-label { color: var(--color-ink-soft); }
+
+.wetter-day-figures {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.wetter-day-temps {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+    font-size: 15px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+/* Erwarteter PV-Ertrag laut PV-Prognose — die fachlich wichtigste Zahl des
+   Tages fuer diese Anlage und deshalb als eigene Plakette im Kopf. */
+.wetter-day-pv {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    padding: 6px 12px;
+    border: 1px solid var(--color-pv);
+    border-radius: 10px;
+    background: var(--color-pv-tint);
+    white-space: nowrap;
+}
+
+.wetter-day-pv-value {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--color-ink);
+}
+
+.wetter-day-pv-label {
+    font-size: 11px;
+    color: var(--color-ink-muted);
+}
+
+.wetter-short-cell--pv { color: var(--color-ink); font-weight: 600; }
+
+.wetter-day-max { color: var(--color-grid); }
+.wetter-day-min { color: var(--color-battery); }
+
+/* Der Stundenverlauf ist keine Wertespalte: er steht als durchgehende Zeile
+   unter dem Spaltenbehaelter und traegt denselben Abstand wie die Spalten
+   untereinander. */
+.wetter-group--wide { margin-top: 14px; }
+
+/* Stundenverlauf: waagerecht scrollbar, damit die Seite selbst nie seitlich
+   scrollt. Jede Spalte traegt Uhrzeit, Symbol, Temperatur, Niederschlags-
+   wahrscheinlichkeit als Balken sowie Menge und Wind. */
+.wetter-hours-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 8px;
+    font-size: 11px;
+    color: var(--color-ink-muted);
+}
+
+/* Der Hinweis auf die 3-Stunden-Schritte betrifft nur die Telefonansicht. */
+.wetter-hours-note { display: none; }
+
+.wetter-hours {
+    display: flex;
+    gap: 2px;
+    overflow-x: auto;
+    padding-bottom: 6px;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: var(--color-surface-muted);
+}
+
+.wetter-hour {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    min-width: 52px;
+    padding: 8px 4px;
+    font-size: 12px;
+    color: var(--color-ink-soft);
+}
+
+/* Nachtstunden bleiben lesbar, treten aber zurueck. */
+.wetter-hour--night { background: var(--color-surface-sunken); }
+
+.wetter-hour-clock { color: var(--color-ink-muted); font-size: 11px; }
+.wetter-hour-icon { font-size: 18px; line-height: 1.2; }
+.wetter-hour-temp { font-weight: 600; color: var(--color-ink); }
+
+.wetter-hour-bar {
+    display: flex;
+    align-items: flex-end;
+    width: 12px;
+    height: 40px;
+    border-radius: 3px;
+    background: var(--color-surface-strong);
+    overflow: hidden;
+}
+
+.wetter-hour-bar-fill {
+    width: 100%;
+    background: var(--color-battery);
+    border-radius: 3px;
+}
+
+.wetter-hour-prob { font-size: 11px; color: var(--color-ink-muted); }
+
+.wetter-hour-rain {
+    font-size: 11px;
+    color: var(--color-battery);
+    min-height: 14px;
+}
+
+.wetter-hour-wind { font-size: 11px; color: var(--color-ink-faint); }
+
+/* Kurzuebersicht der weiteren Tage: eine Zeile je Tag. */
+.wetter-short-hint {
+    margin: 4px 0 0;
+    font-size: 12px;
+    color: var(--color-ink-muted);
+}
+
+.wetter-short-list { margin-top: 12px; }
+
+.wetter-short-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--color-line-soft);
+    font-size: 13px;
+    color: var(--color-ink-soft);
+}
+
+.wetter-short-row:last-child { border-bottom: 0; }
+
+.wetter-short-day {
+    display: flex;
+    flex-direction: column;
+    min-width: 110px;
+}
+
+.wetter-short-day strong { color: var(--color-ink); }
+.wetter-short-date { font-size: 11px; color: var(--color-ink-muted); }
+.wetter-short-icon { font-size: 24px; line-height: 1; }
+.wetter-short-label { flex: 1 1 160px; min-width: 0; }
+
+.wetter-short-temp {
+    display: flex;
+    gap: 10px;
+    min-width: 150px;
+    font-weight: 600;
+}
+
+.wetter-short-cell { min-width: 86px; white-space: nowrap; }
+
+/* Ab Tablet-/Desktopbreite wird aus jedem thematischen Block eine **Spalte**,
+   und die Werte stehen darin als schmucklose Zeilen untereinander: Bezeichnung
+   links, Wert rechtsbuendig. Das spart gegenueber dem Kachelraster viel Hoehe
+   und laesst die Zahlen einer Spalte auf einer Fluchtlinie stehen.
+   Unterhalb von 769px bleibt es beim Kachelraster (siehe Mobile-Block). */
+@media (min-width: 769px) {
+    .wetter-groups {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 14px;
+    }
+
+    /* Die Bloecke einer Reihe werden gleich hoch (Vorgabe `stretch`), damit die
+       Spaltenkanten auf einer Linie stehen. */
+    .wetter-group { padding: 12px 14px; }
+
+    /* Werte untereinander statt im Raster. */
+    .wetter-metrics {
+        display: block;
+        gap: 0;
+    }
+
+    /* Keine sichtbare Kachel mehr: nur eine feine Trennlinie zwischen den
+       Zeilen, die letzte Zeile bleibt ohne. */
+    .wetter-metric {
+        gap: 8px;
+        padding: 6px 0;
+        border: 0;
+        border-bottom: 1px solid var(--color-line-soft);
+        border-radius: 0;
+        background: none;
+        align-items: baseline;
+    }
+
+    .wetter-metric:last-child { border-bottom: 0; padding-bottom: 0; }
+    .wetter-metric:first-child { padding-top: 0; }
+
+    .wetter-metric-icon { font-size: 14px; line-height: 1.4; }
+
+    /* Bezeichnung links, Wert rechts — beide auf gemeinsamer Grundlinie. */
+    .wetter-metric-body {
+        flex: 1 1 auto;
+        flex-direction: row;
+        align-items: baseline;
+        gap: 10px;
+    }
+
+    .wetter-metric-label {
+        flex: 1 1 auto;
+        font-size: 13px;
+        color: var(--color-ink-soft);
+    }
+
+    .wetter-metric-figure {
+        flex: 0 0 auto;
+        align-items: flex-end;
+        text-align: right;
+    }
+
+    .wetter-metric-value { font-size: 14px; }
+
+    /* Die einordnende Faerbung traegt ohne Kachel nur noch der Zusatztext. */
+    .wetter-metric--good,
+    .wetter-metric--warn,
+    .wetter-metric--bad {
+        border-color: var(--color-line-soft);
+        background: none;
+    }
+}
+
+/* Verlaufsdiagramm ueber alle Prognosetage. Die drei Reihenfarben sind fachlich
+   gesetzt: Rot fuer Temperatur, Ockergelb fuer Sonnenintensitaet, Blau fuer
+   Niederschlag. Im dunklen Thema werden sie aufgehellt, damit sie auf tiefem
+   Grund dieselbe Leuchtkraft behalten. */
+:root {
+    --wetter-temp: #cf3a2c;
+    --wetter-sun: #cc9a1e;
+    --wetter-rain: #3f6fa5;
+    /* Ockergelb mit 50 % Deckkraft: Flaeche unter der Sonnenkurve. Eine Quelle
+       fuer Diagramm und Legende, damit beide nicht auseinanderlaufen. */
+    --wetter-sun-fill: rgba(204, 154, 30, 0.5);
+}
+
+.theme-dark {
+    --wetter-temp: #f2837a;
+    --wetter-sun: #f2c94c;
+    --wetter-rain: #9ec9ff;
+    --wetter-sun-fill: rgba(242, 201, 76, 0.5);
+}
+
+/* Zwei Bauformen liegen im Markup; sichtbar ist immer genau eine. */
+.wetter-chart-figure { margin-top: 14px; }
+.wetter-chart-figure--compact { display: none; }
+
+.wetter-chart {
+    display: block;
+    width: 100%;
+}
+
+/* Breite Form: Zeichenflaeche und Anzeigeflaeche sind gleich hoch, die Breite
+   entspricht nahezu 1:1 der Anzeige — die Schrift im SVG bleibt unverzerrt. */
+.wetter-chart--wide { height: 200px; }
+
+/* Schmale Form: das SVG traegt keine Schrift, nur Flaechen und Linien. Es darf
+   sich daher beliebig in die Breite dehnen. */
+.wetter-chart--compact { height: 132px; }
+
+/* Tagesnamen der schmalen Form: gleich breite Zellen, deckungsgleich mit den
+   Tagesabschnitten im SVG (alle Tage haben gleich viele Stunden). */
+.wetter-chart-days {
+    display: flex;
+    margin-bottom: 4px;
+}
+
+.wetter-chart-days span {
+    flex: 1 1 0;
+    min-width: 0;
+    text-align: center;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--color-ink-soft);
+}
+
+.wetter-chart-grid {
+    stroke: var(--color-line);
+    stroke-width: 1;
+}
+
+.wetter-chart-baseline {
+    stroke: var(--color-line-strong);
+    stroke-width: 1;
+}
+
+.wetter-chart-daysep {
+    stroke: var(--color-line-strong);
+    stroke-width: 1;
+    stroke-dasharray: 3 3;
+}
+
+.wetter-chart-now {
+    stroke: var(--color-ink-faint);
+    stroke-width: 1.5;
+}
+
+.wetter-chart-nowlabel {
+    fill: var(--color-ink-muted);
+    font-size: 11px;
+    font-weight: 700;
+}
+
+.wetter-chart-daylabel {
+    fill: var(--color-ink-soft);
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.wetter-chart-axis {
+    fill: var(--color-ink-muted);
+    font-size: 11px;
+}
+
+.wetter-chart-axis--temp { fill: var(--wetter-temp); }
+.wetter-chart-axis--sun { fill: var(--wetter-sun); }
+
+.wetter-chart-rain {
+    fill: var(--wetter-rain);
+    opacity: 0.42;
+}
+
+/* Flaeche unter der Sonnenkurve, zur Nulllinie hin gefuellt. Halbtransparent,
+   damit Raster und Niederschlagsbalken darunter sichtbar bleiben. */
+.wetter-chart-area {
+    stroke: none;
+}
+
+.wetter-chart-area--sun { fill: var(--wetter-sun-fill); }
+
+.wetter-chart-line {
+    fill: none;
+    stroke-width: 2;
+    stroke-linejoin: round;
+    stroke-linecap: round;
+    vector-effect: non-scaling-stroke;
+}
+
+.wetter-chart-line--temp { stroke: var(--wetter-temp); }
+.wetter-chart-line--sun { stroke: var(--wetter-sun); }
+
+.wetter-chart-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    margin-top: 10px;
+    font-size: 12px;
+    color: var(--color-ink-muted);
+}
+
+/* Farbmarke vor jedem Legendeneintrag. */
+.wetter-chart-key::before {
+    content: "";
+    display: inline-block;
+    width: 14px;
+    height: 3px;
+    margin-right: 6px;
+    border-radius: 2px;
+    vertical-align: middle;
+}
+
+.wetter-chart-key--temp::before { background: var(--wetter-temp); }
+
+/* Die Sonnenmarke zeigt Linie und darunterliegende Flaeche zugleich. */
+.wetter-chart-key--sun::before {
+    height: 11px;
+    background: linear-gradient(to bottom, var(--wetter-sun) 0 3px, var(--wetter-sun-fill) 3px);
+}
+
+.wetter-chart-key--rain::before {
+    height: 10px;
+    width: 8px;
+    opacity: 0.6;
+    background: var(--wetter-rain);
+}
+
+.wetter-chart-empty {
+    padding: 24px;
+    text-align: center;
+    color: var(--color-ink-muted);
+    font-size: 13px;
+}
+
+/* Telefonansicht. Leitgedanke: nichts muss seitlich gescrollt werden — weder
+   die Seite noch ein einzelner Abschnitt darin. Dafuer wird das Diagramm auf
+   die schmale Bauform umgeschaltet und der Stundenverlauf auf
+   3-Stunden-Schritte ausgeduennt. Alles andere wird gestrafft. */
+@media (max-width: 768px) {
+    /* Kompaktere Kartenraender und Abstaende. */
+    .wetter-now,
+    .wetter-trend,
+    .wetter-day,
+    .wetter-short {
+        margin-bottom: 12px;
+        padding: 14px;
+    }
+
+    .wetter-groups { gap: 10px; margin-top: 12px; }
+    .wetter-group { padding: 10px 12px; }
+    .wetter-group-head { margin-bottom: 8px; font-size: 12px; }
+
+    .wetter-now-main { gap: 14px; padding-bottom: 12px; }
+    .wetter-now-icon { font-size: 44px; }
+    .wetter-now-temp { font-size: 28px; }
+
+    /* Zwei Kacheln nebeneinander passen ab 320px Geraetebreite. */
+    .wetter-metrics {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+    }
+
+    .wetter-metric { padding: 8px 10px; gap: 8px; }
+    .wetter-metric-icon { font-size: 17px; }
+    .wetter-metric-label { font-size: 11px; }
+    .wetter-metric-value { font-size: 15px; }
+
+    .wetter-day-head { flex-wrap: wrap; gap: 12px; }
+    .wetter-day-icon { font-size: 36px; }
+    .wetter-day-title h2 { font-size: 18px; }
+    .wetter-day-figures { width: 100%; justify-content: space-between; }
+    .wetter-day-pv { padding: 5px 10px; }
+    .wetter-day-pv-value { font-size: 16px; }
+
+    /* Diagramm: schmale Bauform ohne Schrift im SVG. */
+    .wetter-chart-figure--wide { display: none; }
+    .wetter-chart-figure--compact { display: block; }
+    .wetter-chart-legend { gap: 10px; font-size: 11px; }
+
+    /* Stundenverlauf ohne Seitwaertsscrollen: statt 24 schmaler Spalten mit
+       fester Mindestbreite werden nur die vollen 3-Stunden-Schritte gezeigt
+       (0, 3, 6 … 21). Die verbleibenden acht Spalten teilen sich die Breite. */
+    .wetter-hours { overflow-x: hidden; gap: 0; }
+
+    .wetter-hour {
+        display: none;
+        min-width: 0;
+        flex: 1 1 0;
+        padding: 8px 1px;
+        gap: 2px;
+    }
+
+    .wetter-hour:nth-child(3n + 1) { display: flex; }
+    .wetter-hour-clock { font-size: 10px; }
+    .wetter-hour-icon { font-size: 15px; }
+    .wetter-hour-temp { font-size: 11px; }
+    .wetter-hour-bar { height: 30px; width: 9px; }
+    .wetter-hour-prob,
+    .wetter-hour-rain,
+    .wetter-hour-wind { font-size: 10px; }
+    .wetter-hours-legend { gap: 8px; font-size: 10px; }
+    .wetter-hours-note { display: inline; font-weight: 700; }
+
+    /* Kurzuebersicht: Wochentag, Symbol und Temperaturen in der ersten Zeile,
+       die Bezeichnung darunter, die Kennzahlen zweispaltig. */
+    .wetter-short-row { gap: 6px 10px; padding: 10px 0; }
+    .wetter-short-day { min-width: 0; flex: 1 1 auto; }
+    .wetter-short-label { flex-basis: 100%; font-size: 12px; }
+    .wetter-short-temp { min-width: 0; flex: 0 0 auto; }
+
+    .wetter-short-cell {
+        min-width: 0;
+        flex: 1 1 calc(50% - 5px);
+        font-size: 12px;
+    }
+}
+
+/* ── Wetter-Kachel (Dashboard) ──────────────────────────────────────────────
+   Die Kachel belegt immer die volle Breite ihrer Gruppe und ist selbst ein
+   Groessen-Container: alle Umbrueche darin richten sich nach der KACHELBREITE
+   (@container), nicht nach der Fensterbreite. Dieselbe Kachel steht deshalb in
+   einer Viertel-Gruppe einspaltig und in einer vollen Gruppe mehrspaltig — ohne
+   zweite Bauform im Markup. Browser ohne Container-Queries bekommen die
+   mittlere Form; das Werteraster (auto-fit) passt sich auch dort an. */
+.widget-card--weather {
+    grid-column: 1 / -1;
+    container-type: inline-size;
+    container-name: weather;
+}
+
+.widget-card--weather .widget-body {
+    gap: 12px;
+    padding: 12px 14px 14px;
+}
+
+/* Im Bearbeitungsmodus muss nur die Kopfzeile den Buttons ausweichen, nicht das
+   gesamte Werteraster. */
+body.dash-editing .widget-card--weather .widget-body { padding-right: 14px; }
+body.dash-editing .widget-card--weather .weather-head { padding-right: 76px; }
+
+.weather-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+}
+
+.weather-head-icon { font-size: 34px; line-height: 1; }
+
+.weather-head-text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    flex: 1 1 auto;
+}
+
+.weather-head-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--color-ink);
+    line-height: 1.25;
+}
+
+.weather-head-sub {
+    font-size: 12px;
+    color: var(--color-ink-muted);
+    line-height: 1.3;
+}
+
+.weather-head-label {
+    font-size: 12px;
+    color: var(--color-ink-soft);
+    line-height: 1.3;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.weather-head-value {
+    margin-left: auto;
+    font-size: 24px;
+    font-weight: 600;
+    color: var(--color-ink);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+
+.weather-notice {
+    margin: 0;
+    font-size: 12px;
+    color: var(--color-ink-muted);
+}
+
+/* Werteraster: so viele Spalten, wie in die Kachel passen. */
+.weather-values {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+    gap: 8px;
+}
+
+.weather-value {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 8px 10px;
+    border: 1px solid var(--color-line-soft);
+    border-radius: 8px;
+    background: var(--color-surface-muted);
+    min-width: 0;
+}
+
+.weather-value-icon { font-size: 17px; line-height: 1.2; }
+
+.weather-value-body {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    flex: 1 1 auto;
+    gap: 1px;
+}
+
+.weather-value-figure {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.weather-value-label {
+    font-size: 11px;
+    color: var(--color-ink-muted);
+    line-height: 1.3;
+}
+
+.weather-value-number {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--color-ink);
+    font-variant-numeric: tabular-nums;
+}
+
+.weather-value-hint {
+    font-size: 11px;
+    color: var(--color-ink-muted);
+    line-height: 1.3;
+}
+
+/* Einordnende Faerbung (UV-Stufe) — dieselben Paare wie auf der Wetterseite. */
+.weather-value--good { border-color: var(--color-ok-line); background: var(--color-ok-wash); }
+.weather-value--good .weather-value-hint { color: var(--color-ok-ink); }
+.weather-value--warn { border-color: var(--color-warn-tint); background: var(--color-warn-wash); }
+.weather-value--warn .weather-value-hint { color: var(--color-warn-ink); }
+.weather-value--bad { border-color: var(--color-bad-line); background: var(--color-bad-wash); }
+.weather-value--bad .weather-value-hint { color: var(--color-bad-ink); }
+
+/* Schmale Kachel (Viertel-Gruppe, Telefon): eine Wertespalte, kompakter Kopf. */
+@container weather (max-width: 300px) {
+    .weather-values { grid-template-columns: 1fr; }
+    .weather-head { gap: 10px; }
+    .weather-head-icon { font-size: 28px; }
+    .weather-head-value { font-size: 20px; }
+    .weather-head-sub { display: none; }
+}
+
+/* Ab mittlerer Breite steht der Wert in der Zeile rechts neben der Bezeichnung
+   statt darunter — das nutzt die gewonnene Breite, statt sie zu verschenken. */
+@container weather (min-width: 460px) {
+    .weather-value-body {
+        flex-direction: row;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 10px;
+    }
+
+    .weather-value-figure {
+        align-items: flex-end;
+        text-align: right;
+        white-space: nowrap;
+    }
+
+    .weather-value-label { font-size: 12px; }
+}
+
+/* Breite Kachel (halbe/volle Gruppe am Schreibtisch): groesserer Kopf. */
+@container weather (min-width: 560px) {
+    .weather-head-icon { font-size: 42px; }
+    .weather-head-title { font-size: 17px; }
+    .weather-head-sub, .weather-head-label { font-size: 13px; }
+    .weather-head-value { font-size: 30px; }
+
+    .weather-values {
+        grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
+        gap: 10px;
+    }
+}

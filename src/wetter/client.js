@@ -15,7 +15,10 @@ const HOURLY_VARIABLES =
 // die mehrtägige Prognose nutzt weiterhin die Stundenwerte (HOURLY_VARIABLES).
 const MINUTELY_15_VARIABLES =
   'shortwave_radiation,direct_normal_irradiance,diffuse_radiation,temperature_2m';
-const FORECAST_DAYS = 4; // heute + 3 Tage
+// Horizont der PV-Strahlungsprognose. Er deckt denselben Zeitraum ab wie die
+// Wetterseite (`wetter/forecast.js`), damit dort für jeden angezeigten Tag ein
+// erwarteter PV-Ertrag vorliegt — auch in der Kurzübersicht der weiteren Tage.
+const FORECAST_DAYS = 7; // heute + 6 Tage
 const CACHE_TTL_MS = 30 * 60 * 1000; // 30 Minuten
 const FETCH_TIMEOUT_MS = 10 * 1000;
 

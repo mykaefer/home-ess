@@ -46,9 +46,16 @@ const NAV_CORE = [
   { path: '/settings', label: 'Einstellungen', section: 'footer' },
 ];
 
+// Punkte, die im Hauptmenü hinter allem anderen stehen — auch hinter den
+// optionalen Modulen. Die Wetterprognose ist eine Nachschlageseite ohne
+// Steuerfunktion und schließt die Navigation ab.
+const NAV_MAIN_TRAILING = [
+  { path: '/wetter', label: 'Wetterprognose', section: 'main' },
+];
+
 // NAV wird von außen noch als Array erwartet (z. B. in Tests) — exportieren wir
 // die Kern-Liste unter dem alten Namen.
-const NAV = NAV_CORE;
+const NAV = [...NAV_CORE, ...NAV_MAIN_TRAILING];
 
 // Mobile Tab-Bar (≤ 768px): die fünf wichtigsten Seiten als Direktzugriff.
 // Alles Weitere über das Titellogo im Header (öffnet das vollflächige
@@ -99,7 +106,7 @@ function getMainNavItems() {
   const items = NAV_CORE.filter((item) => item.section === 'main');
   const adapterIndex = items.findIndex((item) => item.path === '/adapter');
   items.splice(adapterIndex + 1, 0, ...getHdpNavItems());
-  return [...items, ...getEnabledNavItems()];
+  return [...items, ...getEnabledNavItems(), ...NAV_MAIN_TRAILING];
 }
 
 function renderNavLinks(section, activePath, access) {

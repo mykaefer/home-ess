@@ -31,7 +31,7 @@ eigenständige Desktop- und Mobilansichten.
   Konverter- und Zellmetadaten sowie Clear-Sky-Referenzleistung.
 - Sonnenstandsberechnung mit wahrer Ortssonnenzeit, konfigurierbaren
   Referenzschwellen und direkter Sonnenlichterkennung.
-- Open-Meteo-PV-Prognose für heute und die folgenden drei Tage einschließlich
+- Open-Meteo-PV-Prognose für heute und die folgenden sechs Tage einschließlich
   anlagenspezifischer Selbstkalibrierung in 15-Minuten-Fenstern.
 - Batterieseite für Ladezustand, Leistung, Spannung, Temperatur,
   Wirkungsgrade, Kapazität und konfigurierbaren Mindest-Ladezustand.
@@ -48,6 +48,27 @@ eigenständige Desktop- und Mobilansichten.
   ihrer Priorität frei.
 - Notstrom- und Autarkiezustände, Hysteresen und persistente Zustände verhindern
   unsicheres Schalten nach Neustarts oder bei unvollständigen Messwerten.
+
+## Wetterprognose
+
+- Eigene Seite mit der aktuellen Wetterlage und den kommenden drei Tagen in
+  voller Tiefe: Temperaturen, Niederschlag, Wind, UV-Index, Sonnenintensität,
+  Bewölkung, Luftdruck, Luftfeuchte und Sonnenzeiten — nach Themen gegliedert
+  (am Schreibtisch je Thema eine Spalte, am Telefon Kacheln), jede Größe mit
+  Piktogramm und je Detailtag mit Stundenverlauf.
+- Verlaufsdiagramm über den gesamten Zeitraum: Temperatur und Sonnenintensität
+  als Linien, Niederschlag als Balken dahinter.
+- Der erwartete PV-Tagesertrag aus der PV-Prognose steht im Titel jedes
+  ausführlichen Tages und in jeder Zeile der weiteren Tage.
+- Eigene Telefonansicht: kompakte Abstände, schmale Diagrammform und
+  Stundenverlauf in 3-Stunden-Schritten — nichts muss seitlich gescrollt werden.
+- Die weiteren Tage folgen als Kurzübersicht mit dem Wichtigsten je Zeile.
+- **Wetter-Widget fürs Dashboard**: zeigt wahlweise die aktuelle Lage oder einen
+  einzelnen Prognosetag; welche Werte darin stehen, wird je Kachel angehakt. Die
+  Kachel ordnet sich nach der Breite ihrer Gruppe an — einspaltig in einer
+  Viertel-Gruppe, mehrspaltig in einer vollen.
+- Alle Werte stehen als States in der Systemgruppe **Wetter** bereit und lassen
+  sich in Bedingungen, Automationen, Output und Dashboard-Widgets verwenden.
 
 ## Messen und Schalten von Verbrauchern
 

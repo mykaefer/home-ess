@@ -39,6 +39,8 @@ const { loadPrognosisConfig } = require('../prognosis/config');
 const { buildConsumptionModel, simulateDays } = require('../prognosis/forecast');
 const { getBehaviorRecommendation } = require('../prognosis/behavior');
 const { loadMqttConfig } = require('../mqtt/config');
+const { getCachedForecast: getCachedWeatherForecast } = require('../wetter/forecast');
+const { buildWeatherValues } = require('../wetter/values');
 const { localCalendar } = require('../local-time');
 const { computeYearStats, getDailyMetricValue, statsFromRows, dayKeyOffset } = require('../history/daily-metrics');
 const metrics = require('../runtime-metrics');
@@ -53,6 +55,7 @@ const VALUE_CATEGORIES = [
   'Stromverbrauch',
   'Batterie',
   'Prognose',
+  'Wetter',
   'Netzsteuerung',
   'Pool',
   'Wallbox',
@@ -80,6 +83,7 @@ const CATEGORY_BY_PREFIX = [
   ['strom.', 'Stromverbrauch'],
   ['batterie.', 'Batterie'],
   ['prognose.', 'Prognose'],
+  ['wetter.', 'Wetter'],
   ['grid.', 'Netzsteuerung'],
   ['pool.', 'Pool'],
   ['wallbox.', 'Wallbox'],
@@ -280,6 +284,14 @@ async function buildCalculatedInternalValues(db, cache) {
 
   const entries = [];
 
+  // Wetterprognose (Open-Meteo) als eigene Systemgruppe „Wetter". Gelesen wird
+  // ausschließlich der Cache, den der periodische Wetter-Job füllt — die
+  // State-Berechnung darf nie auf einen Netzabruf warten. Ohne Standort oder vor
+  // dem ersten Abruf bleiben die Werte leer, die States existieren aber.
+  entries.push(...buildWeatherValues(
+    getCachedWeatherForecast(mqttConfig.latitude, mqttConfig.longitude)
+  ));
+
   // Globaler Tagesstatus: bleibt nach einer Mindest-SoC-Netzschaltung bis zum
   // nächsten Tageswechsel auf false.
   entries.push(boolEntry('operating.autark', 'Autark', operatingState.getState().autark));
@@ -328,6 +340,9 @@ async function buildCalculatedInternalValues(db, cache) {
   entries.push(dateEntry('pv.maxYearDate', 'PV Ertrag Maximum dieses Jahr – Datum', orYearStart(pvYearStats.maxDate, calendar.yearKey)));
 
   // Photovoltaik – Wetterprognose (Open-Meteo): erwarteter Tagesertrag heute + 3 Tage.
+  // Die Prognose selbst reicht weiter (siehe `wetter/client.js`); als States
+  // bleiben bewusst nur diese vier bestehen, damit sich die veröffentlichte
+  // State-Struktur nicht ändert.
   // Tagesindex ist stabil (0 = heute), unabhängig vom Wochentag-Label der Oberfläche.
   const forecastDays = forecast && Array.isArray(forecast.days) ? forecast.days : [];
   for (const fc of FORECAST_VALUES) {

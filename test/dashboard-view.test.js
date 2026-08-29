@@ -31,8 +31,12 @@ function baseData(extra = {}) {
 }
 
 test('Widget-Typen: Schalter steht an zweiter Stelle vor der Info-Kachel', () => {
-  assert.deepEqual(WIDGET_TYPE_DEFS.map((def) => def.type), ['value', 'switch', 'info', 'chart']);
+  assert.deepEqual(WIDGET_TYPE_DEFS.map((def) => def.type), ['value', 'switch', 'info', 'chart', 'weather']);
   assert.equal(widgetTypeDef('info').mobileMinWidth, 'full');
+  // Die Wetter-Kachel ordnet ihre Werte selbst nach der Breite an und braucht
+  // dafür die volle Breite ihrer Gruppe — daher keine Größenvarianten.
+  assert.equal(widgetTypeDef('weather').mobileMinWidth, 'full');
+  assert.equal(widgetTypeDef('weather').supportsSize, false);
   // Diagramme brauchen die volle Breite, damit die Zeitachse lesbar bleibt.
   assert.equal(widgetTypeDef('chart').mobileMinWidth, 'full');
   assert.equal(widgetTypeDef('value').mobileMinWidth, null);

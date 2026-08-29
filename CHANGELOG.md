@@ -3,6 +3,120 @@
 Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [1.6.1] — 2026-08-29
+
+### Hinzugefügt
+
+- **Neue Seite „Wetterprognose"** (`/wetter`) als letzter Punkt des Hauptmenüs.
+  Sie zeigt die aktuelle Wetterlage und die **kommenden drei Tage ausführlich**:
+  Wetterlage, Höchst- und Tiefsttemperatur, gefühlte Temperatur, Niederschlags-
+  wahrscheinlichkeit, -menge und -stunden, Regen- und Schneemenge, Wind, Böen
+  und Windrichtung, UV-Index mit Belastungsstufe, Bewölkung, Luftfeuchte,
+  Luftdruck, Sonnenauf- und -untergang sowie Tageslicht- und Sonnenscheindauer.
+  Jede Größe trägt ein Piktogramm. Die Messgrößen stehen dabei nicht in einer
+  langen Kachelreihe, sondern in **thematischen Blöcken** (*Temperatur ·
+  Niederschlag · Wind · Sonne und Licht · Luft*). Am Schreibtisch wird jeder
+  Block eine **Spalte** und die Werte stehen darin platzsparend als schmucklose
+  Zeilen untereinander (Bezeichnung links, Wert rechtsbündig auf gemeinsamer
+  Fluchtlinie); am Telefon bleibt es beim Kachelraster. Jeder Detailtag hat
+  zusätzlich
+  einen **Stundenverlauf** über die volle Breite (Symbol, Temperatur,
+  Niederschlagswahrscheinlichkeit als Balken, Menge und Wind). Die
+  **weiteren vier Tage** stehen darunter als
+  Kurzübersicht mit dem Wichtigsten je Zeile.
+- **Erwarteter PV-Ertrag im Titel jedes Detailtages** und in **jeder** Kurzzeile
+  der weiteren Tage. Die Zahl stammt aus der bestehenden PV-Prognose
+  (`photovoltaik/forecast.js`) und wird über den Tagesschlüssel zugeordnet; ohne
+  Anlagen oder ohne Prognose entfällt die Angabe ersatzlos.
+- **Verlaufsdiagramm über den gesamten Prognosezeitraum** zwischen aktueller
+  Lage und dem ersten Tag: **Temperatur** als rote Linie (linke Achse),
+  **Sonnenintensität** als ockergelbe Linie (rechte Achse, Globalstrahlung in
+  W/m², zur Nulllinie hin halbtransparent gefüllt) und **Niederschlag** je Stunde
+  als blaue Balken dahinter. Tagesgrenzen,
+  Tagesnamen und die laufende Stunde sind markiert. Die Bauform ist bewusst
+  flach, damit der Verlauf die Tageskacheln einordnet statt sie zu verdrängen.
+  Wie alle Ansichten von homeESS entsteht es serverseitig als Inline-SVG
+  (`src/wetter/chart.js`) — ohne Diagrammbibliothek im Browser. Es gibt zwei
+  Bauformen: am Schreibtisch mit Achsen und Beschriftungen im SVG, am Telefon
+  eine schmale Form **ohne Schrift im SVG** (Tagesnamen und Wertebereiche stehen
+  als HTML darüber und darunter). So bleibt die Beschriftung bei jeder
+  Gerätebreite unverzerrt lesbar.
+- Der **Stand der Prognose** (Kopfzeile der Seite und State
+  `wetter.standort.stand`) wird in der **in homeESS korrigierten Zeit**
+  ausgegeben (`time-handler`) und nicht mehr in der rohen Systemzeit — die
+  Oberfläche zeigt damit überall dieselbe Uhr.
+- **Telefonansicht ohne Seitwärtsscrollen.** Weder die Seite noch ein Abschnitt
+  darin muss seitlich gescrollt werden: das Diagramm schaltet auf die schmale
+  Bauform um, und der Stundenverlauf zeigt statt 24 schmaler Spalten die acht
+  vollen **3-Stunden-Schritte** (0, 3, 6 … 21), die sich die Breite teilen — ein
+  Hinweis in der Legende nennt das. Karten, Blöcke und Kacheln laufen mit
+  strafferen Abständen; die Messgrößen stehen zweispaltig.
+- Der Knopf **Aktualisieren** arbeitet nach Post/Redirect/Get: er leitet nach
+  dem Abruf auf `/wetter` um, statt die Seite direkt auszuliefern. Sonst bliebe
+  der Client — insbesondere die WebView der App, die sich ihre zuletzt besuchte
+  Adresse merkt — auf einer Adresse stehen, die nur POST beantwortet; ein
+  späterer Aufruf endete dann in `Cannot GET /wetter/aktualisieren`. Wird die
+  Adresse dennoch per GET geöffnet (gemerkte Adresse, Lesezeichen, Verlauf),
+  führt sie jetzt zurück auf die Seite.
+- **Systemgruppe „Wetter"** mit 159 States, sauber in die Untergruppen
+  *Aktuell*, *Standort*, *Tag 1 – Heute*, *Tag 2 – Morgen*, *Tag 3 – Übermorgen*
+  und *Weitere Tage* sortiert (`system://homeess/wetter.…`). Sie stehen damit
+  auf der States-Seite, im State-Picker, im Wertekatalog, in Bedingungen und im
+  Output zur Verfügung. Die States existieren auch ohne hinterlegten Standort;
+  ihre Werte bleiben dann leer. Neben Wetterlage, Temperaturen, Niederschlag,
+  Wind, UV und Sonnenzeiten gehört dazu die **Sonnenintensität** als
+  Globalstrahlung (`wetter.aktuell.sonnenintensitaet`,
+  `wetter.tagN.sonnenintensitaetMax`, `wetter.tagN.einstrahlung`). Sie ist
+  bewusst getrennt von `sun.intensity.*`: jene States messen die reale
+  PV-Leistung gegen den Klarhimmel-Idealwert und gelten nur für den Istzustand,
+  während die Wetter-States eine Vorhersage sind.
+- Die Wetterdaten stammen wie bisher von **Open-Meteo**, jedoch aus einer
+  eigenen Abfrage (`src/wetter/forecast.js`) mit eigenem 30-Minuten-Cache und
+  eigenem Hintergrund-Job. Die Strahlungsabfrage der PV-Prognose
+  (`src/wetter/client.js`) bleibt eine eigene Abfrage mit unverändertem
+  Variablenumfang; lediglich ihr Tageshorizont ist derselbe (siehe *Geändert*).
+  Rohdaten der Prognose liefert `GET /wetter/daten`.
+- **Wetter-Widget für das Dashboard** (Widget-Typ *Wetter*). Im Dialog wird
+  gewählt, **was** die Kachel zeigt — die aktuelle Lage oder einen einzelnen
+  Prognosetag (heute … in 6 Tagen) — und **welche Werte** darin erscheinen:
+  jede Messgröße ist ein eigenes Häkchen (Temperatur, gefühlte Temperatur,
+  Niederschlag samt Wahrscheinlichkeit und Dauer, Regen- und Schneemenge, Wind,
+  Böen und Windrichtung, Luftfeuchte, Taupunkt, Luftdruck, Bewölkung,
+  Sichtweite, UV-Index mit Belastungsstufe, Sonnenintensität und Einstrahlung,
+  Sonnenschein- und Tageslichtdauer, Sonnenauf- und -untergang sowie der
+  **erwartete PV-Ertrag** aus der PV-Prognose). Größen, die es in der gewählten
+  Anzeigeart nicht gibt — Sonnenaufgang kennt nur ein Tag, Sichtweite nur der
+  Istzustand — blendet der Dialog aus, statt sie leer anzuzeigen. Die Kopfzeile
+  mit Wetterlage und Leitwert steht immer.
+- Die Wetter-Kachel **skaliert nach der Breite ihrer Gruppe**, nicht nach der
+  Fensterbreite: Sie belegt die volle Gruppenbreite und ist selbst ein
+  Größen-Container (`container-type: inline-size`). In einer Viertel-Gruppe
+  steht sie einspaltig mit kompaktem Kopf, in einer halben Gruppe zwei- bis
+  dreispaltig mit Wert rechts neben der Bezeichnung, in einer vollen Gruppe
+  mehrspaltig mit großem Kopf — alles aus **einer** Bauform im Markup.
+  Datengrundlage ist die bestehende Wetterprognose (`src/wetter/`): gelesen wird
+  ausschließlich deren Cache, der Dashboard-Aufbau wartet nie auf einen
+  Netzabruf. Ohne hinterlegten Standort behält die Kachel ihre Form und nennt
+  den Grund; die Werte trägt dann das periodische Nachladen nach.
+
+- **Eigenes Seitenrecht „Wetterprognose"** in der Benutzerverwaltung: Die Seite
+  lässt sich wie jede andere je Benutzer freigeben oder ausblenden. Der Knopf
+  **Aktualisieren** gilt dabei als lesender Zugriff und steht deshalb auch der
+  Rolle „Lesen" offen — er holt lediglich Fremddaten ab und verändert nichts an
+  der Anlage.
+
+### Geändert
+
+- **PV-Prognose reicht jetzt sieben Tage** statt vier (`wetter/client.js`,
+  `forecast_days`). Damit deckt sie denselben Zeitraum ab wie die Wetterseite:
+  In der Kurzübersicht der weiteren Tage trägt nun **jede** Zeile einen
+  erwarteten Ertrag, statt nur der erste Tag. Der Prognosestreifen der Seite
+  **Photovoltaik** zeigt entsprechend sieben Tageskarten. Unverändert bleiben
+  die veröffentlichten States (weiterhin heute/morgen/+2/+3) und die
+  Batteriesimulation der Prognoseseite, die weiterhin mit vier Tagen rechnet.
+  Zu beachten: Die Ertragswerte der hinteren Tage sind naturgemäß deutlich
+  unsicherer als die der ersten Tage.
+
 ## [1.6.0] — 2026-08-23
 
 ### Geändert

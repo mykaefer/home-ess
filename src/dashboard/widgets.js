@@ -3,8 +3,10 @@
 // CRUD für Dashboard-Widgets. Ein Widget ist eine **Wert-Kachel** (type 'value',
 // zeigt einen State aus dem zentralen States-Modell), ein
 // **Schalter** (type 'switch', schaltet ein Gerät oder eine Schaltgruppe aus
-// Messen + Schalten) oder eine **Info-Kachel** (type 'info', zeigt ausgewählte
-// System-Informationen). Widgets können einer Gruppe zugeordnet (group_id) und
+// Messen + Schalten), eine **Info-Kachel** (type 'info', zeigt ausgewählte
+// System-Informationen) oder eine **Wetter-Kachel** (type 'weather', zeigt die
+// aktuelle Lage bzw. einen Prognosetag mit frei gewählten Messgrößen). Widgets
+// können einer Gruppe zugeordnet (group_id) und
 // per Drag&Drop angeordnet werden (position). Gruppenlose Widgets tragen ihre
 // Tab-Zuordnung selbst (tab_id); Widgets in Gruppen erben den Tab der Gruppe.
 // Typ-spezifische Optionen liegen als JSON in `config`.
@@ -18,6 +20,7 @@ const {
 } = require('./widget-types');
 const { normalizeSwitchTarget } = require('./switches');
 const { normalizeChartConfig, chartConfigForStorage, validateChartConfig } = require('./chart-config');
+const { normalizeWeatherConfig } = require('./weather-widget');
 const { topicForId } = require('../states/system-topics');
 
 const schemaReady = new WeakMap();
@@ -110,6 +113,7 @@ function normalizeWidgetRow(row = {}) {
     widget.offColor = normalizeColor(config.offColor);
   }
   if (type === 'chart') widget.chart = normalizeChartConfig(config.chart || config);
+  if (type === 'weather') widget.weather = normalizeWeatherConfig(config.weather || {});
   return widget;
 }
 
@@ -213,6 +217,17 @@ function normalizeWidgetInput(input = {}) {
       unit: input.chartUnit != null ? input.chartUnit : input.unit,
     });
   }
+  if (type === 'weather') {
+    // Aus dem Dialog kommen Tageswahl und Häkchenliste als Formularfelder; über
+    // die API darf auch ein fertiges Objekt übergeben werden.
+    const weather = input.weather && typeof input.weather === 'object' ? input.weather : {};
+    normalized.weather = normalizeWeatherConfig({
+      day: input.weatherDay != null ? input.weatherDay : weather.day,
+      fields: input.weatherFields != null
+        ? toArray(input.weatherFields).map(String)
+        : weather.fields,
+    });
+  }
   return normalized;
 }
 
@@ -239,6 +254,7 @@ function configFor(widget) {
     if (widget.offColor) config.offColor = widget.offColor;
   }
   if (widget.type === 'chart') config.chart = chartConfigForStorage(widget.chart);
+  if (widget.type === 'weather') config.weather = widget.weather;
   return Object.keys(config).length ? JSON.stringify(config) : null;
 }
 

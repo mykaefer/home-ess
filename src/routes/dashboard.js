@@ -36,6 +36,16 @@ const {
   resolveStates,
 } = require('../states/catalog');
 const { INFO_FIELDS, readSystemInfo } = require('../dashboard/system-info');
+const {
+  WEATHER_FIELDS,
+  WEATHER_DAY_OPTIONS,
+  readWeatherWidget,
+  weatherWidgetLabel,
+  usesPvYield,
+} = require('../dashboard/weather-widget');
+const { getWeatherForecast } = require('../wetter/forecast');
+const { listPvPlants } = require('../photovoltaik/plants');
+const { computePvForecast } = require('../photovoltaik/forecast');
 const systemDatabase = require('../database');
 const {
   chartWindow, breaksAtGaps, CHART_RANGES, AGGREGATE_OPTIONS, FILL_OPTIONS, MAX_SERIES,
@@ -43,8 +53,17 @@ const {
 const { renderChartSvg, renderChartLegend, renderNotice } = require('../dashboard/chart-svg');
 const renderDashboard = require('../views/dashboard');
 
-function enrichWidget(widget, valuesById, switchStates) {
+function enrichWidget(widget, valuesById, switchStates, weatherData = null) {
   if (widget.type === 'info') return { ...widget, label: 'System' };
+  // Wetter-Kacheln lesen ausschließlich den Prognose-Cache (siehe
+  // loadWeatherContext) — der Dashboard-Aufbau wartet nie auf einen Netzabruf.
+  if (widget.type === 'weather') {
+    return {
+      ...widget,
+      label: weatherWidgetLabel(widget.weather),
+      weatherView: readWeatherWidget(widget.weather, weatherData || {}),
+    };
+  }
   // Diagramme werden ohne Daten gerendert und laden ihren Inhalt sofort danach
   // nach (/dashboard/widgets/:id/chart). So hängt der Aufbau des Dashboards
   // nicht an der Erreichbarkeit einer externen Datenbank.
@@ -72,6 +91,33 @@ function enrichWidget(widget, valuesById, switchStates) {
   };
 }
 
+// Datengrundlage der Wetter-Kacheln. Gelesen wird ausschließlich der Cache, den
+// der periodische Wetter-Job füllt (`allowFetch: false`) — das Dashboard darf
+// nie auf einen Netzabruf warten. Die PV-Prognose kommt nur dazu, wenn
+// mindestens eine Kachel den erwarteten Ertrag anzeigt; sonst bleibt es beim
+// reinen Wetterabruf. Fehler beider Quellen enden in `null`: die Kachel zeigt
+// dann ihren Hinweis, das übrige Dashboard bleibt unberührt.
+async function loadWeatherContext(db, widgets) {
+  const weatherWidgets = (widgets || []).filter((widget) => widget.type === 'weather');
+  if (!weatherWidgets.length) return null;
+  const needsPv = weatherWidgets.some((widget) => usesPvYield(widget.weather));
+  const [forecast, pvForecast] = await Promise.all([
+    getWeatherForecast(db, { allowFetch: false }).catch(() => null),
+    needsPv ? loadPvForecast(db) : Promise.resolve(null),
+  ]);
+  return { forecast, pvForecast };
+}
+
+async function loadPvForecast(db) {
+  try {
+    const plants = await listPvPlants(db);
+    if (!plants.length) return null;
+    return await computePvForecast(db, plants, { allowFetch: false, cache: mqttClient.getCache() });
+  } catch (_) {
+    return null;
+  }
+}
+
 // Gemeinsame Render-Funktion für `/` und `/dashboard` — beide Wege liefern
 // dieselbe vollständig initialisierte Dashboard-Ansicht.
 async function renderPage(db, res, options = {}) {
@@ -87,8 +133,9 @@ async function renderPage(db, res, options = {}) {
     widgets.filter((widget) => widget.type === 'value').map((widget) => widget.stateTopic)
   );
   const switchStates = await readSwitchStates(db, mqttClient.getCache(), widgets);
+  const weatherData = await loadWeatherContext(db, widgets);
   const valuesById = new Map(internalValues.map((entry) => [entry.id, entry]));
-  const enriched = widgets.map((widget) => enrichWidget(widget, valuesById, switchStates));
+  const enriched = widgets.map((widget) => enrichWidget(widget, valuesById, switchStates, weatherData));
   const groupTabById = new Map(groups.map((group) => [group.id, resolveTabId(tabs, group.tabId)]));
 
   // Tab eines Widgets: Widgets in Gruppen erben den Tab der Gruppe, freie
@@ -119,6 +166,8 @@ async function renderPage(db, res, options = {}) {
       switchTargets,
       infoFields: INFO_FIELDS,
       systemInfo: readSystemInfo(),
+      weatherFields: WEATHER_FIELDS,
+      weatherDayOptions: WEATHER_DAY_OPTIONS,
       maxTabTitleLength: MAX_TAB_TITLE_LENGTH,
       chartRanges: CHART_RANGES,
       chartAggregates: AGGREGATE_OPTIONS,
@@ -160,6 +209,7 @@ function dashboardRoutes(db) {
         widgets.filter((widget) => widget.type === 'value').map((widget) => widget.stateTopic)
       );
       const switchStates = await readSwitchStates(db, mqttClient.getCache(), widgets);
+      const weatherData = await loadWeatherContext(db, widgets);
       const valuesById = new Map(internalValues.map((entry) => [entry.id, entry]));
       res.json({
         widgets: widgets
@@ -175,6 +225,15 @@ function dashboardRoutes(db) {
             return { id: widget.id, on: state.on };
           }),
         system: readSystemInfo(),
+        // Wetter-Kacheln werden nicht neu gebaut, sondern nur nachgetragen: der
+        // Browser schreibt die Werte in die vorhandenen Felder (siehe
+        // applyWeather in views/dashboard.js).
+        weather: widgets
+          .filter((widget) => widget.type === 'weather')
+          .map((widget) => ({
+            id: widget.id,
+            view: readWeatherWidget(widget.weather, weatherData || {}),
+          })),
       });
     } catch (err) {
       next(err);

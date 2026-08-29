@@ -22,6 +22,16 @@ const RESYNC_DEBOUNCE_MS = 2000;
 // CCU-Verbindung. Einzelne Fehlschläge (Gerät offline, kurzer Netzwerkschluckauf)
 // bleiben wie bisher still.
 const REFRESH_FAILURE_LIMIT = 3;
+// Ein Steuerbefehl geht über Funk und wird von der CCU erst nach ihrem eigenen
+// Geräte-Timeout quittiert – deutlich länger als ein lokaler Schnittstellen-
+// Aufruf. Ohne eigenes Zeitlimit liefe jeder Befehl an ein trages oder gerade
+// stummes Gerät in die 10-s-Voreinstellung und gälte fälschlich als Fehler.
+const WRITE_TIMEOUT_MS = 30000;
+// Ein optimistisch (ohne Readback-Event) gemerkter Schreibwert unterdrückt einen
+// gleichlautenden Folgebefehl nur so lange. Danach darf derselbe Wert erneut
+// gesendet werden: Kam der Befehl beim Gerät nie an, bleibt es sonst dauerhaft
+// unschaltbar, weil jeder weitere Klick still am Vergleich hängen bliebe.
+const UNCONFIRMED_REPEAT_MS = 30000;
 
 function segment(value) {
   return encodeURIComponent(String(value));
@@ -79,10 +89,12 @@ module.exports = function createHmRpcAdapter(host) {
   const descriptions = new Map();
   const channels = new Map();
   const states = new Map();
-  // State-Adresse -> zuletzt bekannter (normalisierter) Wert. Dient dem Steuerbefehl
-  // als Vergleichsbasis: Ein Schreibvorgang mit unverändertem Wert löst KEINEN
-  // erneuten setValue an die CCU aus (spart Funk/Duty-Cycle). Wird aus dem
-  // Event-/Refresh-Pfad gepflegt, also derselben Quelle wie die publizierten Werte.
+  // State-Adresse -> { value, confirmed, at }. Dient dem Steuerbefehl als
+  // Vergleichsbasis: Ein Schreibvorgang mit unverändertem Wert löst KEINEN
+  // erneuten setValue an die CCU aus (spart Funk/Duty-Cycle). Bestätigte Werte
+  // stammen aus dem Event-/Refresh-Pfad, also derselben Quelle wie die
+  // publizierten Werte; `confirmed: false` markiert den nur optimistisch
+  // gemerkten Wert direkt nach einem Steuerbefehl (siehe UNCONFIRMED_REPEAT_MS).
   const lastValues = new Map();
   // Kanal -> letzter getParamset-Refresh (ms). Bündelt die je-State-Refreshwünsche
   // eines Kanals, damit ein Live-Tick nicht mehrere getParamset pro Kanal auslöst.
@@ -290,13 +302,30 @@ module.exports = function createHmRpcAdapter(host) {
       for (const entry of eventValues(event[0], event[1], event[2])) latest.set(entry.address, entry);
     }
     if (latest.size) {
-      for (const entry of latest.values()) lastValues.set(entry.address, entry.value);
+      // Werte aus der CCU sind belegt (Readback/Refresh) – sie bestätigen einen
+      // zuvor optimistisch gemerkten Schreibwert bzw. korrigieren ihn.
+      for (const entry of latest.values()) {
+        lastValues.set(entry.address, { value: entry.value, confirmed: true, at: Date.now() });
+      }
       host.publishStates(Array.from(latest.values()));
     }
   }
 
-  async function rpc(method, params) {
-    return (await call(rpcOptions, method, params)).value;
+  async function rpc(method, params, timeout) {
+    return (await call(rpcOptions, method, params, ...(timeout ? [timeout] : []))).value;
+  }
+
+  // Ist die CCU-Schnittstelle selbst noch erreichbar? Der Aufruf ist rein lokal
+  // (kein Funk, kein Duty-Cycle) und beantwortet die einzige Frage, die nach
+  // einem fehlgeschlagenen Steuerbefehl zählt: lag es am Gerät oder an der
+  // Verbindung?
+  async function interfaceAlive() {
+    try {
+      await rpc('system.listMethods', []);
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   async function loadChannel(channel, initialValues) {
@@ -637,17 +666,33 @@ module.exports = function createHmRpcAdapter(host) {
       // Unveränderter Wert: kein erneuter Steuerbefehl an die CCU. ACTION-Parameter
       // (Taster-/Trigger-Impulse) sind davon ausgenommen – dort ist das wiederholte
       // Schreiben desselben „Werts" die eigentliche Aktion und muss durchgehen.
-      if (description.TYPE !== 'ACTION' && lastValues.has(address) && lastValues.get(address) === normalized) {
+      // Ein nur optimistisch gemerkter Wert (kein Readback-Event) sperrt die
+      // Wiederholung dagegen nur kurz: Hat das Gerät den Befehl nie ausgeführt,
+      // muss ein späterer Klick ihn erneut senden dürfen.
+      const known = lastValues.get(address);
+      const blocksRepeat = known && known.value === normalized
+        && (known.confirmed || Date.now() - known.at < UNCONFIRMED_REPEAT_MS);
+      if (description.TYPE !== 'ACTION' && blocksRepeat) {
         return;
       }
       try {
-        await rpc('setValue', [channelAddress, parameter, normalized]);
-        lastValues.set(address, normalized); // optimistisch, bis das Readback-Event nachzieht
+        await rpc('setValue', [channelAddress, parameter, normalized], WRITE_TIMEOUT_MS);
+        // Optimistisch, bis das Readback-Event nachzieht und den Wert bestätigt.
+        lastValues.set(address, { value: normalized, confirmed: false, at: Date.now() });
         // Steuerbefehl gesetzt – das Gerät jetzt kurz aktiv beobachten, damit ein
         // zugehöriges Status-Topic zeitnah nachzieht (auch ohne Push-Event).
         armActiveWatch(deviceOfChannel(channelAddress));
       } catch (err) {
         host.error(`Schreiben ${address} fehlgeschlagen: ${err.message}`);
+        // CCU-Fault (numerischer XML-RPC-Fehlercode, z. B. UNREACH): Die CCU hat
+        // geantwortet, nur dieses Gerät war nicht erreichbar. Die Schnittstelle
+        // ist nachweislich in Ordnung und darf nicht als getrennt gelten – sonst
+        // verwirft ein einzelnes stummes Gerät die Steuerbefehle aller anderen.
+        if (typeof err.code === 'number') return;
+        // Transportfehler (Timeout, Verbindungsabbruch): Das kann am Funkweg des
+        // Geräts liegen oder an der Verbindung. Ein lokaler Schnittstellen-Ping
+        // entscheidet das, statt die Verbindung pauschal fallen zu lassen.
+        if (await interfaceAlive()) return;
         registered = false;
         host.setConnected(false, `CCU-RPC: ${err.message}`);
       }

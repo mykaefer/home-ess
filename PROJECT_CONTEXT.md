@@ -18,14 +18,17 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
 **Aktueller Funktionsstand:**
 - Login (Passwort) mit **„Passwort merken"**-Checkbox.
 - **Dashboard** mit frei konfigurierbaren **Widgets** und **Gruppen** (Titel +
-  Breite voll/halb/viertel). Zwei Widget-Typen (Add-Dialog mit Tabs, Spalte
+  Breite voll/halb/viertel). Die Widget-Typen (Add-Dialog mit Tabs, Spalte
   `dashboard_widgets.type`): **`value`** (Live-Kachel eines Werts aus dem
-  Wert-Katalog `output/internal-values.js`) und **`info`** (System-Infos aus
+  Wert-Katalog `output/internal-values.js`), **`switch`** (Gerät/Schaltgruppe
+  aus Messen + Schalten), **`info`** (System-Infos aus
   `dashboard/system-info.js` — Versionen, CPU/RAM als Fortschrittsbalken u. a.;
-  gewählte Felder als JSON in `dashboard_widgets.config`, Default = alle). Widgets
+  gewählte Felder als JSON in `dashboard_widgets.config`, Default = alle),
+  **`chart`** (Zeitreihen der Systemdatenbank) und **`weather`** (aktuelle Lage
+  oder ein Prognosetag mit angehakten Messgrößen). Widgets
   und Gruppen per **Drag & Drop** anordbar, Widgets in Gruppen verschiebbar,
   Widgets/Gruppen bearbeit- und löschbar. Live-Refresh über `GET /dashboard/data`
-  (Werte + `system`-Block).
+  (Werte + `system`- und `weather`-Block).
 - **Stromverbrauch**: MQTT-Topic-Felder für Eigenverbrauch L1–L3, Netzbezug
   L1–L3 und Zählerstände; oben Eigenverbrauch/Netzbezug als Phasensummen,
   Woche/Jahr aus Tageswert plus Tagesstart-Abgleich über den Dialog
@@ -81,12 +84,15 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   in `buildPhotovoltaikSnapshot`, 60-s-Job; `readPhotovoltaikValues` liest
   schreibfrei).
   **PV-Prognose** (`photovoltaik/forecast.js`): Prognosestreifen unter den
-  KPI-Kacheln mit erwartetem Tagesertrag (kWh) für Heute + 3 Tage. Quelle ist die
-  stündliche Strahlungsprognose von **Open-Meteo** (`wetter/client.js`, kostenlos,
-  kein API-Key, 30-min-In-Memory-Cache, Startup-Prime + 30-min-Refresh in
-  `app.js`). Die Prognose nutzt **dieselbe** Transposition + Skalierung wie der
-  Live-Idealwert (gemeinsame Helfer `solarGeometryAt`, `transposePlaneIrradiance`,
-  `idealPowerFromIrradiance` in `aggregation.js`) — nur mit prognostizierter statt
+  KPI-Kacheln mit erwartetem Tagesertrag (kWh) für Heute + 6 Tage — derselbe
+  Horizont wie die Wetterseite, damit dort jeder angezeigte Tag einen PV-Wert
+  trägt. Als **States** werden weiterhin nur Heute/Morgen/+2/+3 veröffentlicht.
+  Quelle ist die stündliche Strahlungsprognose von **Open-Meteo**
+  (`wetter/client.js`, kostenlos, kein API-Key, 30-min-In-Memory-Cache,
+  Startup-Prime + 30-min-Refresh in `app.js`). Die Prognose nutzt **dieselbe**
+  Transposition + Skalierung wie der Live-Idealwert (gemeinsame Helfer
+  `solarGeometryAt`, `transposePlaneIrradiance`, `idealPowerFromIrradiance` in
+  `aggregation.js`) — nur mit prognostizierter statt
   modellierter Clear-Sky-Strahlung, daher konsistent mit dem Live-Modell. Read-only;
   clientseitig über `/photovoltaik/forecast` aktualisiert (15-min-Takt). Die
   **Heute-Karte** zeigt zusätzlich den **bis jetzt** erwarteten und den **noch
@@ -359,6 +365,54 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   Topic-Feldern weiterverarbeitet werden
   (`messen-schalten/schaltgruppen.js` + `schaltgruppen-automation.js`,
   30-s-Tick + entprellte Reaktion auf `messschalt:`/`schaltgruppe:`-Änderungen).
+- **Wetterprognose** (`/wetter`, `wetter/forecast.js`, View `views/wetter.js`):
+  eigenständige Open-Meteo-Abfrage (`current` + `hourly` + `daily`, sieben Tage,
+  `timezone=auto`) mit eigenem 30-Minuten-Cache und eigenem Job
+  (`weatherForecast` in `app.js`). Sie ist **getrennt** von der Strahlungsabfrage
+  der PV-Prognose (`wetter/client.js`), damit deren Variablenumfang unverändert
+  bleibt; der **Tageshorizont** beider Abrufe ist jedoch gleich (sieben Tage),
+  damit die Seite für jeden Tag einen erwarteten PV-Ertrag zeigen kann.
+  Die Seite steht als **letzter Punkt** des Hauptmenüs
+  (`NAV_MAIN_TRAILING` in `views/layout.js`, also hinter den optionalen Modulen)
+  und zeigt die ersten drei Tage ausführlich samt Stundenverlauf, die restlichen
+  als Kurzübersicht. WMO-Wettercodes werden in `wetter/codes.js` in deutschen
+  Klartext und Piktogramme übersetzt (dort auch Himmelsrichtung, Beaufort und
+  UV-Stufe); ein fehlender Code ergibt „Unbekannt" und nicht „Klar".
+  Die Seite zeigt die Messgrößen je Tag in **thematischen Blöcken** statt in
+  einer langen Kachelreihe. Dieselbe Auszeichnung trägt beide Darstellungen:
+  ab 769 px wird jeder Block eine **Spalte** mit schmucklosen Wertezeilen
+  (`wetter-metric-figure` hält Wert und Einordnung rechtsbündig zusammen), der
+  Stundenverlauf läuft als `wetter-group--wide` über alle Spalten; darunter
+  bleibt das Kachelraster. Die Seite trägt den **erwarteten PV-Tagesertrag** aus
+  `photovoltaik/forecast.js` (Zuordnung über `dateKey`) im Titel jedes
+  Detailtages und stellt zwischen aktueller Lage und erstem Tag ein
+  **Verlaufsdiagramm** über alle Tage (`wetter/chart.js`, Inline-SVG):
+  Temperatur rot auf der linken Achse, Sonnenintensität ockergelb auf der
+  rechten (zur Nulllinie hin mit 50 % Deckkraft gefüllt, Farbton aus
+  `--wetter-sun-fill` für Diagramm und Legende zugleich), Niederschlag als blaue
+  Balken dahinter mit eigenem Maßstab. Lücken in einer Reihe trennen Linie und
+  Fläche, statt überbrückt zu werden. Das Diagramm hat **zwei Bauformen**
+  (`variant: 'wide' | 'compact'`), beide liegen im Markup, sichtbar ist je
+  Breite eine: die schmale trägt **keinen Text im SVG** — Tagesnamen und
+  Wertebereiche stehen als HTML daneben, damit die Beschriftung beim Dehnen
+  nicht gestaucht wird. Am Telefon wird zudem der Stundenverlauf per
+  `:nth-child(3n + 1)` auf 3-Stunden-Schritte ausgedünnt; dadurch muss auf der
+  ganzen Seite nichts seitlich gescrollt werden.
+  Sonnenintensität meint hier die **Globalstrahlung** aus der Prognose
+  (`shortwave_radiation`, W/m²) — nicht `sun.intensity.*`, das die reale
+  PV-Leistung gegen den Klarhimmel-Idealwert misst und nur den Istzustand kennt.
+  `wetter/values.js` bildet daraus **159 System-States** mit dem Präfix
+  `wetter.` in den Untergruppen *Aktuell*, *Standort*, *Tag 1 – Heute*,
+  *Tag 2 – Morgen*, *Tag 3 – Übermorgen* und *Weitere Tage*; die Gruppennamen
+  sind so gewählt, dass die alphanumerische Sortierung des States-Baums die
+  zeitliche Reihenfolge ergibt. Die States werden in
+  `states/system-values.js` **ausschließlich aus dem Cache** gefüllt (kein
+  Netzabruf im State-Pfad) und existieren auch ohne hinterlegte Koordinaten.
+  `POST /wetter/aktualisieren` folgt Post/Redirect/Get (303 auf
+  `/wetter?ok=1`/`?fehler=1`), und dieselbe Adresse beantwortet auch GET mit
+  einer Umleitung auf `/wetter`: die WebView der App merkt sich ihre zuletzt
+  besuchte Adresse und ruft sie beim Start erneut per GET auf — ohne beides
+  landete sie auf einer Adresse, die nur POST kennt.
 - **Systemprognose** (`/prognose`, `prognosis/forecast.js`): simuliert heute +
   drei Folgetage stündlich aus PV-Wetterprognose, Verbrauch und Batterie. Die
   nutzbare Batterie endet am Mindest-SoC; die unter den Batterieparametern
@@ -939,6 +993,26 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   Entfernen einer Linie die übrigen nicht umfärbt. Die Legende trägt Name **und** aktuellen Wert, damit kein Wert nur
   über das Fadenkreuz erreichbar ist. Achsenzahlen werden ab 10.000 einheitlich
   auf k/M gekürzt, Messlücken (> 2,5 × Rasterweite) brechen die Linie.
+- **Wetter-Kachel** (`dashboard/weather-widget.js`): Widget-Typ `weather`, zeigt
+  wahlweise die **aktuelle Lage** oder **einen Prognosetag** (`day: 'current'`
+  bzw. `'0'`…`'6'`) mit frei angehakten Messgrößen (`fields`, Katalog
+  `WEATHER_FIELDS`); beides liegt im `config`-JSON des Widgets. Das Modul
+  **beschafft keine Daten**: es bekommt die normalisierte Prognose aus
+  `wetter/forecast.js` (nur Cache, nie ein Netzabruf beim Seitenaufbau) und
+  formt daraus fertig formatierte Zeilen — Seite „Wetterprognose" und Dashboard
+  teilen sich damit Quelle, Cache und Fachlogik. Der erwartete **PV-Ertrag** ist
+  eine der wählbaren Größen; nur wenn sie angehakt ist, lädt die Route zusätzlich
+  die PV-Prognose. Größen, die es in der jeweiligen Anzeigeart nicht gibt
+  (Sonnenaufgang kennt nur ein Tag, Sichtweite nur der Istzustand), blendet der
+  Dialog aus, statt sie leer anzuzeigen. Fehlt die Prognose, behält die Kachel
+  ihre Form und trägt den Grund als Hinweis — so kann das periodische Nachladen
+  (`GET /dashboard/data`, Block `weather`) sie später ohne Seitenneuaufbau
+  füllen. **Anordnung:** Die Kachel belegt die volle Breite ihrer Gruppe und ist
+  im Stylesheet ein `container-type: inline-size`-Container; alle Umbrüche darin
+  hängen an der **Kachelbreite** (`@container weather …`), nicht an der
+  Fensterbreite. Dieselbe Kachel steht deshalb in einer Viertel-Gruppe
+  einspaltig und in einer vollen Gruppe mehrspaltig — ohne zweite Bauform im
+  Markup.
 - **Systemweite Datenbank** (`src/database/`, Tabelle `system_database`):
   zentrale Zeitreihen-Datenbank (InfluxDB 1.x) für Diagramme und Auswertungen.
   homeESS selbst bleibt bei SQLite; hier geht es ausschließlich um Zeitreihen.
@@ -1136,6 +1210,8 @@ src/
     groups.js             Gruppen-CRUD
     widgets.js            Widget-CRUD (Typen value/info, config-JSON)
     system-info.js        Info-Kachel: Feld-Katalog + Live-System-Werte
+    weather-widget.js     Wetter-Kachel: Feld-Katalog, Tageswahl, Wertermittlung
+                          aus der bestehenden Wetterprognose
   remote-access/
     relay-config.js       Auflösung/Validierung der Relay-Basis-URL (SSRF),
                           Origin-WebSocket-URL + Instanzname

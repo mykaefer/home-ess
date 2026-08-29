@@ -60,6 +60,7 @@ const PAGES = [
   { key: 'conditions', label: 'Bedingungen', prefix: '/conditions' },
   { key: 'adapter', label: 'Adapter', prefix: '/adapter' },
   { key: 'output', label: 'Output', prefix: '/output' },
+  { key: 'wetter', label: 'Wetterprognose', prefix: '/wetter' },
   { key: 'pool', label: 'Poolsteuerung', prefix: '/pool' },
   { key: 'grid-control', label: 'Grid-Control', prefix: '/grid-control' },
   { key: 'wallbox', label: 'Wallbox', prefix: '/wallbox' },
