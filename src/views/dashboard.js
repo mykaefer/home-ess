@@ -11,6 +11,7 @@ const { SERIES_COLORS, CHART_WIDTH } = require('../dashboard/chart-svg');
 const {
   DEFAULT_AREA_OPACITY, MIN_AREA_OPACITY, MAX_AREA_OPACITY,
 } = require('../dashboard/chart-palette');
+const { DEFAULT_WEATHER_FIELDS } = require('../dashboard/weather-widget');
 
 // Dashboard mit frei konfigurierbaren Widgets, Gruppen und Tabs. Widgets zeigen
 // einen zentralen State, schalten ein Gerät /
@@ -26,6 +27,8 @@ function renderDashboard({
   switchTargets = [],
   infoFields = [],
   systemInfo = {},
+  weatherFields = [],
+  weatherDayOptions = [],
   maxTabTitleLength = 40,
   formMessage = '',
   formError = '',
@@ -45,6 +48,15 @@ function renderDashboard({
   maxChartSeries = 4,
 } = {}) {
   const ctx = { infoFields, systemInfo, chartRanges };
+  // Der Wetter-Feldkatalog wandert zusätzlich in den Browser: der Dialog blendet
+  // beim Umschalten zwischen „aktuell" und einem Prognosetag die Felder aus, die
+  // es in der anderen Anzeigeart nicht gibt.
+  const clientWeatherFields = weatherFields.map((field) => ({
+    key: field.key,
+    label: field.label,
+    dayLabel: field.dayLabel || field.label,
+    scopes: field.scopes,
+  }));
   const tabTitleById = new Map(tabs.map((tab) => [tab.id, tab.title]));
   const initialTabId = tabs.some((tab) => tab.id === Number(selectTabId))
     ? Number(selectTabId)
@@ -79,7 +91,7 @@ ${tabs.map((tab) => renderTabButton(tab, tab.id === initialTabId)).join('\n')}
 ${tabs.map((tab) => renderTabPanel(tab, ctx, tab.id === initialTabId)).join('\n')}
         </div>
 
-        ${renderWidgetDialog({ switchTargets, infoFields, tabs, groupsForSelect, tabTitleById, dialogError, chartRanges, chartAggregates, chartFills, maxChartSeries })}
+        ${renderWidgetDialog({ switchTargets, infoFields, weatherFields, weatherDayOptions, tabs, groupsForSelect, tabTitleById, dialogError, chartRanges, chartAggregates, chartFills, maxChartSeries })}
         ${renderGroupDialog({ groupWidths, tabs })}
         ${renderTabDialog({ maxTabTitleLength, tabDialogError })}
         ${renderDeleteTabDialog()}
@@ -106,6 +118,7 @@ ${tabs.map((tab) => renderTabPanel(tab, ctx, tab.id === initialTabId)).join('\n'
       // Diagramme führen ihre vollständige Konfiguration mit, damit der
       // Bearbeiten-Dialog sie ohne weiteren Abruf füllen kann.
       chart: widget.chart || null,
+      weather: widget.weather || null,
     }))
   );
   const clientGroups = groupsForSelect.map((group) => ({
@@ -127,6 +140,10 @@ ${tabs.map((tab) => renderTabPanel(tab, ctx, tab.id === initialTabId)).join('\n'
     var dashboardGroups = ${JSON.stringify(clientGroups)};
     var dashboardTabs = ${JSON.stringify(clientTabs)};
     var widgetTypeDefs = ${JSON.stringify(clientTypeDefs)};
+    var weatherFieldDefs = ${JSON.stringify(clientWeatherFields)};
+    // Grundauswahl der Wetter-Kachel — dieselbe Liste, die der Server bei leerer
+    // Auswahl verwendet (src/dashboard/weather-widget.js).
+    var WEATHER_DEFAULT_FIELDS = ${JSON.stringify(DEFAULT_WEATHER_FIELDS)};
     var initialDialogMode = ${JSON.stringify(dialogMode)};
     var initialEditingWidgetId = ${editingWidgetId == null ? 'null' : Number(editingWidgetId)};
     var initialDialogValues = ${JSON.stringify(dialogValues || {})};
@@ -313,6 +330,7 @@ ${tabs.map((tab) => renderTabPanel(tab, ctx, tab.id === initialTabId)).join('\n'
       }
       document.getElementById('widgetSizeField').hidden = !def.supportsSize;
       if (def.type === 'chart') loadChartMeasurements();
+      if (def.type === 'weather') syncWeatherFieldChoices();
     }
 
     // --- Diagramm-Kacheln ----------------------------------------------------
@@ -546,6 +564,53 @@ ${tabs.map((tab) => renderTabPanel(tab, ctx, tab.id === initialTabId)).join('\n'
       for (var i = 0; i < boxes.length; i++) {
         boxes[i].checked = selected ? selected.indexOf(boxes[i].value) !== -1 : true;
       }
+
+      // Wetter: Anzeigeart und Häkchen. Ohne gespeicherte Auswahl (Neuanlage)
+      // greift die Grundauswahl des Servers — hier bleibt dann alles leer und
+      // die Kachel entscheidet selbst.
+      var weather = values.weather || {};
+      var dayField = document.getElementById('widgetWeatherDay');
+      if (dayField) dayField.value = weather.day || 'current';
+      var weatherSelected = weather.fields || null;
+      var weatherBoxes = document.querySelectorAll('#widgetDialog input[name="weatherFields"]');
+      for (var w = 0; w < weatherBoxes.length; w++) {
+        weatherBoxes[w].checked = weatherSelected
+          ? weatherSelected.indexOf(weatherBoxes[w].value) !== -1
+          : WEATHER_DEFAULT_FIELDS.indexOf(weatherBoxes[w].value) !== -1;
+      }
+      // Die Auswahl kommt hier vollständig aus der Konfiguration — der nächste
+      // Abgleich darf sie nicht durch die Grundauswahl ergänzen.
+      lastWeatherScope = null;
+      syncWeatherFieldChoices();
+    }
+
+    // Nur die Größen anbieten, die es in der gewählten Anzeigeart gibt, und die
+    // Beschriftung daran anpassen. Ausgeblendete Häkchen werden abgewählt, damit
+    // nichts Unsichtbares mitgespeichert wird.
+    //
+    // Beim Wechsel der Anzeigeart erscheinen Größen, die es vorher gar nicht gab
+    // (etwa Sonnenaufgang, den nur ein Tag kennt). Sie starten mit dem Häkchen
+    // der Grundauswahl, statt still abgewählt dazustehen.
+    var lastWeatherScope = null;
+    function syncWeatherFieldChoices() {
+      var dayField = document.getElementById('widgetWeatherDay');
+      if (!dayField) return;
+      var scope = dayField.value === 'current' ? 'current' : 'day';
+      var scopeChanged = lastWeatherScope !== null && lastWeatherScope !== scope;
+      for (var i = 0; i < weatherFieldDefs.length; i++) {
+        var def = weatherFieldDefs[i];
+        var row = document.querySelector('#widgetWeatherFieldList [data-weather-check="' + def.key + '"]');
+        if (!row) continue;
+        var usable = def.scopes.indexOf(scope) !== -1;
+        var appeared = scopeChanged && usable && row.hidden;
+        row.hidden = !usable;
+        var box = row.querySelector('input');
+        if (box && !usable) box.checked = false;
+        if (box && appeared) box.checked = WEATHER_DEFAULT_FIELDS.indexOf(def.key) !== -1;
+        var text = row.querySelector('[data-weather-check-label]');
+        if (text) text.textContent = scope === 'day' ? def.dayLabel : def.label;
+      }
+      lastWeatherScope = scope;
     }
 
     function closeWidgetDialog() {
@@ -1045,10 +1110,45 @@ ${tabs.map((tab) => renderTabPanel(tab, ctx, tab.id === initialTabId)).join('\n'
             setSwitchVisual(entry.id, entry.on);
           });
           if (data.system) applySystemInfo(data.system);
+          (data.weather || []).forEach(function (entry) { applyWeather(entry.id, entry.view); });
         })
         .catch(function () {
           // Anzeige bleibt auf dem letzten gueltigen Stand.
         });
+    }
+
+    // Eine Wetter-Kachel nachtragen. Aufgebaut wird nichts — die Zeilen stehen
+    // seit dem Seitenaufbau, hier wechseln nur Texte, Hinweise und die
+    // UV-Einstufung. Kommt ein Feld nicht vor (Auswahl in einer anderen Sitzung
+    // geändert), bleibt seine Zeile unangetastet bis zum nächsten Seitenaufbau.
+    function applyWeather(id, view) {
+      var tile = document.getElementById('weather-tile-' + id);
+      if (!tile || !view) return;
+      var head = view.head || {};
+      ['icon', 'title', 'subtitle', 'label', 'value'].forEach(function (key) {
+        var node = tile.querySelector('[data-weather="' + key + '"]');
+        if (!node) return;
+        var text = head[key] == null ? '' : String(head[key]);
+        node.textContent = text;
+        if (key === 'subtitle') node.hidden = !text;
+      });
+      var notice = tile.querySelector('[data-weather="notice"]');
+      if (notice) {
+        notice.textContent = view.notice || '';
+        notice.hidden = !view.notice;
+      }
+      (view.fields || []).forEach(function (field) {
+        var row = tile.querySelector('[data-weather-field="' + field.key + '"]');
+        if (!row) return;
+        var value = row.querySelector('[data-weather-display]');
+        if (value) value.textContent = field.display == null ? '—' : field.display;
+        var hint = row.querySelector('[data-weather-hint]');
+        if (hint) {
+          hint.textContent = field.hint || '';
+          hint.hidden = !field.hint;
+        }
+        row.className = 'weather-value' + (field.tone ? ' weather-value--' + field.tone : '');
+      });
     }
 
     // Alle Info-Kacheln mit frischen System-Werten versorgen (Text + Balken).
@@ -1291,6 +1391,7 @@ function sizeClass(widget) {
 
 function renderWidgetCard(widget, ctx = {}) {
   if (widget.type === 'info') return renderInfoCard(widget, ctx);
+  if (widget.type === 'weather') return renderWeatherCard(widget);
   if (widget.type === 'switch') return renderSwitchCard(widget);
   if (widget.type === 'chart') return renderChartCard(widget, ctx);
   const label = widget.label || widget.stateTopic || widget.sourceId;
@@ -1388,6 +1489,51 @@ ${widgetEditBar(widget, 'System')}
             </div>`;
 }
 
+// Wetter-Kachel: Kopfzeile (Symbol, Zeitpunkt, Wetterlage, Leitwert) und darunter
+// die per Häkchen gewählten Messgrößen. Die Kachel belegt die volle Breite ihrer
+// Gruppe und ordnet ihre Werte **nach der eigenen Breite** an — nicht nach der
+// Fensterbreite. Das leisten im Stylesheet `container-type: inline-size` und ein
+// `auto-fit`-Raster: dieselbe Kachel steht in einer Viertel-Gruppe einspaltig
+// und in einer vollbreiten Gruppe vierspaltig, ohne zweite Bauform im Markup.
+//
+// Alle Werte tragen `data-weather-*`-Marken, damit das periodische Nachladen
+// (/dashboard/data → applyWeather) sie ohne Neuaufbau der Kachel aktualisiert.
+function renderWeatherCard(widget) {
+  const view = widget.weatherView || {};
+  const head = view.head || { icon: '🌡️', title: 'Wetter', subtitle: '', label: '—', value: '—' };
+  const fields = Array.isArray(view.fields) ? view.fields : [];
+  const label = widget.label || 'Wetter';
+  const values = fields.map((field) => `                  <div class="weather-value${field.tone ? ` weather-value--${escapeHtml(field.tone)}` : ''}" data-weather-field="${escapeHtml(field.key)}">
+                    <span class="weather-value-icon" aria-hidden="true">${field.icon}</span>
+                    <span class="weather-value-body">
+                      <span class="weather-value-label">${escapeHtml(field.label)}</span>
+                      <span class="weather-value-figure">
+                        <span class="weather-value-number" data-weather-display>${escapeHtml(field.display)}</span>
+                        <span class="weather-value-hint" data-weather-hint${field.hint ? '' : ' hidden'}>${escapeHtml(field.hint)}</span>
+                      </span>
+                    </span>
+                  </div>`).join('\n');
+
+  return `            <div class="widget-card widget-card--weather" data-id="${widget.id}" data-type="weather">
+              <div class="widget-body weather-tile" id="weather-tile-${widget.id}">
+                <div class="weather-head">
+                  <span class="weather-head-icon" data-weather="icon" aria-hidden="true">${head.icon}</span>
+                  <span class="weather-head-text">
+                    <span class="weather-head-title" data-weather="title">${escapeHtml(head.title)}</span>
+                    <span class="weather-head-sub" data-weather="subtitle"${head.subtitle ? '' : ' hidden'}>${escapeHtml(head.subtitle)}</span>
+                    <span class="weather-head-label" data-weather="label">${escapeHtml(head.label)}</span>
+                  </span>
+                  <span class="weather-head-value" data-weather="value">${escapeHtml(head.value)}</span>
+                </div>
+                <p class="weather-notice" data-weather="notice"${view.notice ? '' : ' hidden'}>${escapeHtml(view.notice || '')}</p>
+                <div class="weather-values">
+${values}
+                </div>
+              </div>
+${widgetEditBar(widget, label)}
+            </div>`;
+}
+
 // --- Dialoge -----------------------------------------------------------------
 // Kompakte Farbwahl: verstecktes (validiertes) Feld + nativer Farbwähler +
 // Zurücksetzen auf die Standardfarbe.
@@ -1403,7 +1549,7 @@ function renderColorChoice({ fieldId, name, label, defaultPicker }) {
               </div>`;
 }
 
-function renderWidgetDialog({ switchTargets, infoFields = [], tabs = [], groupsForSelect = [], tabTitleById = new Map(), dialogError = '', chartRanges = [], chartAggregates = [], chartFills = [], maxChartSeries = 4 }) {
+function renderWidgetDialog({ switchTargets, infoFields = [], weatherFields = [], weatherDayOptions = [], tabs = [], groupsForSelect = [], tabTitleById = new Map(), dialogError = '', chartRanges = [], chartAggregates = [], chartFills = [], maxChartSeries = 4 }) {
   const typeTabs = WIDGET_TYPE_DEFS
     .map((def, index) => `              <button type="button" class="dialog-tab${index === 0 ? ' is-active' : ''}" data-tab="${def.type}" onclick="setWidgetType('${def.type}')">${escapeHtml(def.label)}</button>`)
     .join('\n');
@@ -1415,6 +1561,20 @@ function renderWidgetDialog({ switchTargets, infoFields = [], tabs = [], groupsF
                 </label>`
     )
     .join('\n');
+  // Häkchenliste der Wetter-Größen. Jede Zeile trägt ihre Anzeigearten mit; das
+  // Dialog-Skript blendet beim Umschalten der Anzeige die unpassenden aus und
+  // setzt die Beschriftung um („Wind" ↔ „Wind max.").
+  const weatherChecklist = weatherFields
+    .map(
+      (field) => `                <label class="info-check" data-weather-check="${escapeHtml(field.key)}" data-scopes="${escapeHtml(field.scopes.join(' '))}">
+                  <input type="checkbox" name="weatherFields" value="${escapeHtml(field.key)}">
+                  <span data-weather-check-label>${escapeHtml(field.label)}</span>
+                </label>`
+    )
+    .join('\n');
+  const weatherDayOptionMarkup = weatherDayOptions
+    .map((option) => `<option value="${escapeHtml(option.key)}">${escapeHtml(option.label)}</option>`)
+    .join('');
   const tabOptions = tabs
     .map((tab) => `<option value="${tab.id}">${escapeHtml(tab.title)}</option>`)
     .join('');
@@ -1530,6 +1690,22 @@ ${typeTabs}
                 <span>Einheit <span class="pool-optional">(optional)</span></span>
                 <input type="text" id="widgetChartUnit" name="chartUnit" maxlength="12" placeholder="z.B. W">
               </label>
+            </div>
+            <div class="tab-panel" data-panel="weather" hidden>
+              <label class="field-block" for="widgetWeatherDay">
+                <span>Anzeige</span>
+                <select id="widgetWeatherDay" name="weatherDay" onchange="syncWeatherFieldChoices()">
+                  ${weatherDayOptionMarkup}
+                </select>
+                <small class="muted">„Aktuelles Wetter" zeigt die Lage von jetzt, ein Tag die Prognose. Die Auswahl ist relativ — „Morgen" bleibt morgen, auch übermorgen.</small>
+              </label>
+              <div class="field-block">
+                <span>Angezeigte Werte</span>
+                <div class="info-check-list" id="widgetWeatherFieldList">
+${weatherChecklist}
+                </div>
+                <small class="muted">Ohne Häkchen zeigt die Kachel eine sinnvolle Grundauswahl. Die Kopfzeile mit Wetterlage und Leitwert steht immer.</small>
+              </div>
             </div>
             <div class="tab-panel" data-panel="info" hidden>
               <div class="field-block">

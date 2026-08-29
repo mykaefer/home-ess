@@ -108,11 +108,13 @@ const OPERATE_POST_PATTERNS = [
 ];
 
 // POSTs ohne Wirkung auf die Anlage, die auch Lesern erlaubt sind: der
-// MQTT-Verbindungstest (reine Diagnose) und das Farbthema, das ausschliesslich
-// die eigene Darstellung betrifft.
+// MQTT-Verbindungstest (reine Diagnose), das Farbthema, das ausschliesslich die
+// eigene Darstellung betrifft, und das Nachladen der Wetterprognose (holt nur
+// Fremddaten ab).
 const READ_POST_PATTERNS = [
   /^\/settings\/mqtt\/test\/?$/,
   /^\/settings\/theme\/?$/,
+  /^\/wetter\/aktualisieren\/?$/,
 ];
 
 function isOperatePost(pathname) {

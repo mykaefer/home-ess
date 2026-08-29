@@ -54,6 +54,18 @@ const WIDGET_TYPE_DEFS = [
     supportsColor: false,
     mobileMinWidth: 'full',
   },
+  {
+    // Aktuelle Lage oder ein Prognosetag aus der Wetterprognose
+    // (src/dashboard/weather-widget.js). Die Kachel nimmt die volle Breite
+    // ihrer Gruppe ein und ordnet die gewählten Werte selbst nach der
+    // verfügbaren Breite an — daher keine Größenvarianten.
+    type: 'weather',
+    label: 'Wetter',
+    needsSource: false,
+    supportsSize: false,
+    supportsColor: false,
+    mobileMinWidth: 'full',
+  },
 ];
 
 const WIDGET_TYPES = WIDGET_TYPE_DEFS.map((def) => def.type);

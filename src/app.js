@@ -48,6 +48,8 @@ const { listWallboxes } = require('./wallbox/boxes');
 const { buildActorSnapshot } = require('./messen-schalten/aggregation');
 const { recordFunctionSamples, currentFunctionPowerW } = require('./messen-schalten/functions');
 const prognosisRoutes = require('./routes/prognosis');
+const wetterRoutes = require('./routes/wetter');
+const { refreshWeatherForecast } = require('./wetter/forecast');
 const { initModules, isEnabled } = require('./modules');
 const adapterHost = require('./adapters/host');
 const adapterSecrets = require('./adapters/secrets');
@@ -120,6 +122,7 @@ function createApp() {
   app.use(photovoltaikRoutes(db));
   app.use(batterieRoutes(db));
   app.use(prognosisRoutes(db));
+  app.use(wetterRoutes(db));
   app.use(settingsRoutes(db));
   app.use(outputRoutes(db));
   app.use(liveRoutes(db));
@@ -347,6 +350,11 @@ function createApp() {
   // füllen und alle 30 Minuten aktualisieren. Fehler still — die Seite bleibt nutzbar.
   jobs.runExclusive('weather', () => refreshWeather(db)).catch(() => {});
   jobs.schedule('weather', 30 * 60 * 1000, () => refreshWeather(db));
+
+  // Allgemeine Wetterprognose (Seite „Wetterprognose" und States der Gruppe
+  // „Wetter"). Eigener Abruf mit eigenen Variablen, gleicher Takt.
+  jobs.runExclusive('weatherForecast', () => refreshWeatherForecast(db)).catch(() => {});
+  jobs.schedule('weatherForecast', 30 * 60 * 1000, () => refreshWeatherForecast(db));
 
   // Selbstkalibrierung: an Klarhimmel-Momenten den tageszeit-abhängigen
   // Kalibrierfaktor je Anlage sanft nachziehen (Gates inkl. Wetter/SoC im Modul).

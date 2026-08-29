@@ -30,7 +30,7 @@ desktop and mobile layouts.
   converter and cell metadata and clear-sky reference power.
 - Solar-position calculation using local solar time, configurable reference
   thresholds and direct-sun detection.
-- Open-Meteo PV forecast for today and the following three days, including
+- Open-Meteo PV forecast for today and the following six days, including
   per-plant self-calibration in 15-minute windows.
 - Battery dashboard for state of charge, power, voltage, temperature,
   efficiencies, capacity and configurable minimum state of charge.
@@ -46,6 +46,27 @@ desktop and mobile layouts.
 - A central operating-level handler gates all registered consumers by priority.
 - Emergency and autonomy states, hysteresis and persistent state prevent unsafe
   switching after restarts or incomplete measurements.
+
+## Weather forecast
+
+- Dedicated page showing current conditions and the next three days in full
+  detail: temperatures, precipitation, wind, UV index, solar irradiance, cloud
+  cover, pressure, humidity and sun times — grouped by topic (one column per
+  topic on desktop, tiles on mobile), every value with a pictogram and an hourly
+  strip per detailed day.
+- Trend chart across the whole period: temperature and solar irradiance as
+  lines, precipitation as bars behind them.
+- The expected daily PV yield from the PV forecast appears in each detailed
+  day's title and in every row of the remaining days.
+- Dedicated phone layout: tighter spacing, a narrow chart variant and the hourly
+  strip in three-hour steps — nothing scrolls sideways.
+- Remaining days follow as a compact overview with the essentials per row.
+- **Dashboard weather widget**: shows either current conditions or a single
+  forecast day; the values it lists are ticked per tile. The tile lays itself
+  out according to the width of its group — single column in a quarter group,
+  multiple columns in a full one.
+- All values are exposed as states in the **Wetter** system group and can be
+  used in conditions, automations, output and dashboard widgets.
 
 ## Measuring and switching loads
 

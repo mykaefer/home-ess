@@ -615,3 +615,178 @@ test('HM-RPC frischt Kanäle im Hintergrund nacheinander auf – kein Burst, kei
   // Und niemals ein Funk-/Schreibbefehl.
   assert.equal(setValues.length, 0, 'Hintergrund-Refresh löst keinen setValue aus');
 });
+
+// Ein einzelnes stummes Homematic-Gerät darf nicht die ganze Schnittstelle
+// lahmlegen: Die CCU quittiert solche Steuerbefehle mit einem XML-RPC-Fault
+// (z. B. „Generic error (UNREACH)"). Galt das als Verbindungsabbruch, verwarf der
+// Adapter anschließend die Befehle ALLER Geräte mit „CCU nicht verbunden".
+test('HM-RPC behält die Verbindung, wenn ein Gerät den Steuerbefehl mit einem CCU-Fault quittiert', async (t) => {
+  const calls = [];
+  const ccu = http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => {
+      const request = xmlrpc.parseCall(Buffer.concat(chunks).toString('utf8'));
+      calls.push(request);
+      // Nur das stumme Gerät ABC:1 antwortet mit einem Fault.
+      if (request.method === 'setValue' && request.params[0] === 'ABC:1') {
+        res.writeHead(200, { 'Content-Type': 'text/xml' });
+        res.end('<?xml version="1.0"?><methodResponse><fault>'
+          + xmlrpc.encodeValue({ faultCode: -1, faultString: 'Generic error (UNREACH)' })
+          + '</fault></methodResponse>');
+        return;
+      }
+      let result = '';
+      if (request.method === 'listDevices') result = [
+        { ADDRESS: 'ABC', TYPE: 'SWITCH', NAME: 'Stumme Lampe' },
+        { ADDRESS: 'ABC:1', TYPE: 'SWITCH_TRANSMITTER', PARENT: 'ABC', NAME: 'Kanal 1', PARAMSETS: ['VALUES'] },
+        { ADDRESS: 'DEF', TYPE: 'SWITCH', NAME: 'Andere Lampe' },
+        { ADDRESS: 'DEF:1', TYPE: 'SWITCH_TRANSMITTER', PARENT: 'DEF', NAME: 'Kanal 1', PARAMSETS: ['VALUES'] },
+      ];
+      if (request.method === 'getParamsetDescription') result = { STATE: { TYPE: 'BOOL', OPERATIONS: 7 } };
+      if (request.method === 'getParamset') result = { STATE: false };
+      res.writeHead(200, { 'Content-Type': 'text/xml' });
+      res.end(xmlrpc.methodResponse(result));
+    });
+  });
+  const port = await listen(ccu);
+  t.after(() => new Promise((resolve) => ccu.close(resolve)));
+
+  const errors = [];
+  const connections = [];
+  const adapter = createAdapter({
+    name: 'test',
+    setStates() {}, setStorage() {}, publishState() {}, publishStates() {},
+    setConnected(connected, detail) { connections.push({ connected, detail }); },
+    log() {}, error(message) { errors.push(message); },
+  });
+  await adapter.start({ host: '127.0.0.1', port, callbackHost: '127.0.0.1', reconnectInterval: 3600 });
+  t.after(() => adapter.stop());
+
+  await adapter.write('ABC%3A1/STATE', true);
+  assert.ok(errors.some((message) => message.includes('ABC%3A1/STATE fehlgeschlagen')),
+    'der Gerätefehler wird gemeldet');
+  assert.ok(!connections.some((entry) => entry.connected === false),
+    'ein Gerätefehler meldet die CCU-Verbindung nicht als getrennt');
+
+  // Ein anderes Gerät bleibt sofort schaltbar – kein „verworfen: CCU nicht verbunden".
+  await adapter.write('DEF%3A1/STATE', true);
+  assert.equal(calls.filter((c) => c.method === 'setValue' && c.params[0] === 'DEF:1').length, 1);
+  assert.ok(!errors.some((message) => message.includes('verworfen: CCU nicht verbunden')));
+});
+
+// Transportfehler beim Schreiben (Abbruch/Zeitüberschreitung) sind zweideutig:
+// Sie können am Funkweg des Geräts liegen. Ein lokaler Schnittstellen-Ping
+// entscheidet, statt die Verbindung pauschal fallen zu lassen.
+test('HM-RPC trennt bei einem Schreib-Transportfehler nur, wenn auch die Schnittstelle stumm ist', async (t) => {
+  let breakWrite = true;
+  const ccu = http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => {
+      const request = xmlrpc.parseCall(Buffer.concat(chunks).toString('utf8'));
+      if (request.method === 'setValue' && breakWrite) { req.socket.destroy(); return; }
+      let result = '';
+      if (request.method === 'listDevices') result = [
+        { ADDRESS: 'ABC', TYPE: 'SWITCH', NAME: 'Lampe' },
+        { ADDRESS: 'ABC:1', TYPE: 'SWITCH_TRANSMITTER', PARENT: 'ABC', NAME: 'Kanal 1', PARAMSETS: ['VALUES'] },
+      ];
+      if (request.method === 'getParamsetDescription') result = { STATE: { TYPE: 'BOOL', OPERATIONS: 7 } };
+      if (request.method === 'getParamset') result = { STATE: false };
+      res.writeHead(200, { 'Content-Type': 'text/xml' });
+      res.end(xmlrpc.methodResponse(result));
+    });
+  });
+  const port = await listen(ccu);
+  let closed = false;
+  t.after(() => (closed ? null : new Promise((resolve) => ccu.close(resolve))));
+
+  const connections = [];
+  const adapter = createAdapter({
+    name: 'test',
+    setStates() {}, setStorage() {}, publishState() {}, publishStates() {},
+    setConnected(connected, detail) { connections.push({ connected, detail }); },
+    log() {}, error() {},
+  });
+  await adapter.start({ host: '127.0.0.1', port, callbackHost: '127.0.0.1', reconnectInterval: 3600 });
+  t.after(() => adapter.stop());
+
+  // Schnittstelle antwortet noch → Verbindung bleibt bestehen.
+  await adapter.write('ABC%3A1/STATE', true);
+  assert.ok(!connections.some((entry) => entry.connected === false),
+    'solange die Schnittstelle antwortet, bleibt die Verbindung bestehen');
+
+  // Jetzt ist die CCU wirklich weg → der Adapter meldet getrennt und geht in den Reconnect.
+  await new Promise((resolve) => ccu.close(resolve));
+  closed = true;
+  await adapter.write('ABC%3A1/STATE', true);
+  assert.ok(connections.some((entry) => entry.connected === false),
+    'eine tote Schnittstelle wird als getrennt gemeldet');
+});
+
+// Ein Steuerbefehl wird optimistisch gemerkt, bevor das Readback-Event ihn
+// bestätigt. Kam er beim Gerät nie an, muss ein späterer Klick denselben Wert
+// erneut senden dürfen – sonst bleibt das Gerät still unschaltbar.
+test('HM-RPC wiederholt einen unbestätigten Steuerbefehl nach der Karenzzeit', async (t) => {
+  const calls = [];
+  let callbackUrl = '';
+  const ccu = http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => {
+      const request = xmlrpc.parseCall(Buffer.concat(chunks).toString('utf8'));
+      calls.push(request);
+      let result = '';
+      if (request.method === 'listDevices') result = [
+        { ADDRESS: 'ABC', TYPE: 'SWITCH', NAME: 'Lampe' },
+        { ADDRESS: 'ABC:1', TYPE: 'SWITCH_TRANSMITTER', PARENT: 'ABC', NAME: 'Kanal 1', PARAMSETS: ['VALUES'] },
+      ];
+      if (request.method === 'getParamsetDescription') result = { STATE: { TYPE: 'BOOL', OPERATIONS: 7 } };
+      if (request.method === 'getParamset') result = { STATE: false };
+      if (request.method === 'init' && request.params[0]) callbackUrl = request.params[0];
+      res.writeHead(200, { 'Content-Type': 'text/xml' });
+      res.end(xmlrpc.methodResponse(result));
+    });
+  });
+  const port = await listen(ccu);
+  t.after(() => new Promise((resolve) => ccu.close(resolve)));
+
+  const adapter = createAdapter({
+    name: 'test',
+    setStates() {}, setStorage() {}, publishState() {}, publishStates() {},
+    setConnected() {}, log() {}, error() {},
+  });
+  await adapter.start({ host: '127.0.0.1', port, callbackHost: '127.0.0.1', reconnectInterval: 3600 });
+  t.after(() => adapter.stop());
+
+  const setValues = () => calls.filter((c) => c.method === 'setValue').length;
+
+  await adapter.write('ABC%3A1/STATE', true);
+  assert.equal(setValues(), 1);
+
+  // Direkt danach: kein zweiter Funkbefehl (Duty-Cycle-Schonung).
+  await adapter.write('ABC%3A1/STATE', true);
+  assert.equal(setValues(), 1, 'ein frischer Steuerbefehl wird nicht sofort wiederholt');
+
+  // Später, immer noch ohne Readback-Event: erneuter Versuch ist erlaubt.
+  const realNow = Date.now;
+  Date.now = () => realNow() + 60000;
+  try {
+    await adapter.write('ABC%3A1/STATE', true);
+  } finally {
+    Date.now = realNow;
+  }
+  assert.equal(setValues(), 2, 'ein unbestätigter Steuerbefehl darf später erneut gesendet werden');
+
+  // Nach dem bestätigenden Event bleibt der Wert dauerhaft dedupliziert.
+  const target = new URL(callbackUrl);
+  await xmlrpc.call({ host: target.hostname, port: Number(target.port) },
+    'event', ['homeESS-test', 'ABC:1', 'STATE', true]);
+  Date.now = () => realNow() + 120000;
+  try {
+    await adapter.write('ABC%3A1/STATE', true);
+  } finally {
+    Date.now = realNow;
+  }
+  assert.equal(setValues(), 2, 'ein bestätigter Wert löst keinen erneuten Steuerbefehl aus');
+});
