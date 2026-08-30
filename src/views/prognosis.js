@@ -3,6 +3,8 @@
 const { renderLayout } = require('./layout');
 const { escapeHtml, statusText } = require('./components');
 const { BEHAVIOR_MODELS } = require('../prognosis/config');
+// Ampeltext der Prognose — geteilt mit der Energie-Übersicht.
+const { prognosisStatusInfo } = require('../prognosis/status');
 const i18n = require('../i18n');
 const WEEKDAY_NAMES = ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'];
 
@@ -24,13 +26,6 @@ function formatForecastTime(decimalHour) {
   let totalMinutes = Math.round(number * 60);
   totalMinutes = Math.max(0, Math.min(24 * 60 - 1, totalMinutes));
   return `${String(Math.floor(totalMinutes / 60)).padStart(2, '0')}:${String(totalMinutes % 60).padStart(2, '0')}`;
-}
-
-function statusInfo(status) {
-  if (status === 2) return { label: 'Gut versorgt', detail: 'Die Batteriereserve reicht voraussichtlich bis zum nächsten sichtbaren Ladebeginn.', css: 'good' };
-  if (status === 1) return { label: 'Knapp kalkuliert', detail: 'Bis zum nächsten sichtbaren Ladebeginn wird die Batteriereserve voraussichtlich niedrig.', css: 'warn' };
-  if (status == null) return { label: 'Prognose noch unvollständig', detail: 'Für die Bilanz fehlt derzeit eine PV-Wetterprognose.', css: 'warn' };
-  return { label: 'Mindeststand in Sicht', detail: 'Vor dem nächsten sichtbaren Ladebeginn wird der Mindest-SoC voraussichtlich erreicht.', css: 'bad' };
 }
 
 function formatShortEnergy(value) {
@@ -279,7 +274,7 @@ function renderPrognosis({ prognosis, message = '', error = '' } = {}) {
     autarkDaysPreviousYearCount: 0, autarkDaysPreviousYear: '', autarkDaysPreviousYearTopic: '',
   };
   const today = simulation.today;
-  const status = statusInfo(simulation.status);
+  const status = prognosisStatusInfo(simulation.status);
   const chargeStart = simulation.nextChargeStart;
   const chargeStartHint = chargeStart
     ? `${chargeStart.label} · ca. ${formatForecastTime(chargeStart.hour)} Uhr`

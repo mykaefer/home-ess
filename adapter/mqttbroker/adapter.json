@@ -21,7 +21,7 @@
     { "key": "idleMinutes", "label": "Idle-Haltezeit (Minuten)", "type": "number", "default": 1440, "hint": "States, die so lange nicht mehr aktualisiert wurden, werden automatisch entfernt. 0 = nie entfernen." },
     { "key": "maxStates", "label": "Maximale Anzahl Geräte-States", "type": "number", "default": 500, "hint": "Obergrenze für selbst angelegte States. Weitere Topics werden verworfen." },
     { "key": "maxClients", "label": "Maximale Anzahl Clients", "type": "number", "default": 32 },
-    { "key": "jsonPayload", "label": "JSON-Nutzlast auswerten", "type": "checkbox", "default": true, "hint": "Erkennt ioBroker-artige Nutzlasten wie {\"val\":21.5} und übernimmt daraus den Wert." },
+    { "key": "jsonPayload", "label": "JSON-Nutzlast auswerten", "type": "checkbox", "default": true, "hint": "Erkennt JSON-Nutzlasten wie {\"val\":21.5} und übernimmt daraus den Wert." },
     { "key": "systemAccess", "label": "Systemweiten State-Zugriff gewähren", "type": "checkbox", "default": false, "hint": "Blendet den gesamten homeESS-States-Baum unter states/ ein (states/hdp/…, states/system/…). Der eigene Prefix mqttbroker:// bleibt ausgespart. Es gelten die bei den States hinterlegten Schreibrechte; neue States können dort nicht angelegt werden." },
     { "key": "maxSystemStates", "label": "Maximal gespiegelte System-States", "type": "number", "default": 1000, "hint": "Obergrenze für gleichzeitig abonnierte States des Systembaums." },
     { "key": "catalogRefreshSeconds", "label": "Katalogabgleich (Sekunden)", "type": "number", "default": 60, "hint": "Wie oft der Systembaum auf neue oder entfernte States geprüft wird." }

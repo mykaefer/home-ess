@@ -100,7 +100,9 @@ test('Migration: bestehende explizite Seitenlisten behalten Zugriff auf States u
   db = openDatabase();
   await new Promise((resolve) => setTimeout(resolve, 400));
   const migrated = await usersRepo.getUser(db, user.id);
-  assert.deepEqual(migrated.visiblePages, ['dashboard', 'states', 'conditions']);
+  // Reihenfolge folgt dem Seitenkatalog (PAGES) und damit dem Hauptmenü:
+  // Bedingungen steht vor States.
+  assert.deepEqual(migrated.visiblePages, ['dashboard', 'conditions', 'states']);
   db.close();
 });
 

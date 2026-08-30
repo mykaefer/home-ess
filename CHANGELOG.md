@@ -3,6 +3,184 @@
 Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [1.6.2] — 2026-08-30
+
+### Hinzugefügt
+
+- **Klimaanlagen lassen sich übersteuern.** Ist in einem Raum von *Heizung &
+  Klima* eine Klimaanlage zum Kühlen eingerichtet (eine „Kühlen ein"-Folge),
+  legt homeESS unter *System* die neue Gruppe **Klima** an — mit einem
+  Unterordner je Raum und darin zwei Werten:
+  - **Betriebsart** (beschreibbar): `0` = Aus, `1` = An, `2` = Automatik
+    (`system://homeess/klima.<Raum>.betriebsart`; auch „aus"/„an"/„auto" werden
+    angenommen, ein unbrauchbarer Wert bleibt folgenlos).
+  - **Aktiv** (nur lesend): ob die Anlage gerade läuft
+    (`system://homeess/klima.<Raum>.aktiv`).
+
+  In der **Raumübersicht** steht bei jedem Raum mit eingerichteter Klimaanlage
+  ein **Umschalter An / Aus / Automatik** — dieselben Schaltflächen wie bei den
+  Pumpenmodi der Poolsteuerung, mit der aktuellen Betriebsart markiert. Er
+  schaltet ohne Seitenneuaufbau (`POST /heizung/raum/<id>/klima/<0|1|2>`) und
+  zählt als **Bedienen**, steht also auch der Rolle *bedienen* offen. Räume ohne
+  Kühlgerät lassen die Spalte leer.
+
+  Je Raum lässt sich unter *Heizung & Klima → Raum → Klimaanlage* zusätzlich
+  eine **Uhrzeit** hinterlegen, zu der eine Handschaltung von selbst auf
+  Automatik zurückfällt (leer = keine). Maßgeblich ist die erste Fälligkeit
+  **nach** dem Umschalten: wer um 23:00 Uhr auf „An" stellt, dessen Rückkehr um
+  22:00 Uhr kommt am folgenden Tag. Gerechnet wird in lokaler Wandzeit über den
+  zentralen Timehandler, und der Zeitpunkt der Handschaltung liegt in der
+  Datenbank — ein Neustart holt eine verpasste Rückkehr nach, statt sie zu
+  verlieren.
+
+  „Aus" und „An" setzen die automatischen Aktionsschleifen des Kühlgerätes aus:
+  die Anlage reagiert dann weder auf einen offenen Fenster-/Türkontakt noch auf
+  die Raumtemperatur, sondern bleibt in ihrem geschalteten Zustand stehen.
+  Zurück auf **Automatik** springt sie beim Erreichen der eingestellten
+  **Soll-Temperatur** — und, sofern gesetzt, spätestens zur Rückkehr-Uhrzeit des
+  Raums. Für die Soll-Temperatur gilt: gemeint ist der Übergang dorthin; war der
+  Sollwert beim Umschalten bereits erreicht, hebt das die Handschaltung nicht
+  sofort wieder auf. Vorrang behält das **Betriebslevel**: deckt es die
+  Priorität des Kühlgerätes nicht ab, bleibt die Anlage auch bei „An" aus und
+  läuft wieder an, sobald das Level sie freigibt. Heizen, Wärmeanforderung an
+  die Zentralheizung und der Heizkörperlüfter bleiben von der Übersteuerung
+  unberührt. Die eingestellte Betriebsart überlebt einen Neustart; die
+  Raumübersicht zeigt eine aktive Handschaltung als Marke an.
+
+- **Beschreibbare States lassen sich direkt auf der States-Seite bedienen.**
+  Jede Zeile eines beschreibbaren States bekommt in der Übersicht ihr passendes
+  Bedienelement:
+  - **Ein/Aus** für Schaltzustände (Boolean-States ebenso wie 1/0-States — der
+    geschriebene Wert richtet sich nach der Darstellung des Ziel-States),
+  - eine **Auswahl** für Werte mit fester Bedeutung (etwa die Betriebsart einer
+    Klimaanlage: Aus/An/Automatik),
+  - ein **Feld mit „Setzen"** für Zahlen und Texte (Zahlenfelder übernehmen
+    Grenzen und Schrittweite der Quelle, die Eingabetaste setzt ebenfalls).
+
+  Welches Element erscheint, meldet die Quelle mit: Module liefern es zu ihren
+  Schreibzielen (Soll-Temperatur, Schornsteinfeger-Modus, Klima-Betriebsart),
+  Custom States leiten es aus ihrem Datentyp ab, und für Adapter-States — die
+  nur melden, *dass* sie beschreibbar sind — wird es aus dem zuletzt gesehenen
+  Wert abgeleitet. Geschrieben wird über `POST /states/value` und damit
+  denselben Weg wie aus einer Aktionsfolge (Systemwert-Schreibziele, Custom
+  States, Adapter oder Broker); angenommen werden ausschließlich States, die
+  ihre Quelle als beschreibbar meldet. Das Setzen zählt als **Bedienen** und
+  steht damit auch der Rolle *bedienen* offen — Leser bekommen die
+  Bedienelemente gar nicht erst ausgeliefert. Die Elemente ziehen mit den
+  Live-Werten nach; eine begonnene Eingabe bleibt dabei unangetastet.
+
+- **Wert-Widgets des Dashboards nehmen eine eigene Beschriftung an.** Im
+  Widget-Dialog steht unter dem State das optionale Feld *Bezeichnung*; bleibt
+  es leer, trägt die Kachel wie bisher den Namen des States. Ist es gefüllt,
+  zeigt die Kachel diesen Text und nennt im Tooltip zusätzlich den State, aus
+  dem der Wert stammt. Gespeichert wird die Beschriftung wie beim
+  Schalter-Widget als `label` in der Widget-Konfiguration — Bestands-Widgets
+  bleiben unverändert.
+
+- **Der systemweite Topic-Picker öffnet doppelt so breit**, sofern der Platz es
+  zulässt: statt fester 460 px nimmt er bis zu 920 px und weicht nur dem
+  Viewport (auf schmalen Geräten bleibt es wie bisher bei der verfügbaren
+  Breite). Lange State-Namen und ihre Werte stehen dadurch nebeneinander,
+  ohne abgeschnitten zu werden.
+
+- **Neue Seite „Energie"** (`/energie`) an **zweiter Stelle** des Hauptmenüs,
+  direkt hinter dem Dashboard. Sie fasst die Eckdaten der Energieseiten auf
+  einer Seite zusammen: **Photovoltaik** (aktuelle Leistung, Ertrag heute,
+  Woche, Jahr mit Vorjahresvergleich), **Stromverbrauch** (Eigenverbrauch und
+  Netzbezug — aktuell, heute, Woche, Jahr) und **Batterie** (Ladezustand mit
+  Mindest-SoC, Leistung, nutzbare Energie und Kapazität, Spannung und
+  Temperatur, dazu der SoC-Balken). Ist das Modul **Grid-Control** aktiv, kommt
+  dessen Schaltzustand dazu; den Abschluss bildet die **Prognose** mit ihrer
+  Ampelbewertung als Chip (*Gut versorgt · Knapp kalkuliert · Mindeststand in
+  Sicht*), PV- und Verbrauchsrest des Tages, Netzbedarf sowie SoC am Tagesende
+  mit Autarkie-Angabe. Jeder Abschnitt trägt Titel und Schaltfläche als Sprung
+  auf die zugehörige Seite. Die Werte aktualisieren sich wie auf den Fachseiten
+  über `/energie/data` (MQTT-Ereignis und Minutentakt). Die Übersicht liest
+  ausschließlich — sie schreibt keine Summen fort und stößt keinen Netzabruf an
+  (Prognose wie auf der Prognoseseite nur aus dem Cache).
+
+- **Schleifen und Pausen in den Bedingungen.** Der **Dann-** und der
+  **Sonst-Zweig** sind jetzt vollwertige **Aktionsfolgen** — dieselben Bausteine
+  wie in den Aktionsfolgen von *Heizung & Klima* und *Heimkino*:
+  - **Wert zuweisen** wie bisher (fester Wert oder Topic, Rechenfunktion,
+    Rundung), **Pause** (Sekunden) und **Schleife** mit einstellbarer Zahl an
+    **Durchläufen**. Schleifen sind beliebig verschachtelbar und nehmen jede
+    Aktionsart auf.
+  - **Zyklische Prüfung je Schleife** (optional): im eingestellten Abstand wird
+    eine Bedingung erneut bewertet; trifft sie nicht zu, wird **ausschließlich
+    diese Schleife** noch einmal abgespult — die Plausibilitätsprüfung, mit der
+    sich ein tatsächlich erreichter Zustand absichern lässt (z. B. „Rollladen
+    meldet 100 %"). Geprüft wird nur der Zweig, der zuletzt gelaufen ist.
+  - Die Folge läuft **von oben nach unten**, die **Reihenfolge zählt** deshalb:
+    Aktionen tragen eine Dragfläche und lassen sich frei verschieben, auch in
+    eine Schleife hinein und wieder heraus. Trigger und Wenns bleiben wie bisher
+    unsortiert.
+  - Solange eine Folge läuft (Pausen, Schleifen), löst dieselbe Bedingung nicht
+    erneut aus; der laufende Durchgang wird zu Ende geführt.
+- **Schleife als eigenständige Automation.** Neben „Bedingung hinzufügen" steht
+  jetzt **„Schleife hinzufügen"** (auch je Verzeichnis, Schaltfläche `+S`): Eine
+  so angelegte Automation hat **weder Trigger noch Wenn noch Sonst** — nur die
+  Schleife. Ihre **zyklische Prüfung ist dort Pflicht** und zugleich die
+  Ausführungsbedingung: solange die Prüfung nicht zutrifft, läuft die Schleife im
+  eingestellten Abstand erneut. Anders als bei einer getriggerten Bedingung
+  beginnt diese Prüfung schon **ab dem Start von homeESS** — sie wartet auf keinen
+  vorherigen Lauf. In der Liste trägt eine solche Automation das Kennzeichen
+  **„Zyklisch"**.
+  - Die tragende Prüfung lässt sich nicht abschalten und die Schleife nicht
+    löschen, solange sie die einzige Auslösequelle ist; kommt ein Trigger dazu,
+    wird sie wieder zur gewöhnlichen Bedingung. Umgekehrt darf der letzte Trigger
+    entfernt werden, sobald eine sich selbst auslösende Schleife da ist.
+
+### Geändert
+
+- **Der Topic-Picker klappt in die Richtung mit mehr Platz auf.** Liegt das
+  Topic-Feld in der unteren Hälfte des Viewports — ist es also näher am unteren
+  als am oberen Rand —, öffnet die Auswahl nach oben, sonst nach unten. Bisher
+  klappte sie erst dann nach oben, wenn unterhalb weniger als 240 px übrig
+  waren. Die nutzbare Höhe richtet sich damit ebenfalls nach der größeren
+  Seite.
+
+- **Der Sonst-Zweig darf mehrere Aktionen enthalten.** Bisher war er auf genau
+  ein Element begrenzt; als Aktionsfolge nimmt er nun — wie das Dann — beliebig
+  viele Aktionen auf. Die Bindung an eine aktive Wenn-Prüfung bleibt.
+- **Aktionsarten haben nur noch eine Definition:** Validierung, Grenzen und
+  Beschreibungstexte von *Wert · Pause · Schleife* liegen in
+  `src/conditions/repository.js`; die Aktionsfolgen der Module beziehen sie von
+  dort, statt sie ein zweites Mal zu führen.
+- **Menü aufgeräumt:** *Stromverbrauch*, *Photovoltaik*, *Batterie* und
+  *Prognose* sind keine eigenen Hauptpunkte mehr, sondern **Unterpunkte von
+  „Energie"**. Bei aktivem Modul steht **Grid-Control** ebenfalls dort (vor der
+  Prognose) statt im allgemeinen Modulblock. Das Hauptmenü verliert damit vier
+  bis fünf Einträge.
+- **Keine Fremdsoftware mehr namentlich genannt.** Wo bisher ein bestimmtes
+  Broker-Produkt beim Namen genannt wurde, ist jetzt durchgängig allgemein vom
+  **MQTT-Broker** die Rede — in der Oberfläche (u. a. Output-Dialog und
+  Sprachkataloge), in den Adapterbeschreibungen (Zigbee, MQTT-Broker), in den
+  Quelltextkommentaren sowie in der Dokumentation ([MQTT.md](MQTT.md), README,
+  PROJECT_CONTEXT und den Release Notes). Die Topic-Hilfsfunktion heißt
+  entsprechend `stateIdToMqttTopic`; das zugehörige Schlüsselwort ist aus
+  `package.json` entfernt.
+- **Output-Seite:** Die irreführende Beschreibung über das 30-Sekunden-Rücklesen
+  ist aus dem Seitenkopf entfernt.
+- **Output** ist keine eigene Hauptseite mehr, sondern eine **Unterseite von
+  „States"** (neben *Custom States*) — es schreibt berechnete Werte an
+  Ziel-States zurück und gehört damit in denselben Bereich.
+- **„Wetterprognose" heißt jetzt „Wetter"** — im Menü, in der Seitenliste der
+  Benutzerrechte sowie als Überschrift und Browser-Titel der Seite selbst.
+- **Bedingungen** steht im Hauptmenü jetzt **zwischen „Messen + Schalten" und
+  „Adapter"** — die Seite wertet die dort gepflegten Geräte aus und rückt damit
+  vor die technischen Seiten (Adapter, States). Die Seitenliste der
+  Benutzerrechte folgt derselben Reihenfolge wie das Menü.
+- **Mobile Tab-Leiste:** *Energie* ersetzt den Direktzugriff auf *Batterie*
+  (Reihenfolge: Dashboard · Energie · Strom · PV · Prognose); die Batterieseite
+  bleibt über Energie und das Menü-Sheet erreichbar. Die Tab-Leiste bleibt
+  bewusst ein Direktzugriff und bildet die Menühierarchie nicht nach.
+- **Ampeltext der Prognose** liegt jetzt in `src/prognosis/status.js` und wird
+  von Prognoseseite und Energie-Übersicht gemeinsam genutzt.
+- **Seitenrechte:** „Energie" ist eine eigene Seite im Rechtemodell und lässt
+  sich je Benutzer freischalten. Ist sie gesperrt, rücken die freigeschalteten
+  Unterseiten wie bisher als eigene Hauptpunkte ins Menü.
+
 ## [1.6.1] — 2026-08-29
 
 ### Hinzugefügt
@@ -417,7 +595,7 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 - **Zigbee-Adapter.** homeESS wird damit zur eigenständigen
   Zigbee-Zentrale: Netzwerk, Pairing, Geräte-Interviews und Gerätebefehle
   laufen vollständig im Adapter, der den Coordinator über Serial oder TCP
-  direkt anspricht. Zigbee2MQTT, ioBroker, deCONZ-Server, ein MQTT-Gateway
+  direkt anspricht. Zigbee2MQTT, deCONZ-Server, ein MQTT-Gateway
   oder ein Cloud-Dienst werden nicht benötigt. Geräte-States entstehen
   dynamisch aus den Exposes von `zigbee-herdsman-converters`, ein bestehendes
   Netz lässt sich ohne erneutes Pairing übernehmen, und die Netzwerkkarte zeigt
@@ -554,7 +732,7 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
   Adapterstart ohne Laufzeitverbindung, stößt sein nächstes unverändertes
   Lebenszeichen den Binding-Abgleich erneut an. Der Badge bleibt dadurch nicht
   mehr bis zu einem manuellen Adapterneustart offline.
-- **Wallbox-Steuerung nach ioBroker-/MQTT-Neustarts.** homeESS führt für das
+- **Wallbox-Steuerung nach MQTT-Neustarts.** homeESS führt für das
   Steuerung-Sync-Topic nun einen lokalen Soll-Schatten. Nur ein echter,
   abweichender Schreibwunsch gilt als manuelle Bedienung; bestätigte Readbacks,
   Retained-Werte und wiederholte eigene Anforderungen setzen die Steuerung nicht
@@ -3023,7 +3201,7 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
   Autarkbetrieb SoC > 98 % plus Überschuss voraus; im Netzparallelbetrieb gilt
   die obere Grid-Control-Schwelle beziehungsweise ohne das Modul 90 % als voll.
   Auswahl und Aktivierung befinden sich oben rechts auf der Prognoseseite.
-- Prognose-Wertekatalog um die bisherigen ioBroker-Kennzahlen ergänzt:
+- Prognose-Wertekatalog um die bisherigen externen Kennzahlen ergänzt:
   dynamischer Tagesdurchschnitt, 24-h-Hochrechnung der letzten Stunde,
   profilbasierter Verbrauch bis Sonnenaufgang, Gesamtbedarf inklusive
   Akkufüllung sowie verfügbare, fehlende und freie Energie. „Bedarf gedeckt“
@@ -3036,7 +3214,7 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
   **Betrieb** ergänzt. Der Ja/Nein-Wert spiegelt den Notstromzustand
   (`emergencyMode`) und steht damit für Outputs und Dashboard-Widgets bereit.
 
-- Optionales Modul **Grid-Control** mit ioBroker-konformer MQTT-Steuerung für
+- Optionales Modul **Grid-Control** mit broker-konformer MQTT-Steuerung für
   Netz und Überschusseinspeisung. SoC und Spannung besitzen jeweils getrennte
   untere/obere Schaltfenster mit lokaler, begrenzter Hysterese; dazwischen ist
   der jeweilige Grid-Ausgang aus. Temperaturwarnungen, Warnungs-Publishing und
@@ -3077,7 +3255,7 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 ### Geändert
 
 - Allgemeine Output-Engine auf eine geschlossene, verifizierte Regelschleife
-  umgestellt: aktiver ioBroker-Readback alle 30 Sekunden, erneutes Schreiben bei
+  umgestellt: aktiver Broker-Readback alle 30 Sekunden, erneutes Schreiben bei
   fehlender oder abweichender Bestätigung, Retry-Begrenzung und sichtbarer Status
   je Output. Nicht rücklesbare Command-Topics werden nicht mehr als sichere
   Output-Ziele akzeptiert.
@@ -3135,7 +3313,7 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 - **Readback-Verfälschung behoben:** eigene `ack:false`-Schreib-Echos auf dem
   Haupt-Topic werden nicht mehr als Broker-Stand gecacht — nur `ack:true` bzw.
   Rohwerte gelten als bestätigter Ist-Zustand. Behebt die falsche
-  „bestätigt“-Anzeige, obwohl ioBroker einen anderen Wert hielt.
+  „bestätigt“-Anzeige, obwohl der Broker einen anderen Wert hielt.
 - **Notstromerkennung:** überalterte Netzfrequenzen (nach Verbindungsabbruch)
   entriegeln den Notstrom nicht mehr — Frische-Prüfung der Cache-Werte.
 - **Startup-Race behoben:** optionale Module werden vor dem Laden der
@@ -3358,7 +3536,7 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 ## [0.4.0] — 2026-06-26
 
 ### Hinzugefügt
-- **Output-Seite** (`/output`): beliebige berechnete Werte an ioBroker-Ziel-Topics
+- **Output-Seite** (`/output`): beliebige berechnete Werte an Ziel-Topics des Brokers
   zurückgeben. Publish-Engine (`output/engine.js`) wertet den Wert-Katalog debounced
   bei MQTT-Änderungen + alle 60 s aus und schreibt je Output nur bei Wertänderung.
   Kompakte, alphabetisch sortierte Zeilenliste.

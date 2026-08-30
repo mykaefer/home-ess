@@ -25,7 +25,7 @@ Laststeuerung verwendet.
 
 ## Schnittstellen und Adapter
 
-- MQTT-Anbindung, insbesondere für die Zusammenarbeit mit ioBroker
+- MQTT-Anbindung für die Zusammenarbeit mit einem MQTT-Broker
 - Integrierte Adapter für **Homematic CCU (HM-RPC)**, **Modbus TCP** und
   **Tasmota**
 - Flexible Zuordnung von Topics und Adapter-States über hierarchische,

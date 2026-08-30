@@ -1,7 +1,7 @@
 'use strict';
 
 // Geschlossene Output-Regelschleife: Ein gesendeter Wert gilt erst dann als
-// erfolgreich, wenn ioBroker ihn auf dem Ziel-State bestätigt zurückmeldet.
+// erfolgreich, wenn der MQTT-Broker ihn auf dem Ziel-State bestätigt zurückmeldet.
 // Eigene ack:false-Schreib-Echos werden bereits im MQTT-Client verworfen.
 
 const mqttClient = require('../mqtt/client');

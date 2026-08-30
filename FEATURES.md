@@ -22,6 +22,9 @@ desktop and mobile layouts.
 
 ## Energy monitoring
 
+- Energy overview as the entry point to the energy pages: key figures from
+  photovoltaics, electricity consumption, battery, forecast and – when enabled –
+  grid control on one page, each linking to its sub-page.
 - Electricity-consumption dashboard for self-consumption, grid import, export
   and daily, weekly and annual energy values.
 - Raw meter handling that counts deltas safely and avoids jumps after meter or
@@ -125,7 +128,21 @@ desktop and mobile layouts.
   the room only measures its temperature and exposes every value as a system
   value — under *System* in the *Räume* folder with one subfolder per room,
   named after the room (`system://homeess/raeume.Wohnzimmer.temperatur`) rather
-  than numbered. Whether a room is served by its local device or by the central
+  than numbered. If a room has an air conditioner for cooling, its state can be
+  overridden by hand: under *System* in the *Klima* folder each such room gets a
+  writable **operating mode** (0 = off, 1 = on, 2 = automatic,
+  `system://homeess/klima.Wohnzimmer.betriebsart`) plus a read-only **active**
+  value reporting whether the unit is currently running. "Off" and "on" suspend
+  the automatic action sequences — the unit then reacts neither to an open
+  window/door contact nor to the room temperature and stays in the state it was
+  switched to. It returns to automatic once the room reaches its setpoint — and,
+  if a per-room **time of day** is configured, at that time at the latest (the
+  first occurrence after the switch counts; a restart catches it up).
+  The operating level keeps precedence: if it does not cover the cooling
+  device's priority, the unit stays off even in "on". The mode can be set either
+  through the state or straight from the **room overview**, where every room with
+  an air conditioner carries an *on / off / automatic* switch.
+  Whether a room is served by its local device or by the central
   heating is decided by the **outdoor temperature** (system-wide or a dedicated
   source) against a per-room threshold. Each room can also drive a radiator fan
   that runs while the room requests heat from the central heating. Both local
@@ -158,6 +175,21 @@ desktop and mobile layouts.
 - Every hDP ARGB device can apply a device-specific dimming switch: when a
   selected state equals the configured value, homeESS reduces the calculated
   output brightness by the configured percentage before sending it.
+- **Dashboard value tiles** can carry a label of their own instead of the state
+  name; the tooltip then also names where the value comes from.
+- The system-wide **topic picker** opens up to twice as wide whenever the screen
+  allows it, so long state names stay fully readable. It always expands towards
+  whichever side has more room: fields in the lower half of the screen open the
+  list upwards.
+- The **States** page shows system values, custom states and adapter states in
+  one tree — and **writable states can be operated right there**: on/off buttons
+  for switches, a dropdown for values with fixed meanings (such as an air
+  conditioner's operating mode) and a field with "Setzen" for numbers and text.
+  Which control appears is declared by the source itself (modules and custom
+  states know their data type); for adapter states it is derived from the last
+  value seen. Writing takes the same path as an action sequence, and only states
+  their source reports as writable are a target at all. Operating requires the
+  *operate* role; readers see the values without controls.
 - Custom States use the same full-width group layout as Measuring + Switching.
   Direct drag handles reorder or move folders and states, while all folder and
   state properties remain editable after creation.
@@ -170,6 +202,14 @@ desktop and mobile layouts.
   remainder, smaller or larger value) and round on request. The responsive editor uses the same expandable group
   layout as Measuring + Switching and Custom States, including nested folders
   that conditions can be dragged into.
+- The then and else branches are action sequences: value assignment, pause and
+  freely nested loops with a configurable number of passes. A loop can check
+  cyclically whether the intended state was reached and, on mismatch, is the
+  only part replayed. Actions run top to bottom and can be reordered by drag and
+  drop, including into a loop.
+- A loop can also be created without a condition: its plausibility check is then
+  mandatory and doubles as the execution condition – the loop runs as long as
+  the checked state has not been reached.
 - Administrators can upload validated ZIP packages. Archive structure, paths,
   checksums, limits, manifest values and JavaScript syntax are checked before
   an adapter reaches `/adapter/`.

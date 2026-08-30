@@ -24,6 +24,10 @@ function badges(room) {
   if (state.heatDemand && !state.heatAllowed) list.push('<span class="adapter-badge adapter-badge--warn">Betriebslevel sperrt Heizen</span>');
   if (state.heating) list.push('<span class="adapter-badge adapter-badge--on">Heizen</span>');
   if (state.cooling) list.push('<span class="adapter-badge adapter-badge--on hz-badge-cool">Kühlen</span>');
+  // Handschaltung der Klimaanlage (system://homeess/klima.<Raum>.betriebsart).
+  if (state.climateOverride) {
+    list.push(`<span class="adapter-badge adapter-badge--warn">Klima von Hand: ${state.climateMode === 1 ? 'An' : 'Aus'}</span>`);
+  }
   if (state.centralDemand) list.push('<span class="adapter-badge adapter-badge--on hz-badge-central">Zentralheizung angefordert</span>');
   if (!list.length) {
     // Ohne Aktionsfolgen und ohne Zentralheizungs-Freigabe misst der Raum nur.
@@ -39,6 +43,27 @@ function rowAction(label, icon, attributes, danger = false) {
   const tag = attributes.startsWith('href') ? 'a' : 'button';
   const type = tag === 'button' ? ' type="button"' : '';
   return `<${tag} class="module-toggle-btn hz-row-action${danger ? ' button-danger' : ''}"${type} ${attributes} aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}"><span class="hz-action-label">${escapeHtml(label)}</span><span class="hz-action-icon" aria-hidden="true">${icon}</span></${tag}>`;
+}
+
+// Umschalter der Klimaanlage: An / Aus / Automatik, wie die Pumpenmodi der
+// Poolsteuerung. Er erscheint nur bei Räumen mit eingerichtetem Kühlgerät —
+// ohne Anlage gäbe es nichts zu übersteuern.
+const CLIMATE_MODES = [[1, 'An', 'on'], [0, 'Aus', 'off'], [2, 'Automatik', 'auto']];
+
+function climateModeClass(mode) {
+  const entry = CLIMATE_MODES.find(([value]) => value === Number(mode));
+  return entry ? ` pump-mode-btn--active-${entry[2]}` : '';
+}
+
+function climateSwitch(room) {
+  if (!room.hasCoolDevice) return '';
+  const current = Number(room.climateMode);
+  const buttons = CLIMATE_MODES.map(([value, label]) =>
+    `<button type="button" class="pump-mode-btn${value === current ? climateModeClass(value) : ''}" data-hz-klima-mode="${value}"
+                      aria-pressed="${value === current ? 'true' : 'false'}" onclick="setHeizungKlima(${room.id}, ${value})">${escapeHtml(label)}</button>`).join('\n                    ');
+  return `<div class="pump-mode-btns hz-klima-btns">
+                    ${buttons}
+                  </div>`;
 }
 
 function roomRow(room) {
@@ -57,6 +82,7 @@ function roomRow(room) {
                     <button type="submit" class="module-toggle-btn">Setzen</button>
                   </form>
                 </span>
+                <span class="hz-col-klima" data-hz-klima="${room.id}">${climateSwitch(room)}</span>
                 <span class="hz-col-state" data-hz-badges="${room.id}">${badges(room)}</span>
                 <span class="adapter-row-actions">
                   ${rowAction('Einstellungen', '⚙', `href="/heizung/raum/${room.id}"`)}
@@ -68,7 +94,7 @@ function roomRow(room) {
 function roomBlock(rooms) {
   const header = rooms.length
     ? `              <div class="adapter-row hz-room-row adapter-row--head">
-                <span>Raum</span><span class="hz-col-temp">Ist</span><span class="hz-col-target">Soll</span><span class="hz-col-state">Zustand</span><span></span>
+                <span>Raum</span><span class="hz-col-temp">Ist</span><span class="hz-col-target">Soll</span><span class="hz-col-klima">Klima</span><span class="hz-col-state">Zustand</span><span></span>
               </div>`
     : '';
   const rows = rooms.length
@@ -251,12 +277,36 @@ ${billingCard(billing, central)}
       if (state.heatDemand && !state.heatAllowed) html += '<span class="adapter-badge adapter-badge--warn">Betriebslevel sperrt Heizen</span> ';
       if (state.heating) html += '<span class="adapter-badge adapter-badge--on">Heizen</span> ';
       if (state.cooling) html += '<span class="adapter-badge adapter-badge--on hz-badge-cool">Kühlen</span> ';
+      if (state.climateOverride) html += '<span class="adapter-badge adapter-badge--warn">Klima von Hand: ' + (state.climateMode === 1 ? 'An' : 'Aus') + '</span> ';
       if (state.centralDemand) html += '<span class="adapter-badge adapter-badge--on hz-badge-central">Zentralheizung angefordert</span> ';
       if (!html) html = '<span class="adapter-badge adapter-badge--off">Aus</span>';
       return html;
     }
+    // Klimaanlage umschalten (0 = Aus, 1 = An, 2 = Automatik). Danach kurz
+    // warten und den Stand nachziehen — die Regelung entscheidet im nächsten
+    // Takt, ob die Anlage tatsächlich läuft.
+    function setHeizungKlima(roomId, mode) {
+      fetch('/heizung/raum/' + roomId + '/klima/' + mode, {
+        method: 'POST', headers: { Accept: 'application/json' },
+      })
+        .then(function () { setTimeout(heizungPoll, 300); })
+        .catch(function () {});
+    }
+    function heizungKlimaApply(roomId, mode) {
+      var box = document.querySelector('[data-hz-klima="' + roomId + '"]');
+      if (!box) return;
+      var classes = { 0: 'pump-mode-btn--active-off', 1: 'pump-mode-btn--active-on', 2: 'pump-mode-btn--active-auto' };
+      var buttons = box.querySelectorAll('[data-hz-klima-mode]');
+      for (var i = 0; i < buttons.length; i++) {
+        var value = Number(buttons[i].getAttribute('data-hz-klima-mode'));
+        var active = value === Number(mode);
+        buttons[i].classList.toggle(classes[value], active);
+        buttons[i].setAttribute('aria-pressed', active ? 'true' : 'false');
+      }
+    }
     function heizungApply(data) {
       (data.rooms || []).forEach(function (room) {
+        if (room.hasCoolDevice) heizungKlimaApply(room.id, room.climateMode);
         var tempNode = document.querySelector('[data-hz-temp="' + room.id + '"]');
         if (tempNode) tempNode.textContent = heizungTemp(room.temperature);
         var badgeNode = document.querySelector('[data-hz-badges="' + room.id + '"]');

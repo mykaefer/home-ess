@@ -232,7 +232,7 @@ function decideWallboxAction(box, state, ctx) {
   // überein und werden folgenlos verworfen.
   // JSON-lose Rohwerte sind als Legacy-Schreibwünsche zulässig, während eines
   // Broker-Reconnects aber nicht von Retained-Zuständen unterscheidbar. Im
-  // Rebaseline-Fenster werden sie deshalb nur ignoriert; echte ioBroker-Kommandos
+  // Rebaseline-Fenster werden sie deshalb nur ignoriert; echte Broker-Kommandos
   // (ack:false) bleiben eindeutig und dürfen sofort wirken.
   const rawReconnectReplay = rebaselining && ctx.syncRequestAck == null;
   if (ctx.syncRequest && !rawReconnectReplay && ctx.syncRequest !== state.expectedSyncValue) {

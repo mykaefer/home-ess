@@ -4,7 +4,7 @@
   "locale": "de-DE",
   "direction": "ltr",
   "messages": {
-    "description": "Macht homeESS zur eigenständigen Zigbee-Zentrale. Der Adapter verwaltet Netzwerk, Pairing und Geräte selbst und spricht den Coordinator direkt über Serial oder TCP an – ohne Zigbee2MQTT, ioBroker, deCONZ-Server oder Cloud-Dienst.",
+    "description": "Macht homeESS zur eigenständigen Zigbee-Zentrale. Der Adapter verwaltet Netzwerk, Pairing und Geräte selbst und spricht den Coordinator direkt über Serial oder TCP an – ohne Zigbee2MQTT, deCONZ-Server oder Cloud-Dienst.",
     "coordinator_type": "Coordinator-Typ",
     "transport_type": "Anbindung",
     "tcp_host": "Bridge-Adresse",

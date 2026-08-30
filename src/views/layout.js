@@ -1,7 +1,7 @@
 'use strict';
 
 const { escapeHtml } = require('./components');
-const { getEnabledNavItems } = require('../modules');
+const { getEnabledNavItems, isEnabled } = require('../modules');
 const { getHdpNavItems } = require('../adapters/navigation');
 const { statePickerModal, statePickerScript, statePickerAutoAttach } = require('./state-picker');
 const { currentAccess, canSeePage, pageForPath, themeBodyClass } = require('../auth/access');
@@ -21,9 +21,20 @@ try {
 // dynamisch in die Hauptnavigation ein.
 const NAV_CORE = [
   { path: '/dashboard', label: 'Dashboard', section: 'main' },
-  { path: '/stromverbrauch', label: 'Stromverbrauch', section: 'main' },
-  { path: '/photovoltaik', label: 'Photovoltaik', section: 'main' },
-  { path: '/batterie', label: 'Batterie', section: 'main' },
+  // Energie ist der Einstieg in die Energieseiten: die Übersicht bündelt deren
+  // Eckdaten, die Detailseiten hängen als Unterpunkte darunter. Grid-Control
+  // kommt in getMainNavItems() dazu, sobald das Modul aktiv ist.
+  {
+    path: '/energie',
+    label: 'Energie',
+    section: 'main',
+    children: [
+      { path: '/stromverbrauch', label: 'Stromverbrauch' },
+      { path: '/photovoltaik', label: 'Photovoltaik' },
+      { path: '/batterie', label: 'Batterie' },
+      { path: '/prognose', label: 'Prognose' },
+    ],
+  },
   {
     path: '/messen-schalten',
     label: 'Messen + Schalten',
@@ -33,24 +44,29 @@ const NAV_CORE = [
       { path: '/messen-schalten/schaltgruppen', label: 'Schaltgruppen' },
     ],
   },
-  { path: '/prognose', label: 'Prognose', section: 'main' },
+  // Bedingungen wertet die Geräte aus Messen + Schalten aus und steht deshalb
+  // direkt dahinter, noch vor den technischen Seiten (Adapter, States).
+  { path: '/conditions', label: 'Bedingungen', section: 'main' },
   { path: '/adapter', label: 'Adapter', section: 'main' },
   {
+    // Output schreibt berechnete Werte an Ziel-States zurück und gehört damit
+    // in denselben Bereich wie die States selbst.
     path: '/states', label: 'States', section: 'main',
-    children: [{ path: '/states/custom', label: 'Custom States' }],
+    children: [
+      { path: '/states/custom', label: 'Custom States' },
+      { path: '/output', label: 'Output' },
+    ],
   },
-  { path: '/conditions', label: 'Bedingungen', section: 'main' },
-  { path: '/output', label: 'Output', section: 'main' },
   // Module und Fernzugriff sind in die Einstellungsseite (Tabs) integriert; der
   // Footer trägt daher nur noch die Einstellungen.
   { path: '/settings', label: 'Einstellungen', section: 'footer' },
 ];
 
 // Punkte, die im Hauptmenü hinter allem anderen stehen — auch hinter den
-// optionalen Modulen. Die Wetterprognose ist eine Nachschlageseite ohne
-// Steuerfunktion und schließt die Navigation ab.
+// optionalen Modulen. Wetter ist eine Nachschlageseite ohne Steuerfunktion und
+// schließt die Navigation ab.
 const NAV_MAIN_TRAILING = [
-  { path: '/wetter', label: 'Wetterprognose', section: 'main' },
+  { path: '/wetter', label: 'Wetter', section: 'main' },
 ];
 
 // NAV wird von außen noch als Array erwartet (z. B. in Tests) — exportieren wir
@@ -62,9 +78,9 @@ const NAV = [...NAV_CORE, ...NAV_MAIN_TRAILING];
 // Navigations-Sheet) — ein eigener Menü-Tab entfällt.
 const MOBILE_TABS = [
   { path: '/dashboard', label: 'Dashboard', icon: '🏠' },
-  { path: '/stromverbrauch', label: 'Strom', icon: '⚡' },
+  { path: '/energie', label: 'Energie', icon: '⚡' },
+  { path: '/stromverbrauch', label: 'Strom', icon: '🔌' },
   { path: '/photovoltaik', label: 'PV', icon: '☀️' },
-  { path: '/batterie', label: 'Batterie', icon: '🔋' },
   { path: '/prognose', label: 'Prognose', icon: '📈' },
 ];
 
@@ -103,18 +119,55 @@ function navItemVisible(item, access) {
 // Geräteverwaltungen stehen als eigene Hauptpunkte direkt hinter „Adapter“;
 // andere Adapter erhalten unabhängig von ihren Unterseiten keinen Eintrag.
 function getMainNavItems() {
-  const items = NAV_CORE.filter((item) => item.section === 'main');
+  const items = NAV_CORE.filter((item) => item.section === 'main').map((item) => (
+    item.path === '/energie' ? { ...item, children: energieChildren() } : item
+  ));
   const adapterIndex = items.findIndex((item) => item.path === '/adapter');
   items.splice(adapterIndex + 1, 0, ...getHdpNavItems());
-  return [...items, ...getEnabledNavItems(), ...NAV_MAIN_TRAILING];
+  // Grid-Control steuert Netzbezug und Einspeisung und gehört damit unter
+  // Energie – es erscheint dort statt im allgemeinen Modulblock.
+  const moduleItems = getEnabledNavItems().filter((item) => item.path !== '/grid-control');
+  return [...items, ...moduleItems, ...NAV_MAIN_TRAILING];
+}
+
+// Unterpunkte von „Energie": die drei Kernseiten, dazu Grid-Control, sobald das
+// gleichnamige Modul aktiviert ist.
+function energieChildren() {
+  const base = NAV_CORE.find((item) => item.path === '/energie');
+  const children = [...(base.children || [])];
+  if (!isEnabled('grid-control')) return children;
+  // Grid-Control gehört zum Ist-Zustand und steht deshalb vor der Prognose,
+  // die den Ausblick auf die kommenden Tage abschließt.
+  const prognoseIndex = children.findIndex((child) => child.path === '/prognose');
+  const gridControl = { path: '/grid-control', label: 'Grid-Control' };
+  if (prognoseIndex < 0) children.push(gridControl);
+  else children.splice(prognoseIndex, 0, gridControl);
+  return children;
+}
+
+// Sichtbare Navigationspunkte inklusive ihrer Unterpunkte. Ist eine Seite mit
+// Unterpunkten selbst nicht freigeschaltet, rücken die freigeschalteten
+// Unterpunkte als eigene Hauptpunkte nach – sie bleiben so erreichbar.
+function visibleNavItems(items, access) {
+  const result = [];
+  for (const item of items) {
+    const children = (item.children || []).filter((child) => navItemVisible(child, access));
+    if (navItemVisible(item, access)) {
+      result.push(item.children ? { ...item, children } : item);
+    } else {
+      for (const child of children) {
+        result.push({ path: child.path, label: child.label, section: item.section });
+      }
+    }
+  }
+  return result;
 }
 
 function renderNavLinks(section, activePath, access) {
   const items = section === 'main'
     ? getMainNavItems()
     : NAV_CORE.filter((item) => item.section === section);
-  return items
-    .filter((item) => navItemVisible(item, access))
+  return visibleNavItems(items, access)
     .map((item) => renderNavItem(item, activePath))
     .join('\n          ');
 }
@@ -131,8 +184,7 @@ function renderMobileNav(activePath, access) {
     }).join('\n      ');
 
   const flatLinks = [];
-  const mainItems = getMainNavItems()
-    .filter((item) => navItemVisible(item, access));
+  const mainItems = visibleNavItems(getMainNavItems(), access);
   for (const item of mainItems) {
     flatLinks.push({ path: item.path, label: item.label, sub: false });
     for (const child of item.children || []) {

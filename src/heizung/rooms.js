@@ -25,6 +25,7 @@
 const { normalizeMqttTopic } = require('../mqtt/topics');
 const { topicForId } = require('../states/system-topics');
 const { checkboxValue } = require('../conditions/values');
+const climate = require('./climate');
 
 // Systemwerte der Räume: id-Präfix und Ordner auf der States-Seite.
 const ID_PREFIX = 'raeume.';
@@ -74,6 +75,14 @@ function toNumber(value) {
   if (!raw) return null;
   const number = Number(raw);
   return Number.isFinite(number) ? number : null;
+}
+
+// Uhrzeit, zu der eine Handschaltung der Klimaanlage auf Automatik zurückfällt.
+// Leer heißt: keine selbsttätige Rückkehr zu einer festen Zeit.
+function resetTime(value) {
+  const time = climate.parseResetTime(value);
+  if (time == null) throw validation('Bitte die Uhrzeit als HH:MM angeben (z. B. 22:00) oder das Feld leer lassen.');
+  return time;
 }
 
 // Priorität 1–5 (1 = höchste). Ein leeres Feld behält die Vorgabe.
@@ -152,6 +161,15 @@ function normalizeRoom(row = {}) {
     // Verzögerung, bevor ein offener Kontakt Heizen/Kühlen abschaltet
     // (0 = sofort).
     contactDelaySeconds: Number(row.contact_delay_seconds || 0),
+    // Übersteuerung der Klimaanlage: 0 = Aus, 1 = An, 2 = Automatik
+    // (heizung/climate.js). Sie überlebt einen Neustart, damit eine
+    // Handschaltung nicht unbemerkt verlorengeht.
+    climateMode: climate.normalizeMode(row.climate_mode, climate.MODE_AUTO),
+    // Seit wann die Handschaltung steht — Bezugspunkt der Rückkehr-Uhrzeit.
+    climateModeSince: row.climate_mode_since == null ? null : Number(row.climate_mode_since),
+    // Optionale Uhrzeit „HH:MM", zu der eine Handschaltung von selbst auf
+    // Automatik zurückfällt (leer = keine).
+    climateResetTime: climate.parseResetTime(row.climate_reset_time) || '',
     lastError: row.last_error || '',
   };
 }
@@ -180,7 +198,8 @@ function normalizeContact(row = {}) {
 
 const ROOM_COLUMNS = `id, name, position, target_temp, heat_offset, cool_offset, cool_min_temp, hysteresis,
   thermostat_topic, heat_priority, cool_priority, heat_central_fallback,
-  central_allowed, central_temp, fan_topic, contact_delay_seconds, last_error`;
+  central_allowed, central_temp, fan_topic, contact_delay_seconds,
+  climate_mode, climate_mode_since, climate_reset_time, last_error`;
 
 // Zwei Namen dürfen nicht auf dieselbe State-Adresse fallen („Bad 1" und
 // „Bad_1" wären dasselbe Topic). Geprüft wird gegen alle übrigen Räume.
@@ -241,6 +260,7 @@ function cleanRoomInput(input = {}) {
     fanTopic: normalizeMqttTopic(input.fanTopic || ''),
     centralAllowed,
     centralTemp: null,
+    climateResetTime: resetTime(input.climateResetTime),
     contactDelaySeconds: Math.round(requireNumber(
       input.contactDelaySeconds == null || text(input.contactDelaySeconds) === '' ? 0 : input.contactDelaySeconds,
       'die Verzögerung der Kontakte', 0, MAX_CONTACT_DELAY_SECONDS
@@ -268,12 +288,13 @@ async function createRoom(db, input = {}) {
     const result = await dbRun(db, `INSERT INTO heizung_rooms
       (name, position, target_temp, heat_offset, cool_offset, cool_min_temp, hysteresis, thermostat_topic,
        heat_priority, cool_priority, heat_central_fallback,
-       central_allowed, central_temp, fan_topic, contact_delay_seconds)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+       central_allowed, central_temp, fan_topic, contact_delay_seconds, climate_reset_time)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
       values.name, next.position, values.targetTemp, values.heatOffset, values.coolOffset,
       values.coolMinTemp, values.hysteresis,
       values.thermostatTopic, values.heatPriority, values.coolPriority, values.heatCentralFallback ? 1 : 0,
       values.centralAllowed ? 1 : 0, values.centralTemp, values.fanTopic, values.contactDelaySeconds,
+      values.climateResetTime,
     ]);
     return getRoom(db, result.id);
   } catch (error) {
@@ -291,11 +312,12 @@ async function updateRoom(db, id, input = {}) {
     await dbRun(db, `UPDATE heizung_rooms SET name = ?, target_temp = ?, heat_offset = ?, cool_offset = ?,
       cool_min_temp = ?, hysteresis = ?, thermostat_topic = ?, heat_priority = ?, cool_priority = ?,
       heat_central_fallback = ?, central_allowed = ?, central_temp = ?, fan_topic = ?,
-      contact_delay_seconds = ? WHERE id = ?`, [
+      contact_delay_seconds = ?, climate_reset_time = ? WHERE id = ?`, [
       values.name, values.targetTemp, values.heatOffset, values.coolOffset,
       values.coolMinTemp, values.hysteresis,
       values.thermostatTopic, values.heatPriority, values.coolPriority, values.heatCentralFallback ? 1 : 0,
-      values.centralAllowed ? 1 : 0, values.centralTemp, values.fanTopic, values.contactDelaySeconds, roomId,
+      values.centralAllowed ? 1 : 0, values.centralTemp, values.fanTopic, values.contactDelaySeconds,
+      values.climateResetTime, roomId,
     ]);
   } catch (error) {
     if (error && error.code === 'SQLITE_CONSTRAINT') throw validation('Einen Raum mit diesem Namen gibt es bereits.');
@@ -312,6 +334,20 @@ async function setTargetTemp(db, id, value) {
   const result = await dbRun(db, 'UPDATE heizung_rooms SET target_temp = ? WHERE id = ?', [target, Number(id)]);
   if (!result.changes) throw validation('Raum nicht gefunden.');
   return target;
+}
+
+// Betriebsart der Klimaanlage setzen (State-Schreibzugriff, Rückfall auf
+// Automatik). Ein unbrauchbarer Wert bleibt folgenlos.
+async function setClimateMode(db, id, value, now = Date.now()) {
+  const mode = climate.normalizeMode(value);
+  if (mode == null) throw validation('Bitte 0 (Aus), 1 (An) oder 2 (Automatik) angeben.');
+  // Der Zeitpunkt der Handschaltung ist der Bezugspunkt der Rückkehr-Uhrzeit;
+  // in der Automatik gibt es nichts zurückzunehmen.
+  const since = mode === climate.MODE_AUTO ? null : now;
+  const result = await dbRun(db, 'UPDATE heizung_rooms SET climate_mode = ?, climate_mode_since = ? WHERE id = ?',
+    [mode, since, Number(id)]);
+  if (!result.changes) throw validation('Raum nicht gefunden.');
+  return { mode, since };
 }
 
 async function markError(db, id, message = '') {
@@ -439,7 +475,9 @@ function stateTopic(name, suffix) {
 
 const ROOM_STATES = [
   { suffix: 'temperatur', label: 'Temperatur', unit: '°C', writable: false },
-  { suffix: 'soll', label: 'Soll-Temperatur', unit: '°C', writable: true },
+  // Beschreibbar und deshalb mit Bedienelement für die States-Seite.
+  { suffix: 'soll', label: 'Soll-Temperatur', unit: '°C', writable: true,
+    control: { type: 'number', min: MIN_TEMP, max: MAX_TEMP, step: 0.5 } },
   { suffix: 'heizen', label: 'Heizen', unit: '', writable: false },
   { suffix: 'kuehlen', label: 'Kühlen', unit: '', writable: false },
   { suffix: 'zentral', label: 'Wärmeanforderung Zentralheizung', unit: '', writable: false },
@@ -501,6 +539,7 @@ function roomEntries(room, state = {}) {
       category: `${CATEGORY}/${room.name}`,
       unit: definition.unit,
       writable: definition.writable,
+      control: definition.control,
       value,
       display: definition.unit === '°C' ? formatTemp(value == null ? null : Number(value)) : (value ? 'Ein' : 'Aus'),
     };
@@ -511,7 +550,7 @@ module.exports = {
   ID_PREFIX, CATEGORY, ROOM_STATES,
   MIN_TEMP, MAX_TEMP, MAX_OFFSET, MIN_HYSTERESIS, MAX_HYSTERESIS, MAX_CONTACT_DELAY_SECONDS,
   MIN_PRIORITY, MAX_PRIORITY,
-  listRooms, getRoom, createRoom, updateRoom, deleteRoom, setTargetTemp, markError,
+  listRooms, getRoom, createRoom, updateRoom, deleteRoom, setTargetTemp, setClimateMode, markError,
   listSensors, listAllSensors, addSensor, updateSensor, deleteSensor,
   listContacts, listAllContacts, addContact, updateContact, deleteContact,
   stateId, stateTopic, addressFor, ensureFreeAddress,

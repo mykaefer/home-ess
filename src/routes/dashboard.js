@@ -84,9 +84,13 @@ function enrichWidget(widget, valuesById, switchStates, weatherData = null) {
     };
   }
   const entry = valuesById.get(widget.stateTopic);
+  const stateLabel = entry ? entry.label : widget.stateTopic;
   return {
     ...widget,
-    label: entry ? entry.label : widget.stateTopic,
+    // Eine eigene Beschriftung ersetzt den Namen des States; ohne sie bleibt es
+    // beim Namen aus dem Wertekatalog.
+    label: widget.valueLabel || stateLabel,
+    stateLabel,
     currentDisplay: entry ? entry.display : '—',
   };
 }

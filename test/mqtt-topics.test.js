@@ -58,7 +58,7 @@ test('parseSchemeTopic erkennt Adapter-Topics prefix://instanz/adresse', () => {
   });
 });
 
-test('parseSchemeTopic liefert null für normale ioBroker-Topics', () => {
+test('parseSchemeTopic liefert null für normale Broker-Topics', () => {
   assert.equal(parseSchemeTopic('battery.0.soc'), null);
   assert.equal(parseSchemeTopic('Heizung/Vorlauf'), null);
   assert.equal(parseSchemeTopic(''), null);

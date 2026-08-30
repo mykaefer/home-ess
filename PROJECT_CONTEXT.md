@@ -8,7 +8,7 @@
 ## Was ist homeESS?
 
 Basis für ein **Energy Storage System (ESS)**. Der Server abonniert
-MQTT-Topics (Quelle: ioBroker-Broker), hält die eingehenden Werte in einem
+MQTT-Topics (Quelle: der angebundene MQTT-Broker), hält die eingehenden Werte in einem
 Cache und soll daraus ableiten, **wie Lasten geschaltet werden** (Regel-Engine,
 deren Betriebslevel prognosegeführt werden; ein zentraler **Betriebslevel-Handler**
 (`operating-level/handler.js`) setzt registrierte Verbraucher nach Priorität durch —
@@ -29,6 +29,24 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   und Gruppen per **Drag & Drop** anordbar, Widgets in Gruppen verschiebbar,
   Widgets/Gruppen bearbeit- und löschbar. Live-Refresh über `GET /dashboard/data`
   (Werte + `system`- und `weather`-Block).
+- **Energie** (`/energie`, Menü Position 2, `energie/overview.js`, View
+  `views/energie.js`): Übersicht und Einstiegspunkt der Energieseiten. Je
+  Fachbereich eine Karte — **Photovoltaik** (Leistung, Ertrag heute/Woche/Jahr
+  + Vorjahr), **Stromverbrauch** (Eigenverbrauch/Netzbezug aktuell, heute,
+  Woche, Jahr), **Batterie** (SoC + Mindest-SoC, Leistung, nutzbare Energie und
+  Kapazität, Spannung/Temperatur, SoC-Balken) und, bei aktivem Modul,
+  **Grid-Control** (Schaltzustände) und zuletzt **Prognose** (Ampelbewertung als
+  Chip, PV/Verbrauch/Netzbedarf heute noch, SoC Tagesende + Autarkie) — mit
+  Titel und Schaltfläche als Sprung auf die jeweilige Unterseite. Stromverbrauch,
+  Photovoltaik, Batterie, (falls aktiv) Grid-Control und Prognose sind im Menü
+  **Unterpunkte** von Energie. Die Seite nutzt ausschließlich die
+  **schreibfreien** Lesevarianten (`readStromverbrauchValues`,
+  `readPhotovoltaikValues`, `readBatterieData`) sowie `computePrognosis` mit
+  `allowFetch: false` (nur Prognose-Cache, nie ein Netzabruf) und schreibt keine
+  Summen fort; Live-Aktualisierung über `GET /energie/data` (MQTT-Ereignis +
+  60-s-Takt). Die Ampeltexte der Prognose kommen aus `prognosis/status.js` und
+  sind mit der Prognoseseite geteilt.
+  Abschnitte, deren Seite für den Benutzer nicht freigeschaltet ist, entfallen.
 - **Stromverbrauch**: MQTT-Topic-Felder für Eigenverbrauch L1–L3, Netzbezug
   L1–L3 und Zählerstände; oben Eigenverbrauch/Netzbezug als Phasensummen,
   Woche/Jahr aus Tageswert plus Tagesstart-Abgleich über den Dialog
@@ -167,7 +185,7 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   dass ein noch im Cache liegender älterer Remote-Wert eine gerade gespeicherte
   Einstellung zurückdreht. Läuft reaktiv bei Wertänderung (entprellt) sowie
   einmalig beim Start.
-- **Messen + Schalten** (`/messen-schalten`, Kernseite, Menü unter Batterie):
+- **Messen + Schalten** (`/messen-schalten`, Kernseite, Menü unter Energie):
   Gruppen als **einklappbare Abschnitte über die volle Seitenbreite** (Vorbild
   Output-Kategorien: Standard zugeklappt, Auf/Zu-Zustand je Gruppe in
   localStorage `homeess.ms.openGroups`), unter Geschwistern **alphanumerisch
@@ -413,7 +431,8 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   einer Umleitung auf `/wetter`: die WebView der App merkt sich ihre zuletzt
   besuchte Adresse und ruft sie beim Start erneut per GET auf — ohne beides
   landete sie auf einer Adresse, die nur POST kennt.
-- **Systemprognose** (`/prognose`, `prognosis/forecast.js`): simuliert heute +
+- **Systemprognose** (`/prognose`, Menü unter Energie, `prognosis/forecast.js`):
+  simuliert heute +
   drei Folgetage stündlich aus PV-Wetterprognose, Verbrauch und Batterie. Die
   nutzbare Batterie endet am Mindest-SoC; die unter den Batterieparametern
   gepflegten Lade- und Entladewirkungsgrade werden getrennt gerechnet.
@@ -499,7 +518,7 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   Erreichen des Mindest-SoC stehen im Wertekatalog. Die Ampel bewertet primär
   Netzbedarf beziehungsweise Mindest-SoC bis zum Ladebeginn; Tagesend-SoC ist
   nachgeordnet.
-  Der Katalog bildet außerdem die früheren ioBroker-Prognosegrößen ab:
+  Der Katalog bildet außerdem die früheren externen Prognosegrößen ab:
   dynamischer Tagesdurchschnitt, 24-h-Hochrechnung aus der letzten Stunde,
   Verbrauch bis zum nächsten Sonnenaufgang aus Stundenprofil beziehungsweise
   letzter Stunde, Gesamtbedarf inklusive Akkufüllung, verfügbare, fehlende und
@@ -629,7 +648,7 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
     der Live-Status-Badge im UI bleibt davon unberührt momentan. Die Auflösung
     („wird wieder bestätigt“) wird neutral protokolliert.
 - **Output** (`/output`): beliebige berechnete Werte (Wert-Katalog) an
-  ioBroker-**Ziel-Topics** zurückgeben. Die **Engine** (`output/engine.js`)
+  **Ziel-Topics** des MQTT-Brokers zurückgeben. Die **Engine** (`output/engine.js`)
   arbeitet als geschlossene Regelschleife: Ziel-States werden abonniert und in
   einem 30-s-Fenster aktiv per `/get` gelesen — jedoch **je Output zu einem
   zufälligen Zeitpunkt** innerhalb des Fensters (`verifyTick`, Slot-Verteilung),
@@ -645,6 +664,42 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   je Kategorie wird pro Browser (localStorage) gemerkt, das Nachladen bei
   MQTT-Bursts gebündelt (max. 1×/s). Die Wertauswahl im Dialog nutzt den zentralen
   Wertekatalog (`views/value-catalog.js`).
+- **Bedingungen** (`/conditions`, `src/conditions/`, Menü zwischen Messen +
+  Schalten und Adapter): frei anlegbare Automationen aus **Trigger** (Zeit,
+  Wertänderung, exaktes Ereignis), **Wenn** (State-Vergleiche, gemeinsam
+  geprüft, abschaltbar), **Dann** und optionalem **Sonst**. Verzeichnisse ordnen
+  die Bedingungen; ein Ausführungsschutz begrenzt Selbstauslösungen
+  (60 Läufe/Minute je Bedingung).
+  - **Dann und Sonst sind Aktionsfolgen** (dieselben Bausteine wie die
+    Aktionsfolgen der Module, gemeinsame Datenschicht in
+    `conditions/repository.js`, Ausführung über `automation/action-runner.js`):
+    **Wert zuweisen** (fester Wert oder Topic-Verweis, Rechenfunktion, Rundung),
+    **Pause** (Sekunden) und **Schleife** (`parent_id`, beliebig verschachtelbar,
+    `repeats` Durchläufe). Die Folge läuft **von oben nach unten**; die
+    Reihenfolge ist deshalb bedeutsam und per Dragfläche änderbar — auch in eine
+    Schleife hinein und wieder heraus (`POST /conditions/:id/items/layout`
+    speichert den vollständigen Baum beider Zweige). Trigger und Wenns bleiben
+    unsortiert, ihre Reihenfolge hat keine Bedeutung.
+  - **Prüfung einer Schleife** (optional): im eingestellten Abstand wird eine
+    Bedingung (ein „Wenn") erneut bewertet; trifft sie nicht zu, wird
+    **ausschließlich diese Schleife** erneut abgespult, nicht der übrige Zweig.
+    Der Abstand zählt ab der letzten Ausführung der Schleife bzw. ab dem Start
+    von homeESS; ein unbekannter Wert gilt als nicht erfüllt. Geprüft wird nur
+    der Zweig, der **zuletzt gelaufen** ist (Dann oder Sonst) — sonst würden sich
+    beide dauerhaft überschreiben. Nach einem Neustart ruht die Prüfung, bis die
+    Bedingung einmal ausgeführt wurde.
+  - **Schleife ohne Bedingung** (`createCondition` mit `mode: 'loop'`, Seite:
+    „Schleife hinzufügen" bzw. `+S` je Verzeichnis): eine Automation **ohne
+    Trigger, Wenn und Sonst**, deren einzige Dann-Aktion eine Schleife mit
+    **zwingender** zyklischer Prüfung ist. Die Prüfung ist dann die
+    Ausführungsbedingung; sie greift **ab dem Start** (`checkLoops` behandelt den
+    Dann-Zweig triggerloser Bedingungen als den maßgeblichen, statt auf einen
+    vorherigen Lauf zu warten). Eine Bedingung braucht deshalb entweder einen
+    Trigger **oder** eine sich selbst auslösende Schleife
+    (`isSelfTriggeringLoop`); die letzte Auslösequelle lässt sich weder löschen
+    noch ihre Prüfung abschalten.
+  - Solange eine Folge läuft (Pausen, Schleifen), löst dieselbe Bedingung nicht
+    erneut aus; der laufende Durchgang wird zu Ende geführt.
 - **Optionale Module** (`src/modules/index.js`): generische Registry +
   In-Memory-Enabled-State; Seite `/module` zum Aktivieren/Deaktivieren.
   Aktivierte Module erscheinen automatisch in der Sidebar. Aktuell:
@@ -1134,11 +1189,24 @@ src/
     session.js            DB-gestützte Cookie-Sessions + requireAuth
     routes.js             /, POST /login, /logout
   mqtt/
-    topics.js             ioBroker-Topic-Helfer (reine Funktionen, aus MQTT.md)
+    topics.js             MQTT-Topic-Helfer (reine Funktionen, aus MQTT.md)
     config.js             MQTT-Config + Umgebungs-Snapshot (Temp/Zeit/Datum)
     client.js             Verbindungs-Manager + publish + testConnection
                           + Ad-hoc-Subscription-API (subscribeAdHoc)
     state-definitions.js  Sammelt alle abonnierten Topics (mqtt/strom/pv/batterie)
+  automation/
+    action-sequences.js   Datenschicht der Aktionsfolgen (Module); Aktionsarten
+                          und Grenzen kommen aus conditions/repository.js
+    action-runner.js      Ausfuehrung: Werte schreiben, Pausen, Schleifen,
+                          zyklische Pruefung (Bedingungen + Module)
+  conditions/
+    repository.js         Bedingungen, Verzeichnisse, Elemente; Aktionsarten
+                          write/pause/loop inkl. Baum und Layout
+    engine.js             Auswertung: Trigger, Wenn-Pruefung, Dann-/Sonst-Folge
+                          und zyklische Schleifenpruefung
+    values.js             Wert-/Topic-Erkennung, Rechenfunktionen, Rundung
+  energie/
+    overview.js           Eckdaten der Energieseiten (read-only) fuer /energie
   stromverbrauch/
     config.js             Topics laden/speichern + buildStateDefinitions
     aggregation.js        Aggregation (schreibend) + readStromverbrauchValues
@@ -1236,6 +1304,7 @@ src/
     redact.js             Redaction + Logging der Fernzugriff-Ereignisse
   routes/
     dashboard.js          GET /dashboard + Widget/Gruppen-CRUD + /layout + /data
+    energie.js            GET /energie (Uebersicht) + GET /energie/data
     stromverbrauch.js     GET /stromverbrauch + Topic/Abgleich-POSTs + /data
     photovoltaik.js       GET /photovoltaik + CRUD + /data + /forecast
     batterie.js           GET /batterie + POST /batterie/topics + GET /batterie/data
@@ -1266,6 +1335,7 @@ src/
     layout.js             App-Hülle + Nav + Header-Live-Script (inkl. Batterie-Icon)
     login.js              Login-Seite
     dashboard.js          Dashboard: Widgets/Gruppen, Drag&Drop, Dialoge
+    energie.js            Energie — Uebersicht der Energieseiten mit Sprungzielen
     stromverbrauch.js     Stromverbrauch — KPI-Kacheln + Config
     photovoltaik.js       Photovoltaik — Anlagenliste
     batterie.js           Batterie — KPI-Kacheln + SoC-Balken + Config
@@ -1291,7 +1361,7 @@ public/styles.css         Statische Assets (CSS)
 public/energiefluss-diagram.js  Gemeinsame Zeichen-Logik des Energiefluss-
                           Diagramms (window.EFDiagram; Seite + Export)
 data/app.db               SQLite (gitignored)
-MQTT.md                   Referenz: ioBroker-MQTT-Regeln
+MQTT.md                   Referenz: MQTT-Broker-Regeln
 ```
 
 ## Fernzugriff / Pairing / Relay-Tunnel
@@ -1645,7 +1715,7 @@ Anleitung zum Anbinden neuer Verbraucher: [LEVEL_HANDLING.md](LEVEL_HANDLING.md)
 - **Sessions statt Flag:** Cookie-Name `ess_sid`. „Merken" → 30-Tage-Cookie;
   sonst Session-Cookie (serverseitig 12 h gültig).
 - **Passwörter gehasht** (Node `crypto.scrypt`). Default beim ersten Start: `admin`.
-- **MQTT/ioBroker-Regeln** in [MQTT.md](MQTT.md) und in `mqtt/topics.js` umgesetzt.
+- **MQTT-Broker-Regeln** in [MQTT.md](MQTT.md) und in `mqtt/topics.js` umgesetzt.
 - **ack-Unterscheidung beim Readback:** Eingehende Nachrichten mit `ack:false`
   sind Schreibwünsche/Kommandos (u. a. das Echo eigener Schreibvorgänge auf dem
   Haupt-Topic) und werden **nicht** als Broker-Stand gecacht. Nur `ack:true` bzw.

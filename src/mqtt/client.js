@@ -8,7 +8,7 @@ const systemRouter = require('../states/system-router');
 const { parseSystemTopic } = require('../states/system-topics');
 const {
   normalizeMqttTopic,
-  ioBrokerIdToMqttTopic,
+  stateIdToMqttTopic,
   mqttReadCandidates,
   mqttWriteCandidates,
   mqttSubscribeCandidates,
@@ -20,7 +20,7 @@ const {
   parseValue,
 } = require('./topics');
 
-// Verbindungs-Manager für den ioBroker-MQTT-Broker. Hält eine einzige laufende
+// Verbindungs-Manager für den MQTT-Broker. Hält eine einzige laufende
 // Verbindung, abonniert konfigurierte Topics und cached eingehende Werte.
 // Aufgebaut nach den Regeln in MQTT.md (clean-Session, Set beim connect leeren,
 // Wildcard für Slash-States, exaktes Routing). Die Last-Schalt-Logik (Regel-
@@ -40,7 +40,7 @@ let subscribedTopics = new Set(); // Deduplizierung der Abos
 // Zentraler Wert-Cache liegt im gemeinsamen state-bus (auch von Adaptern genutzt).
 const valueCache = bus.getCache();
 // Schreibwünsche werden getrennt vom bestätigten Werte-Cache verteilt. Damit
-// können Verbraucher wie die Wallbox-Bedienerkennung ein echtes ioBroker-
+// können Verbraucher wie die Wallbox-Bedienerkennung ein echtes Broker-
 // Kommando (ack:false) von einem beim Start erneut gesendeten Ist-Zustand
 // (ack:true) unterscheiden. JSON-lose Rohwerte bleiben aus Kompatibilitäts-
 // gründen ebenfalls mögliche Schreibwünsche; der Verbraucher dedupliziert sie
@@ -167,7 +167,7 @@ function handleMessage(topic, buffer) {
   }
   const receivedAt = Date.now();
   // Nur ack:true ist eindeutig eine bestätigte Zustandsmeldung. ack:false ist
-  // ein ioBroker-Schreibwunsch; ein JSON-loser Rohwert kann je nach Broker sowohl
+  // ein Schreibwunsch; ein JSON-loser Rohwert kann je nach Broker sowohl
   // Kommando als auch Zustand sein und wird deshalb zusätzlich als möglicher
   // Schreibwunsch signalisiert. Der normale Cache bleibt für Rohwerte erhalten.
   if (ack !== true && routedKeys.length) {
@@ -178,7 +178,7 @@ function handleMessage(topic, buffer) {
   // ack:false ist ein Schreibwunsch/Kommando (u. a. das Echo unserer eigenen
   // Schreibvorgänge auf dem Haupt-Topic) – kein bestätigter Ist-Zustand. Solche
   // Nachrichten dürfen den Readback-Cache nicht verfälschen, sonst meldet die
-  // Verifikation fälschlich „bestätigt", obwohl ioBroker einen anderen Wert hält.
+  // Verifikation fälschlich „bestätigt", obwohl der Broker einen anderen Wert hält.
   if (ack === false) return;
   // Werte setzen und ein gemeinsames Event über den state-bus auslösen.
   bus.ingest(routedKeys, payload, { topic: incomingTopic, receivedAt });
@@ -311,7 +311,7 @@ function requestStateValue(cacheKey) {
   return requested;
 }
 
-// Wert an ein Ziel-Topic schreiben (ioBroker-Konvention aus MQTT.md):
+// Wert an ein Ziel-Topic schreiben (Broker-Konvention aus MQTT.md):
 // Command-Topics (_SET/.SET//SET) erhalten nur den Rohwert; normale States
 // erhalten zusätzlich /set (Rohwert) und das Haupt-Topic als JSON {val, ack:false}.
 //
@@ -335,7 +335,7 @@ function publish(targetTopic, value) {
   // Adapter-Topics (prefix://) gehen an die zuständige Instanz, nicht an den Broker.
   if (isSchemeTopic(targetTopic)) return adapterRouter.write(targetTopic, value);
   if (!client) return false;
-  const baseTopic = ioBrokerIdToMqttTopic(normalizeMqttTopic(targetTopic));
+  const baseTopic = stateIdToMqttTopic(normalizeMqttTopic(targetTopic));
   if (!baseTopic) return false;
   const radio = isRadioTopic(targetTopic);
 

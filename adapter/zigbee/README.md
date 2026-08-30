@@ -5,7 +5,7 @@ Netzwerkverwaltung läuft in diesem Adapter; der Coordinator ist reine
 Funkhardware.
 
 Für den Betrieb wird **nichts weiter benötigt** — kein Zigbee2MQTT, kein
-Home Assistant, kein ioBroker, kein deCONZ-Server, kein MQTT-Gateway und kein
+Home Assistant, kein deCONZ-Server, kein MQTT-Gateway und kein
 Cloud-Dienst.
 
 ```text

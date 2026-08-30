@@ -21,7 +21,7 @@ function coerceText(text) {
 }
 
 // MQTT-Nutzlast in einen homeESS-Wert überführen. Mit `json` wird eine
-// ioBroker-artige Hülle {"val": …} ausgepackt; skalare JSON-Werte ebenso.
+// JSON-Hülle {"val": …} ausgepackt; skalare JSON-Werte ebenso.
 function decodePayload(payload, options = {}) {
   const text = Buffer.isBuffer(payload) ? payload.toString('utf8') : String(payload == null ? '' : payload);
   const trimmed = text.trim();

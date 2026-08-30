@@ -11,7 +11,7 @@ test('Output-Readback vergleicht Zahlen unabhängig von MQTT-Darstellung', () =>
   assert.equal(valuesEqual('12.51', 12.5), false);
 });
 
-test('Output-Readback erkennt boolesche ioBroker-Darstellungen', () => {
+test('Output-Readback erkennt boolesche Broker-Darstellungen', () => {
   assert.equal(valuesEqual('true', true), true);
   assert.equal(valuesEqual(1, true), true);
   assert.equal(valuesEqual('0', false), true);

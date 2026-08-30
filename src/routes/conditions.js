@@ -67,6 +67,17 @@ function conditionsRoutes(db) {
   router.post('/conditions/:id/delete', requireAuth, mutate(
     (req) => repository.deleteCondition(db, req.params.id), 'Bedingung entfernt.'
   ));
+  // Vor `/conditions/:id/items/:itemId`: sonst würde „layout" als Element-ID
+  // gelesen. Die Reihenfolge im Dann-/Sonst-Zweig kommt als JSON-Baum.
+  router.post('/conditions/:id/items/layout', requireAuth, async (req, res) => {
+    try {
+      await repository.updateItemLayout(db, req.params.id, req.body || {});
+      await engine.reload();
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(400).json({ error: error.message || 'Reihenfolge konnte nicht gespeichert werden.' });
+    }
+  });
   router.post('/conditions/:id/items', requireAuth, mutate(
     (req) => repository.addItem(db, req.params.id, req.body), 'Element hinzugefügt.',
     (req) => ({ kind: 'item-add', conditionId: Number(req.params.id), values: req.body })

@@ -91,6 +91,26 @@ test('Wert-Widget rendert Größenklasse und eigene Wertfarbe', () => {
   assert.match(html, /id="widget-value-6">3 kWh/);
 });
 
+test('Eine eigene Beschriftung ersetzt den State-Namen und nennt ihn im Tooltip', () => {
+  const html = renderDashboard(baseData({
+    tabs: [{
+      id: 1,
+      title: 'Übersicht',
+      ungrouped: [
+        {
+          id: 7, type: 'value', stateTopic: 'system://homeess/pv.current',
+          valueLabel: 'Sonnenstrom', stateLabel: 'Photovoltaik – Leistung', label: 'Sonnenstrom',
+          currentDisplay: '512 W', size: 'l', groupId: null,
+        },
+      ],
+      groups: [],
+    }],
+  }));
+  assert.match(html, /<div class="widget-label" title="Sonnenstrom · Photovoltaik – Leistung">Sonnenstrom<\/div>/);
+  // Der Dialog bietet das Feld an.
+  assert.match(html, /id="widgetValueLabel" name="valueLabel"/);
+});
+
 test('Schalter-Widget rendert vollflächige Schaltfläche mit Zustand', () => {
   const label = 'Sehr langer Schaltername fuer kleine Kacheln';
   const html = renderDashboard(baseData({

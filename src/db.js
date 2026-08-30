@@ -816,10 +816,12 @@ function openDatabase() {
         condition_id INTEGER NOT NULL,
         kind TEXT NOT NULL CHECK (kind IN ('trigger', 'when', 'then', 'else')),
         type TEXT NOT NULL,
+        parent_id INTEGER,
         config_json TEXT NOT NULL DEFAULT '{}',
         position INTEGER NOT NULL DEFAULT 0,
         last_fired_at INTEGER,
-        FOREIGN KEY (condition_id) REFERENCES automation_conditions(id) ON DELETE CASCADE
+        FOREIGN KEY (condition_id) REFERENCES automation_conditions(id) ON DELETE CASCADE,
+        FOREIGN KEY (parent_id) REFERENCES automation_condition_items(id) ON DELETE CASCADE
       )`
     );
     db.run(
@@ -880,6 +882,9 @@ function openDatabase() {
         central_temp REAL,
         fan_topic TEXT NOT NULL DEFAULT '',
         contact_delay_seconds INTEGER NOT NULL DEFAULT 0,
+        climate_mode INTEGER NOT NULL DEFAULT 2,
+        climate_mode_since INTEGER,
+        climate_reset_time TEXT NOT NULL DEFAULT '',
         last_error TEXT NOT NULL DEFAULT ''
       )`
     );
@@ -1024,6 +1029,7 @@ function openDatabase() {
     migrateMessSchaltTemperaturePower(db);
     migrateConditionFolders(db);
     migrateConditionElseKind(db);
+    migrateConditionItemParent(db);
     migrateHeimkinoRooms(db);
     seedHeizungCentral(db);
     seedHeizungBilling(db);
@@ -1050,6 +1056,18 @@ function migrateHeizungDeviceActions(db) {
     // Optionaler Heizkörperlüfter je Raum.
     if (!existing.has('fan_topic')) {
       db.run("ALTER TABLE heizung_rooms ADD COLUMN fan_topic TEXT NOT NULL DEFAULT ''");
+    }
+    // Übersteuerung der Klimaanlage (0 = Aus, 1 = An, 2 = Automatik). Räume aus
+    // älteren Ständen starten in der Automatik.
+    if (!existing.has('climate_mode')) {
+      db.run('ALTER TABLE heizung_rooms ADD COLUMN climate_mode INTEGER NOT NULL DEFAULT 2');
+    }
+    // Zeitpunkt der Handschaltung und die optionale Uhrzeit ihrer Rücknahme.
+    if (!existing.has('climate_mode_since')) {
+      db.run('ALTER TABLE heizung_rooms ADD COLUMN climate_mode_since INTEGER');
+    }
+    if (!existing.has('climate_reset_time')) {
+      db.run("ALTER TABLE heizung_rooms ADD COLUMN climate_reset_time TEXT NOT NULL DEFAULT ''");
     }
     if (!existing.has('heat_priority')) {
       db.run('ALTER TABLE heizung_rooms ADD COLUMN heat_priority INTEGER NOT NULL DEFAULT 2');
@@ -1146,6 +1164,20 @@ function migrateHeimkinoRooms(db) {
   });
 }
 
+// Dann- und Sonst-Zweige können seit den Schleifen verschachtelt sein: eine
+// Schleife (`type` = loop) nimmt über `parent_id` weitere Aktionen auf.
+// Bestandsdatenbanken bekommen die Spalte nachgereicht; alle vorhandenen
+// Elemente bleiben damit auf der obersten Ebene (parent_id NULL).
+function migrateConditionItemParent(db) {
+  db.all('PRAGMA table_info(automation_condition_items)', (err, rows) => {
+    if (err || !Array.isArray(rows) || rows.length === 0) return;
+    if (rows.some((row) => row.name === 'parent_id')) return;
+    // Der Aufruf kann sich mit dem Neuaufbau der Tabelle (Sonst-Zweig)
+    // überschneiden; ein bereits vorhandenes `parent_id` ist dann kein Fehler.
+    db.run('ALTER TABLE automation_condition_items ADD COLUMN parent_id INTEGER', () => {});
+  });
+}
+
 function migrateConditionElseKind(db) {
   db.get("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'automation_condition_items'", (err, row) => {
     if (err || !row || !row.sql || row.sql.includes("'else'")) return;
@@ -1169,6 +1201,9 @@ function migrateConditionElseKind(db) {
       db.run('DROP TABLE automation_condition_items');
       db.run('ALTER TABLE automation_condition_items_next RENAME TO automation_condition_items');
       db.run('CREATE INDEX IF NOT EXISTS idx_automation_items_condition_kind ON automation_condition_items (condition_id, kind, position, id)');
+      // Der Neuaufbau erzeugt die Tabelle ohne `parent_id`; die Spalte für die
+      // Schleifen kommt danach (idempotent) wieder dazu.
+      migrateConditionItemParent(db);
     });
   });
 }

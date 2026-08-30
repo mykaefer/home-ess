@@ -320,7 +320,8 @@ const CENTRAL_STATES = [
   { suffix: 'laufzeit_heute', label: 'Laufzeit heute', unit: 'h', writable: false },
   { suffix: 'verbrauch_heute', label: 'Verbrauch heute', unit: '', writable: false },
   { suffix: 'kosten_heute', label: 'Heizkosten heute', unit: '€', writable: false },
-  { suffix: 'schornsteinfeger', label: 'Schornsteinfeger-Modus', unit: '', writable: true },
+  { suffix: 'schornsteinfeger', label: 'Schornsteinfeger-Modus', unit: '', writable: true,
+    control: { type: 'switch', on: '1', off: '0' } },
 ];
 
 function flowCacheKey(kind) {
@@ -376,6 +377,7 @@ function centralEntries(config, snapshot = {}) {
       category: CATEGORY,
       unit: state.suffix === 'verbrauch_heute' ? config.unit : state.unit,
       writable: state.writable,
+      control: state.control,
       value,
       display,
     };

@@ -378,6 +378,15 @@ function buildTree(data) {
 
 async function managementTree(db) { return buildTree(await rowsWithPaths(db)); }
 
+// Custom States kennen ihren Datentyp — daraus ergibt sich das Bedienelement
+// (states/controls.js ergänzt fehlende Angaben).
+function controlForType(dataType) {
+  if (dataType === 'boolean') return { type: 'switch', on: 'true', off: 'false' };
+  if (dataType === 'integer') return { type: 'number', step: 1 };
+  if (dataType === 'float') return { type: 'number', step: 'any' };
+  return { type: 'text' };
+}
+
 async function buildStatesBlock(db) {
   const data = await rowsWithPaths(db);
   const tree = buildTree(data);
@@ -389,7 +398,9 @@ async function buildStatesBlock(db) {
   });
   function mapState(state) {
     return { address: state.path.join('/'), name: state.name, topic: state.topic, unit: state.unit,
-      writable: true, topicSelectable: true, sourceType: 'custom', value: state.value, display: state.display };
+      writable: true, topicSelectable: true, sourceType: 'custom', value: state.value, display: state.display,
+      // Der Datentyp bestimmt das Bedienelement auf der States-Seite.
+      control: controlForType(state.dataType) };
   }
   const categories = tree.folders.map(mapFolder);
   if (tree.states.length) categories.unshift({ name: 'Ohne Verzeichnis', states: tree.states.map(mapState), children: [], stateCount: tree.states.length });
@@ -406,5 +417,5 @@ async function listCatalogEntries(db) {
     sourceType: 'custom', writable: true, topicSelectable: true }));
 }
 
-module.exports = { init, rowsWithPaths, addFolder, updateFolder, deleteFolder, addState, updateState, deleteState, setValue, updateLayout,
+module.exports = { init, controlForType, rowsWithPaths, addFolder, updateFolder, deleteFolder, addState, updateState, deleteState, setValue, updateLayout,
   coerceValue, normalizeDefinition, formatValue, managementTree, buildStatesBlock, listCatalogEntries, TYPES, ROUNDINGS };
