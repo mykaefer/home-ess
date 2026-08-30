@@ -12,8 +12,14 @@ const { renderActionSequences } = require('./action-sequences');
 const { PHASES } = require('../heizung/actions');
 const {
   MIN_TEMP, MAX_TEMP, MAX_OFFSET, MIN_HYSTERESIS, MAX_HYSTERESIS, MAX_CONTACT_DELAY_SECONDS,
-  MIN_PRIORITY, MAX_PRIORITY,
+  MIN_PRIORITY, MAX_PRIORITY, addressFor,
 } = require('../heizung/rooms');
+const climate = require('../heizung/climate');
+
+// Topic der Betriebsart — der Weg, auf dem die Klimaanlage übersteuert wird.
+function climateTopic(room) {
+  return climate.stateTopic(addressFor(room.name), 'betriebsart');
+}
 
 function temp(value) {
   return value == null || !Number.isFinite(Number(value)) ? '—' : `${Number(value).toFixed(1).replace('.', ',')} °C`;
@@ -92,7 +98,7 @@ ${rows.length ? rows.join('\n') : `              <div class="adapter-row adapter
           </div>`;
 }
 
-function settingsForm(room, central) {
+function settingsForm(room, central, hasCoolDevice) {
   const centralChecked = room.centralAllowed ? ' checked' : '';
   return `        <form action="/heizung/raum/${room.id}" method="POST" class="hz-settings">
           <div class="dialog-section">
@@ -115,6 +121,14 @@ function settingsForm(room, central) {
             <div class="dialog-grid dialog-grid--two">
               <label class="field-block"><span>Zentralheizung ab Außentemperatur unter (°C)</span><input name="centralTemp" type="number" value="${num(room.centralTemp)}" min="${MIN_TEMP}" max="${MAX_TEMP}" step="0.5" data-no-state-picker></label>
               <label class="field-block condition-topic-field"><span>Heizkörperlüfter (optional)</span><span class="field-hint">Wird eingeschaltet, solange dieser Raum Wärme von der Zentralheizung anfordert, und danach wieder aus</span><input name="fanTopic" value="${escapeHtml(room.fanTopic)}" data-state-picker data-state-picker-writable autocomplete="off" placeholder="State auswählen…"></label>
+            </div>
+          </div>
+          <div class="dialog-section">
+            <div class="dialog-section-head"><h4>Klimaanlage</h4></div>
+            ${hasCoolDevice ? '' : '<p class="muted condition-section-hint"><strong>Für diesen Raum ist noch kein Kühlgerät eingerichtet</strong> — die Einstellung greift, sobald die Folge „Kühlen ein" Aktionen enthält.</p>'}
+            <p class="muted condition-section-hint">Die Klimaanlage dieses Raums lässt sich über den State <code>${escapeHtml(climateTopic(room))}</code> von Hand übersteuern (0 = Aus, 1 = An, 2 = Automatik). Eine Handschaltung setzt die automatischen Aktionsschleifen aus — die Anlage reagiert dann weder auf einen offenen Kontakt noch auf die Raumtemperatur. Zurück auf Automatik geht sie, sobald der Raum die Soll-Temperatur erreicht — und, wenn hier eine Uhrzeit steht, spätestens zu dieser Zeit. Maßgeblich ist die erste Fälligkeit nach dem Umschalten: wer um 23:00 Uhr auf „An" stellt, dessen Rückkehr um 22:00 Uhr kommt am folgenden Tag.</p>
+            <div class="dialog-grid dialog-grid--two">
+              <label class="field-block"><span>Zurück auf Automatik um (optional)</span><span class="field-hint">Leer = nur beim Erreichen der Soll-Temperatur</span><input name="climateResetTime" type="time" value="${escapeHtml(room.climateResetTime || '')}" data-no-state-picker></label>
             </div>
           </div>
           <div class="dialog-section">
@@ -170,7 +184,7 @@ ${rows.join('\n')}
 
 function renderHeizungRoom({
   room = null, sensors = [], contacts = [], central = {}, state = {}, stateTopics = [],
-  tree = {}, actions = [], error = '', message = '', initialDialog = null,
+  tree = {}, actions = [], hasCoolDevice = false, error = '', message = '', initialDialog = null,
 } = {}) {
   if (!room) return renderLayout({ title: 'Heizung & Klima', activePath: '/heizung', body: '<p>Raum nicht gefunden.</p>' });
   // Die Aktionsfolgen kommen aus demselben Baustein wie beim Heimkino.
@@ -223,7 +237,7 @@ ${statesBlock(room, stateTopics)}
           <p class="muted condition-section-hint">Heiz- und Kühlgerät werden über Aktionsfolgen geschaltet — Wertzuweisungen, Pausen und Schleifen, die zyklisch prüfen können, ob der gewünschte Zustand tatsächlich erreicht wurde. So lässt sich auch eine Splitklimaanlage bedienen, die Betriebsart, Solltemperatur und Einschaltbefehl nacheinander braucht. <strong>Beide Geräte sind optional:</strong> ein Raum ohne Aktionen in der „ein"-Folge erfasst nur seine Temperatur.</p>
 ${sequences.body}
         </div>
-${settingsForm(room, central)}
+${settingsForm(room, central, hasCoolDevice)}
         ${sensorDialog(room.id)}`;
 
   const script = `

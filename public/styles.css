@@ -655,6 +655,9 @@ h2 .cmd-confirm { font-size: 13px; vertical-align: middle; }
 
 .kpi-card--pv .kpi-value { color: #e67e22; }
 .kpi-card--bat .kpi-value { color: #27ae60; }
+/* Fachliche Legende auch fuer die Uebersichtskacheln: Netz rot, Eigenverbrauch lila. */
+.kpi-card--grid .kpi-value { color: var(--color-grid); }
+.kpi-card--self .kpi-value { color: var(--color-self); }
 
 /* PV-Prognose: kompakte Kachelreihe (heute + Folgetage) */
 .forecast-row {
@@ -847,6 +850,86 @@ h2 .cmd-confirm { font-size: 13px; vertical-align: middle; }
     justify-content: flex-end;
     padding-top: 12px;
     border-top: 1px solid var(--color-line);
+}
+
+/* Energie-Übersicht: je Fachbereich eine Karte mit Kopfzeile, die auf die
+   ausführliche Seite führt. Die Karten benutzen die vorhandenen KPI- und
+   Tabellenbausteine, damit Übersicht und Detailseite gleich aussehen. */
+.energie-intro {
+    margin: -8px 0 20px;
+}
+
+.energie-sections {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.energie-section-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 16px;
+    margin-bottom: 16px;
+}
+
+.energie-section-head h2 {
+    margin: 0 0 4px;
+}
+
+.energie-section-head p {
+    margin: 0;
+}
+
+.energie-section-title {
+    color: inherit;
+    text-decoration: none;
+}
+
+/* Ampel-Chip neben dem Abschnittstitel (Prognose). */
+.energie-section-head h2 .forecast-chip {
+    display: inline-block;
+    margin-left: 10px;
+    vertical-align: middle;
+}
+
+.energie-section-title:hover {
+    text-decoration: underline;
+}
+
+.energie-section-link {
+    display: inline-flex;
+    align-items: center;
+    flex: 0 0 auto;
+    text-decoration: none;
+    white-space: nowrap;
+}
+
+/* Letzte Zeile einer Abschnittskarte schliesst buendig ab. */
+.energie-section .kpi-row,
+.energie-section .energy-overview,
+.energie-section .soc-bar-wrap,
+.energie-section .info-card {
+    margin-bottom: 0;
+}
+
+.energie-section .kpi-row + .soc-bar-wrap {
+    margin-top: 16px;
+}
+
+/* Die Übersicht zeigt vier Zeiträume statt fünf – ohne Rahmen, da sie bereits
+   in der Abschnittskarte liegt. */
+.energie-overview--flat {
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    padding: 0;
+}
+
+.energie-overview--flat .energy-overview-head,
+.energie-overview--flat .energy-overview-row {
+    grid-template-columns: 1.1fr repeat(4, minmax(100px, 1fr));
 }
 
 .strom-layout {
@@ -1469,6 +1552,96 @@ h2 .cmd-confirm { font-size: 13px; vertical-align: middle; }
     border-color: var(--color-line-strong);
     background: var(--color-surface);
     color: var(--color-ink);
+}
+
+/* ----------------------------------------------------------------------------
+   Bedienung beschreibbarer States direkt in der Baumzeile.
+   Je nach Datentyp steht dort ein Ein/Aus-Paar, eine Auswahl oder ein Feld mit
+   „Setzen" (siehe states/controls.js). Die Elemente bleiben so flach wie die
+   Zeile selbst, damit der Baum seine Zeilenhöhe behält.
+   -------------------------------------------------------------------------- */
+.value-row-control {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 4px;
+}
+
+.value-row-control.is-busy {
+    opacity: 0.5;
+    pointer-events: none;
+}
+
+.state-op-btn {
+    padding: 1px 8px;
+    border: 1px solid var(--color-line-strong);
+    border-radius: 5px;
+    background: var(--color-surface-muted);
+    color: var(--color-ink-soft);
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 18px;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background 0.1s, color 0.1s, border-color 0.1s;
+}
+
+.state-op-btn:hover {
+    background: var(--color-surface-sunken);
+}
+
+/* Ein/Aus stehen als Paar zusammen. */
+.value-row-control[data-control-type="switch"] .state-op-btn:first-child {
+    border-radius: 5px 0 0 5px;
+    border-right-width: 0;
+}
+
+.value-row-control[data-control-type="switch"] .state-op-btn:last-child {
+    border-radius: 0 5px 5px 0;
+}
+
+.value-row-control[data-control-type="switch"] .state-op-btn[data-state-on].is-active {
+    background: #0ea5e9;
+    border-color: #0ea5e9;
+    color: #fff;
+}
+
+.value-row-control[data-control-type="switch"] .state-op-btn[data-state-off].is-active {
+    background: #6b7280;
+    border-color: #6b7280;
+    color: #fff;
+}
+
+.state-op-select,
+.state-op-input {
+    height: 20px;
+    padding: 0 4px;
+    border: 1px solid var(--color-line-strong);
+    border-radius: 5px;
+    background: var(--color-surface);
+    color: var(--color-ink);
+    font-size: 11px;
+    line-height: 18px;
+}
+
+.state-op-input {
+    width: 86px;
+    text-align: right;
+}
+
+/* Auf schmalen Geräten rutscht die Bedienung unter den Wert, statt die Zeile
+   zu stauchen. */
+@media (max-width: 640px) {
+    .states-tree .value-row--operable {
+        flex-wrap: wrap;
+        padding-bottom: 4px;
+        row-gap: 4px;
+    }
+
+    .states-tree .value-row--operable .value-row-control {
+        flex: 1 0 100%;
+        justify-content: flex-end;
+    }
 }
 
 .state-props-dialog {
@@ -2399,6 +2572,11 @@ body.dash-editing .widget-group {
         min-width: 760px;
     }
 
+    .energie-overview--flat .energy-overview-head,
+    .energie-overview--flat .energy-overview-row {
+        min-width: 620px;
+    }
+
     .energy-overview-actions {
         justify-content: flex-start;
     }
@@ -3088,6 +3266,7 @@ a.secondary-button {
 .forecast-chip--good { color: var(--color-ok-ink); background: var(--color-ok-tint); }
 .forecast-chip--bad { color: var(--color-bad-ink); background: var(--color-bad-tint); }
 .forecast-chip--neutral { color: var(--color-ink-mid); background: var(--color-surface-muted); }
+.forecast-chip--warn { color: var(--color-warn-ink); background: var(--color-warn-tint); }
 .forecast-bar-row { display: grid; grid-template-columns: 54px minmax(100px, 1fr) 95px; gap: 10px; align-items: center; margin: 7px 0; font-size: 12px; color: var(--color-ink-muted); }
 .forecast-bar-row b { color: var(--color-ink-soft); text-align: right; font-variant-numeric: tabular-nums; }
 .forecast-bar-track { height: 9px; overflow: hidden; border-radius: 999px; background: var(--color-surface-muted); }
@@ -3736,6 +3915,9 @@ a.secondary-button {
 }
 .condition-enabled.is-enabled { color: var(--color-ok-line); background: rgba(34, 197, 94, .2); }
 .condition-enabled.is-disabled { color: #cbd5e1; background: rgba(148, 163, 184, .18); }
+/* Kennzeichen einer Automation ohne Trigger: ausgelöst von der zyklischen
+   Prüfung ihrer Schleife (Farbe wie die Schleifen-Chips). */
+.condition-enabled--loop { color: #a5f3fc; background: rgba(8, 145, 178, .28); }
 .condition-runtime {
     min-width: 0;
     max-width: 340px;
@@ -3769,8 +3951,9 @@ a.secondary-button {
     font-size: 10px;
 }
 .condition-item-zone { min-height: 36px; }
-/* Trigger, Wenns und Danns tragen bewusst keine Dragfläche: ihre Reihenfolge
-   ist für die Auswertung ohne Bedeutung. */
+/* Trigger und Wenns tragen bewusst keine Dragfläche: ihre Reihenfolge ist für
+   die Auswertung ohne Bedeutung. Die Aktionen des Dann- und Sonst-Zweigs laufen
+   dagegen von oben nach unten und sind deshalb verschiebbar (.cnd-action). */
 .condition-item {
     display: grid;
     grid-template-columns: 68px minmax(0, 1fr) 60px;
@@ -3802,6 +3985,21 @@ a.secondary-button {
 .condition-kind--then { color: var(--color-ok-ink); background: var(--color-ok-tint); }
 .condition-kind--else { color: var(--color-accent-ink); background: var(--color-accent-tint); }
 .condition-item-description { min-width: 0; overflow-wrap: anywhere; color: var(--color-text); }
+/* Aktionszeile des Dann-/Sonst-Zweigs: zusätzliche Spalte für die Dragfläche.
+   Zone und Schleifen folgen den Aktionsfolgen der Module (.hk-/.hz-Regeln). */
+.condition-item.cnd-action {
+    grid-template-columns: 22px 68px minmax(0, 1fr) 60px;
+    border-top: 0;
+    border: 1px solid var(--color-line-soft);
+}
+
+.condition-section-add {
+    margin-left: auto;
+}
+
+.condition-item.cnd-action:hover .widget-actions,
+.condition-item.cnd-action:focus-within .widget-actions { opacity: 1; }
+
 .condition-item .widget-actions { justify-self: end; }
 .condition-item .widget-icon-btn:disabled { opacity: .3; cursor: not-allowed; }
 .condition-item:hover .widget-actions,
@@ -3932,7 +4130,8 @@ a.secondary-button {
 .hk-phase-body,
 .hz-phase-body { background: var(--color-surface-subtle); }
 .hk-zone,
-.hz-zone {
+.hz-zone,
+.cnd-zone {
     display: flex;
     flex-direction: column;
     gap: 6px;
@@ -3940,7 +4139,8 @@ a.secondary-button {
     padding: 8px;
 }
 .hk-zone:empty::after,
-.hz-zone:empty::after {
+.hz-zone:empty::after,
+.cnd-zone:empty::after {
     content: 'Keine Aktionen – Aktion hierher ziehen oder unten hinzufügen.';
     display: block;
     padding: 6px 8px;
@@ -3948,17 +4148,23 @@ a.secondary-button {
     font-size: 12px;
 }
 .hk-loop-zone:empty::after,
-.hz-loop-zone:empty::after { content: 'Leere Schleife – Aktion hierher ziehen.'; }
+.hz-loop-zone:empty::after,
+.cnd-loop-zone:empty::after { content: 'Leere Schleife – Aktion hierher ziehen.'; }
 .hk-zone.condition-drag-over,
-.hz-zone.condition-drag-over { outline: 2px dashed #3b82f6; outline-offset: -3px; border-radius: 8px; }
+.hz-zone.condition-drag-over,
+.cnd-zone.condition-drag-over { outline: 2px dashed #3b82f6; outline-offset: -3px; border-radius: 8px; }
 .hk-node,
-.hz-node { border-radius: 6px; }
+.hz-node,
+.cnd-node { border-radius: 6px; }
 .hk-node.group-dragging,
-.hz-node.group-dragging { opacity: .45; }
+.hz-node.group-dragging,
+.cnd-node.group-dragging { opacity: .45; }
 .hk-node.condition-drop-before,
-.hz-node.condition-drop-before { box-shadow: inset 0 3px 0 #3b82f6; }
+.hz-node.condition-drop-before,
+.cnd-node.condition-drop-before { box-shadow: inset 0 3px 0 #3b82f6; }
 .hk-node.condition-drop-after,
-.hz-node.condition-drop-after { box-shadow: inset 0 -3px 0 #3b82f6; }
+.hz-node.condition-drop-after,
+.cnd-node.condition-drop-after { box-shadow: inset 0 -3px 0 #3b82f6; }
 .hk-action,
 .hz-action {
     display: grid;
@@ -3978,29 +4184,41 @@ a.secondary-button {
 .hk-action:focus-within .widget-actions,
 .hz-action:focus-within .widget-actions { opacity: 1; }
 .hk-drag,
-.hz-drag { cursor: grab; }
+.hz-drag,
+.cnd-drag { cursor: grab; }
 .hk-kind--write,
-.hz-kind--write { color: var(--color-ok-ink); background: var(--color-ok-tint); }
+.hz-kind--write,
+.cnd-kind--write { color: var(--color-ok-ink); background: var(--color-ok-tint); }
 .hk-kind--pause,
-.hz-kind--pause { color: var(--color-warn-ink); background: var(--color-warn-tint); }
+.hz-kind--pause,
+.cnd-kind--pause { color: var(--color-warn-ink); background: var(--color-warn-tint); }
 .hk-kind--loop,
-.hz-kind--loop { color: var(--color-cyan-ink); background: var(--color-cyan-tint); }
+.hz-kind--loop,
+.cnd-kind--loop { color: var(--color-cyan-ink); background: var(--color-cyan-tint); }
 .hk-loop,
-.hz-loop { border: 1px solid var(--color-line-strong); overflow: hidden; background: var(--color-surface); }
+.hz-loop,
+.cnd-loop { border: 1px solid var(--color-line-strong); overflow: hidden; background: var(--color-surface); }
 .hk-loop-head,
-.hz-loop-head { min-height: 36px; }
+.hz-loop-head,
+.cnd-loop-head { min-height: 36px; }
 .hk-loop-head.condition-drag-over,
-.hz-loop-head.condition-drag-over { outline: 2px solid #0891b2; outline-offset: -3px; background: rgba(8, 145, 178, .3); }
+.hz-loop-head.condition-drag-over,
+.cnd-loop-head.condition-drag-over { outline: 2px solid #0891b2; outline-offset: -3px; background: rgba(8, 145, 178, .3); }
 .hk-loop-title,
-.hz-loop-title { flex: 1 1 auto; font-weight: 600; }
+.hz-loop-title,
+.cnd-loop-title { flex: 1 1 auto; font-weight: 600; }
 .hk-loop-head .ms-group-count,
-.hz-loop-head .ms-group-count { margin-right: 0; }
+.hz-loop-head .ms-group-count,
+.cnd-loop-head .ms-group-count { margin-right: 0; }
 .hk-loop-body,
-.hz-loop-body { display: none; background: var(--color-surface-subtle); }
+.hz-loop-body,
+.cnd-loop-body { display: none; background: var(--color-surface-subtle); }
 .hk-loop.is-open > .hk-loop-body,
-.hz-loop.is-open > .hz-loop-body { display: block; }
+.hz-loop.is-open > .hz-loop-body,
+.cnd-loop.is-open > .cnd-loop-body { display: block; }
 .hk-loop.is-open > .hk-loop-head .ms-caret,
-.hz-loop.is-open > .hz-loop-head .ms-caret { transform: rotate(90deg); }
+.hz-loop.is-open > .hz-loop-head .ms-caret,
+.cnd-loop.is-open > .cnd-loop-head .ms-caret { transform: rotate(90deg); }
 
 @media (max-width: 1400px) {
     /* Weniger Spalten statt gequetschter Inhalte – Kopf- und Datenzeile
@@ -4046,8 +4264,8 @@ a.secondary-button {
 .hz-lists { margin-top: 0; }
 .hz-room-row {
     grid-template-columns:
-        minmax(0, 1.6fr) minmax(0, 0.7fr) minmax(0, 1.1fr)
-        minmax(0, 1.8fr) minmax(0, 1.5fr);
+        minmax(0, 1.5fr) minmax(0, 0.6fr) minmax(0, 1fr) minmax(0, 1.1fr)
+        minmax(0, 1.5fr) minmax(0, 1.3fr);
     align-items: center;
     gap: 10px 14px;
 }
@@ -4066,6 +4284,12 @@ a.secondary-button {
 .hz-room-link { color: inherit; text-decoration: none; }
 .hz-room-link:hover { text-decoration: underline; }
 .hz-col-temp { font-size: 17px; font-weight: 600; white-space: nowrap; }
+/* Umschalter der Klimaanlage (An/Aus/Automatik) in der Raumzeile. Die Knöpfe
+   sind dieselben wie bei den Pumpenmodi der Poolsteuerung und bleiben deshalb
+   auch mit der Rolle „bedienen" nutzbar. Räume ohne Kühlgerät lassen die Spalte
+   leer. */
+.hz-klima-btns { margin-top: 0; }
+.hz-klima-btns .pump-mode-btn { padding: 4px 7px; }
 .hz-col-state { display: flex; flex-wrap: wrap; gap: 6px; }
 .hz-badge-cool { color: var(--color-cyan-ink); }
 .hz-badge-central { color: #d97706; }
@@ -4141,7 +4365,10 @@ a.secondary-button {
 .hz-settings .dialog-section { margin-bottom: 8px; }
 
 @media (max-width: 1200px) {
-    .hz-room-row { grid-template-columns: minmax(0, 1.6fr) minmax(0, 0.7fr) minmax(0, 1.1fr) minmax(0, 1.6fr); }
+    .hz-room-row {
+        grid-template-columns:
+            minmax(0, 1.5fr) minmax(0, 0.6fr) minmax(0, 1fr) minmax(0, 1.1fr) minmax(0, 1.4fr);
+    }
     .hz-room-row > .hz-col-state { display: none; }
 }
 
@@ -4154,10 +4381,16 @@ a.secondary-button {
         grid-template-areas:
             "name temp"
             "state state"
+            "klima klima"
             "target actions";
         gap: 4px 8px;
         padding: 7px 10px;
     }
+    /* Der Umschalter bekommt auf dem Telefon eine eigene Zeile; ohne
+       Klimaanlage bleibt sie leer und fällt weg. */
+    .hz-room-row > .hz-col-klima { grid-area: klima; }
+    .hz-room-row > .hz-col-klima:empty { display: none; }
+    .hz-klima-btns .pump-mode-btn { padding: 4px 9px; font-size: 12px; }
     .hz-room-row > .adapter-col-name { grid-area: name; gap: 0; }
     /* Lange Raumnamen kürzen, statt die Ist-Temperatur zu verdrängen. */
     .hz-room-row .hz-room-link { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -5156,6 +5389,7 @@ body,
 .fh-key--plan { background: #afa3b9; }
 
 .kpi-card--grid .kpi-value { color: var(--color-grid); }
+.kpi-card--self .kpi-value { color: var(--color-self); }
 .forecast-chip--bad {
     color: var(--color-grid);
     background: var(--color-grid-tint);
@@ -5163,6 +5397,10 @@ body,
 .forecast-chip--good {
     color: #8b671d;
     background: var(--color-pv-tint);
+}
+.forecast-chip--warn {
+    color: var(--color-warn-ink);
+    background: var(--color-warn-tint);
 }
 .forecast-hero-soc strong,
 .forecast-day-foot--battery strong { color: var(--color-battery); }
@@ -5478,6 +5716,15 @@ body,
     .kpi-value { font-size: 1.4em; }
 
     .panel-card { padding: 14px; }
+
+    /* Abschnittskopf der Energie-Übersicht: Titel und Sprung zur Detailseite
+       untereinander, damit die Schaltflaeche nicht den Text quetscht. */
+    .energie-section-head {
+        flex-wrap: wrap;
+        gap: 10px;
+    }
+
+    .energie-sections { gap: 14px; }
     .content-grid { gap: 14px; }
     .content-grid--split { grid-template-columns: 1fr; }
 
@@ -5744,6 +5991,11 @@ body,
         min-width: 0;
         grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 8px 14px;
+    }
+
+    /* Auch die vierspaltige Übersichtsvariante wird auf dem Telefon zur Karte. */
+    .energie-overview--flat .energy-overview-row {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
     .energy-overview-row strong { font-size: 15px; }
@@ -6328,6 +6580,15 @@ body,
     pointer-events: auto;
     opacity: 1;
     cursor: pointer;
+}
+
+/* Ebenso die Bedienelemente beschreibbarer States auf der States-Seite: sie
+   werden Lesern gar nicht erst ausgeliefert, „bedienen" darf sie benutzen. */
+.access-operate .main-content .value-row-control input,
+.access-operate .main-content .value-row-control select {
+    pointer-events: auto;
+    opacity: 1;
+    cursor: auto;
 }
 
 /* ============================================================================

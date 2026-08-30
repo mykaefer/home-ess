@@ -3,7 +3,7 @@
   "name": "Zigbee",
   "prefix": "zigbee",
   "version": "1.3.4",
-  "description": "Macht homeESS zur eigenständigen Zigbee-Zentrale. Der Adapter verwaltet Netzwerk, Pairing und Geräte selbst und spricht den Coordinator direkt über Serial oder TCP an – ohne Zigbee2MQTT, ioBroker, deCONZ-Server oder Cloud-Dienst. Geräte werden über zigbee-herdsman-converters automatisch erkannt; ihre States entstehen dynamisch aus den Exposes des jeweiligen Gerätes.",
+  "description": "Macht homeESS zur eigenständigen Zigbee-Zentrale. Der Adapter verwaltet Netzwerk, Pairing und Geräte selbst und spricht den Coordinator direkt über Serial oder TCP an – ohne Zigbee2MQTT, deCONZ-Server oder Cloud-Dienst. Geräte werden über zigbee-herdsman-converters automatisch erkannt; ihre States entstehen dynamisch aus den Exposes des jeweiligen Gerätes.",
   "copyright": "Copyright (C) 2026 Kevin Käfer",
   "multiInstance": true,
   "main": "index.js",

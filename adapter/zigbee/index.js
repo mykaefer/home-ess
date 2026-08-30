@@ -4,7 +4,7 @@
 //
 // Macht homeESS zur eigenständigen Zigbee-Zentrale: Netzwerkverwaltung,
 // Pairing, Geräte-Interviews und Gerätebefehle laufen vollständig in diesem
-// Adapterprozess. Es wird kein Zigbee2MQTT, kein ioBroker, kein deCONZ-Server,
+// Adapterprozess. Es wird kein Zigbee2MQTT, kein deCONZ-Server,
 // kein MQTT-Gateway und kein Cloud-Dienst benötigt; der Coordinator ist reine
 // Funkhardware.
 //

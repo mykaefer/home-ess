@@ -107,6 +107,9 @@ function normalizeWidgetRow(row = {}) {
   if (def.supportsSize) widget.size = normalizeSize(config.size);
   if (def.supportsColor) widget.color = normalizeColor(config.color);
   if (type === 'info') widget.infoFields = sanitizeFields(config.fields);
+  // Wert-Kacheln tragen sonst den Namen ihres States; eine eigene Beschriftung
+  // ist optional und ersetzt ihn (wie beim Schalter).
+  if (type === 'value') widget.valueLabel = String(config.label || '').trim();
   if (type === 'switch') {
     widget.switchLabel = String(config.label || '').trim();
     widget.onColor = normalizeColor(config.onColor);
@@ -190,6 +193,7 @@ function normalizeWidgetInput(input = {}) {
   if (def.supportsSize) normalized.size = normalizeSize(input.size);
   if (def.supportsColor) normalized.color = normalizeColor(input.color);
   if (type === 'info') normalized.infoFields = sanitizeFields(toArray(input.infoFields).map(String));
+  if (type === 'value') normalized.valueLabel = String(input.valueLabel || '').trim().slice(0, 60);
   if (type === 'switch') {
     // Schalter verwenden ein eigenes Zielfeld (switchTarget) statt des
     // State-Pickers; das Ziel landet normalisiert in sourceId.
@@ -248,6 +252,7 @@ function configFor(widget) {
   if (widget.size && widget.size !== 'l') config.size = widget.size;
   if (widget.color) config.color = widget.color;
   if (widget.type === 'info') config.fields = widget.infoFields;
+  if (widget.type === 'value' && widget.valueLabel) config.label = widget.valueLabel;
   if (widget.type === 'switch') {
     if (widget.switchLabel) config.label = widget.switchLabel;
     if (widget.onColor) config.onColor = widget.onColor;

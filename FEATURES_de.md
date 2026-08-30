@@ -23,6 +23,10 @@ eigenständige Desktop- und Mobilansichten.
 
 ## Energiemessung
 
+- Energie-Übersicht als Einstieg in die Energieseiten: Eckdaten von
+  Photovoltaik, Stromverbrauch, Batterie, Prognose und – falls aktiv –
+  Grid-Control auf einer Seite, jeweils mit Sprung auf die zugehörige
+  Unterseite.
 - Stromverbrauchsseite für Eigenverbrauch, Netzbezug, Einspeisung sowie Tages-,
   Wochen- und Jahreswerte.
 - Sichere Rohzählerbehandlung über Differenzen ohne Sprünge nach Zähler- oder
@@ -128,6 +132,21 @@ eigenständige Desktop- und Mobilansichten.
   Temperatur und stellt alle Werte als Systemwerte bereit — unter *System* im
   Ordner *Räume* mit einem Unterordner je Raum, benannt nach dem Raum
   (`system://homeess/raeume.Wohnzimmer.temperatur`) statt durchnummeriert. Ob
+  Ist im Raum eine **Klimaanlage zum Kühlen** eingerichtet, lässt sich ihr
+  Zustand von Hand übersteuern: unter *System* im Ordner *Klima* liegt je Raum
+  eine beschreibbare **Betriebsart** (0 = Aus, 1 = An, 2 = Automatik,
+  `system://homeess/klima.Wohnzimmer.betriebsart`) und daneben der nur lesende
+  Wert **Aktiv**, der meldet, ob die Anlage gerade läuft. „Aus" und „An" setzen
+  die automatischen Aktionsschleifen aus — die Anlage reagiert dann weder auf
+  einen offenen Fenster-/Türkontakt noch auf die Raumtemperatur, sondern bleibt
+  in ihrem geschalteten Zustand stehen. Zurück auf Automatik springt sie, wenn
+  der Raum die eingestellte Soll-Temperatur erreicht — und, sofern je Raum eine
+  **Uhrzeit** hinterlegt ist, spätestens zu dieser Zeit (die erste Fälligkeit
+  nach dem Umschalten zählt; ein Neustart holt sie nach). Vorrang behält das
+  Betriebslevel: deckt es die Priorität des Kühlgerätes nicht ab, bleibt die
+  Anlage auch bei „An" aus. Bedient wird die Betriebsart wahlweise über den
+  State oder direkt in der **Raumübersicht**, wo Räume mit Klimaanlage einen
+  Umschalter *An / Aus / Automatik* tragen. Ob
   ein Raum seine Wärme vom lokalen Gerät oder von der Zentralheizung bekommt,
   entscheidet die **Außentemperatur** (systemweit oder eigene Quelle) gegen eine
   je Raum einstellbare Grenztemperatur. Je Raum lässt sich zusätzlich ein
@@ -162,6 +181,23 @@ eigenständige Desktop- und Mobilansichten.
 - Jedes hDP-ARGB-Gerät kann einen eigenen Dimmschalter verwenden: Entspricht
   der gewählte State dem hinterlegten Vergleichswert, reduziert homeESS die
   berechnete Ausgabehelligkeit vor der Übertragung um den eingestellten Anteil.
+- **Wert-Kacheln des Dashboards** tragen wahlweise eine eigene Beschriftung
+  statt des State-Namens; der Tooltip nennt dann zusätzlich die Herkunft des
+  Wertes.
+- Der systemweite **Topic-Picker** öffnet bis zur doppelten Breite, wenn der
+  Bildschirm den Platz hergibt — lange State-Namen bleiben so vollständig
+  lesbar. Aufgeklappt wird immer in die Richtung mit mehr Platz: Felder in der
+  unteren Hälfte des Bildschirms öffnen die Auswahl nach oben.
+- Die Seite **States** zeigt Systemwerte, Custom States und Adapter-States in
+  einem gemeinsamen Baum — und **beschreibbare States lassen sich dort direkt
+  bedienen**: Ein/Aus-Schaltflächen für Schaltzustände, eine Auswahl für Werte
+  mit fester Bedeutung (etwa die Betriebsart einer Klimaanlage) und ein Feld mit
+  „Setzen" für Zahlen und Texte. Welches Element erscheint, sagt die Quelle
+  selbst (Module und Custom States kennen ihren Datentyp); für Adapter-States
+  wird es aus dem zuletzt gesehenen Wert abgeleitet. Geschrieben wird über
+  denselben Weg wie aus einer Aktionsfolge, und nur States, die ihre Quelle als
+  beschreibbar meldet, sind überhaupt ein Ziel. Die Bedienung setzt die Rolle
+  *bedienen* voraus; Leser sehen die Werte ohne Bedienelemente.
 - Custom States verwenden dasselbe vollbreite Gruppenraster wie Messen +
   Schalten. Eigene Drag-Flächen sortieren oder verschieben Verzeichnisse und
   States; alle Verzeichnis- und State-Eigenschaften bleiben nach dem Anlegen
@@ -177,6 +213,15 @@ eigenständige Desktop- und Mobilansichten.
   verwendet dasselbe ausklappbare Gruppenraster wie Messen + Schalten und
   Custom States, inklusive verschachtelbarer Verzeichnisse, in die sich
   Bedingungen per Drag&Drop einsortieren lassen.
+- Dann- und Sonst-Zweig sind Aktionsfolgen: Wertzuweisung, Pause und beliebig
+  verschachtelbare Schleifen mit einstellbarer Zahl an Durchläufen. Eine
+  Schleife prüft auf Wunsch zyklisch, ob der gewünschte Zustand erreicht wurde,
+  und wird bei Abweichung als Einzige erneut abgespult. Die Aktionen laufen von
+  oben nach unten und lassen sich per Drag&Drop sortieren – auch in eine
+  Schleife hinein.
+- Eine Schleife lässt sich auch ohne Bedingung anlegen: dann ist ihre
+  Plausibilitätsprüfung Pflicht und zugleich die Ausführungsbedingung – die
+  Schleife läuft, solange der geprüfte Zustand nicht erreicht ist.
 - Administratoren können geprüfte ZIP-Pakete hochladen. Archivstruktur, Pfade,
   Prüfsummen, Limits, Manifestwerte und JavaScript-Syntax werden geprüft, bevor
   ein Adapter `/adapter/` erreicht.

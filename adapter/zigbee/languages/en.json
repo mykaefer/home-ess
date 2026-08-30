@@ -4,7 +4,7 @@
   "locale": "en-GB",
   "direction": "ltr",
   "messages": {
-    "description": "Turns homeESS into a self-contained Zigbee gateway. The adapter manages the network, pairing and devices itself and talks to the coordinator directly over serial or TCP – without Zigbee2MQTT, ioBroker, a deCONZ server or any cloud service.",
+    "description": "Turns homeESS into a self-contained Zigbee gateway. The adapter manages the network, pairing and devices itself and talks to the coordinator directly over serial or TCP – without Zigbee2MQTT, a deCONZ server or any cloud service.",
     "coordinator_type": "Coordinator type",
     "transport_type": "Connection",
     "tcp_host": "Bridge address",

@@ -6,7 +6,16 @@ const KINDS = new Set(['trigger', 'when', 'then', 'else']);
 const ACTION_KINDS = new Set(['then', 'else']);
 const TRIGGER_TYPES = new Set(['time', 'change', 'event']);
 const WHEN_TYPES = new Set(['state']);
-const THEN_TYPES = new Set(['write']);
+// Dann und Sonst sind vollwertige Aktionsfolgen: Werte zuweisen, Pausen
+// abwarten, Schleifen mehrfach durchlaufen — dieselben Bausteine wie in den
+// Aktionsfolgen der Module (automation/action-sequences.js, das seine
+// Aktionsarten von hier bezieht).
+const THEN_TYPES = new Set(['write', 'pause', 'loop']);
+const ACTION_TYPE_LABELS = { write: 'Wert', pause: 'Pause', loop: 'Schleife' };
+const MAX_PAUSE_SECONDS = 86400;
+const MAX_REPEATS = 1000;
+const MIN_CHECK_SECONDS = 5;
+const MAX_CHECK_SECONDS = 86400;
 const OPERATORS = new Set(['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'contains', 'truthy', 'falsy']);
 const UNIT_SECONDS = { minutes: 60, hours: 3600, days: 86400 };
 const NUMERIC_HINT = 'Wert muss bei mathematischen Operatoren numerisch sein.';
@@ -79,6 +88,42 @@ function weekdays(value) {
   return result;
 }
 
+function decimalValue(value) {
+  const raw = String(value == null ? '' : value).trim().replace(',', '.');
+  if (!raw) return null;
+  const number = Number(raw);
+  return Number.isFinite(number) ? number : null;
+}
+
+function pauseSeconds(value) {
+  const seconds = decimalValue(value);
+  if (seconds == null || seconds <= 0 || seconds > MAX_PAUSE_SECONDS) {
+    throw validation(`Die Pause muss zwischen 0 und ${MAX_PAUSE_SECONDS} Sekunden liegen.`);
+  }
+  return Math.round(seconds * 10) / 10;
+}
+
+// Eine Schleife wiederholt ihren Inhalt und prüft optional in festem Abstand,
+// ob der gewünschte Zustand wirklich erreicht wurde. Die Prüfbedingung ist
+// exakt ein „Wenn" — gleiche Eingaben, gleiche Validierung, gleicher Vergleich.
+function loopConfig(input) {
+  const repeats = decimalValue(input.repeats);
+  if (repeats == null || !Number.isInteger(repeats) || repeats < 1 || repeats > MAX_REPEATS) {
+    throw validation(`Die Anzahl der Durchläufe muss zwischen 1 und ${MAX_REPEATS} liegen.`);
+  }
+  const config = { repeats, checkEnabled: booleanValue(input.checkEnabled, false) };
+  if (!config.checkEnabled) return config;
+  const interval = decimalValue(input.checkIntervalSeconds);
+  if (interval == null || interval < MIN_CHECK_SECONDS || interval > MAX_CHECK_SECONDS) {
+    throw validation(`Der Prüfabstand muss zwischen ${MIN_CHECK_SECONDS} und ${MAX_CHECK_SECONDS} Sekunden liegen.`);
+  }
+  config.checkIntervalSeconds = Math.round(interval);
+  config.check = normalizeItemInput('when', {
+    type: 'state', topic: input.checkTopic, operator: input.checkOperator, value: input.checkValue,
+  }).config;
+  return config;
+}
+
 function normalizeItemInput(kindValue, input = {}) {
   const kind = String(kindValue || input.kind || '').trim().toLowerCase();
   if (!KINDS.has(kind)) throw validation('Elementart ist ungültig.');
@@ -120,6 +165,8 @@ function normalizeItemInput(kindValue, input = {}) {
 
   if (!THEN_TYPES.has(type)) throw validation(`${kind === 'else' ? 'Sonst' : 'Dann'}-Typ ist ungültig.`);
   const label = kind === 'else' ? 'Sonst' : 'Dann';
+  if (type === 'pause') return { kind, type, config: { seconds: pauseSeconds(input.seconds) } };
+  if (type === 'loop') return { kind, type, config: loopConfig(input) };
   const targetTopic = cleanTopic(input.topic, 'Ziel-State');
   if (/^system:\/\//i.test(targetTopic)) throw validation(`Berechnete System-States sind schreibgeschützt und können kein ${label}-Ziel sein.`);
   const operation = String(input.operation || 'set').trim().toLowerCase();
@@ -159,6 +206,25 @@ function describeAction(config) {
   return `${config.topic} auf ${term} setzen${suffix}`;
 }
 
+function formatSeconds(seconds) {
+  const number = Number(seconds);
+  if (!Number.isFinite(number)) return '—';
+  return `${number.toLocaleString('de-DE', { maximumFractionDigits: 1 })} s`;
+}
+
+// Beschreibung einer Aktion (Dann/Sonst sowie die Aktionsfolgen der Module).
+function describeActionItem(item) {
+  const config = item.config || {};
+  if (item.type === 'pause') return `Pause für ${formatSeconds(config.seconds)}`;
+  if (item.type === 'loop') {
+    const repeats = `${config.repeats || 1}× durchlaufen`;
+    if (!config.checkEnabled || !config.check) return `Schleife · ${repeats}`;
+    const check = describeItem({ kind: 'when', type: 'state', config: config.check });
+    return `Schleife · ${repeats} · Prüfung alle ${formatSeconds(config.checkIntervalSeconds)}: ${check}`;
+  }
+  return describeAction(config);
+}
+
 function describeItem(item) {
   const c = item.config;
   if (item.kind === 'trigger' && item.type === 'change') return `Bei jeder Wertänderung von ${c.topic}`;
@@ -169,16 +235,51 @@ function describeItem(item) {
   }
   if (item.kind === 'trigger') return `${(c.weekdays || []).map((day) => DAY_LABELS[day]).join(', ')} um ${c.time} Uhr`;
   if (item.kind === 'when') return `${c.topic} ${OPERATOR_LABELS[c.operator] || c.operator}${['truthy', 'falsy'].includes(c.operator) ? '' : ` ${c.value}`}`;
-  return describeAction(c);
+  return describeActionItem(item);
 }
 
 function normalizeItemRow(row) {
   const item = {
     id: Number(row.id), conditionId: Number(row.condition_id), kind: row.kind, type: row.type,
+    parentId: row.parent_id == null ? null : Number(row.parent_id),
     position: Number(row.position || 0), config: parseConfig(row.config_json), lastFiredAt: row.last_fired_at == null ? null : Number(row.last_fired_at),
   };
+  item.typeLabel = ACTION_TYPE_LABELS[item.type] || item.type;
   item.description = describeItem(item);
   return item;
+}
+
+// Dann-/Sonst-Zweig als Baum: Schleifen tragen ihre Aktionen als `children`,
+// alles andere bleibt flach. Die Reihenfolge zählt, denn eine Folge läuft von
+// oben nach unten (Pausen!).
+function buildActionTree(items) {
+  const byId = new Map();
+  for (const item of items) byId.set(item.id, { ...item, children: [] });
+  const roots = [];
+  for (const node of byId.values()) {
+    const parent = node.parentId == null ? null : byId.get(node.parentId);
+    if (parent && parent.type === 'loop') parent.children.push(node);
+    else roots.push(node);
+  }
+  const sort = (list) => {
+    list.sort((left, right) => left.position - right.position || left.id - right.id);
+    for (const node of list) if (node.children.length) sort(node.children);
+  };
+  sort(roots);
+  return roots;
+}
+
+// Alle Aktionen eines Baums flach – für Abonnements und Schleifensuche.
+function collectActionNodes(list) {
+  const all = [];
+  const walk = (nodes) => {
+    for (const node of nodes || []) {
+      all.push(node);
+      if (node.children && node.children.length) walk(node.children);
+    }
+  };
+  walk(list);
+  return all;
 }
 
 async function listFolders(db) {
@@ -201,7 +302,7 @@ async function listConditions(db) {
   const [conditions, items] = await Promise.all([
     dbAll(db, `SELECT id, folder_id, name, enabled, when_enabled, position, last_triggered_at, last_result, last_error
                  FROM automation_conditions ORDER BY position, name COLLATE NOCASE, id`),
-    dbAll(db, `SELECT id, condition_id, kind, type, config_json, position, last_fired_at
+    dbAll(db, `SELECT id, condition_id, kind, type, parent_id, config_json, position, last_fired_at
                  FROM automation_condition_items ORDER BY condition_id, kind, position, id`),
   ]);
   const byCondition = new Map();
@@ -220,8 +321,12 @@ async function listConditions(db) {
       lastResult: row.last_result || '', lastError: row.last_error || '',
       triggers: all.filter((item) => item.kind === 'trigger'),
       whens: all.filter((item) => item.kind === 'when'),
+      // `thens`/`elses` bleiben flach (alle Aktionen, auch die in Schleifen);
+      // `thenTree`/`elseTree` tragen die Verschachtelung und die Reihenfolge.
       thens: all.filter((item) => item.kind === 'then'),
       elses: all.filter((item) => item.kind === 'else'),
+      thenTree: buildActionTree(all.filter((item) => item.kind === 'then')),
+      elseTree: buildActionTree(all.filter((item) => item.kind === 'else')),
     };
   });
 }
@@ -344,18 +449,37 @@ function initialItem(input, kind) {
   });
 }
 
+// Eine Schleife trägt ihre Auslösung selbst: ihre zyklische Prüfung ist die
+// Ausführungsbedingung. Eine so angelegte Automation hat deshalb weder Trigger
+// noch Wenn — nur die Schleife als einzige Dann-Aktion, und die Prüfung ist
+// dort Pflicht (ohne sie liefe sie nie).
+function initialLoopItem(input) {
+  return normalizeItemInput('then', {
+    type: 'loop', repeats: input.repeats, checkEnabled: '1',
+    checkTopic: input.checkTopic, checkOperator: input.checkOperator,
+    checkValue: input.checkValue, checkIntervalSeconds: input.checkIntervalSeconds,
+  });
+}
+
 async function createCondition(db, input = {}) {
   const name = cleanText(input.name, 'Name', 120);
   const enabled = booleanValue(input.enabled, false);
-  const whenEnabled = booleanValue(input.whenEnabled, true);
-  const elseEnabled = booleanValue(input.elseEnabled, false);
+  // `mode` = 'loop' legt eine reine Schleifen-Automation an (siehe oben).
+  const loopMode = String(input.mode || '').trim().toLowerCase() === 'loop';
+  const whenEnabled = loopMode ? false : booleanValue(input.whenEnabled, true);
+  const elseEnabled = loopMode ? false : booleanValue(input.elseEnabled, false);
   if (elseEnabled && !whenEnabled) throw validation('Ein Sonst-Zweig setzt eine aktive Wenn-Prüfung voraus.');
   const folderId = folderReference(input.folderId);
   await requireFolder(db, folderId);
-  const entries = [initialItem(input, 'trigger')];
-  if (whenEnabled) entries.push(initialItem(input, 'when'));
-  entries.push(initialItem(input, 'then'));
-  if (elseEnabled) entries.push(initialItem(input, 'else'));
+  const entries = [];
+  if (loopMode) {
+    entries.push(initialLoopItem(input));
+  } else {
+    entries.push(initialItem(input, 'trigger'));
+    if (whenEnabled) entries.push(initialItem(input, 'when'));
+    entries.push(initialItem(input, 'then'));
+    if (elseEnabled) entries.push(initialItem(input, 'else'));
+  }
   await dbRun(db, 'BEGIN IMMEDIATE');
   try {
     const next = await dbGet(db, 'SELECT COALESCE(MAX(position), -1) + 1 AS position FROM automation_conditions WHERE folder_id IS ?', [folderId]);
@@ -426,58 +550,200 @@ async function deleteCondition(db, id) {
   }
 }
 
+// Nur Schleifen nehmen Aktionen auf; ihr Inhalt gehört zwingend zum selben
+// Zweig (ein Dann kann nicht in eine Schleife des Sonst rutschen).
+function itemParentReference(value) {
+  if (value === '' || value == null || value === 'null') return null;
+  const id = Number(value);
+  if (!Number.isInteger(id) || id <= 0) throw validation('Die gewählte Schleife ist ungültig.');
+  return id;
+}
+
+async function getItem(db, conditionId, itemId) {
+  const row = await dbGet(db, `SELECT id, condition_id, kind, type, parent_id, config_json, position, last_fired_at
+                                 FROM automation_condition_items WHERE id = ? AND condition_id = ?`,
+  [Number(itemId), Number(conditionId)]);
+  return row ? normalizeItemRow(row) : null;
+}
+
+async function requireLoopParent(db, conditionId, parentId, kind) {
+  if (parentId == null) return;
+  if (!ACTION_KINDS.has(kind)) throw validation('Nur Dann- und Sonst-Aktionen können in einer Schleife liegen.');
+  const parent = await getItem(db, conditionId, parentId);
+  if (!parent) throw validation('Die gewählte Schleife wurde nicht gefunden.');
+  if (parent.type !== 'loop') throw validation('Aktionen können nur in eine Schleife verschoben werden.');
+  if (parent.kind !== kind) throw validation('Eine Aktion kann nicht in den anderen Zweig verschoben werden.');
+}
+
 async function addItem(db, conditionIdValue, input = {}) {
   const conditionId = Number(conditionIdValue);
   const condition = await dbGet(db, 'SELECT id, when_enabled FROM automation_conditions WHERE id = ?', [conditionId]);
   if (!condition) throw validation('Bedingung nicht gefunden.');
   const entry = normalizeItemInput(input.kind, input);
+  const parentId = itemParentReference(input.parentId);
+  await requireLoopParent(db, conditionId, parentId, entry.kind);
   // Der Sonst-Zweig läuft genau dann, wenn die Wenn-Prüfung nicht zutrifft. Er
   // bleibt deshalb einmalig und an eine aktive Prüfung gebunden.
-  if (entry.kind === 'else') {
-    if (condition.when_enabled === 0) throw validation('Ein Sonst-Zweig setzt eine aktive Wenn-Prüfung voraus.');
-    if (await itemCount(db, conditionId, 'else')) throw validation('Je Bedingung ist nur ein Sonst-Zweig möglich.');
+  if (entry.kind === 'else' && condition.when_enabled === 0) {
+    throw validation('Ein Sonst-Zweig setzt eine aktive Wenn-Prüfung voraus.');
   }
   const next = await dbGet(db, `SELECT COALESCE(MAX(position), -1) + 1 AS position
-                                  FROM automation_condition_items WHERE condition_id = ? AND kind = ?`, [conditionId, entry.kind]);
-  const result = await dbRun(db, `INSERT INTO automation_condition_items (condition_id, kind, type, config_json, position)
-                                  VALUES (?, ?, ?, ?, ?)`, [conditionId, entry.kind, entry.type, JSON.stringify(entry.config), next.position]);
+                                  FROM automation_condition_items
+                                 WHERE condition_id = ? AND kind = ? AND parent_id IS ?`, [conditionId, entry.kind, parentId]);
+  const result = await dbRun(db, `INSERT INTO automation_condition_items (condition_id, kind, type, parent_id, config_json, position)
+                                  VALUES (?, ?, ?, ?, ?, ?)`, [conditionId, entry.kind, entry.type, parentId, JSON.stringify(entry.config), next.position]);
   // Ein neu angelegtes Wenn schaltet die Prüfung wieder ein; sonst bliebe es
   // ohne sichtbaren Grund wirkungslos.
   if (entry.kind === 'when' && condition.when_enabled === 0) {
     await dbRun(db, 'UPDATE automation_conditions SET when_enabled = 1 WHERE id = ?', [conditionId]);
   }
-  return normalizeItemRow(await dbGet(db, `SELECT id, condition_id, kind, type, config_json, position, last_fired_at
+  return normalizeItemRow(await dbGet(db, `SELECT id, condition_id, kind, type, parent_id, config_json, position, last_fired_at
                                             FROM automation_condition_items WHERE id = ?`, [result.id]));
 }
 
 async function updateItem(db, conditionIdValue, itemIdValue, input = {}) {
   const conditionId = Number(conditionIdValue);
   const itemId = Number(itemIdValue);
-  const current = await dbGet(db, 'SELECT id, kind FROM automation_condition_items WHERE id = ? AND condition_id = ?', [itemId, conditionId]);
+  const current = await dbGet(db, 'SELECT id, kind, type FROM automation_condition_items WHERE id = ? AND condition_id = ?', [itemId, conditionId]);
   if (!current) throw validation('Element nicht gefunden.');
-  const entry = normalizeItemInput(current.kind, { ...input, kind: current.kind });
+  // Die Aktionsart bleibt beim Bearbeiten erhalten: eine Schleife mit Inhalt
+  // würde beim Wechsel auf eine andere Art ihre Aktionen verlieren.
+  const type = ACTION_KINDS.has(current.kind) ? current.type : input.type;
+  const entry = normalizeItemInput(current.kind, { ...input, kind: current.kind, type });
+  // Trägt diese Schleife die Auslösung der Bedingung, darf ihre Prüfung nicht
+  // abgeschaltet werden – die Automation liefe sonst nie wieder.
+  if (type === 'loop') {
+    const next = { ...current, kind: current.kind, type, config: entry.config };
+    const others = (await listItems(db, conditionId)).filter((item) => item.id !== itemId);
+    if (!hasTriggerSource([...others, next])) {
+      throw validation('Diese Schleife löst die Bedingung aus; ihre zyklische Prüfung kann nicht abgeschaltet werden.');
+    }
+  }
   await dbRun(db, 'UPDATE automation_condition_items SET type = ?, config_json = ?, last_fired_at = NULL WHERE id = ?', [entry.type, JSON.stringify(entry.config), itemId]);
-  return normalizeItemRow(await dbGet(db, `SELECT id, condition_id, kind, type, config_json, position, last_fired_at
+  return normalizeItemRow(await dbGet(db, `SELECT id, condition_id, kind, type, parent_id, config_json, position, last_fired_at
                                             FROM automation_condition_items WHERE id = ?`, [itemId]));
+}
+
+// Eine Schleife nimmt beim Löschen ihren gesamten Inhalt mit.
+function descendantItemIds(items, rootId) {
+  const childrenByParent = new Map();
+  for (const item of items) {
+    const key = item.parentId == null ? 'root' : item.parentId;
+    if (!childrenByParent.has(key)) childrenByParent.set(key, []);
+    childrenByParent.get(key).push(item.id);
+  }
+  const ids = [];
+  const stack = [Number(rootId)];
+  const seen = new Set();
+  while (stack.length) {
+    const id = stack.pop();
+    if (seen.has(id)) continue;
+    seen.add(id);
+    ids.push(id);
+    stack.push(...(childrenByParent.get(id) || []));
+  }
+  return ids;
+}
+
+// Womit löst eine Bedingung aus? Entweder über einen Trigger — oder über eine
+// Dann-Schleife mit zyklischer Prüfung, die sich selbst auslöst. Eine Bedingung
+// ohne beides könnte nie laufen und wird deshalb nicht zugelassen.
+function isSelfTriggeringLoop(item) {
+  return item.kind === 'then' && item.type === 'loop'
+    && !!(item.config && item.config.checkEnabled && item.config.check);
+}
+
+function hasTriggerSource(items) {
+  return items.some((item) => item.kind === 'trigger') || items.some(isSelfTriggeringLoop);
 }
 
 async function deleteItem(db, conditionIdValue, itemIdValue) {
   const conditionId = Number(conditionIdValue);
   const itemId = Number(itemIdValue);
-  const item = await dbGet(db, 'SELECT id, kind FROM automation_condition_items WHERE id = ? AND condition_id = ?', [itemId, conditionId]);
+  const item = await getItem(db, conditionId, itemId);
   if (!item) throw validation('Element nicht gefunden.');
-  const remaining = (await itemCount(db, conditionId, item.kind)) - 1;
-  if (remaining < 1 && (item.kind === 'trigger' || item.kind === 'then')) {
-    throw validation('Jede Bedingung benötigt mindestens einen Trigger und ein Dann.');
+  const all = await listItems(db, conditionId);
+  const siblings = all.filter((entry) => entry.kind === item.kind);
+  const ids = descendantItemIds(siblings, itemId);
+  const remaining = siblings.length - ids.length;
+  if (remaining < 1 && item.kind === 'then') {
+    throw validation('Jede Bedingung benötigt mindestens ein Dann.');
+  }
+  // Der letzte Trigger darf gehen, wenn eine sich selbst auslösende Schleife
+  // bleibt; umgekehrt darf die letzte solche Schleife nur weichen, wenn ein
+  // Trigger existiert.
+  if (!hasTriggerSource(all.filter((entry) => !ids.includes(entry.id)))) {
+    throw validation('Jede Bedingung braucht einen Trigger oder eine Schleife mit zyklischer Prüfung.');
   }
   // Das letzte Wenn zu entfernen schaltet die Prüfung ab – solange kein
   // Sonst-Zweig davon abhängt.
   if (item.kind === 'when' && remaining < 1 && await itemCount(db, conditionId, 'else')) {
     throw validation('Solange ein Sonst-Zweig besteht, wird mindestens ein Wenn benötigt.');
   }
-  await dbRun(db, 'DELETE FROM automation_condition_items WHERE id = ?', [itemId]);
+  const marks = ids.map(() => '?').join(',');
+  await dbRun(db, `DELETE FROM automation_condition_items WHERE condition_id = ? AND id IN (${marks})`, [conditionId, ...ids]);
   if (item.kind === 'when' && remaining < 1) {
     await dbRun(db, 'UPDATE automation_conditions SET when_enabled = 0 WHERE id = ?', [conditionId]);
+  }
+}
+
+async function listItems(db, conditionId) {
+  const rows = await dbAll(db, `SELECT id, condition_id, kind, type, parent_id, config_json, position, last_fired_at
+                                  FROM automation_condition_items WHERE condition_id = ? ORDER BY position, id`,
+  [Number(conditionId)]);
+  return rows.map(normalizeItemRow);
+}
+
+// Drag&Drop im Dann-/Sonst-Zweig überträgt den vollständigen sichtbaren Baum
+// beider Zweige – als konsistente Momentaufnahme geprüft und gespeichert
+// (Vorbild: die Aktionsfolgen der Module).
+async function updateItemLayout(db, conditionIdValue, input = {}) {
+  const conditionId = Number(conditionIdValue);
+  const known = new Map((await listItems(db, conditionId))
+    .filter((item) => ACTION_KINDS.has(item.kind))
+    .map((item) => [item.id, item]));
+  const entries = Array.isArray(input.items) ? input.items : [];
+  if (entries.length !== known.size) throw validation('Das Layout ist unvollständig; bitte die Seite neu laden.');
+
+  const layout = new Map();
+  for (const entry of entries) {
+    const id = Number(entry.id);
+    if (!known.has(id) || layout.has(id)) throw validation('Das Layout enthält unbekannte oder doppelte Aktionen.');
+    const kind = String(entry.kind || '').trim().toLowerCase();
+    if (!ACTION_KINDS.has(kind)) throw validation('Nur Dann- und Sonst-Aktionen sind sortierbar.');
+    const position = Number(entry.position);
+    if (!Number.isInteger(position) || position < 0) throw validation('Layoutposition ist ungültig.');
+    layout.set(id, { kind, parentId: itemParentReference(entry.parentId), position });
+  }
+  for (const [id, entry] of layout) {
+    if (entry.parentId == null) continue;
+    const parent = layout.get(entry.parentId);
+    if (!parent) throw validation('Die gewählte Schleife wurde nicht gefunden.');
+    if (known.get(entry.parentId).type !== 'loop') throw validation('Aktionen können nur in eine Schleife verschoben werden.');
+    if (parent.kind !== entry.kind) throw validation('Eine Aktion kann nicht in den anderen Zweig verschoben werden.');
+    const seen = new Set([id]);
+    let cursor = entry.parentId;
+    while (cursor != null) {
+      if (seen.has(cursor)) throw validation('Schleifen dürfen keinen Kreis bilden.');
+      seen.add(cursor);
+      cursor = layout.get(cursor).parentId;
+    }
+  }
+  // Ein Zweig darf durch das Verschieben nicht leer werden: ohne Dann hätte die
+  // Bedingung nichts mehr auszuführen.
+  if (![...layout.values()].some((entry) => entry.kind === 'then')) {
+    throw validation('Jede Bedingung benötigt mindestens ein Dann.');
+  }
+  await dbRun(db, 'BEGIN IMMEDIATE');
+  try {
+    for (const [id, entry] of layout) {
+      await dbRun(db, 'UPDATE automation_condition_items SET kind = ?, parent_id = ?, position = ? WHERE id = ? AND condition_id = ?',
+        [entry.kind, entry.parentId, entry.position, id, conditionId]);
+    }
+    await dbRun(db, 'COMMIT');
+  } catch (error) {
+    await dbRun(db, 'ROLLBACK').catch(() => {});
+    throw error;
   }
 }
 
@@ -556,7 +822,10 @@ async function markItemFired(db, itemId, at = Date.now()) {
 }
 
 module.exports = {
+  isSelfTriggeringLoop,
   listConditions, listFolders, conditionTree, getCondition, createCondition, updateCondition, deleteCondition,
-  addFolder, updateFolder, deleteFolder, addItem, updateItem, deleteItem, updateLayout,
-  normalizeItemInput, describeItem, markTriggered, markItemFired, dbGet,
+  addFolder, updateFolder, deleteFolder, addItem, updateItem, deleteItem, updateLayout, updateItemLayout,
+  normalizeItemInput, describeItem, describeActionItem, buildActionTree, collectActionNodes,
+  markTriggered, markItemFired, dbGet,
+  ACTION_TYPE_LABELS, MAX_PAUSE_SECONDS, MAX_REPEATS, MIN_CHECK_SECONDS, MAX_CHECK_SECONDS,
 };

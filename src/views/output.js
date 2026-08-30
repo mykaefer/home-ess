@@ -21,7 +21,6 @@ function renderOutput({
           <div class="panel-head">
             <div>
               <h2>Outputs</h2>
-              <p class="muted">Jeder Output wird alle 30 Sekunden aktiv aus ioBroker zurückgelesen. Fehlende oder abweichende Werte werden automatisch erneut geschrieben.</p>
             </div>
             <button type="button" class="settings-form button-inline" onclick="openOutputDialog('add')">Hinzufuegen</button>
           </div>
@@ -245,7 +244,7 @@ function renderOutputDialog({ internalValues, dialogError, dialogValues, dialogM
             <div class="dialog-hero">
               <div>
                 <h3 id="outputDialogTitle">Output hinzufuegen</h3>
-                <p class="muted">Internen Wert auswaehlen und Ziel-Topic im ioBroker angeben.</p>
+                <p class="muted">Internen Wert auswaehlen und Ziel-Topic auf dem MQTT-Broker angeben.</p>
               </div>
             </div>
             ${statusText(dialogError)}
@@ -253,7 +252,7 @@ function renderOutputDialog({ internalValues, dialogError, dialogValues, dialogM
               <label class="field-block" for="outputTargetTopic">
                 <span>Ziel-Topic</span>
                 <input type="text" id="outputTargetTopic" name="targetTopic" value="${escapeHtml(values.targetTopic)}" placeholder="z.B. 0_userdata.0.homeess.SoC" required>
-                <small class="muted form-hint">Bestätigter State im ioBroker. Command-Topics sind nicht zulässig, weil sie keinen sicheren Istwert zurückmelden.</small>
+                <small class="muted form-hint">Bestätigter State auf dem MQTT-Broker. Command-Topics sind nicht zulässig, weil sie keinen sicheren Istwert zurückmelden.</small>
               </label>
             </div>
             ${renderValueCatalog({ values: internalValues, inputId: 'outputSourceId', name: 'sourceId', selectedId: values.sourceId, label: 'Interner Wert' })}

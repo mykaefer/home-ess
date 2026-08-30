@@ -226,6 +226,53 @@ test('Aktionsfolgen der Geräte laufen über die Raumseite', async () => {
   assert.equal((await actionsRepo.listActions(db, room.id)).length, 0);
 });
 
+test('Die Übersicht schaltet die Klimaanlage eines Raums um', async () => {
+  const climate = require('../src/heizung/climate');
+  const { isOperatePost } = require('../src/auth/session');
+  const [room] = await rooms.listRooms(db);
+  // Der Raum aus dem vorherigen Test hat inzwischen eine Kühlfolge — erst damit
+  // gibt es überhaupt etwas zu übersteuern.
+  await actionsRepo.addAction(db, room.id, {
+    phase: 'cool_on', type: 'write', topic: 'custom://Klima', operation: 'set', value: '1',
+  });
+  await runtime.reload();
+
+  const overview = await fetch(`${baseUrl}/heizung`).then((res) => res.text());
+  assert.match(overview, new RegExp(`data-hz-klima="${room.id}"`));
+  assert.match(overview, /setHeizungKlima\(\d+, 2\)/);
+  assert.match(overview, /pump-mode-btn--active-auto/, 'die Automatik ist zu Beginn markiert');
+
+  const switched = await fetch(`${baseUrl}/heizung/raum/${room.id}/klima/1`, { method: 'POST', headers: { Accept: 'application/json' } });
+  assert.equal(switched.status, 200);
+  assert.deepEqual(await switched.json(), { ok: true, mode: climate.MODE_ON });
+  const stored = await rooms.getRoom(db, room.id);
+  assert.equal(stored.climateMode, climate.MODE_ON);
+  assert.ok(stored.climateModeSince > 0, 'der Zeitpunkt der Handschaltung wird festgehalten');
+  assert.equal(runtime.snapshot().get(room.id).climateMode, climate.MODE_ON);
+
+  // Die Übersicht zeigt die Handschaltung jetzt markiert.
+  const after = await fetch(`${baseUrl}/heizung`).then((res) => res.text());
+  assert.match(after, /pump-mode-btn--active-on/);
+
+  // Zurück in die Automatik.
+  await fetch(`${baseUrl}/heizung/raum/${room.id}/klima/2`, { method: 'POST', headers: { Accept: 'application/json' } });
+  assert.equal((await rooms.getRoom(db, room.id)).climateMode, climate.MODE_AUTO);
+
+  // Unbrauchbare Angaben bleiben folgenlos.
+  const wrongMode = await fetch(`${baseUrl}/heizung/raum/${room.id}/klima/warm`, { method: 'POST', headers: { Accept: 'application/json' } });
+  assert.equal(wrongMode.status, 400);
+  const wrongRoom = await fetch(`${baseUrl}/heizung/raum/9999/klima/1`, { method: 'POST', headers: { Accept: 'application/json' } });
+  assert.equal(wrongRoom.status, 404);
+
+  // Umschalten ist eine Bedienung — auch die Rolle „bedienen" darf das.
+  assert.equal(isOperatePost(`/heizung/raum/${room.id}/klima/1`), true);
+  assert.equal(isOperatePost(`/heizung/raum/${room.id}`), false);
+
+  const coolAction = (await actionsRepo.listActions(db, room.id)).find((action) => action.phase === 'cool_on');
+  await actionsRepo.deleteAction(db, room.id, coolAction.id);
+  await runtime.reload();
+});
+
 test('Zentralheizung wird über ihre Seite eingerichtet und geschaltet', async () => {
   const withoutOutdoor = await fetch(`${baseUrl}/heizung/zentrale`, form({
     enabled: '1', mode: 'relais', switchTopic: 'custom://Brenner',

@@ -122,7 +122,7 @@ function readCachedBool(cache, key) {
   return { on: parseBool(entry.value), value: entry.value, receivedAt: Number(entry.receivedAt) || 0 };
 }
 
-// ioBroker prüft den Datentyp eines States. Ein Boolean-State darf deshalb
+// Der MQTT-Broker prüft den Datentyp eines States. Ein Boolean-State darf deshalb
 // nicht als numerische 1/0 beschrieben werden. Die vom Broker empfangene
 // Darstellung bestimmt das passende Rückgabeformat.
 function remotePayload(on, remote) {

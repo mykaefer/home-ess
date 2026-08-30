@@ -78,7 +78,7 @@ Objektwerte werden als JSON gespeichert. Dadurch stehen beispielsweise
 gespeicherte IR-Codes direkt nach dem Adapterstart für Bedingungen und
 Schreibaktionen bereit.
 
-### Wallbox-Sync nach Broker- und ioBroker-Neustarts
+### Wallbox-Sync nach Broker-Neustarts
 
 Die Wallbox-Automatik trennt bestätigte Zustände nun von echten externen
 Schreibwünschen. Ein lokaler Soll-Schatten verhindert, dass eigene Readbacks,

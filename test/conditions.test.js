@@ -34,7 +34,7 @@ async function freshDb() {
   await run(db, `CREATE TABLE automation_condition_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT, condition_id INTEGER NOT NULL,
     kind TEXT NOT NULL CHECK (kind IN ('trigger', 'when', 'then', 'else')), type TEXT NOT NULL,
-    config_json TEXT NOT NULL DEFAULT '{}',
+    parent_id INTEGER, config_json TEXT NOT NULL DEFAULT '{}',
     position INTEGER NOT NULL DEFAULT 0, last_fired_at INTEGER)`);
   return db;
 }
@@ -64,9 +64,11 @@ test('Bedingungen erzwingen Trigger, Wenn und Dann und bleiben vollständig edit
     type: 'state', topic: 'custom://Anwesenheit', operator: 'eq', value: 'ja',
   });
   await repository.deleteItem(db, condition.id, extra.id);
+  // Ohne Trigger und ohne selbstauslösende Schleife könnte die Bedingung nie
+  // laufen – der letzte Trigger bleibt deshalb gesperrt.
   await assert.rejects(
     () => repository.deleteItem(db, condition.id, condition.triggers[0].id),
-    /mindestens einen Trigger/,
+    /Trigger oder eine Schleife mit zyklischer Prüfung/,
   );
   const updated = await repository.getCondition(db, condition.id);
   assert.equal(updated.name, 'Kinoabend');
@@ -353,16 +355,21 @@ test('Ohne Wenn-Prüfung läuft der Dann-Zweig bedingungslos', async () => {
   }
 });
 
-test('Der Sonst-Zweig läuft bei nicht erfüllter Prüfung und bleibt einmalig', async () => {
+test('Der Sonst-Zweig läuft bei nicht erfüllter Prüfung und nimmt wie das Dann mehrere Aktionen auf', async () => {
   const db = await freshDb();
   const condition = await repository.createCondition(db, {
     ...validInput('Sonstzweig'), elseEnabled: '1',
     elseType: 'write', elseTopic: 'custom://Notlicht', elseOperation: 'set', elseValue: '5',
   });
   assert.equal(condition.elses.length, 1);
-  await assert.rejects(() => repository.addItem(db, condition.id, {
+  // Seit Dann und Sonst Aktionsfolgen sind (Wert, Pause, Schleife), darf auch
+  // der Sonst-Zweig mehrere Aktionen enthalten.
+  await repository.addItem(db, condition.id, {
     kind: 'else', type: 'write', topic: 'custom://Zweites', value: '1',
-  }), /nur ein Sonst-Zweig/);
+  });
+  assert.equal((await repository.getCondition(db, condition.id)).elses.length, 2);
+  await repository.deleteItem(db, condition.id,
+    (await repository.getCondition(db, condition.id)).elses[1].id);
   await assert.rejects(
     () => repository.updateCondition(db, condition.id, { name: 'Sonstzweig', enabled: '1', whenEnabled: '0' }),
     /nicht deaktiviert/,
@@ -449,9 +456,12 @@ test('Bedingungsseite folgt dem Gruppenraster und bietet Pluszeile, Dialoge und 
   assert.match(html, /fetch\('\/conditions\/layout'/);
   const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
   for (const script of scripts) assert.doesNotThrow(() => new Function(script[1]));
+  // Menüplatz: direkt hinter Messen + Schalten (dessen Geräte ausgewertet
+  // werden) und vor den technischen Seiten Adapter/States.
   const navHtml = renderLayout({ activePath: '/conditions' });
-  assert.ok(navHtml.indexOf('href="/states"') < navHtml.indexOf('href="/conditions"'));
-  assert.ok(navHtml.indexOf('href="/conditions"') < navHtml.indexOf('href="/output"'));
+  assert.ok(navHtml.indexOf('href="/messen-schalten"') < navHtml.indexOf('href="/conditions"'));
+  assert.ok(navHtml.indexOf('href="/conditions"') < navHtml.indexOf('href="/adapter"'));
+  assert.ok(navHtml.indexOf('href="/adapter"') < navHtml.indexOf('href="/output"'));
   const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'styles.css'), 'utf8');
   assert.match(css, /\.condition-item \{\s*display: grid;\s*grid-template-columns: 68px minmax\(0, 1fr\) 60px;/);
   assert.match(css, /\.access-read \.main-content \.condition-add-row/);
@@ -466,9 +476,12 @@ test('Dialoge bieten Wenn-Schalter, Sonst-Bereich, Rechenfunktionen und Wertprü
     elseType: 'write', elseTopic: 'custom://Notlicht', elseOperation: 'set', elseValue: '5',
   });
   const html = renderConditions(await repository.conditionTree(db));
-  // Vier Bereiche mit eigener Kennzeichnung.
-  assert.match(html, /class="condition-kind condition-kind--else">Sonst</);
+  // Vier Bereiche mit eigener Kennzeichnung. Trigger und Wenn tragen den
+  // Bereich als Chip, Dann und Sonst die Aktionsart (Wert, Pause, Schleife) –
+  // der Bereich steht dort in der Abschnittsüberschrift.
+  assert.match(html, /class="condition-kind condition-kind--when">Wenn</);
   assert.match(html, /class="condition-section condition-section--else"/);
+  assert.match(html, /class="condition-kind cnd-kind--write">Wert</);
   assert.match(html, /<option value="else">Sonst<\/option>/);
   // Wenn und Sonst sind im Anlegen-Dialog zuschaltbar.
   assert.match(html, /id="createWhenEnabled" type="checkbox" name="whenEnabled"/);
@@ -480,7 +493,9 @@ test('Dialoge bieten Wenn-Schalter, Sonst-Bereich, Rechenfunktionen und Wertprü
     assert.match(html, new RegExp(`id="${id}" name="[a-zA-Z0-9]+" data-condition-value data-state-picker`));
     assert.match(html, new RegExp(`id="${id}Error" hidden>Wert muss bei mathematischen Operatoren numerisch sein<`));
   }
-  assert.equal((html.match(/class="field-hint">Fester Wert oder Topic</g) || []).length, 7);
+  // Sieben Wertfelder plus die Vergleichswerte der beiden Schleifen-Prüfungen
+  // (Anlegen-Dialog und Element-Dialog).
+  assert.equal((html.match(/class="field-hint">Fester Wert oder Topic</g) || []).length, 9);
   assert.match(html, /<option value="mul">Multiplizieren \(×\)<\/option>/);
   assert.match(html, /id="conditionItemRound" name="round" type="number" min="0" max="6"/);
   assert.match(html, /custom:\/\/Licht auf custom:\/\/Bezug \+ 100 setzen, gerundet auf 1 Nachkommastellen/);
@@ -495,22 +510,253 @@ test('Dialoge bieten Wenn-Schalter, Sonst-Bereich, Rechenfunktionen und Wertprü
   await close(db);
 });
 
-test('Elemente sind nicht verschiebbar, Bedingungen und Verzeichnisse dagegen schon', async () => {
+// ── Aktionsfolgen im Dann-/Sonst-Zweig: Wert, Pause und Schleife ──────────
+test('Dann und Sonst nehmen Pausen und Schleifen auf und beschreiben sie verständlich', async () => {
+  const db = await freshDb();
+  const condition = await repository.createCondition(db, validInput('Folge'));
+  const pause = await repository.addItem(db, condition.id, { kind: 'then', type: 'pause', seconds: '1,5' });
+  assert.equal(pause.config.seconds, 1.5);
+  assert.equal(pause.description, 'Pause für 1,5 s');
+  assert.equal(pause.typeLabel, 'Pause');
+
+  const loop = await repository.addItem(db, condition.id, {
+    kind: 'then', type: 'loop', repeats: '3', checkEnabled: '1',
+    checkTopic: 'custom://Licht', checkOperator: 'eq', checkValue: '20', checkIntervalSeconds: '60',
+  });
+  assert.equal(loop.config.repeats, 3);
+  assert.equal(loop.config.check.topic, 'custom://Licht');
+  assert.match(loop.description, /Schleife · 3× durchlaufen · Prüfung alle 60 s: custom:\/\/Licht ist gleich 20/);
+
+  // Aktionen in der Schleife hängen als Kinder unter ihr.
+  const inner = await repository.addItem(db, condition.id, {
+    kind: 'then', type: 'write', parentId: loop.id, topic: 'custom://Licht', value: '20',
+  });
+  assert.equal(inner.parentId, loop.id);
+  const tree = (await repository.getCondition(db, condition.id)).thenTree;
+  const loopNode = tree.find((node) => node.type === 'loop');
+  assert.equal(loopNode.children.length, 1);
+  assert.equal(loopNode.children[0].id, inner.id);
+
+  // Grenzen der Eingaben.
+  await assert.rejects(() => repository.addItem(db, condition.id, { kind: 'then', type: 'pause', seconds: '0' }), /Pause muss/);
+  await assert.rejects(() => repository.addItem(db, condition.id, { kind: 'then', type: 'loop', repeats: '0' }), /Durchläufe/);
+  await assert.rejects(() => repository.addItem(db, condition.id, {
+    kind: 'then', type: 'loop', repeats: '2', checkEnabled: '1', checkTopic: 'custom://X', checkOperator: 'eq', checkValue: '1', checkIntervalSeconds: '1',
+  }), /Prüfabstand/);
+  // Nur Schleifen nehmen Aktionen auf.
+  await assert.rejects(() => repository.addItem(db, condition.id, {
+    kind: 'then', type: 'write', parentId: pause.id, topic: 'custom://Y', value: '1',
+  }), /nur in eine Schleife/);
+
+  // Eine Schleife nimmt beim Löschen ihren Inhalt mit.
+  await repository.deleteItem(db, condition.id, loop.id);
+  const rest = await repository.getCondition(db, condition.id);
+  assert.equal(rest.thens.some((item) => item.id === inner.id), false);
+  await close(db);
+});
+
+test('Der Dann-Zweig läuft als Folge: Reihenfolge, Pause und Schleifendurchläufe', async () => {
+  const db = await freshDb();
+  const condition = await repository.createCondition(db, {
+    name: 'Ablauf', enabled: '1', triggerType: 'event', triggerTopic: 'custom://Start', triggerValue: '1',
+    whenEnabled: '0', thenType: 'write', thenTopic: 'custom://Eins', thenValue: '1',
+  });
+  await repository.addItem(db, condition.id, { kind: 'then', type: 'pause', seconds: '0.1' });
+  const loop = await repository.addItem(db, condition.id, { kind: 'then', type: 'loop', repeats: '3' });
+  await repository.addItem(db, condition.id, {
+    kind: 'then', type: 'write', parentId: loop.id, topic: 'custom://Zwei', value: '2',
+  });
+
+  const writes = [];
+  const originalPublish = mqttClient.publish;
+  mqttClient.publish = (topic, value) => { writes.push({ topic, value }); return true; };
+  try {
+    await engine.init(db);
+    adapterRouter.ingestTopic('custom://Start', 0);
+    adapterRouter.ingestTopic('custom://Start', 1);
+    await wait(400);
+    assert.deepEqual(writes, [
+      { topic: 'custom://Eins', value: 1 },
+      { topic: 'custom://Zwei', value: 2 },
+      { topic: 'custom://Zwei', value: 2 },
+      { topic: 'custom://Zwei', value: 2 },
+    ], 'erst der Wert, dann die Pause, danach die Schleife dreimal');
+  } finally {
+    engine.stop(); mqttClient.publish = originalPublish; await close(db);
+  }
+});
+
+test('Zyklische Prüfung spult nur die Schleife des zuletzt gelaufenen Zweigs erneut ab', async () => {
+  const db = await freshDb();
+  const condition = await repository.createCondition(db, {
+    name: 'Nachfassen', enabled: '1', triggerType: 'event', triggerTopic: 'custom://Start', triggerValue: '1',
+    whenEnabled: '0', thenType: 'write', thenTopic: 'custom://Egal', thenValue: '0',
+  });
+  const loop = await repository.addItem(db, condition.id, {
+    kind: 'then', type: 'loop', repeats: '1', checkEnabled: '1',
+    checkTopic: 'custom://Ist', checkOperator: 'eq', checkValue: '20', checkIntervalSeconds: '5',
+  });
+  await repository.addItem(db, condition.id, {
+    kind: 'then', type: 'write', parentId: loop.id, topic: 'custom://Soll', value: '20',
+  });
+
+  const writes = [];
+  const originalPublish = mqttClient.publish;
+  mqttClient.publish = (topic, value) => { writes.push({ topic, value }); return true; };
+  try {
+    await engine.init(db);
+    // Ohne gelaufenen Zweig wird nicht geprüft.
+    adapterRouter.ingestTopic('custom://Ist', 0);
+    await engine.checkLoops(Date.now() + 60000);
+    await wait(80);
+    assert.equal(writes.length, 0, 'vor der ersten Ausführung bleibt die Prüfung stumm');
+
+    adapterRouter.ingestTopic('custom://Start', 0);
+    adapterRouter.ingestTopic('custom://Start', 1);
+    await wait(120);
+    const afterRun = writes.length;
+    assert.ok(afterRun >= 2, 'der Zweig ist einmal komplett gelaufen');
+
+    // Der Ist-Wert passt nicht zur Prüfung: die Schleife läuft erneut.
+    await engine.checkLoops(Date.now() + 60000);
+    await wait(120);
+    assert.deepEqual(writes[writes.length - 1], { topic: 'custom://Soll', value: 20 });
+    assert.ok(writes.length > afterRun, 'die Schleife wurde nachgefasst');
+    assert.match((await repository.listConditions(db))[0].lastResult, /Schleife nach Prüfung wiederholt/);
+
+    // Stimmt der Ist-Wert, bleibt es dabei.
+    const before = writes.length;
+    adapterRouter.ingestTopic('custom://Ist', 20);
+    await engine.checkLoops(Date.now() + 120000);
+    await wait(80);
+    assert.equal(writes.length, before, 'erfüllte Prüfung löst nichts aus');
+  } finally {
+    engine.stop(); mqttClient.publish = originalPublish; await close(db);
+  }
+});
+
+test('Die Reihenfolge der Aktionen lässt sich verschieben – auch in eine Schleife hinein', async () => {
+  const db = await freshDb();
+  const condition = await repository.createCondition(db, validInput('Sortieren'));
+  const first = (await repository.getCondition(db, condition.id)).thens[0];
+  const loop = await repository.addItem(db, condition.id, { kind: 'then', type: 'loop', repeats: '2' });
+
+  await repository.updateItemLayout(db, condition.id, {
+    items: [
+      { id: loop.id, kind: 'then', parentId: null, position: 0 },
+      { id: first.id, kind: 'then', parentId: loop.id, position: 0 },
+    ],
+  });
+  const tree = (await repository.getCondition(db, condition.id)).thenTree;
+  assert.equal(tree.length, 1);
+  assert.equal(tree[0].id, loop.id);
+  assert.equal(tree[0].children[0].id, first.id);
+
+  // Eine Schleife kann nicht in sich selbst wandern, und der Zweig darf nicht leer werden.
+  await assert.rejects(() => repository.updateItemLayout(db, condition.id, {
+    items: [
+      { id: loop.id, kind: 'then', parentId: loop.id, position: 0 },
+      { id: first.id, kind: 'then', parentId: loop.id, position: 0 },
+    ],
+  }), /Kreis/);
+  await assert.rejects(() => repository.updateItemLayout(db, condition.id, {
+    items: [{ id: loop.id, kind: 'then', parentId: null, position: 0 }],
+  }), /unvollständig/);
+  await close(db);
+});
+
+test('Eine Schleife lässt sich ohne Bedingung anlegen – ihre Prüfung ist dann Pflicht und Auslöser', async () => {
+  const db = await freshDb();
+  const loopCondition = await repository.createCondition(db, {
+    name: 'Rollladen nachfassen', enabled: '1', mode: 'loop', repeats: '1',
+    checkTopic: 'custom://RollladenIst', checkOperator: 'eq', checkValue: '100', checkIntervalSeconds: '60',
+  });
+  // Weder Trigger noch Wenn noch Sonst – nur die Schleife als Dann-Aktion.
+  assert.deepEqual(
+    [loopCondition.triggers.length, loopCondition.whens.length, loopCondition.elses.length, loopCondition.thens.length],
+    [0, 0, 0, 1],
+  );
+  assert.equal(loopCondition.whenEnabled, false);
+  const loop = loopCondition.thens[0];
+  assert.equal(loop.type, 'loop');
+  assert.equal(loop.config.checkEnabled, true);
+  assert.equal(loop.config.check.topic, 'custom://RollladenIst');
+
+  // Ohne Prüfangaben kommt keine Schleifen-Automation zustande.
+  await assert.rejects(() => repository.createCondition(db, {
+    name: 'Unvollständig', mode: 'loop', repeats: '1', checkIntervalSeconds: '60',
+  }), /Prüf-State|State fehlt/);
+
+  // Die Prüfung dieser Schleife trägt die Auslösung und darf nicht weg.
+  await assert.rejects(() => repository.updateItem(db, loopCondition.id, loop.id, {
+    repeats: '2', checkEnabled: '0',
+  }), /kann nicht abgeschaltet werden/);
+  await assert.rejects(() => repository.deleteItem(db, loopCondition.id, loop.id), /Dann/);
+
+  // Mit einem zusätzlichen Trigger wird sie zur gewöhnlichen Bedingung – dann
+  // darf die Prüfung auch abgeschaltet werden.
+  await repository.addItem(db, loopCondition.id, {
+    kind: 'trigger', type: 'change', topic: 'custom://Start',
+  });
+  await repository.updateItem(db, loopCondition.id, loop.id, { repeats: '2', checkEnabled: '0' });
+  const updated = await repository.getCondition(db, loopCondition.id);
+  assert.equal(updated.thens[0].config.checkEnabled, false);
+  await close(db);
+});
+
+test('Die Schleifen-Automation läuft ohne Trigger allein über ihre Prüfung', async () => {
+  const db = await freshDb();
+  const condition = await repository.createCondition(db, {
+    name: 'Nachführen', enabled: '1', mode: 'loop', repeats: '1',
+    checkTopic: 'custom://Ist', checkOperator: 'eq', checkValue: '20', checkIntervalSeconds: '5',
+  });
+  const loop = condition.thens[0];
+  await repository.addItem(db, condition.id, {
+    kind: 'then', type: 'write', parentId: loop.id, topic: 'custom://Soll', value: '20',
+  });
+
+  const writes = [];
+  const originalPublish = mqttClient.publish;
+  mqttClient.publish = (topic, value) => { writes.push({ topic, value }); return true; };
+  try {
+    await engine.init(db);
+    adapterRouter.ingestTopic('custom://Ist', 0);
+    // Kein Trigger, kein vorheriger Lauf: die Prüfung allein löst aus.
+    await engine.checkLoops(Date.now() + 60000);
+    await wait(120);
+    assert.deepEqual(writes, [{ topic: 'custom://Soll', value: 20 }]);
+
+    // Stimmt der Ist-Wert, bleibt die Schleife stehen.
+    adapterRouter.ingestTopic('custom://Ist', 20);
+    await engine.checkLoops(Date.now() + 120000);
+    await wait(80);
+    assert.equal(writes.length, 1);
+  } finally {
+    engine.stop(); mqttClient.publish = originalPublish; await close(db);
+  }
+});
+
+test('Trigger und Wenn sind nicht verschiebbar; Aktionen, Bedingungen und Verzeichnisse dagegen schon', async () => {
   const db = await freshDb();
   const folder = await repository.addFolder(db, { name: 'Heizung' });
   await repository.createCondition(db, { ...validInput('Warm'), folderId: folder.id });
   const html = renderConditions(await repository.conditionTree(db));
   assert.doesNotMatch(html, /condition-item-drag/);
   assert.equal(/class="condition-item"/.test(html), true);
+  // Die Aktionen des Dann-/Sonst-Zweigs laufen der Reihe nach ab und tragen
+  // deshalb eine eigene Dragfläche.
+  assert.match(html, /class="condition-item cnd-node cnd-action"/);
+  assert.match(html, /class="widget-drag cnd-drag"/);
+  assert.match(html, /fetch\('\/conditions\/' \+ conditionId \+ '\/items\/layout'/);
   assert.match(html, /class="ms-group condition-folder"/);
   assert.match(html, /class="widget-drag ms-group-drag condition-folder-drag"/);
   assert.match(html, /class="condition-dropzone" data-folder-id="1"/);
   assert.match(html, /id="conditionFolderForm"/);
   assert.match(html, /'\/conditions\/folder\/' \+ id : '\/conditions\/folder'/);
-  // Das Layout darf nur Verzeichnisse und Bedingungen übertragen; Trigger, Wenns
-  // und Danns tauchen darin nicht mehr auf.
+  // Das Verzeichnis-/Bedingungslayout überträgt weiterhin nur Verzeichnisse und
+  // Bedingungen; die Aktionsreihenfolge geht als eigener Baum an die Bedingung.
   assert.match(html, /folders: folders, conditions: conditions/);
-  assert.doesNotMatch(html, /items: items/);
+  assert.match(html, /return \{ items: items \};/);
   const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
   for (const script of scripts) assert.doesNotThrow(() => new Function(script[1]));
   const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'styles.css'), 'utf8');

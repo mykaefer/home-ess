@@ -32,6 +32,36 @@ test('Wert-Widget: State-Topic Pflicht, Typ default value', async () => {
   db.close();
 });
 
+test('Wert-Widget: optionale eigene Beschriftung ersetzt den State-Namen', async () => {
+  const db = await freshDb();
+  const widget = await widgetsRepo.createWidget(db, {
+    stateTopic: 'system://homeess/pv.current',
+    valueLabel: '  Sonnenstrom  ',
+  });
+  assert.equal(widget.valueLabel, 'Sonnenstrom');
+  // Sie liegt wie beim Schalter als `label` in der Konfiguration.
+  const stored = await new Promise((resolve, reject) => db.get(
+    'SELECT config FROM dashboard_widgets WHERE id = ?', [widget.id],
+    (error, row) => (error ? reject(error) : resolve(row))
+  ));
+  assert.deepEqual(JSON.parse(stored.config), { label: 'Sonnenstrom' });
+
+  // Ohne Beschriftung bleibt die Konfiguration leer (Bestandsdaten unverändert).
+  const plain = await widgetsRepo.createWidget(db, { stateTopic: 'system://homeess/pv.today' });
+  assert.equal(plain.valueLabel, '');
+
+  // Sie lässt sich ändern und wieder entfernen.
+  const renamed = await widgetsRepo.updateWidget(db, widget.id, {
+    type: 'value', stateTopic: 'system://homeess/pv.current', valueLabel: 'PV jetzt',
+  });
+  assert.equal(renamed.valueLabel, 'PV jetzt');
+  const cleared = await widgetsRepo.updateWidget(db, widget.id, {
+    type: 'value', stateTopic: 'system://homeess/pv.current', valueLabel: '',
+  });
+  assert.equal(cleared.valueLabel, '');
+  db.close();
+});
+
 test('Alte Wertekatalog-Bezüge werden dauerhaft als State-Topic migriert', async () => {
   const db = await freshDb();
   await new Promise((resolve, reject) => db.run(

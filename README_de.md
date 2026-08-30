@@ -28,7 +28,7 @@ Maschinen oder LXC-Container. Eine minimale Debian-Installation genügt.
 - Debian, Ubuntu, Raspberry Pi OS oder eine andere Debian-basierte Distribution
 - `systemd` und `apt`
 - Node.js ab Version 20.17; der Installer ergänzt bei Bedarf eine passende Version
-- Ein MQTT-Broker wie ioBroker ist für den ersten Start optional
+- Ein MQTT-Broker ist für den ersten Start optional
 
 ## Installation
 

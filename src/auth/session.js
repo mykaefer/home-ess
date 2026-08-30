@@ -93,9 +93,10 @@ function requireAuth(req, res, next) {
 }
 
 // Schalt-/Bedien-Routen, die auch mit der Rolle „bedienen" erlaubt sind:
-// Schalter in Messen + Schalten, Schaltgruppen und Dashboard-Schalter sowie die
+// Schalter in Messen + Schalten, Schaltgruppen und Dashboard-Schalter, die
 // Bedienelemente für Wallbox-Lademodi/-Steuerung und die Pool-Pumpenmodi
-// (An/Aus/Automatik). Alle anderen schreibenden Requests erfordern „schreiben".
+// (An/Aus/Automatik) sowie das Setzen beschreibbarer States auf der
+// States-Seite. Alle anderen schreibenden Requests erfordern „schreiben".
 const OPERATE_POST_PATTERNS = [
   /^\/dashboard\/switch\/\d+\/[^/]+\/?$/,
   /^\/messen-schalten\/actor\/\d+\/switch\/[^/]+\/?$/,
@@ -103,6 +104,10 @@ const OPERATE_POST_PATTERNS = [
   /^\/wallbox\/box\/\d+\/mode\/[^/]+\/?$/,
   /^\/wallbox\/box\/\d+\/control\/[^/]+\/?$/,
   /^\/pool\/pump\/[^/]+\/[^/]+\/?$/,
+  // Beschreibbare States direkt auf der States-Seite bedienen.
+  /^\/states\/value\/?$/,
+  // Klimaanlage eines Raums umschalten (An/Aus/Automatik).
+  /^\/heizung\/raum\/\d+\/klima\/[^/]+\/?$/,
   // Systemweite Warnung quittieren (Warnband im Layout) – Bedienen genügt.
   /^\/live\/warnung\/quittieren\/?$/,
 ];

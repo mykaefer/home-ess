@@ -11,7 +11,9 @@ const stateProperties = require('./properties');
 const {
   buildStatesTree: buildAdapterStatesTree,
   categoryParts,
+  forEachState,
 } = require('../adapters/states');
+const stateControls = require('./controls');
 const { listCalculatedInternalValues, VALUE_CATEGORIES } = require('./system-values');
 const { topicForId } = require('./system-topics');
 const customStates = require('./custom');
@@ -56,6 +58,8 @@ function systemCategories(values) {
       writable: entry.writable === true,
       topicSelectable: entry.writable === true,
       sourceType: 'system',
+      // Module melden zu beschreibbaren Werten mit, wie sie bedient werden.
+      control: entry.control,
       value: entry.value,
       display: entry.display,
     });
@@ -128,7 +132,24 @@ async function buildStatesTree(db, cache = bus.getCache()) {
       ...virtual.flatMap((block) => block.categories || []),
     ]),
   }, ...sortBlocks([custom, ...physical])];
-  return stateProperties.applyToBlocks(blocks);
+  // Erst die Anzeigeeigenschaften (Nachkommastellen, Einheit), dann die
+  // Bedienelemente — sie richten sich nach dem fertigen Wert.
+  return stateControls.applyToBlocks(stateProperties.applyToBlocks(blocks));
+}
+
+// Einen einzelnen State im Baum suchen (Schreibzugriff von der States-Seite:
+// bedient werden darf nur, was die Quelle als beschreibbar meldet).
+async function findState(db, topic, cache = bus.getCache()) {
+  const wanted = String(topic || '').trim();
+  if (!wanted) return null;
+  const tree = await buildStatesTree(db, cache);
+  let found = null;
+  for (const block of tree) {
+    forEachState(block.categories, (state) => {
+      if (!found && state.topic === wanted) found = state;
+    });
+  }
+  return found;
 }
 
 // Anzeigetitel eines Blocks – zugleich sein Sortierschlüssel. Der System-Block
@@ -211,6 +232,7 @@ function invalidateStates() {
 
 module.exports = {
   buildStatesTree,
+  findState,
   listAllStates,
   invalidateStates,
   entriesFromBlocks,

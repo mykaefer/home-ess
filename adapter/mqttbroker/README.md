@@ -22,7 +22,7 @@ der Broker den Wert als Retained Message an die Abonnenten des Topics.
 
 Nutzlasten werden zu Zahl, Boolean oder Text ausgewertet (`21.5`, `ON`, `aus`).
 Mit der Einstellung **JSON-Nutzlast auswerten** wird zusätzlich die
-ioBroker-Form `{"val": 21.5, "ack": true}` ausgepackt.
+JSON-Form `{"val": 21.5, "ack": true}` ausgepackt.
 
 ## Idle-Haltezeit
 

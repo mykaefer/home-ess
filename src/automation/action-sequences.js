@@ -19,14 +19,15 @@
 // sich die Module unterscheiden.
 
 const conditions = require('../conditions/repository');
-const { checkboxValue } = require('../conditions/values');
 
+// Aktionsarten, Grenzen und Beschreibungen kommen aus den Bedingungen: dort
+// sind dieselben Bausteine als Dann-/Sonst-Zweig zu Hause, und beide Seiten
+// sollen sich in Validierung und Wortlaut nie auseinanderentwickeln.
 const TYPES = new Set(['write', 'pause', 'loop']);
-const MAX_PAUSE_SECONDS = 86400;
-const MAX_REPEATS = 1000;
-const MIN_CHECK_SECONDS = 5;
-const MAX_CHECK_SECONDS = 86400;
-const TYPE_LABELS = { write: 'Wert', pause: 'Pause', loop: 'Schleife' };
+const {
+  ACTION_TYPE_LABELS: TYPE_LABELS,
+  MAX_PAUSE_SECONDS, MAX_REPEATS, MIN_CHECK_SECONDS, MAX_CHECK_SECONDS,
+} = conditions;
 
 function dbAll(db, sql, params = []) {
   return new Promise((resolve, reject) => db.all(sql, params, (err, rows) => (err ? reject(err) : resolve(rows || []))));
@@ -46,49 +47,12 @@ function validation(message) {
   return error;
 }
 
-function decimal(value) {
-  const raw = String(value == null ? '' : value).trim().replace(',', '.');
-  if (!raw) return null;
-  const number = Number(raw);
-  return Number.isFinite(number) ? number : null;
-}
-
-function pauseSeconds(value) {
-  const seconds = decimal(value);
-  if (seconds == null || seconds <= 0 || seconds > MAX_PAUSE_SECONDS) {
-    throw validation(`Die Pause muss zwischen 0 und ${MAX_PAUSE_SECONDS} Sekunden liegen.`);
-  }
-  return Math.round(seconds * 10) / 10;
-}
-
-function loopConfig(input) {
-  const repeats = decimal(input.repeats);
-  if (repeats == null || !Number.isInteger(repeats) || repeats < 1 || repeats > MAX_REPEATS) {
-    throw validation(`Die Anzahl der Durchläufe muss zwischen 1 und ${MAX_REPEATS} liegen.`);
-  }
-  const config = { repeats, checkEnabled: checkboxValue(input.checkEnabled, false) };
-  if (!config.checkEnabled) return config;
-  const interval = decimal(input.checkIntervalSeconds);
-  if (interval == null || interval < MIN_CHECK_SECONDS || interval > MAX_CHECK_SECONDS) {
-    throw validation(`Der Prüfabstand muss zwischen ${MIN_CHECK_SECONDS} und ${MAX_CHECK_SECONDS} Sekunden liegen.`);
-  }
-  config.checkIntervalSeconds = Math.round(interval);
-  // Die Prüfbedingung ist exakt ein „Wenn" der Bedingungen – gleiche Eingaben,
-  // gleiche Validierung, gleicher Vergleich zur Laufzeit.
-  config.check = conditions.normalizeItemInput('when', {
-    type: 'state', topic: input.checkTopic, operator: input.checkOperator, value: input.checkValue,
-  }).config;
-  return config;
-}
-
 // Vollständige Eingabe einer Aktion prüfen und in ihre gespeicherte Form
-// bringen. Die Wert-Zuweisung übernimmt unverändert die Regeln des „Dann".
+// bringen — Wert, Pause und Schleife sind exakt das „Dann" der Bedingungen.
 function normalizeActionInput(input = {}) {
   const type = String(input.type || '').trim().toLowerCase();
   if (!TYPES.has(type)) throw validation('Die Aktionsart ist ungültig.');
-  if (type === 'write') return { type, config: conditions.normalizeItemInput('then', { ...input, type: 'write' }).config };
-  if (type === 'pause') return { type, config: { seconds: pauseSeconds(input.seconds) } };
-  return { type, config: loopConfig(input) };
+  return { type, config: conditions.normalizeItemInput('then', { ...input, type }).config };
 }
 
 function parseConfig(value) {
@@ -98,20 +62,8 @@ function parseConfig(value) {
   } catch (_) { return {}; }
 }
 
-function formatSeconds(seconds) {
-  const number = Number(seconds);
-  if (!Number.isFinite(number)) return '—';
-  return `${number.toLocaleString('de-DE', { maximumFractionDigits: 1 })} s`;
-}
-
 function describeAction(action) {
-  const config = action.config || {};
-  if (action.type === 'write') return conditions.describeItem({ kind: 'then', type: 'write', config });
-  if (action.type === 'pause') return `Pause für ${formatSeconds(config.seconds)}`;
-  const repeats = `${config.repeats || 1}× durchlaufen`;
-  if (!config.checkEnabled || !config.check) return `Schleife · ${repeats}`;
-  const check = conditions.describeItem({ kind: 'when', type: 'state', config: config.check });
-  return `Schleife · ${repeats} · Prüfung alle ${formatSeconds(config.checkIntervalSeconds)}: ${check}`;
+  return conditions.describeActionItem({ type: action.type, config: action.config || {} });
 }
 
 // Alle Aktionen eines Baums flach – für Abonnements der referenzierten Topics.

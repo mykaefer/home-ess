@@ -282,7 +282,7 @@ wird unabhängig von homeESS versioniert; die Version steht in
 
 Erste Fassung. homeESS wird damit zur eigenständigen Zigbee-Zentrale: Netzwerk,
 Pairing, Geräte-Interviews und Gerätebefehle laufen vollständig im Adapter.
-Weder Zigbee2MQTT noch ioBroker, Home Assistant, ein deCONZ-Server, ein
+Weder Zigbee2MQTT noch Home Assistant, ein deCONZ-Server, ein
 MQTT-Gateway oder ein Cloud-Dienst werden benötigt.
 
 ### Hinzugefügt

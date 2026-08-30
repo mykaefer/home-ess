@@ -112,6 +112,7 @@ ${tabs.map((tab) => renderTabPanel(tab, ctx, tab.id === initialTabId)).join('\n'
       tabId: tab.id,
       size: widget.size || 'l',
       color: widget.color || '',
+      valueLabel: widget.valueLabel || '',
       switchLabel: widget.switchLabel || '',
       onColor: widget.onColor || '',
       offColor: widget.offColor || '',
@@ -545,6 +546,7 @@ ${tabs.map((tab) => renderTabPanel(tab, ctx, tab.id === initialTabId)).join('\n'
       colorChoiceSync('widgetColor', values.color || '');
       var target = values.switchTarget != null ? values.switchTarget : (values.type === 'switch' ? (values.sourceId || '') : '');
       document.getElementById('widgetSwitchTarget').value = target;
+      document.getElementById('widgetValueLabel').value = values.valueLabel || '';
       document.getElementById('widgetSwitchLabel').value = values.switchLabel || '';
       colorChoiceSync('widgetOnColor', values.onColor || '');
       colorChoiceSync('widgetOffColor', values.offColor || '');
@@ -1395,11 +1397,16 @@ function renderWidgetCard(widget, ctx = {}) {
   if (widget.type === 'switch') return renderSwitchCard(widget);
   if (widget.type === 'chart') return renderChartCard(widget, ctx);
   const label = widget.label || widget.stateTopic || widget.sourceId;
+  // Bei eigener Beschriftung nennt der Tooltip zusätzlich den State, damit die
+  // Herkunft des Wertes ablesbar bleibt.
+  const title = widget.valueLabel && widget.stateLabel && widget.stateLabel !== label
+    ? `${label} · ${widget.stateLabel}`
+    : label;
   const currentDisplay = widget.currentDisplay == null ? '—' : widget.currentDisplay;
   const colorStyle = widget.color ? ` style="color:${escapeHtml(widget.color)}"` : '';
   return `            <div class="widget-card widget-card--value${sizeClass(widget)}" data-id="${widget.id}" data-type="value">
               <div class="widget-body">
-                <div class="widget-label" title="${escapeHtml(label)}">${escapeHtml(label)}</div>
+                <div class="widget-label" title="${escapeHtml(title)}">${escapeHtml(label)}</div>
                 <div class="widget-value" id="widget-value-${widget.id}"${colorStyle}>${escapeHtml(currentDisplay)}</div>
               </div>
 ${widgetEditBar(widget, label)}
@@ -1629,6 +1636,10 @@ ${typeTabs}
               <label class="field-block" for="widgetStateTopic">
                 <span>State</span>
                 <input type="text" id="widgetStateTopic" name="stateTopic" data-state-picker autocomplete="off" placeholder="State auswählen…">
+              </label>
+              <label class="field-block" for="widgetValueLabel">
+                <span>Bezeichnung <span class="pool-optional">(optional, sonst Name des States)</span></span>
+                <input type="text" id="widgetValueLabel" name="valueLabel" maxlength="60" data-no-state-picker>
               </label>
               ${renderColorChoice({ fieldId: 'widgetColor', name: 'color', label: 'Farbe des Werts', defaultPicker: '#1a1a2e' })}
             </div>

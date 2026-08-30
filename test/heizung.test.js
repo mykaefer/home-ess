@@ -8,6 +8,8 @@ const bus = require('../src/state-bus');
 const rooms = require('../src/heizung/rooms');
 const actionsRepo = require('../src/heizung/actions');
 const central = require('../src/heizung/central');
+const climate = require('../src/heizung/climate');
+const systemRouter = require('../src/states/system-router');
 const billing = require('../src/heizung/billing');
 const runtime = require('../src/heizung/runtime');
 const modules = require('../src/modules');
@@ -33,7 +35,9 @@ async function freshDb() {
     heat_topic TEXT NOT NULL DEFAULT '', cool_topic TEXT NOT NULL DEFAULT '',
     central_allowed INTEGER NOT NULL DEFAULT 0, central_temp REAL,
     fan_topic TEXT NOT NULL DEFAULT '',
-    contact_delay_seconds INTEGER NOT NULL DEFAULT 0, last_error TEXT NOT NULL DEFAULT '')`);
+    contact_delay_seconds INTEGER NOT NULL DEFAULT 0,
+    climate_mode INTEGER NOT NULL DEFAULT 2, climate_mode_since INTEGER,
+    climate_reset_time TEXT NOT NULL DEFAULT '', last_error TEXT NOT NULL DEFAULT '')`);
   await run(db, `CREATE TABLE heizung_room_sensors (
     id INTEGER PRIMARY KEY AUTOINCREMENT, room_id INTEGER NOT NULL, name TEXT NOT NULL DEFAULT '',
     topic TEXT NOT NULL, position INTEGER NOT NULL DEFAULT 0)`);
@@ -1190,4 +1194,241 @@ test('Das Zählwerk weist unplausible Eingaben ab', async () => {
   await billing.closePeriod(db, { metered: '250' }, now);
   assert.equal((await central.loadCentralConfig(db)).consumptionPerHour, 2);
   await close(db);
+});
+
+// Wartet, bis eine Bedingung eintritt — die Handschaltung über den State läuft
+// asynchron (DB-Schreibung und anschließender Takt).
+async function waitFor(check, timeout = 1000) {
+  const until = Date.now() + timeout;
+  while (Date.now() < until) {
+    if (check()) return true;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  return check();
+}
+
+test('Die Klimaanlage eines Raums liefert ihre beiden Klima-States', async () => {
+  const db = await freshDb();
+  const room = await rooms.createRoom(db, { ...baseRoom, name: 'Bad unten', coolOffset: '2' });
+  const [modus, aktiv] = climate.climateEntries(room, rooms.addressFor(room.name), { cooling: true });
+  assert.equal(modus.id, 'klima.Bad_unten.betriebsart');
+  assert.equal(climate.stateTopic('Bad_unten', 'betriebsart'), 'system://homeess/klima.Bad_unten.betriebsart');
+  // Die Betriebsart ist das einzige Schreibziel; „aktiv" meldet nur zurück.
+  assert.equal(modus.writable, true);
+  assert.equal(modus.value, climate.MODE_AUTO);
+  assert.equal(modus.display, 'Automatik');
+  assert.equal(modus.category, 'Klima/Bad unten');
+  assert.equal(aktiv.id, 'klima.Bad_unten.aktiv');
+  assert.equal(aktiv.writable, false);
+  assert.equal(aktiv.value, 1);
+
+  // Geschrieben werden darf als Zahl oder als Wort; alles andere bleibt folgenlos.
+  assert.equal(climate.normalizeMode('aus'), climate.MODE_OFF);
+  assert.equal(climate.normalizeMode('1'), climate.MODE_ON);
+  assert.equal(climate.normalizeMode(2), climate.MODE_AUTO);
+  assert.equal(climate.normalizeMode('kalt'), null);
+  await close(db);
+});
+
+test('Übersteuerung „Aus" hält die Klimaanlage trotz Kühlbedarf aus', async () => {
+  const db = await freshDb();
+  const room = await rooms.createRoom(db, { ...baseRoom, coolOffset: '2' });
+  const sensor = await rooms.addSensor(db, room.id, { topic: 'hdp://sensor/1' });
+  await addSwitchSequences(db, room.id, 'cool', 'custom://Klima');
+  const capture = captureWrites();
+  const topic = climate.stateTopic(rooms.addressFor(room.name), 'betriebsart');
+  try {
+    await runtime.init(db);
+    // 25 °C bei Soll 21 + Offset 2: die Automatik kühlt.
+    feed(rooms.sensorCacheKey(sensor), 25);
+    const start = Date.now();
+    await runtime.tick(start);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    assert.equal(runtime.snapshot().get(room.id).cooling, true);
+
+    // Handschaltung „Aus" über den State.
+    capture.writes.length = 0;
+    assert.equal(systemRouter.write(topic, '0'), true);
+    await waitFor(() => runtime.snapshot().get(room.id).climateMode === climate.MODE_OFF);
+    await runtime.tick(start + 5000);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    let state = runtime.snapshot().get(room.id);
+    assert.equal(state.cooling, false);
+    assert.equal(state.climateOverride, true);
+    assert.equal(lastWrite(capture.writes, 'custom://Klima'), 0);
+    assert.match(state.note, /Automatik ist ausgesetzt/);
+
+    // Es wird noch wärmer — die Raumtemperatur bleibt ohne Wirkung.
+    feed(rooms.sensorCacheKey(sensor), 28);
+    await runtime.tick(start + 10000);
+    state = runtime.snapshot().get(room.id);
+    assert.equal(state.cooling, false);
+    assert.equal(state.climateMode, climate.MODE_OFF);
+
+    // Erst das Erreichen der Soll-Temperatur stellt auf Automatik zurück.
+    feed(rooms.sensorCacheKey(sensor), 20.5);
+    await runtime.tick(start + 15000);
+    state = runtime.snapshot().get(room.id);
+    assert.equal(state.climateMode, climate.MODE_AUTO);
+    assert.equal(state.climateOverride, false);
+    assert.equal(state.cooling, false);
+    assert.equal((await rooms.getRoom(db, room.id)).climateMode, climate.MODE_AUTO);
+  } finally {
+    runtime.stop();
+    capture.restore();
+    await close(db);
+  }
+});
+
+test('Übersteuerung „An" ignoriert Fensterkontakt und Temperatur, nicht aber das Betriebslevel', async () => {
+  const db = await freshDb();
+  const room = await rooms.createRoom(db, { ...baseRoom, coolOffset: '2', coolPriority: '4', contactDelaySeconds: '0' });
+  const sensor = await rooms.addSensor(db, room.id, { topic: 'hdp://sensor/1' });
+  const contact = await rooms.addContact(db, room.id, { topic: 'hdp://kontakt/1' });
+  await addSwitchSequences(db, room.id, 'cool', 'custom://Klima');
+  const capture = captureWrites();
+  const topic = climate.stateTopic(rooms.addressFor(room.name), 'betriebsart');
+  try {
+    await runtime.init(db);
+    // 18 °C: die Automatik hätte keinen Grund zu kühlen.
+    feed(rooms.sensorCacheKey(sensor), 18);
+    feed(rooms.contactCacheKey(contact), 0);
+    const start = Date.now();
+    await runtime.tick(start);
+    assert.equal(runtime.snapshot().get(room.id).cooling, false);
+
+    capture.writes.length = 0;
+    assert.equal(systemRouter.write(topic, 'an'), true);
+    await waitFor(() => runtime.snapshot().get(room.id).cooling === true);
+    let state = runtime.snapshot().get(room.id);
+    assert.equal(state.climateMode, climate.MODE_ON);
+    assert.equal(lastWrite(capture.writes, 'custom://Klima'), 1);
+    // Die Soll-Temperatur war beim Umschalten schon erreicht — das ist keine
+    // Flanke und hebt die Handschaltung deshalb nicht sofort wieder auf.
+    assert.equal(state.climateOverride, true);
+
+    // Offenes Fenster: die Anlage läuft weiter.
+    feed(rooms.contactCacheKey(contact), 1);
+    await runtime.tick(start + 5000);
+    state = runtime.snapshot().get(room.id);
+    assert.equal(state.contactOpen, true);
+    assert.equal(state.cooling, true);
+
+    // Das Betriebslevel behält seinen Vorrang.
+    capture.writes.length = 0;
+    levelHandler.applyLevel(3);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    assert.equal(lastWrite(capture.writes, 'custom://Klima'), 0);
+    await runtime.tick(start + 10000);
+    state = runtime.snapshot().get(room.id);
+    assert.equal(state.cooling, false);
+    assert.equal(state.climateMode, climate.MODE_ON);
+    assert.match(state.note, /Betriebslevel 3 sperrt das Kühlgerät/);
+
+    // Wieder freigegeben: die Handschaltung wirkt erneut.
+    levelHandler.applyLevel(5);
+    await runtime.tick(start + 15000);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    assert.equal(runtime.snapshot().get(room.id).cooling, true);
+
+    // Warm werden und wieder auf die Soll-Temperatur fallen: jetzt greift die
+    // Flanke und die Anlage steht wieder in der Automatik.
+    feed(rooms.sensorCacheKey(sensor), 26);
+    await runtime.tick(start + 20000);
+    assert.equal(runtime.snapshot().get(room.id).climateMode, climate.MODE_ON);
+    feed(rooms.sensorCacheKey(sensor), 21);
+    await runtime.tick(start + 25000);
+    state = runtime.snapshot().get(room.id);
+    assert.equal(state.climateMode, climate.MODE_AUTO);
+    assert.equal(state.climateOverride, false);
+    // Fenster offen — in der Automatik bleibt die Anlage jetzt aus.
+    assert.equal(state.cooling, false);
+  } finally {
+    levelHandler.applyLevel(5);
+    runtime.stop();
+    capture.restore();
+    await close(db);
+  }
+});
+
+test('Die Rückkehr-Uhrzeit greift erst bei der ersten Fälligkeit nach dem Umschalten', () => {
+  const at = (iso) => new Date(iso).getTime();
+  // Um 20:00 auf „An", Rückkehr um 22:00 → erst um 22:00.
+  const abends = at('2026-08-30T20:00:00+02:00');
+  assert.equal(climate.resetDue('22:00', abends, at('2026-08-30T21:59:00+02:00')), false);
+  assert.equal(climate.resetDue('22:00', abends, at('2026-08-30T22:00:00+02:00')), true);
+  // Nach der Uhrzeit geschaltet: die Rückkehr kommt am folgenden Tag.
+  const spaet = at('2026-08-30T23:00:00+02:00');
+  assert.equal(climate.resetDue('22:00', spaet, at('2026-08-31T06:00:00+02:00')), false);
+  assert.equal(climate.resetDue('22:00', spaet, at('2026-08-31T22:00:00+02:00')), true);
+  // Ein verpasster Zeitpunkt wird nachgeholt (Neustart, Ausfall).
+  assert.equal(climate.resetDue('22:00', abends, at('2026-09-02T09:00:00+02:00')), true);
+  // Ohne Uhrzeit und ohne Handschaltung passiert nichts.
+  assert.equal(climate.resetDue('', abends, at('2026-09-02T09:00:00+02:00')), false);
+  assert.equal(climate.resetDue('22:00', null, at('2026-09-02T09:00:00+02:00')), false);
+});
+
+test('Der Raum prüft seine Rückkehr-Uhrzeit und weist unbrauchbare Eingaben ab', async () => {
+  const db = await freshDb();
+  const room = await rooms.createRoom(db, { ...baseRoom, climateResetTime: '22:00' });
+  assert.equal(room.climateResetTime, '22:00');
+  // Leer bedeutet: keine selbsttätige Rückkehr zu einer festen Zeit.
+  const ohne = await rooms.updateRoom(db, room.id, { ...baseRoom, climateResetTime: '' });
+  assert.equal(ohne.climateResetTime, '');
+  await assert.rejects(() => rooms.updateRoom(db, room.id, { ...baseRoom, climateResetTime: '25:00' }), /HH:MM/);
+  await assert.rejects(() => rooms.updateRoom(db, room.id, { ...baseRoom, climateResetTime: 'abends' }), /HH:MM/);
+
+  // Eine Handschaltung merkt sich ihren Zeitpunkt, die Automatik nicht.
+  const setzen = await rooms.setClimateMode(db, room.id, climate.MODE_ON, 1000);
+  assert.deepEqual(setzen, { mode: climate.MODE_ON, since: 1000 });
+  assert.equal((await rooms.getRoom(db, room.id)).climateModeSince, 1000);
+  await rooms.setClimateMode(db, room.id, climate.MODE_AUTO, 2000);
+  assert.equal((await rooms.getRoom(db, room.id)).climateModeSince, null);
+  await close(db);
+});
+
+test('Zur eingestellten Uhrzeit fällt die Handschaltung auf Automatik zurück', async () => {
+  const db = await freshDb();
+  // Rückkehr um 22:00 Uhr; die Soll-Temperatur bleibt außer Reichweite, damit
+  // allein die Uhrzeit die Übersteuerung beendet.
+  const room = await rooms.createRoom(db, { ...baseRoom, coolOffset: '2', climateResetTime: '22:00' });
+  const sensor = await rooms.addSensor(db, room.id, { topic: 'hdp://sensor/1' });
+  await addSwitchSequences(db, room.id, 'cool', 'custom://Klima');
+  const capture = captureWrites();
+  const topic = climate.stateTopic(rooms.addressFor(room.name), 'betriebsart');
+  const at = (iso) => new Date(iso).getTime();
+  try {
+    await runtime.init(db);
+    // 26 °C: die Automatik würde kühlen — von Hand ausgeschaltet bleibt sie aus.
+    feed(rooms.sensorCacheKey(sensor), 26);
+    await runtime.tick(at('2026-08-30T20:00:00+02:00'));
+    assert.equal(systemRouter.write(topic, '0'), true);
+    await waitFor(() => runtime.snapshot().get(room.id).climateMode === climate.MODE_OFF);
+    // Der Zeitpunkt der Handschaltung liegt jetzt in der Datenbank; für den
+    // Test wird er auf 20:00 Uhr gesetzt.
+    await rooms.setClimateMode(db, room.id, climate.MODE_OFF, at('2026-08-30T20:00:00+02:00'));
+    await runtime.reload();
+
+    await runtime.tick(at('2026-08-30T21:00:00+02:00'));
+    let state = runtime.snapshot().get(room.id);
+    assert.equal(state.climateMode, climate.MODE_OFF);
+    assert.equal(state.cooling, false);
+    assert.match(state.note, /Zurück auf Automatik um 22:00 Uhr/);
+
+    // 22:00 Uhr: zurück in der Automatik — und die kühlt bei 26 °C sofort.
+    await runtime.tick(at('2026-08-30T22:00:00+02:00'));
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    state = runtime.snapshot().get(room.id);
+    assert.equal(state.climateMode, climate.MODE_AUTO);
+    assert.equal(state.climateOverride, false);
+    assert.equal(state.cooling, true);
+    assert.equal(lastWrite(capture.writes, 'custom://Klima'), 1);
+    const stored = await rooms.getRoom(db, room.id);
+    assert.equal(stored.climateMode, climate.MODE_AUTO);
+    assert.equal(stored.climateModeSince, null);
+  } finally {
+    runtime.stop();
+    capture.restore();
+    await close(db);
+  }
 });

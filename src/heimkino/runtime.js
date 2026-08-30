@@ -109,7 +109,7 @@ function publishRoomState(roomId, on) {
   adapterRouter.ingestFromInstance(rooms.INSTANCE, String(roomId), on ? 1 : 0);
 }
 
-// ioBroker prüft den Datentyp eines States: ein Boolean-State darf nicht als
+// Der MQTT-Broker prüft den Datentyp eines States: ein Boolean-State darf nicht als
 // numerische 1/0 beschrieben werden. Die zuletzt empfangene Darstellung des
 // Sync-Topics bestimmt deshalb das Format (wie bei den Schaltgruppen).
 function remotePayload(on, remote) {

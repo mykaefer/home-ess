@@ -3,7 +3,7 @@
 **v1.5.0** macht homeESS zur eigenständigen Zigbee-Zentrale. Der neue
 Zigbee-Adapter spricht den Coordinator direkt über Serial oder TCP an und führt
 Netzwerk, Pairing, Geräte-Interviews und Gerätebefehle selbst — ohne
-Zigbee2MQTT, ioBroker, deCONZ-Server, MQTT-Gateway oder Cloud-Dienst. Dazu
+Zigbee2MQTT, deCONZ-Server, MQTT-Gateway oder Cloud-Dienst. Dazu
 kommen eine kompakte Ansicht der Adapterseite, ein Topic-Browser im
 MQTT-Broker-Adapter und eine geänderte Regel für adaptereigene Abhängigkeiten.
 

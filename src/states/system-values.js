@@ -64,6 +64,7 @@ const VALUE_CATEGORIES = [
   'Verbrauchssummen',
   'Schaltgruppen',
   'Räume',
+  'Klima',
   'Zentralheizung',
   'Betrieb',
   'Sonstiges',
@@ -218,7 +219,7 @@ function orYearStart(dayKey, yearKey) {
 // die Zahl der bereits angebrochenen Tage. Bewusst nicht das Mittel der
 // historisierten Einzeltage: die Tageshistorie beginnt erst ab Einführung dieser
 // Funktion und wäre daher nie repräsentativ. So bleibt der Wert konsistent mit den
-// Jahressummen (analog zur ioBroker-Rechnung Jahr ÷ DayCount).
+// Jahressummen (Jahr ÷ DayCount).
 function avgPerDay(yearValue, dayOfYear) {
   if (yearValue == null || !(dayOfYear > 0)) return 0;
   return yearValue / dayOfYear;

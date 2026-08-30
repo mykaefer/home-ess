@@ -6,6 +6,16 @@ const timeHandler = require('../time-handler');
 const repository = require('./repository');
 const values = require('./values');
 
+// Der Action-Runner führt die Dann-/Sonst-Folgen aus (geteilt mit den
+// Aktionsfolgen der Module). Er wird bewusst erst beim ersten Gebrauch geladen:
+// action-runner.js greift seinerseits auf diese Engine zu, und ein Require zur
+// Ladezeit bekäme deren Exporte noch nicht vollständig zu sehen.
+let runner = null;
+function actionRunner() {
+  if (!runner) runner = require('../automation/action-runner').createActionRunner('conditions');
+  return runner;
+}
+
 const TICK_MS = 1000;
 const EXECUTION_WINDOW_MS = 60000;
 const MAX_EXECUTIONS_PER_WINDOW = 60;
@@ -26,6 +36,15 @@ const pending = new Set();
 let pendingTimer = null;
 let armTimer = null;
 const armedTriggers = new Set();
+// Schleifen mit zyklischer Prüfung: flache Liste über alle Bedingungen, dazu
+// der Zeitpunkt der letzten Prüfung/Ausführung je Schleife.
+let loops = [];
+const loopBaselines = new Map();
+// Zuletzt ausgeführter Zweig je Bedingung ('then' oder 'else'). Nur dessen
+// Schleifen werden zyklisch geprüft – sonst würden Dann und Sonst einander
+// dauerhaft überschreiben. Nach einem Neustart bleibt die Prüfung aus, bis die
+// Bedingung einmal gelaufen ist.
+const lastBranch = new Map();
 
 // Das Element selbst hat den Basisschlüssel; Vergleichs- und Zielwerte, die auf
 // ein Topic verweisen, bekommen je Feld einen eigenen Abo-Schlüssel.
@@ -150,11 +169,15 @@ function actionValue(item) {
   return values.roundTo(values.applyOperation(operation, left, right), round);
 }
 
-function runActions(items) {
-  for (const item of items) {
-    const value = actionValue(item);
-    if (!mqttClient.publish(item.config.topic, value)) throw new Error(`Ziel-State ${item.config.topic} konnte nicht geschrieben werden.`);
-  }
+// Einen Zweig als Aktionsfolge abarbeiten: Werte zuweisen, Pausen abwarten,
+// Schleifen mehrfach durchlaufen — von oben nach unten. Die Bedingung bleibt
+// währenddessen in `running` und löst nicht erneut aus; erst danach ist sie
+// wieder frei.
+async function runBranch(condition, kind) {
+  const list = (kind === 'else' ? condition.elseTree : condition.thenTree) || [];
+  const result = await actionRunner().run(`${condition.id}:${kind}`, list);
+  lastBranch.set(condition.id, kind);
+  return result;
 }
 
 function actionSummary(prefix, count) {
@@ -198,13 +221,13 @@ async function evaluateCondition(condition, trigger = null) {
         condition.lastTriggeredAt = now; condition.lastResult = result; condition.lastError = '';
         return false;
       }
-      runActions(elses);
+      await runBranch(condition, 'else');
       const result = actionSummary('Sonst ausgeführt', elses.length);
       await repository.markTriggered(database, condition.id, result, '', now);
       condition.lastTriggeredAt = now; condition.lastResult = result; condition.lastError = '';
       return true;
     }
-    runActions(condition.thens);
+    await runBranch(condition, 'then');
     const result = actionSummary('Ausgeführt', condition.thens.length);
     await repository.markTriggered(database, condition.id, result, '', now);
     condition.lastTriggeredAt = now; condition.lastResult = result; condition.lastError = '';
@@ -282,6 +305,56 @@ async function checkTimeTriggers(now = Date.now()) {
   }
 }
 
+// Eine Schleife nach nicht erfüllter Prüfung erneut abspulen – nur diese
+// Schleife, nicht der übrige Zweig.
+async function rerunLoop(entry) {
+  const condition = conditions.find((item) => item.id === entry.conditionId);
+  try {
+    const result = await actionRunner().runLoopOnce(entry.loop);
+    if (result.status !== 'done' || !database) return;
+    const message = `${entry.kind === 'else' ? 'Sonst' : 'Dann'}: Schleife nach Prüfung wiederholt`;
+    await repository.markTriggered(database, entry.conditionId, message, '').catch(() => {});
+    if (condition) { condition.lastTriggeredAt = Date.now(); condition.lastResult = message; condition.lastError = ''; }
+  } catch (error) {
+    const message = String((error && error.message) || error).slice(0, 1000);
+    if (database) await repository.markTriggered(database, entry.conditionId, 'Fehler', message).catch(() => {});
+    if (condition) { condition.lastTriggeredAt = Date.now(); condition.lastResult = 'Fehler'; condition.lastError = message; }
+  } finally {
+    loopBaselines.set(entry.loop.id, Date.now());
+  }
+}
+
+// Zyklische Plausibilitätsprüfung der Schleifen: im eingestellten Abstand wird
+// die Bedingung erneut bewertet; trifft sie nicht zu, läuft die Schleife noch
+// einmal. Geprüft wird nur der Zweig, der zuletzt ausgeführt wurde.
+async function checkLoops(now = Date.now()) {
+  if (!database || reloading) return;
+  for (const entry of loops) {
+    const config = entry.loop.config || {};
+    if (!config.checkEnabled || !config.check) continue;
+    const condition = conditions.find((item) => item.id === entry.conditionId);
+    if (!condition || !condition.enabled) continue;
+    // Ohne Trigger ist die zyklische Prüfung selbst die Ausführungsbedingung:
+    // der Dann-Zweig gilt dann von Anfang an als der maßgebliche. Mit Trigger
+    // bleibt es beim zuletzt gelaufenen Zweig, damit Dann und Sonst einander
+    // nicht dauerhaft überschreiben.
+    const branch = lastBranch.get(entry.conditionId)
+      || (condition.triggers.length ? null : 'then');
+    if (branch !== entry.kind) continue;
+    const intervalMs = Number(config.checkIntervalSeconds || 0) * 1000;
+    if (!(intervalMs > 0)) continue;
+    const baseline = loopBaselines.get(entry.loop.id);
+    if (baseline == null) { loopBaselines.set(entry.loop.id, loadedAt); continue; }
+    if (now - baseline < intervalMs) continue;
+    loopBaselines.set(entry.loop.id, now);
+    // Läuft der Zweig gerade vollständig, hat er Vorrang.
+    if (running.has(condition.id)) continue;
+    if (actionRunner().isBusy(`${condition.id}:${entry.kind}`) || actionRunner().isLoopBusy(entry.loop.id)) continue;
+    if (actionRunner().checkFulfilled(entry.loop)) continue;
+    rerunLoop(entry).catch(() => {});
+  }
+}
+
 function clearSubscriptions() {
   if (armTimer) clearTimeout(armTimer);
   armTimer = null;
@@ -296,6 +369,7 @@ async function reload() {
     clearSubscriptions();
     conditions = await repository.listConditions(database);
     loadedAt = Date.now();
+    loops = [];
     const currentIntervalIds = new Set();
     for (const condition of conditions) {
       for (const trigger of condition.triggers) {
@@ -307,13 +381,29 @@ async function reload() {
           intervalBaselines.set(trigger.id, { at: loadedAt, signature });
         }
       }
-      // Vergleichs- und Zielwerte dürfen selbst auf ein Topic verweisen; diese
-      // Quellen werden mitgelesen, lösen aber keine Auswertung aus.
-      for (const item of [...condition.whens, ...condition.thens, ...(condition.elses || [])]) {
+      // Vergleichswerte dürfen selbst auf ein Topic verweisen; diese Quellen
+      // werden mitgelesen, lösen aber keine Auswertung aus.
+      for (const item of condition.whens) {
         for (const slot of referencedSlots(item)) {
           const key = cacheKey(item, slot);
           mqttClient.subscribeAdHoc(String(item.config[slot]).trim(), key);
           subscriptions.add(key);
+        }
+      }
+      // Dann und Sonst sind Aktionsfolgen: Ziel-/Zweitwerte einer Zuweisung und
+      // die Prüfbedingung einer Schleife liest der Action-Runner unter seinen
+      // eigenen Schlüsseln.
+      for (const kind of ['then', 'else']) {
+        const tree = (kind === 'else' ? condition.elseTree : condition.thenTree) || [];
+        for (const action of repository.collectActionNodes(tree)) {
+          for (const [slot, topic] of actionRunner().referencedSlots(action)) {
+            const key = actionRunner().cacheKey(action.id, slot);
+            mqttClient.subscribeAdHoc(topic, key);
+            subscriptions.add(key);
+          }
+          if (action.type === 'loop' && action.config && action.config.checkEnabled) {
+            loops.push({ conditionId: condition.id, kind, loop: action });
+          }
         }
       }
       for (const item of [...condition.triggers, ...condition.whens]) {
@@ -330,6 +420,12 @@ async function reload() {
       }
     }
     for (const id of intervalBaselines.keys()) if (!currentIntervalIds.has(id)) intervalBaselines.delete(id);
+    // Der Prüfabstand einer neu geladenen Schleife zählt ab dem Ladezeitpunkt.
+    const currentLoopIds = new Set(loops.map((entry) => entry.loop.id));
+    for (const id of [...loopBaselines.keys()]) if (!currentLoopIds.has(id)) loopBaselines.delete(id);
+    for (const entry of loops) if (!loopBaselines.has(entry.loop.id)) loopBaselines.set(entry.loop.id, loadedAt);
+    const currentConditionIds = new Set(conditions.map((entry) => entry.id));
+    for (const id of [...lastBranch.keys()]) if (!currentConditionIds.has(id)) lastBranch.delete(id);
     armTimer = setTimeout(() => {
       armTimer = null;
       for (const key of triggerByCacheKey.keys()) armedTriggers.add(key);
@@ -344,7 +440,10 @@ async function init(db) {
   if (!unsubscribeBus) unsubscribeBus = bus.onValuesChanged(onValues);
   await reload();
   if (!timer) {
-    timer = setInterval(() => checkTimeTriggers().catch(() => {}), TICK_MS);
+    timer = setInterval(() => {
+      checkTimeTriggers().catch(() => {});
+      checkLoops().catch(() => {});
+    }, TICK_MS);
     if (typeof timer.unref === 'function') timer.unref();
   }
 }
@@ -354,9 +453,9 @@ function stop() {
   if (armTimer) clearTimeout(armTimer);
   if (pendingTimer) clearTimeout(pendingTimer);
   if (unsubscribeBus) unsubscribeBus();
-  timer = null; pendingTimer = null; armTimer = null; unsubscribeBus = null; database = null; conditions = []; pending.clear(); running.clear(); executionHistory.clear(); blockedUntil.clear(); intervalBaselines.clear(); clearSubscriptions();
+  timer = null; pendingTimer = null; armTimer = null; unsubscribeBus = null; database = null; conditions = []; loops = []; pending.clear(); running.clear(); executionHistory.clear(); blockedUntil.clear(); intervalBaselines.clear(); loopBaselines.clear(); lastBranch.clear(); if (runner) runner.reset(); clearSubscriptions();
 }
 
 function getRuntime() { return conditions; }
 
-module.exports = { init, reload, stop, getRuntime, evaluateCondition, checkTimeTriggers, compare, valuesEqual, literal, cacheKey };
+module.exports = { init, reload, stop, getRuntime, evaluateCondition, checkTimeTriggers, checkLoops, compare, valuesEqual, literal, cacheKey };

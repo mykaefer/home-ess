@@ -1,16 +1,16 @@
-# ioBroker MQTT – Regelwerk für fehlerfreie Kommunikation
+# MQTT – Regelwerk für fehlerfreie Kommunikation
 
-Dieses Dokument beschreibt alle bekannten Eigenheiten des ioBroker-MQTT-Brokers und die bewährten Muster für eine stabile, fehlerfreie MQTT-Kommunikation. Es ist projektneutral und kann als direkte Referenz für neue Projekte verwendet werden.
+Dieses Dokument beschreibt alle bekannten Eigenheiten des MQTT-Brokers und die bewährten Muster für eine stabile, fehlerfreie MQTT-Kommunikation. Es ist projektneutral und kann als direkte Referenz für neue Projekte verwendet werden.
 
 ---
 
 ## Grundprinzipien
 
-1. **Kein automatisches Prefix.** ioBroker veröffentlicht State-Werte ohne `iobroker/`-Prefix. Dieses Prefix niemals automatisch voranstellen – es ist ausschließlich für interne ioBroker-Protokollnachrichten reserviert. Wenn ein Broker solche Topics blockiert, ist das erwünscht.
+1. **Kein automatisches Prefix.** Der Broker veröffentlicht State-Werte ohne zusätzliches Prefix. Ein broker-eigenes Prefix niemals automatisch voranstellen – es ist ausschließlich für interne Protokollnachrichten reserviert. Wenn ein Broker solche Topics blockiert, ist das erwünscht.
 
-2. **State-ID ≠ MQTT-Topic.** ioBroker speichert States mit Punktnotation (`adapter.instanz.pfad`). Der MQTT-Adapter veröffentlicht sie wahlweise als Punkt-Topic (`adapter.instanz.pfad`) oder Slash-Topic (`adapter/instanz/pfad`). Beide kommen vor; welches Format zuverlässig geliefert wird, hängt vom ioBroker-MQTT-Adapter und dessen Version ab.
+2. **State-ID ≠ MQTT-Topic.** Der Broker speichert States mit Punktnotation (`adapter.instanz.pfad`) und veröffentlicht sie wahlweise als Punkt-Topic (`adapter.instanz.pfad`) oder Slash-Topic (`adapter/instanz/pfad`). Beide kommen vor; welches Format zuverlässig geliefert wird, hängt vom Broker und dessen Version ab.
 
-3. **QoS 0 ist Standard.** ioBroker-MQTT-Adapter verwenden in der Regel QoS 0. Höhere QoS-Level sind selten konfiguriert und schaffen oft mehr Probleme als sie lösen.
+3. **QoS 0 ist Standard.** MQTT-Broker verwenden in der Regel QoS 0. Höhere QoS-Level sind selten konfiguriert und schaffen oft mehr Probleme als sie lösen.
 
 4. **`clean: true`.** MQTT.js sollte mit `clean: true` verbunden werden. Persistent sessions führen zu Zustellung alter Nachrichten bei Reconnect und verschleiern fehlerhafte Subscriptions.
 
@@ -28,14 +28,14 @@ Dieses Dokument beschreibt alle bekannten Eigenheiten des ioBroker-MQTT-Brokers 
    die Fernbedienung einen Zustand anzeigen, den das Gerät nicht annehmen darf.
 
 7. **Broker-States nicht zyklisch per `/get` pollen.** Insbesondere bei
-   Homematic kann eine Wertanfrage über ioBroker eine echte Funkabfrage auslösen.
+   Homematic kann eine Wertanfrage über den Broker eine echte Funkabfrage auslösen.
    Viele Geräte-Topics oder kurze Intervalle treiben dadurch den Duty-Cycle hoch.
    Normale MQTT-States deshalb ereignisgetrieben abonnieren; aktive Reads sind
    nur für lokale Adapter-Schema-Topics (`prefix://instanz/adresse`) zulässig.
 
 ---
 
-## Topic-Formate in ioBroker
+## Topic-Formate
 
 ### Normalform / Normalisierung
 
@@ -51,10 +51,10 @@ function normalizeMqttTopic(topic) {
 
 ### State-ID → MQTT-Topic (Punkt → Slash)
 
-ioBroker-State-IDs werden durch Ersetzen aller Punkte durch Slashes zu einem MQTT-Topic:
+State-IDs werden durch Ersetzen aller Punkte durch Slashes zu einem MQTT-Topic:
 
 ```js
-function ioBrokerIdToMqttTopic(stateId) {
+function stateIdToMqttTopic(stateId) {
   return String(stateId || "")
     .replace(/^\/+/, "")
     .replace(/\./g, "/")
@@ -65,13 +65,13 @@ function ioBrokerIdToMqttTopic(stateId) {
 
 ### MQTT-Adapter-States erkennen
 
-Wenn ein Nutzer eine ioBroker-State-ID in der Form `mqtt.0.Heizung.Vorlauf` konfiguriert (State des MQTT-Adapters selbst), ist das eigentliche Broker-Topic `Heizung/Vorlauf`:
+Wenn ein Nutzer eine State-ID in der Form `mqtt.0.Heizung.Vorlauf` konfiguriert (ein State der MQTT-Anbindung selbst), ist das eigentliche Broker-Topic `Heizung/Vorlauf`:
 
 ```js
 function mqttAdapterStateToBrokerTopic(topic) {
   const clean = normalizeMqttTopic(topic);
   const dotMatch = clean.match(/^mqtt\.\d+\.(.+)$/i);
-  if (dotMatch) return ioBrokerIdToMqttTopic(dotMatch[1]);
+  if (dotMatch) return stateIdToMqttTopic(dotMatch[1]);
   const slashMatch = clean.match(/^mqtt\/\d+\/(.+)$/i);
   if (slashMatch) return normalizeMqttTopic(slashMatch[1]);
   return "";
@@ -87,7 +87,7 @@ Für jedes konfigurierte Topic werden alle realistischen MQTT-Pfade erzeugt, auf
 function mqttReadCandidates(configuredTopic) {
   const clean = normalizeMqttTopic(configuredTopic);
   if (!clean) return [];
-  const slashVariant = ioBrokerIdToMqttTopic(clean);
+  const slashVariant = stateIdToMqttTopic(clean);
   const adapterVariant = mqttAdapterStateToBrokerTopic(clean);
   const result = new Set([clean]);
   if (slashVariant !== clean) result.add(slashVariant);
@@ -104,7 +104,7 @@ function mqttReadCandidates(configuredTopic) {
 
 ### Problemstellung
 
-Manche ioBroker-Adapter (z. B. Modbus, Victron Energy via MQTT-Adapter) erzeugen State-IDs, in denen der State-Name selbst Slashes enthält:
+Manche Datenquellen (z. B. Modbus, Victron Energy) erzeugen State-IDs, in denen der State-Name selbst Slashes enthält:
 
 ```
 modbus.0.holdingRegisters.100.817_/Ac/Consumption/L1/Power
@@ -114,7 +114,7 @@ Das Dot-Prefix lautet hier `modbus.0.holdingRegisters.100.817_`, der State-Name 
 
 ### Warum ein exaktes Abo nicht funktioniert
 
-Der ioBroker-MQTT-Broker konvertiert beim Matching einer Subscription **alle Slashes zurück zu Punkten**, um die State-ID zu finden. Bei obigem Beispiel würde er aus dem Slash-Topic `modbus/0/holdingRegisters/100/817_/Ac/Consumption/L1/Power` die State-ID `modbus.0.holdingRegisters.100.817_.Ac.Consumption.L1.Power` rekonstruieren – diese existiert nicht. Das Abo wird zwar bestätigt (SUBACK), aber:
+Der MQTT-Broker konvertiert beim Matching einer Subscription **alle Slashes zurück zu Punkten**, um die State-ID zu finden. Bei obigem Beispiel würde er aus dem Slash-Topic `modbus/0/holdingRegisters/100/817_/Ac/Consumption/L1/Power` die State-ID `modbus.0.holdingRegisters.100.817_.Ac.Consumption.L1.Power` rekonstruieren – diese existiert nicht. Das Abo wird zwar bestätigt (SUBACK), aber:
 
 - **Retained-Wert:** Kommt an (einmalig, oft leer), weil der Broker ihn direkt unter dem Topic gespeichert hat.
 - **Live-Updates:** Kommen **nie** an, weil der Broker das Topic bei jeder Veröffentlichung nicht auf die Subscription matcht.
@@ -136,7 +136,7 @@ function mqttSlashStateWildcard(configuredTopic) {
   const lastDot = dotPrefix.lastIndexOf(".");
   if (lastDot === -1) return ""; // kein Punkt-Praefix → natives Slash-Topic, kein Problem
   const base = dotPrefix.slice(0, lastDot);
-  const slashBase = ioBrokerIdToMqttTopic(base);
+  const slashBase = stateIdToMqttTopic(base);
   return slashBase ? `${slashBase}/#` : "";
 }
 // "modbus.0.holdingRegisters.100.817_/Ac/Consumption/L1/Power"
@@ -172,7 +172,7 @@ mit eingebettetem Slash funktioniert prinzipiell nicht:
   versickert (selbst wenn man an alle Punkt-/Slash-Kandidaten schreibt).
 
 **Symptom:** Der Zustand wird korrekt angezeigt/gelesen, ein Schaltbefehl ändert
-den realen State im ioBroker aber nie.
+den realen State auf dem Broker aber nie.
 
 **Lösung:** Für **Schalt-Ziel-Topics slash-freie** State-IDs verwenden (z. B. einen
 schreibbaren Hilfs-State unter `0_userdata.0.…` anlegen und per Skript auf das
@@ -234,9 +234,9 @@ function reconnect() {
 
 ## Payload-Formate
 
-### ioBroker MQTT-Adapter: JSON-Wrapping
+### JSON-Wrapping
 
-Der ioBroker MQTT-Adapter kann Werte in einem JSON-Objekt veröffentlichen:
+Der Broker kann Werte in einem JSON-Objekt veröffentlichen:
 
 ```json
 { "val": 42, "ack": true, "ts": 1710000000000, "lc": 1710000000000 }
@@ -251,7 +251,7 @@ function unwrapMqttPayload(raw) {
   try {
     const parsed = JSON.parse(text);
     if (parsed && typeof parsed === "object" && "val" in parsed) {
-      return parsed.val; // ioBroker-Format: { val, ack, ... }
+      return parsed.val; // JSON-Format: { val, ack, ... }
     }
   } catch (_) {}
   return text; // anderes JSON oder Parse-Fehler → Rohstring zurückgeben
@@ -262,7 +262,7 @@ function unwrapMqttPayload(raw) {
 
 ### `ack`-Flag: bestätigter Zustand vs. Schreibwunsch
 
-In ioBroker bedeutet `ack:true` den **bestätigten Ist-Zustand** eines States,
+Auf dem Broker bedeutet `ack:true` den **bestätigten Ist-Zustand** eines States,
 `ack:false` einen **Schreibwunsch/Kommando**. Schreibt ein Client einen Wert auf
 das Haupt-Topic (`{val, ack:false}`, siehe unten), so empfängt er dieses
 **eigene Echo** über seine Subscription wieder zurück. Wird das ungeprüft gecacht,
@@ -294,7 +294,7 @@ if (ack === false) return; // Schreibwunsch/Echo – kein bestätigter Zustand
 
 ### Sinnlose Werte ignorieren
 
-Leere Payloads, `null` und `NaN` sind im ioBroker-Kontext keine gültigen Werte:
+Leere Payloads, `null` und `NaN` sind keine gültigen Werte:
 
 ```js
 function isMeaningfulValue(value) {
@@ -307,14 +307,14 @@ Diese Werte **nicht cachen** und **nicht an UI-Clients weitergeben**.
 
 ### Leere Retained-Payloads bei Dot-Topics
 
-Wenn für ein Topic sowohl ein Dot-Topic als auch ein Slash-Topic abonniert wird, kann das Dot-Topic einen leeren Retained-Wert liefern (weil ioBroker beim State-Löschen oder -Initialisieren einen leeren Payload retained). Das Slash-Topic liefert dagegen den echten Wert.
+Wenn für ein Topic sowohl ein Dot-Topic als auch ein Slash-Topic abonniert wird, kann das Dot-Topic einen leeren Retained-Wert liefern (weil der Broker beim State-Löschen oder -Initialisieren einen leeren Payload retained). Das Slash-Topic liefert dagegen den echten Wert.
 
 Regel: Leere Payloads auf dem Dot-Topic ignorieren, wenn ein Slash-Topic existiert:
 
 ```js
 function shouldIgnoreEmptyPayload(configuredTopic, incomingTopic, rawPayload) {
   if (isMeaningfulValue(rawPayload)) return false;
-  const slashVariant = ioBrokerIdToMqttTopic(normalizeMqttTopic(configuredTopic));
+  const slashVariant = stateIdToMqttTopic(normalizeMqttTopic(configuredTopic));
   if (slashVariant === normalizeMqttTopic(configuredTopic)) return false; // kein Unterschied
   return normalizeMqttTopic(incomingTopic) !== slashVariant; // ignorieren, wenn nicht Slash-Variante
 }
@@ -326,7 +326,7 @@ function shouldIgnoreEmptyPayload(configuredTopic, incomingTopic, rawPayload) {
 
 ### Normaler State (kein Command-Topic)
 
-ioBroker erwartet Schreiboperationen auf zwei Wegen gleichzeitig:
+Der Broker erwartet Schreiboperationen auf zwei Wegen gleichzeitig:
 
 ```js
 // 1. Direkt auf dem Topic, mit JSON-Body und ack: false
@@ -358,7 +358,7 @@ function mqttWriteCandidates(configuredTopic) {
 
 ### Command-Topics (`_SET`, `.SET`, `/SET`)
 
-Topics die auf `_SET`, `.SET` oder `/SET` enden, sind reine Schreib-Topics in ioBroker. Kein `/set`-Suffix anfügen, keinen JSON-Body senden – direkt den Rohwert publizieren:
+Topics die auf `_SET`, `.SET` oder `/SET` enden, sind reine Schreib-Topics. Kein `/set`-Suffix anfügen, keinen JSON-Body senden – direkt den Rohwert publizieren:
 
 ```js
 function isCommandTopic(topic) {
@@ -379,7 +379,7 @@ function publish(configuredTopic, value) {
 
 ### Wert-Typen beim JSON-Publish
 
-ioBroker erwartet den richtigen JavaScript-Typ im `val`-Feld:
+Der Broker erwartet den richtigen JavaScript-Typ im `val`-Feld:
 
 ```js
 function parseValue(value) {
@@ -395,7 +395,7 @@ function parseValue(value) {
 
 ## Aktive Wertabfrage (`/get`-Pattern)
 
-ioBroker-States können per `/get`-Subtopic aktiv angefragt werden. Dabei antwortet ioBroker mit dem aktuellen Wert auf dem Haupt-Topic (nicht auf `/get`):
+States können per `/get`-Subtopic aktiv angefragt werden. Dabei antwortet der Broker mit dem aktuellen Wert auf dem Haupt-Topic (nicht auf `/get`):
 
 ```js
 // Anfrage senden:
@@ -575,10 +575,10 @@ async function fetchLiveValue(configuredTopic, timeoutMs = 3500) {
 |---|---|---|
 | Nach Reconnect keine Live-Werte mehr | `subscribedTopics`-Set nicht geleert | `subscribedTopics = new Set()` im `connect`-Event |
 | Modbus/Victron Topics nie aktuell | State-ID mit eingebettetem Slash, exaktes Abo scheitert am Broker | `#`-Wildcard an letzter Punkt-Grenze vor erstem Slash |
-| Dot-Topic liefert leere Werte | ioBroker retained leere Payloads unter Punkt-Namen | Leere Payloads auf Dot-Topics ignorieren wenn Slash-Variante existiert |
+| Dot-Topic liefert leere Werte | Der Broker retained leere Payloads unter Punkt-Namen | Leere Payloads auf Dot-Topics ignorieren wenn Slash-Variante existiert |
 | Wert bleibt nach State-Änderung alt | `subscribedTopics` enthält noch alten Topic-Pfad | Nach Topic-Änderung altes Topic aus Set entfernen |
 | `mqtt.0.X`-States liefern nichts | Falsche Kandidaten-Berechnung (Adapter-Prefix nicht abgezogen) | `mqttAdapterStateToBrokerTopic` vor Kandidatenberechnung |
-| Schalter toggelt, ioBroker reagiert nicht | Nur `/set` oder nur JSON-Body gesendet | Immer beide senden: `/set` (Rohwert) + Haupt-Topic (JSON `{val, ack:false}`) |
+| Schalter toggelt, der Broker reagiert nicht | Nur `/set` oder nur JSON-Body gesendet | Immer beide senden: `/set` (Rohwert) + Haupt-Topic (JSON `{val, ack:false}`) |
 | Command-Topic (`_SET`) sendet JSON-Body | `isCommandTopic` nicht geprüft | Command-Topics: nur Rohwert, kein `/set`, kein JSON |
 | Alte Events nach Client-Neuaufbau | `close`/`error`/`message` Events des alten Clients | Generation-Counter oder Client-Objekt-Vergleich |
 | Topics die stunden-/tagealt bleiben | Keine Watchdog-Logik für stille Subscriptions | `checkSilentSubscriptions` periodisch aufrufen |

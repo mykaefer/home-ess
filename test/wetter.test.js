@@ -626,7 +626,7 @@ test.after(async () => {
 
 test('GET /wetter liefert die Seite aus dem Cache', async () => {
   const html = await fetch(`${baseUrl}/wetter`).then((res) => res.text());
-  assert.match(html, /Wetterprognose/);
+  assert.match(html, /<h1>Wetter<\/h1>/);
   assert.match(html, /24,3 °C/);
   assert.equal((html.match(/class="wetter-short-row"/g) || []).length, 4);
 });
@@ -664,7 +664,7 @@ test('Eine gemerkte Abruf-Adresse per GET führt zurück auf die Seite', async (
 
   const gefolgt = await fetch(`${baseUrl}/wetter/aktualisieren`);
   assert.equal(gefolgt.status, 200);
-  assert.match(await gefolgt.text(), /Wetterprognose/);
+  assert.match(await gefolgt.text(), /<h1>Wetter<\/h1>/);
 });
 
 test('GET /wetter/daten liefert die Prognose als JSON', async () => {

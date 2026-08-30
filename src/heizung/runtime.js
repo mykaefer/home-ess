@@ -29,6 +29,13 @@
 //        zusätzlich einschalten, dass in diesem Fall **direkt die
 //        Zentralheizung** heizt — dann entfällt für den Raum solange die
 //        Außentemperaturgrenze.
+//   8. Die **Klimaanlage** eines Raums lässt sich von Hand übersteuern (Aus/An/
+//        Automatik, siehe heizung/climate.js). Eine Übersteuerung setzt die
+//        automatischen Aktionsschleifen des Kühlgerätes aus: weder ein offener
+//        Kontakt noch die Raumtemperatur schalten die Anlage dann noch. Erst
+//        das **Erreichen der Soll-Temperatur** — oder die optionale
+//        **Rückkehr-Uhrzeit** des Raums — stellt sie auf Automatik zurück.
+//        Das Betriebslevel behält auch hier seinen Vorrang.
 //
 // Eingestellte Werte werden nie automatisch verändert: steht die Grenze etwa auf
 // 4 °C Außentemperatur und die Soll-Temperatur auf 21 °C, so heizt zwischen
@@ -58,6 +65,7 @@ const levelHandler = require('../operating-level/handler');
 const conditionEngine = require('../conditions/engine');
 const { createActionRunner } = require('../automation/action-runner');
 const rooms = require('./rooms');
+const climate = require('./climate');
 const actionsRepo = require('./actions');
 const central = require('./central');
 
@@ -166,7 +174,7 @@ function applySubscriptions(desired) {
   }
 }
 
-// ioBroker prüft den Datentyp eines States: ein Boolean-State darf nicht als
+// Der MQTT-Broker prüft den Datentyp eines States: ein Boolean-State darf nicht als
 // numerische 1/0 beschrieben werden. Die zuletzt gesehene Darstellung des
 // Ziel-States bestimmt deshalb das Format (wie bei Heimkino/Schaltgruppen).
 function switchPayload(on, lastValue) {
@@ -352,6 +360,9 @@ function stateFor(roomId) {
       centralDemand: false,
       contactOpenSince: null,
       blocked: false,
+      // Flankenmerker der Übersteuerung: war die Soll-Temperatur beim letzten
+      // Takt schon erreicht? `null` = noch nicht ausgewertet.
+      climateReached: null,
       temperature: null,
       sensorCount: 0,
       thermostat: emptyThermostat(''),
@@ -454,6 +465,34 @@ async function syncThermostat(room, state, sweep, now) {
   return room.targetTemp;
 }
 
+// Betriebsart der Klimaanlage festhalten (Handschaltung über den State und der
+// selbsttätige Rückfall auf Automatik).
+async function applyClimateMode(room, mode, now = Date.now()) {
+  if (!database) return;
+  const result = await rooms.setClimateMode(database, room.id, mode, now).catch(() => null);
+  room.climateMode = mode;
+  // Bezugspunkt der Rückkehr-Uhrzeit: wann die Handschaltung gesetzt wurde.
+  room.climateModeSince = result ? result.since : (mode === climate.MODE_AUTO ? null : now);
+  const state = roomState.get(room.id);
+  // Nach einem Wechsel beginnt die Flankenauswertung von vorn.
+  if (state) state.climateReached = null;
+}
+
+// Beendet die Übersteuerung? Nur das **Erreichen** der Soll-Temperatur, also
+// der Übergang von „noch nicht erreicht" zu „erreicht". Stand die
+// Ist-Temperatur beim Umschalten bereits auf oder unter dem Sollwert, ist das
+// keine Flanke — die Handschaltung bliebe sonst wirkungslos.
+function climateReachedTarget(state, temperature, target) {
+  if (temperature == null || target == null) {
+    state.climateReached = null;
+    return false;
+  }
+  const reached = temperature <= target;
+  const previous = state.climateReached;
+  state.climateReached = reached;
+  return reached && previous === false;
+}
+
 // Ein Raum: messen, sperren, entscheiden, schalten, veröffentlichen.
 // `outdoor` ist die Außentemperatur (null, wenn unbekannt).
 async function evaluateRoom(room, outdoor, sweep, now) {
@@ -532,6 +571,38 @@ async function evaluateRoom(room, outdoor, sweep, now) {
     }
   }
 
+  // Übersteuerung der Klimaanlage: eine Handschaltung ersetzt die automatische
+  // Entscheidung des Kühlgerätes vollständig — offener Kontakt und
+  // Raumtemperatur bleiben dafür ohne Wirkung. Vorrang behält allein das
+  // Betriebslevel. Heizen und Zentralheizung bleiben davon unberührt.
+  const coolDevice = hasCoolDevice(room);
+  let override = coolDevice && climate.isOverride(room.climateMode);
+  if (override) {
+    // Zwei Wege zurück in die Automatik: die erreichte Soll-Temperatur und die
+    // optionale Uhrzeit des Raums.
+    const reached = climateReachedTarget(state, temperature, target);
+    if (reached || climate.resetDue(room.climateResetTime, room.climateModeSince, now)) {
+      await applyClimateMode(room, climate.MODE_AUTO, now);
+      override = false;
+    }
+  } else {
+    state.climateReached = null;
+  }
+  if (override) {
+    const wanted = room.climateMode === climate.MODE_ON;
+    // Das Hysterese-Gedächtnis pausiert, damit die Automatik nach dem Ende der
+    // Übersteuerung frisch entscheidet.
+    coolDemand = false;
+    cooling = wanted && coolAllowed;
+    const until = room.climateResetTime ? ` Zurück auf Automatik um ${room.climateResetTime} Uhr.` : '';
+    note = wanted && !coolAllowed
+      ? `Betriebslevel ${levelHandler.currentOperatingLevel()} sperrt das Kühlgerät (Priorität ${room.coolPriority}) — die Handschaltung „An" wartet.${until}`
+      : `Klimaanlage von Hand auf „${climate.modeLabel(room.climateMode)}" — die Automatik ist ausgesetzt.${until}`;
+  }
+  state.climateMode = room.climateMode;
+  state.climateOverride = override;
+  state.hasCoolDevice = coolDevice;
+
   state.heatDemand = heatDemand;
   state.coolDemand = coolDemand;
   state.outdoorCold = outdoorCold;
@@ -550,9 +621,12 @@ async function evaluateRoom(room, outdoor, sweep, now) {
   // lässt sich hier nicht beurteilen.
   commandFan(room, centralDemand, now);
 
-  publishEntries(rooms.roomEntries(room, {
+  const entries = rooms.roomEntries(room, {
     temperature, targetTemp: target, heating, cooling, centralDemand, contactOpen: state.blocked,
-  }), now);
+  });
+  // Nur ein Raum mit eingerichteter Klimaanlage hat etwas zu übersteuern.
+  if (coolDevice) entries.push(...climate.climateEntries(room, rooms.addressFor(room.name), { cooling }));
+  publishEntries(entries, now);
   return state;
 }
 
@@ -817,6 +891,11 @@ function snapshot() {
       heatAllowed: levelHandler.isAllowed(room.heatPriority),
       coolAllowed: levelHandler.isAllowed(room.coolPriority),
       centralDemand: !!(state && state.centralDemand),
+      // Betriebsart der Klimaanlage und ob sie die Automatik gerade aussetzt.
+      climateMode: room.climateMode,
+      climateOverride: !!(state && state.climateOverride),
+      climateResetTime: room.climateResetTime || '',
+      hasCoolDevice: hasCoolDevice(room),
       contactOpen: !!(state && state.blocked),
       contactPending: !!(state && state.contactOpenSince != null && !state.blocked),
       note: state ? state.note : '',
@@ -897,9 +976,15 @@ async function reload() {
   const liveTopics = new Set();
   for (const room of roomList) {
     for (const state of rooms.ROOM_STATES) liveTopics.add(rooms.stateTopic(room.name, state.suffix));
+    // Die Klima-Werte gibt es nur, solange der Raum ein Kühlgerät hat.
+    if (hasCoolDevice(room)) {
+      const address = rooms.addressFor(room.name);
+      for (const state of climate.CLIMATE_STATES) liveTopics.add(climate.stateTopic(address, state.suffix));
+    }
   }
   for (const topic of [...published.keys()]) {
-    if (topic.startsWith(topicForId(rooms.ID_PREFIX)) && !liveTopics.has(topic)) {
+    const own = topic.startsWith(topicForId(rooms.ID_PREFIX)) || topic.startsWith(topicForId(climate.ID_PREFIX));
+    if (own && !liveTopics.has(topic)) {
       published.delete(topic);
       bus.remove(topic);
     }
@@ -939,6 +1024,23 @@ function handleRoomWrite(id, value) {
     .catch(() => {});
 }
 
+// Schreibzugriff auf system://homeess/klima.<Raum>.betriebsart: 0 = Aus,
+// 1 = An, 2 = Automatik. Der Zustand „aktiv" ist eine Rückmeldung und bleibt
+// gesperrt.
+function handleClimateWrite(id, value) {
+  const parts = String(id || '').slice(climate.ID_PREFIX.length).split('.');
+  const suffix = parts.pop();
+  const room = roomByAddress(parts.join('_'));
+  if (!room || suffix !== 'betriebsart' || !database) return;
+  const mode = climate.normalizeMode(value);
+  // Ein unbrauchbarer Wert bleibt folgenlos — er darf die Anlage nicht
+  // stillschweigend abstellen.
+  if (mode == null || !hasCoolDevice(room)) return;
+  applyClimateMode(room, mode, Date.now())
+    .then(() => tick())
+    .catch(() => {});
+}
+
 // Schreibzugriff auf system://homeess/zentralheizung.schornsteinfeger.
 function handleCentralWrite(id, value) {
   if (String(id) !== central.stateId('schornsteinfeger') || !database) return;
@@ -961,7 +1063,11 @@ async function currentValues() {
   if (!isEnabled('heizung') || !centralConfig) return [];
   const states = snapshot();
   const entries = [];
-  for (const room of roomList) entries.push(...rooms.roomEntries(room, states.get(room.id) || {}));
+  for (const room of roomList) {
+    const state = states.get(room.id) || {};
+    entries.push(...rooms.roomEntries(room, state));
+    if (hasCoolDevice(room)) entries.push(...climate.climateEntries(room, rooms.addressFor(room.name), state));
+  }
   if (centralConfig.enabled && database) {
     const view = centralSnapshot();
     entries.push(...central.centralEntries(centralConfig, await centralValueSnapshot(
@@ -976,6 +1082,7 @@ async function init(db) {
   if (!providersRegistered) {
     registerValueProvider(() => currentValues());
     systemRouter.registerWriter(rooms.ID_PREFIX, handleRoomWrite);
+    systemRouter.registerWriter(climate.ID_PREFIX, handleClimateWrite);
     systemRouter.registerWriter(central.ID_PREFIX, handleCentralWrite);
     providersRegistered = true;
   }

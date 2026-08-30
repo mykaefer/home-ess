@@ -7,6 +7,7 @@ const { checkboxValue } = require('../conditions/values');
 const rooms = require('../heizung/rooms');
 const actionsRepo = require('../heizung/actions');
 const central = require('../heizung/central');
+const climate = require('../heizung/climate');
 const billing = require('../heizung/billing');
 const runtime = require('../heizung/runtime');
 const renderHeizung = require('../views/heizung');
@@ -76,11 +77,20 @@ function heizungRoutes(db) {
       tree,
       actions,
       state: runtime.snapshot().get(room.id) || {},
-      stateTopics: rooms.ROOM_STATES.map((entry) => ({
-        label: entry.label,
-        topic: rooms.stateTopic(room.name, entry.suffix),
-        writable: entry.writable,
-      })),
+      stateTopics: [
+        ...rooms.ROOM_STATES.map((entry) => ({
+          label: entry.label,
+          topic: rooms.stateTopic(room.name, entry.suffix),
+          writable: entry.writable,
+        })),
+        // Die Klima-States gibt es nur, solange der Raum ein Kühlgerät hat.
+        ...(actionsRepo.hasDevice(tree, 'cool') ? climate.CLIMATE_STATES.map((entry) => ({
+          label: `Klimaanlage ${entry.label}`,
+          topic: climate.stateTopic(rooms.addressFor(room.name), entry.suffix),
+          writable: entry.writable,
+        })) : []),
+      ],
+      hasCoolDevice: actionsRepo.hasDevice(tree, 'cool'),
       ...options,
     }));
   }
@@ -173,6 +183,25 @@ function heizungRoutes(db) {
   router.post('/heizung/raum/:id', requireAuth, requireHeizungEnabled, roomPageMutation(
     (req) => rooms.updateRoom(db, req.params.id, req.body), 'Einstellungen gespeichert.'
   ));
+
+  // Klimaanlage eines Raums umschalten (Übersicht): 0 = Aus, 1 = An,
+  // 2 = Automatik. Das ist eine Bedienung, kein Konfigurieren — die Route steht
+  // deshalb in den Bedien-Pfaden (auth/session.js).
+  router.post('/heizung/raum/:id/klima/:mode', requireAuth, requireHeizungEnabled, async (req, res, next) => {
+    try {
+      const room = await rooms.getRoom(db, req.params.id);
+      if (!room) return res.status(404).json({ error: 'Raum nicht gefunden.' });
+      const mode = climate.normalizeMode(req.params.mode);
+      if (mode == null) return res.status(400).json({ error: 'Ungültige Betriebsart.' });
+      await rooms.setClimateMode(db, room.id, mode);
+      await runtime.reload();
+      await runtime.tick().catch(() => {});
+      return res.json({ ok: true, mode });
+    } catch (error) {
+      if (error && error.validation) return res.status(400).json({ error: error.message });
+      return next(error);
+    }
+  });
 
   // Soll-Temperatur schnell verstellen (Übersicht und Raumseite).
   router.post('/heizung/raum/:id/soll', requireAuth, requireHeizungEnabled, async (req, res, next) => {

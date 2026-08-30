@@ -22,6 +22,7 @@ const systemWarning = require('./system-warning');
 
 const authRoutes = require('./auth/routes');
 const dashboardRoutes = require('./routes/dashboard');
+const energieRoutes = require('./routes/energie');
 const stromverbrauchRoutes = require('./routes/stromverbrauch');
 const photovoltaikRoutes = require('./routes/photovoltaik');
 const batterieRoutes = require('./routes/batterie');
@@ -118,6 +119,7 @@ function createApp() {
   // Routen-Module. Jede Funktionsgruppe liegt in eigener Datei.
   app.use(authRoutes(db));
   app.use(dashboardRoutes(db));
+  app.use(energieRoutes(db));
   app.use(stromverbrauchRoutes(db));
   app.use(photovoltaikRoutes(db));
   app.use(batterieRoutes(db));

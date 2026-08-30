@@ -1,6 +1,6 @@
 'use strict';
 
-// Seite „Wetterprognose": die drei kommenden Tage ausführlich mit allen
+// Seite „Wetter": die drei kommenden Tage ausführlich mit allen
 // Messgrößen und Stundenverlauf, die weiteren Tage darunter als Kurzübersicht.
 //
 // Die Messgrößen eines Tages stehen nicht als eine lange Kachelreihe, sondern in
@@ -357,7 +357,7 @@ ${renderFurtherDays(furtherDays, pvByDateKey)}`
         </div>`;
 
   const body = `        <div class="page-head page-head--split">
-          <h1>Wetterprognose</h1>
+          <h1>Wetter</h1>
           <form action="/wetter/aktualisieren" method="POST" class="wetter-refresh">
             ${stand ? `<span class="wetter-stand">Stand: ${escapeHtml(stand)}</span>` : ''}
             <button type="submit" class="secondary-button">Aktualisieren</button>
@@ -372,7 +372,7 @@ ${content}
         <p class="wetter-source">Datenquelle: Open-Meteo. Alle Werte stehen zusätzlich als States in der
         Systemgruppe <a href="/states">Wetter</a> zur Verfügung.</p>`;
 
-  return renderLayout({ title: 'Wetterprognose', activePath: '/wetter', body });
+  return renderLayout({ title: 'Wetter', activePath: '/wetter', body });
 }
 
 module.exports = renderWetter;

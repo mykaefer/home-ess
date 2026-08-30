@@ -1,7 +1,7 @@
 'use strict';
 
-// Topic-Helfer für ioBroker-MQTT. Reine Funktionen, abgeleitet aus MQTT.md.
-// Diese Schicht kapselt die Eigenheiten des ioBroker-Brokers (Punkt-/Slash-
+// MQTT-Topic-Helfer. Reine Funktionen, abgeleitet aus MQTT.md.
+// Diese Schicht kapselt die Eigenheiten des MQTT-Brokers (Punkt-/Slash-
 // Notation, eingebettete Slashes, Command-Topics) für Lese- und Schreibpfade.
 
 function normalizeMqttTopic(topic) {
@@ -18,7 +18,7 @@ function normalizeMqttTopic(topic) {
 }
 
 // State-ID (Punktnotation) -> MQTT-Topic (Slash-Notation).
-function ioBrokerIdToMqttTopic(stateId) {
+function stateIdToMqttTopic(stateId) {
   return String(stateId || '')
     .replace(/^\/+/, '')
     .replace(/\./g, '/')
@@ -29,7 +29,7 @@ function ioBrokerIdToMqttTopic(stateId) {
 function mqttAdapterStateToBrokerTopic(topic) {
   const clean = normalizeMqttTopic(topic);
   const dotMatch = clean.match(/^mqtt\.\d+\.(.+)$/i);
-  if (dotMatch) return ioBrokerIdToMqttTopic(dotMatch[1]);
+  if (dotMatch) return stateIdToMqttTopic(dotMatch[1]);
   const slashMatch = clean.match(/^mqtt\/\d+\/(.+)$/i);
   if (slashMatch) return normalizeMqttTopic(slashMatch[1]);
   return '';
@@ -39,7 +39,7 @@ function mqttAdapterStateToBrokerTopic(topic) {
 function mqttReadCandidates(configuredTopic) {
   const clean = normalizeMqttTopic(configuredTopic);
   if (!clean) return [];
-  const slashVariant = ioBrokerIdToMqttTopic(clean);
+  const slashVariant = stateIdToMqttTopic(clean);
   const adapterVariant = mqttAdapterStateToBrokerTopic(clean);
   const result = new Set([clean]);
   if (slashVariant !== clean) result.add(slashVariant);
@@ -79,7 +79,7 @@ function mqttSlashStateWildcard(configuredTopic) {
   const lastDot = dotPrefix.lastIndexOf('.');
   if (lastDot === -1) return '';
   const base = dotPrefix.slice(0, lastDot);
-  const slashBase = ioBrokerIdToMqttTopic(base);
+  const slashBase = stateIdToMqttTopic(base);
   return slashBase ? `${slashBase}/#` : '';
 }
 
@@ -96,7 +96,7 @@ function mqttSubscribeCandidates(configuredTopic) {
 // Adapter-Schema-Topics: prefix://instanz/adresse. Der Prefix (Schema) wird beim
 // Adapter registriert, die Instanz ist der benannte Adapter-Lauf, die Adresse der
 // gerätespezifische State-Pfad. Gibt { scheme, instance, address } zurück oder
-// null, wenn kein Schema-Topic vorliegt. Normale ioBroker-Topics (Punkt-/Slash-
+// null, wenn kein Schema-Topic vorliegt. Normale Broker-Topics (Punkt-/Slash-
 // Notation ohne "://") liefern null und laufen weiter über den Broker.
 function parseSchemeTopic(topic) {
   const text = String(topic == null ? '' : topic).trim();
@@ -135,9 +135,9 @@ function isCommandTopic(topic) {
   return upper.endsWith('.SET') || upper.endsWith('/SET') || upper.endsWith('_SET');
 }
 
-// Auspacken einer ioBroker-MQTT-Nachricht inkl. ack-Flag.
+// Auspacken einer MQTT-Nachricht inkl. ack-Flag.
 //   { value, ack } – ack ist true/false (aus dem JSON) oder null (kein JSON-Wrap).
-// In ioBroker bedeutet ack:true den BESTÄTIGTEN Ist-Zustand, ack:false einen
+// Auf dem Broker bedeutet ack:true den BESTÄTIGTEN Ist-Zustand, ack:false einen
 // reinen Schreibwunsch/Kommando. Letzteres ist u. a. das Echo unserer eigenen
 // Schreibvorgänge auf dem Haupt-Topic und darf NICHT als Readback gelten.
 function unwrapMqttMessage(raw) {
@@ -154,7 +154,7 @@ function unwrapMqttMessage(raw) {
   return { value: text, ack: null };
 }
 
-// Auspacken des ioBroker-JSON-Formats { val, ack, ... }; sonst Rohstring.
+// Auspacken des JSON-Formats { val, ack, ... }; sonst Rohstring.
 function unwrapMqttPayload(raw) {
   return unwrapMqttMessage(raw).value;
 }
@@ -175,7 +175,7 @@ function parseValue(value) {
 
 module.exports = {
   normalizeMqttTopic,
-  ioBrokerIdToMqttTopic,
+  stateIdToMqttTopic,
   mqttAdapterStateToBrokerTopic,
   mqttReadCandidates,
   mqttWriteCandidates,

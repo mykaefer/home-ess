@@ -3,7 +3,7 @@
 const express = require('express');
 const { requireAuth } = require('../auth/session');
 const { displayValue, forEachState } = require('../adapters/states');
-const { buildStatesTree } = require('../states/repository');
+const { buildStatesTree, findState } = require('../states/repository');
 const { listCatalogLevel, searchCatalog } = require('../states/catalog');
 const mqttClient = require('../mqtt/client');
 const renderStates = require('../views/states');
@@ -77,9 +77,38 @@ function statesRoutes(db) {
   router.get('/states', requireAuth, async (req, res) => {
     try {
       const tree = await buildStatesTree(db, mqttClient.getCache());
+      // Ob die Bedienelemente mitgeliefert werden, entscheidet die View selbst
+      // anhand der request-gebundenen Rechte (currentAccess()).
       res.send(renderStates({ tree }));
     } catch (_) {
       res.status(500).send('Fehler beim Laden der States.');
+    }
+  });
+
+  // Beschreibbaren State direkt von der States-Seite aus setzen. Geschrieben
+  // wird über denselben Weg wie aus Aktionsfolgen (mqttClient.publish): er
+  // verteilt an Systemwert-Schreibziele, Custom States, Adapter oder den
+  // Broker. Bedient werden darf nur, was die Quelle als beschreibbar meldet —
+  // ein beliebiges Topic ist über diesen Weg ausdrücklich kein Schreibziel.
+  router.post('/states/value', requireAuth, async (req, res) => {
+    try {
+      const body = req.body || {};
+      const topic = String(body.topic || '').trim();
+      if (!topic) return res.status(400).json({ error: 'Kein State angegeben.' });
+      const value = String(body.value == null ? '' : body.value).slice(0, 500);
+      const state = await findState(db, topic, mqttClient.getCache());
+      if (!state) return res.status(404).json({ error: 'Dieser State ist nicht bekannt.' });
+      if (!state.writable) return res.status(400).json({ error: 'Dieser State ist nicht beschreibbar.' });
+      if (!mqttClient.publish(topic, value)) {
+        return res.status(400).json({ error: 'Der Wert konnte nicht geschrieben werden.' });
+      }
+      // Custom States liegen in der Datenbank — der Katalog-Schnappschuss ist
+      // nach dem Schreiben veraltet.
+      invalidateStates();
+      return res.json({ ok: true, topic, value });
+    } catch (error) {
+      console.error('[states] Wert nicht schreibbar:', error && error.stack ? error.stack : error);
+      return res.status(400).json({ error: error.message || 'Der Wert konnte nicht gesetzt werden.' });
     }
   });
 
@@ -215,16 +244,20 @@ function statesRoutes(db) {
     try {
       const tree = await buildStatesTree(db, mqttClient.getCache());
       const values = {};
+      // Rohwerte der beschreibbaren States: die Bedienelemente auf der Seite
+      // zeigen damit den tatsächlichen Zustand, nicht die formatierte Anzeige.
+      const raw = {};
       for (const inst of tree) {
         // Virtuelle Blöcke (z. B. Schaltgruppen) liefern eine eigene Darstellung
         // („Ein"/„Aus"); Adapter-States werden weiterhin generisch formatiert.
         forEachState(inst.categories, (st) => {
           values[st.topic] = st.display != null ? st.display : displayValue(st.value, st.unit);
+          if (st.writable) raw[st.topic] = st.value == null ? '' : String(st.value);
         });
       }
-      res.json({ values });
+      res.json({ values, raw });
     } catch (_) {
-      res.status(500).json({ values: {} });
+      res.status(500).json({ values: {}, raw: {} });
     }
   });
 

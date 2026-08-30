@@ -37,7 +37,11 @@ function statePickerScript() {
     var statePickerWritableOnly = false;
     var statePickerWired = false;
     var statePickerHome = null;
+    // Grundbreite des Pickers und die Breite, bis zu der er wachsen darf: bei
+    // genügend Platz öffnet er doppelt so breit, damit lange State-Namen und
+    // ihre Werte nebeneinander lesbar bleiben.
     var STATE_PICKER_WIDTH = 460;
+    var STATE_PICKER_WIDTH_MAX = STATE_PICKER_WIDTH * 2;
     var STATE_PICKER_EXPAND_KEY = 'homeess.statepicker.expanded.v1';
     var STATE_PICKER_SCROLL_KEY = 'homeess.statepicker.scroll.v1';
     var statePickerExpandedCache = {};
@@ -136,12 +140,19 @@ function statePickerScript() {
       if (!pop || !statePickerAnchor) return;
       var r = statePickerAnchor.getBoundingClientRect();
       var vw = window.innerWidth, vh = window.innerHeight;
-      // Feste, komfortable Breite – NICHT an die (oft schmale) Feldbreite gekoppelt,
-      // damit lange State-Namen nicht abgeschnitten werden. Nur der Viewport begrenzt.
-      var width = Math.min(STATE_PICKER_WIDTH, vw - 16);
+      // Die Breite ist NICHT an die (oft schmale) Feldbreite gekoppelt, damit
+      // lange State-Namen nicht abgeschnitten werden. Lässt der Platz es zu,
+      // öffnet der Picker bis zur doppelten Grundbreite; sonst nimmt er sich so
+      // viel, wie der Viewport hergibt. Steht rechts zu wenig Raum, rückt er
+      // unten nach links, statt schmaler zu werden.
+      var width = Math.min(STATE_PICKER_WIDTH_MAX, vw - 16);
       var left = Math.max(8, Math.min(r.left, vw - width - 8));
       var spaceBelow = vh - r.bottom, spaceAbove = r.top;
-      var openUp = spaceBelow < 240 && spaceAbove > spaceBelow;
+      // Aufgeklappt wird immer in die Richtung mit mehr Platz: liegt das Feld in
+      // der unteren Hälfte des Viewports (mehr Raum darüber als darunter),
+      // öffnet der Picker nach oben, sonst nach unten. Bei Gleichstand bleibt
+      // es bei der gewohnten Richtung nach unten.
+      var openUp = spaceAbove > spaceBelow;
       var maxH = Math.max(160, Math.min(360, (openUp ? spaceAbove : spaceBelow) - 12));
       pop.style.position = 'fixed';
       pop.style.margin = '0';

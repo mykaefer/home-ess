@@ -2,6 +2,8 @@
 
 const { renderLayout } = require('./layout');
 const { escapeHtml } = require('./components');
+const { isOn } = require('../states/controls');
+const { currentAccess } = require('../auth/access');
 
 // Zentrale States-Seite: berechnete Systemwerte und von Adaptern gemeldete
 // States in einem gemeinsamen Baum mit aktuellem Wert.
@@ -17,7 +19,7 @@ function renderStates({ tree = [] } = {}) {
   const blocks = renderStatesTree(tree);
 
   const body = `        <h1>States</h1>
-        <p class="muted" style="margin-bottom:16px;">Zentrale Übersicht aller internen Systemwerte, Custom States und Adapter-States. Eigene les- und schreibbare Werte lassen sich unter <a href="/states/custom">Custom States</a> verwalten.</p>
+        <p class="muted" style="margin-bottom:16px;">Zentrale Übersicht aller internen Systemwerte, Custom States und Adapter-States. Beschreibbare States lassen sich direkt hier bedienen — schalten, auswählen oder einen Wert setzen. Eigene les- und schreibbare Werte lassen sich unter <a href="/states/custom">Custom States</a> verwalten.</p>
         <div class="states-tree">
 ${blocks}
         </div>
@@ -62,8 +64,96 @@ ${blocks}
       }
       return count !== nodes.length;
     }
+    // ── Bedienung beschreibbarer States ─────────────────────────────────────
+    // Zuletzt gemeldete Rohwerte. Die Anzeige zeigt den formatierten Wert, die
+    // Bedienelemente brauchen den echten.
+    var statesRawValues = {};
+    function statesTruthy(value) {
+      var raw = String(value == null ? '' : value).trim().toLowerCase();
+      if (!raw) return false;
+      if (['1', 'true', 'on', 'ein', 'an', 'ja', 'yes'].indexOf(raw) >= 0) return true;
+      if (['0', 'false', 'off', 'aus', 'nein', 'no'].indexOf(raw) >= 0) return false;
+      var number = Number(raw.replace(',', '.'));
+      return isNaN(number) ? false : number !== 0;
+    }
+    function statesControlBox(node) {
+      return node && node.closest ? node.closest('[data-state-control]') : null;
+    }
+    // Eine begonnene Eingabe darf die laufende Aktualisierung nicht
+    // überschreiben — sonst tippt der Nutzer gegen den Sekundentakt an.
+    function statesDirty(node) {
+      var box = statesControlBox(node);
+      if (box) box.setAttribute('data-dirty', '1');
+    }
+    function statesInputKey(event, node) {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        statesWriteInput(node);
+      }
+    }
+    function statesWriteInput(node) {
+      var box = statesControlBox(node);
+      var input = box ? box.querySelector('input') : null;
+      if (input) statesWrite(node, input.value);
+    }
+    function statesWrite(node, value) {
+      var box = statesControlBox(node);
+      if (!box || box.classList.contains('is-busy')) return;
+      var topic = box.getAttribute('data-state-control');
+      box.classList.add('is-busy');
+      fetch('/states/value', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ topic: topic, value: String(value) }),
+      })
+        .then(function (response) {
+          return response.json().then(function (data) {
+            if (!response.ok) throw new Error(data && data.error ? data.error : 'Der Wert konnte nicht gesetzt werden.');
+            return data;
+          });
+        })
+        .then(function () {
+          box.removeAttribute('data-dirty');
+          box.classList.remove('is-busy');
+          // Der geschriebene Wert kommt über den State-Bus zurück; kurz danach
+          // steht er in der Anzeige.
+          setTimeout(statesRefresh, 400);
+        })
+        .catch(function (error) {
+          box.classList.remove('is-busy');
+          alert(error.message || 'Der Wert konnte nicht gesetzt werden.');
+        });
+    }
+    // Bedienelemente auf den gemeldeten Stand bringen.
+    function statesApplyControls(raw) {
+      if (!raw) return;
+      statesRawValues = raw;
+      var boxes = document.querySelectorAll('[data-state-control]');
+      for (var i = 0; i < boxes.length; i++) {
+        var box = boxes[i];
+        var topic = box.getAttribute('data-state-control');
+        if (!Object.prototype.hasOwnProperty.call(raw, topic)) continue;
+        var value = raw[topic];
+        var type = box.getAttribute('data-control-type');
+        if (type === 'switch') {
+          var on = statesTruthy(value);
+          var onBtn = box.querySelector('[data-state-on]');
+          var offBtn = box.querySelector('[data-state-off]');
+          if (onBtn) onBtn.classList.toggle('is-active', on);
+          if (offBtn) offBtn.classList.toggle('is-active', !on);
+        } else if (type === 'select') {
+          var select = box.querySelector('select');
+          if (select && document.activeElement !== select) select.value = String(value);
+        } else {
+          var input = box.querySelector('input');
+          if (input && document.activeElement !== input && box.getAttribute('data-dirty') !== '1') {
+            input.value = String(value);
+          }
+        }
+      }
+    }
     var statesTreeLoading = false;
-    function statesReloadTree(values) {
+    function statesReloadTree(values, raw) {
       if (statesTreeLoading) return;
       statesTreeLoading = true;
       fetch('/states/tree.json', { headers: { Accept: 'application/json' } })
@@ -74,6 +164,7 @@ ${blocks}
           container.innerHTML = data.html;
           statesRestoreExpansion();
           if (values) statesApplyValues(values);
+          statesApplyControls(raw || statesRawValues);
         })
         .catch(function () {})
         .then(function () { statesTreeLoading = false; });
@@ -83,8 +174,11 @@ ${blocks}
         .then(function (r) { return r.ok ? r.json() : null; })
         .then(function (data) {
           if (!data || !data.values) return;
-          if (statesStructureChanged(data.values)) statesReloadTree(data.values);
-          else statesApplyValues(data.values);
+          if (statesStructureChanged(data.values)) statesReloadTree(data.values, data.raw);
+          else {
+            statesApplyValues(data.values);
+            statesApplyControls(data.raw);
+          }
         })
         .catch(function () {});
     }
@@ -299,12 +393,44 @@ ${cats}
           </div>`;
 }
 
+// Bedienelement eines beschreibbaren States. Der Topic steht am Container —
+// die Schaltflächen finden ihn darüber und müssen ihn nicht selbst tragen.
+function renderControl(st) {
+  const control = st.control;
+  if (!control) return '';
+  const topic = escapeHtml(st.topic);
+  const label = escapeHtml(st.name);
+  const head = `<span class="value-row-control" data-state-control="${topic}" data-control-type="${escapeHtml(control.type)}">`;
+  if (control.type === 'switch') {
+    const on = isOn(st.value);
+    return `${head}<button type="button" class="state-op-btn${on ? ' is-active' : ''}" data-state-on
+                    aria-label="${label} einschalten" onclick="statesWrite(this, '${escapeHtml(control.on)}')">Ein</button><button type="button" class="state-op-btn${on ? '' : ' is-active'}" data-state-off
+                    aria-label="${label} ausschalten" onclick="statesWrite(this, '${escapeHtml(control.off)}')">Aus</button></span>`;
+  }
+  if (control.type === 'select') {
+    const current = st.value == null ? '' : String(st.value);
+    const options = control.options.map((option) => `<option value="${escapeHtml(option.value)}"${option.value === current ? ' selected' : ''}>${escapeHtml(option.label)}</option>`).join('');
+    return `${head}<select class="state-op-select" aria-label="${label} setzen" onchange="statesWrite(this, this.value)">${options}</select></span>`;
+  }
+  const number = control.type === 'number';
+  const limits = number
+    ? `${control.min == null ? '' : ` min="${escapeHtml(control.min)}"`}${control.max == null ? '' : ` max="${escapeHtml(control.max)}"`} step="${escapeHtml(control.step == null ? 'any' : control.step)}"`
+    : ' maxlength="500"';
+  return `${head}<input class="state-op-input" type="${number ? 'number' : 'text'}"${limits} value="${escapeHtml(st.value == null ? '' : st.value)}"
+                    aria-label="${label} setzen" data-no-state-picker oninput="statesDirty(this)" onkeydown="statesInputKey(event, this)"><button type="button" class="state-op-btn" onclick="statesWriteInput(this)">Setzen</button></span>`;
+}
+
 function renderCategory(cat, depth = 0, instanceKey = '', parentPath = '') {
+  // Bedient werden darf ab der Rolle „bedienen"; Lesern bleibt die reine
+  // Anzeige (serverseitig ist das Setzen ohnehin gesperrt).
+  const canOperate = currentAccess().canOperate;
   const rows = cat.states.map((st) => {
     const valueAttr = escapeHtml(st.topic);
-    return `              <div class="value-row">
+    const control = canOperate ? renderControl(st) : '';
+    return `              <div class="value-row${control ? ' value-row--operable' : ''}">
                 <span class="value-row-label">${escapeHtml(st.name)}${st.writable ? ' <span class="muted" style="font-size:0.8em;">(schreibbar)</span>' : ''}</span>
                 <span class="value-row-now" data-state-value="${valueAttr}">${escapeHtml(st.display == null ? '—' : st.display)}</span>
+                ${control}
                 <button type="button" class="state-edit-button" title="Eigenschaften bearbeiten" aria-label="Eigenschaften von ${escapeHtml(st.name)} bearbeiten" onclick="openStateProperties('${escapeHtml(st.topic).replace(/'/g, '&#39;')}', '${escapeHtml(st.name).replace(/'/g, '&#39;')}')">✎</button>
               </div>`;
   }).join('\n');
