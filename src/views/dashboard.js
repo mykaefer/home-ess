@@ -1,6 +1,9 @@
 'use strict';
 
 const { renderLayout } = require('./layout');
+// Beschriftungen zusammengesetzter Anzeigen kommen aus dem Katalog: ein
+// gemischter Textknoten wäre sonst nicht übersetzbar.
+const i18n = require('../i18n');
 const { escapeHtml, statusText } = require('./components');
 const {
   WIDGET_TYPE_DEFS,
@@ -418,7 +421,7 @@ ${tabs.map((tab) => renderTabPanel(tab, ctx, tab.id === initialTabId)).join('\n'
       labelInput.maxLength = 40;
       labelInput.value = label || '';
       labelInput.placeholder = measurement;
-      labelInput.setAttribute('aria-label', 'Name in der Legende für ' + measurement);
+      labelInput.setAttribute('aria-label', 'Name in der Legende für' + ' ' + measurement);
 
       var source = document.createElement('span');
       source.className = 'chart-series-name';
@@ -461,7 +464,7 @@ ${tabs.map((tab) => renderTabPanel(tab, ctx, tab.id === initialTabId)).join('\n'
         ? Math.round(Number(options.areaOpacity) * 100)
         : CHART_AREA_OPACITY;
       opacity.title = 'Deckkraft der Fläche in Prozent';
-      opacity.setAttribute('aria-label', 'Deckkraft der Fläche in Prozent für ' + measurement);
+      opacity.setAttribute('aria-label', 'Deckkraft der Fläche in Prozent für' + ' ' + measurement);
       // Ohne Füllung ist die Deckkraft gegenstandslos — aber nur schreibgeschützt,
       // nicht deaktiviert: ein deaktiviertes Feld schickt der Browser nicht mit,
       // und die parallelen Listen des Formulars gerieten aus dem Tritt.
@@ -1667,7 +1670,7 @@ ${typeTabs}
                 <input type="text" id="widgetChartTitle" name="chartTitle" maxlength="60">
               </label>
               <div class="field-block">
-                <span>Linien <span class="pool-optional">(höchstens ${maxChartSeries})</span></span>
+                <span>Linien <span class="pool-optional">${i18n.t('dashboard.at_most', { count: maxChartSeries })}</span></span>
                 <div class="chart-series-list" id="widgetChartSeriesList"></div>
                 <div class="chart-series-add">
                   <select id="widgetChartMeasurement"><option value="">Messreihen werden geladen…</option></select>

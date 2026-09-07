@@ -5,6 +5,27 @@ wird unabhängig von homeESS versioniert; die Version steht in
 [adapter.json](adapter.json). Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [1.2.13] — 2026-08-31
+
+### Geändert
+
+- **Der Online-Firmwarekatalog wird wirklich nur einmal am Tag gefragt.** Bisher
+  fragte jeder Adapterstart den Katalog erneut — ein Dienstneustart, eine
+  geänderte Einstellung und jeder Auto-Restart nach einem Absturz lösten also
+  zusätzliche Abrufe aus. Jetzt gilt ein Tagesplan: Der erste Abruf nach der
+  Neuinstallation legt die Uhrzeit fest, zu der von da an geprüft wird; die
+  Instanzen verteilen sich damit von allein über den Tag. Der Plan liegt als
+  `catalog-schedule.json` im Datenverzeichnis der Instanz und übersteht
+  Neustarts. Ein Abruf belegt den Tag auch dann, wenn er fehlschlug; fehlt ein
+  ganzer Kalendertag, wird beim nächsten Start nachgeholt. Die Prüfung von Hand
+  bleibt jederzeit möglich und zählt als Tagesabruf mit.
+- **Ausnahme nach einem Update.** Ändert sich die homeESS-Version (Update über
+  die interne Updatefunktion), prüft der Adapter beim Start sofort, auch wenn der
+  Tagesabruf bereits gelaufen ist. Dafür liest er das neue Feld `hostVersion` aus
+  `host.getInstanceIdentity()`; fehlt es (ältere homeESS-Laufzeit), tritt die
+  Adapterversion an seine Stelle.
+- Die Firmwarekachel nennt jetzt die tägliche Uhrzeit und den nächsten Termin.
+
 ## [1.2.12] — 2026-08-24
 
 ### Hinzugefügt

@@ -1,6 +1,9 @@
 'use strict';
 
 const { renderLayout } = require('./layout');
+// Sätze mit eingesetzten Werten laufen über den Katalog: ein zusammengesetzter
+// Textknoten wäre sonst nicht übersetzbar.
+const i18n = require('../i18n');
 const { escapeHtml, statusText } = require('./components');
 
 function checked(value) { return value ? ' checked' : ''; }
@@ -22,7 +25,7 @@ function renderLogRows(entries) {
     )
     .join('');
 }
-function brokerValue(id, value) { return `<span class="topic-current">Broker: <strong id="${id}">${escapeHtml(value == null ? '—' : value)}</strong></span>`; }
+function brokerValue(id, value) { return `<span class="topic-current"><span>Broker:</span> <strong id="${id}">${escapeHtml(value == null ? '—' : value)}</strong></span>`; }
 // Bestätigungs-Badge: zeigt, ob der Broker den geschriebenen Schaltbefehl
 // tatsächlich zurückgemeldet hat. null = kein Topic/keine Schaltung aktiv.
 function confirmBadge(id, confirmed) {
@@ -69,14 +72,14 @@ function renderGridControl({ config, batteryConfig, state, brokerValues = {}, lo
             <div class="settings-card-head"><h2>SoC-Schaltung</h2><p class="settings-card-hint">Unten und oben sind getrennte Schaltfenster. Im Bereich dazwischen bleibt dieser Ausgang aus.</p></div>
             <label class="checkbox-field"><input type="checkbox" name="socEnabled"${checked(config.socEnabled)}> Bei SoC-Ereignissen schalten</label>
             <div class="field-grid grid-control-fields">
-              <div class="field"><label for="socLowerOffset">Untere Schwelle: Mindest-SoC + Offset (%)</label><input id="socLowerOffset" name="socLowerOffset" type="number" min="0" max="20" step="1" value="${escapeHtml(config.socLowerOffset)}"><small>Aktuell Netz an bei ≤ ${escapeHtml(lowSoc)} %</small></div>
-              <div class="field"><label for="socUpperOffset">Obere Schwelle: 100 % − Offset (%)</label><input id="socUpperOffset" name="socUpperOffset" type="number" min="0" max="20" step="1" value="${escapeHtml(config.socUpperOffset)}"><small>Aktuell Netz an bei ≥ ${escapeHtml(highSoc)} %</small></div>
+              <div class="field"><label for="socLowerOffset">Untere Schwelle: Mindest-SoC + Offset (%)</label><input id="socLowerOffset" name="socLowerOffset" type="number" min="0" max="20" step="1" value="${escapeHtml(config.socLowerOffset)}"><small>${i18n.t('grid.current_on_below', { value: escapeHtml(lowSoc) })}</small></div>
+              <div class="field"><label for="socUpperOffset">Obere Schwelle: 100 % − Offset (%)</label><input id="socUpperOffset" name="socUpperOffset" type="number" min="0" max="20" step="1" value="${escapeHtml(config.socUpperOffset)}"><small>${i18n.t('grid.current_on_above', { value: escapeHtml(highSoc) })}</small></div>
               <div class="field"><label for="socHysteresis">Hysterese je Schaltgrenze (%)</label><input id="socHysteresis" name="socHysteresis" type="number" min="0" max="5" step="1" value="${escapeHtml(config.socHysteresis)}"><small>Maximal 5 %, wirkt nur direkt an der jeweiligen Grenze.</small></div>
             </div>
           </div>
 
           <div class="settings-card">
-            <div class="settings-card-head"><h2>Spannungsschaltung</h2><p class="settings-card-hint">Grenzen aus Batterie: ${escapeHtml(batteryConfig.lowerVoltage)} V / ${escapeHtml(batteryConfig.upperVoltage)} V. Im Bereich dazwischen ist dieser Ausgang aus.</p></div>
+            <div class="settings-card-head"><h2>Spannungsschaltung</h2><p class="settings-card-hint">${i18n.t('grid.battery_limits', { lower: escapeHtml(batteryConfig.lowerVoltage), upper: escapeHtml(batteryConfig.upperVoltage) })}</p></div>
             <label class="checkbox-field"><input type="checkbox" name="voltageEnabled"${checked(config.voltageEnabled)}> Bei Spannungsereignissen schalten</label>
             <div class="field-grid grid-control-fields"><div class="field"><label for="voltageHysteresis">Hysterese je Schaltgrenze (V)</label><input id="voltageHysteresis" name="voltageHysteresis" type="number" min="0" max="10" step="0.1" value="${escapeHtml(config.voltageHysteresis)}"></div></div>
           </div>
@@ -95,7 +98,7 @@ function renderGridControl({ config, batteryConfig, state, brokerValues = {}, lo
             <label class="checkbox-field"><input type="checkbox" name="loadEnabled"${checked(config.loadEnabled)}> Bei Wechselrichterlast schalten</label>
             <div class="field-grid grid-control-fields"><div class="field"><label for="loadOffDelaySeconds">Ausschaltverzögerung (Sekunden)</label><input id="loadOffDelaySeconds" name="loadOffDelaySeconds" type="number" min="0" max="3600" step="1" value="${escapeHtml(config.loadOffDelaySeconds)}"><small>0 schaltet ohne Verzögerung ab. Eine laufende Verzögerung bleibt bei einem HomeESS-Neustart erhalten.</small></div></div>
             <div class="phase-threshold-grid grid-control-fields">
-              ${[1, 2, 3].map((phase) => `<div class="phase-threshold-card"><strong>L${phase}</strong><span class="topic-current">Aktuell: <strong id="current-load-l${phase}">${escapeHtml(state.inverterLoads?.[phase - 1] == null ? '—' : state.inverterLoads[phase - 1])} W</strong></span><div class="field"><label for="loadShedMaxL${phase}">Maximallast Lastabwurf (W)</label><input id="loadShedMaxL${phase}" name="loadShedMaxL${phase}" type="number" min="0" step="1" value="${escapeHtml(config[`loadShedMaxL${phase}`])}"></div><div class="field"><label for="loadOnL${phase}">Netz ein über (W)</label><input id="loadOnL${phase}" name="loadOnL${phase}" type="number" min="0" step="1" value="${escapeHtml(config[`loadOnL${phase}`])}"></div><div class="field"><label for="loadOffL${phase}">Netz aus unter (W)</label><input id="loadOffL${phase}" name="loadOffL${phase}" type="number" min="0" step="1" value="${escapeHtml(config[`loadOffL${phase}`])}"></div></div>`).join('')}
+              ${[1, 2, 3].map((phase) => `<div class="phase-threshold-card"><strong>L${phase}</strong><span class="topic-current"><span>Aktuell:</span> <strong id="current-load-l${phase}">${escapeHtml(state.inverterLoads?.[phase - 1] == null ? '—' : state.inverterLoads[phase - 1])} W</strong></span><div class="field"><label for="loadShedMaxL${phase}">Maximallast Lastabwurf (W)</label><input id="loadShedMaxL${phase}" name="loadShedMaxL${phase}" type="number" min="0" step="1" value="${escapeHtml(config[`loadShedMaxL${phase}`])}"></div><div class="field"><label for="loadOnL${phase}">Netz ein über (W)</label><input id="loadOnL${phase}" name="loadOnL${phase}" type="number" min="0" step="1" value="${escapeHtml(config[`loadOnL${phase}`])}"></div><div class="field"><label for="loadOffL${phase}">Netz aus unter (W)</label><input id="loadOffL${phase}" name="loadOffL${phase}" type="number" min="0" step="1" value="${escapeHtml(config[`loadOffL${phase}`])}"></div></div>`).join('')}
             </div>
           </div>
           <div class="button-row"><button type="submit">Konfiguration speichern</button></div>
@@ -109,7 +112,7 @@ function renderGridControl({ config, batteryConfig, state, brokerValues = {}, lo
           <div class="gc-log" id="gc-log">${renderLogRows(log.entries)}</div>
           <div class="gc-log-pager">
             <button type="button" id="gc-log-newer" disabled>← Neuer</button>
-            <span id="gc-log-info">Seite ${log.page} / ${log.totalPages}${log.page === 1 ? ' (live)' : ' (statisch)'}</span>
+            <span id="gc-log-info">${i18n.t('grid.page_of', { page: log.page, total: log.totalPages })}${log.page === 1 ? ` ${i18n.t('grid.live')}` : ` ${i18n.t('grid.static')}`}</span>
             <button type="button" id="gc-log-older"${log.totalPages <= 1 ? ' disabled' : ''}>Älter →</button>
           </div>
         </div>`;

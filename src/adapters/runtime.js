@@ -191,6 +191,9 @@ function buildHost() {
     getDataDirectory() {
       return hostCall('storage.dir');
     },
+    // { instanceId, fingerprint, hostVersion }. `hostVersion` ist die laufende
+    // homeESS-Version — daran erkennt ein Adapter ein Update über die interne
+    // Updatefunktion und unterscheidet es von einem gewöhnlichen Neustart.
     getInstanceIdentity() {
       return hostCall('identity');
     },

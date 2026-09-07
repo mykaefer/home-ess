@@ -521,7 +521,7 @@ Das an die Factory übergebene `host`-Objekt:
 | `await host.listStateOptions()` | Liefert die vom Benutzer je State hinterlegten **Adapteroptionen dieser Instanz** als `[{ topic, options }]`. Das Formularschema stammt aus `stateOptions` im Manifest (siehe unten). Nach einer Änderung ruft homeESS zusätzlich `stateOptionsChanged()` am Adapter auf. |
 | `await host.listStates(limit?)` | Liefert den **quellenübergreifenden State-Katalog** als flache Liste `{ topic, name, category, unit, value, writable, sourceType }` — Systemwerte, Custom States und alle Adapter-Instanzen mit ihrem kanonischen Topic. Für Adapter, die States weiterreichen oder spiegeln. Werte selbst kommen weiterhin über `subscribeState`. |
 | `await host.getDataDirectory()` | Instanzeigenes Datenverzeichnis (0700) für Nutzdaten, die zu groß für die Instanz-Einstellungen sind. |
-| `host.getInstanceIdentity()` | Liefert die dauerhafte öffentliche homeESS-Instanz-ID und deren Fingerprint, niemals den privaten Schlüssel. |
+| `host.getInstanceIdentity()` | Liefert `{ instanceId, fingerprint, hostVersion }`: die dauerhafte öffentliche homeESS-Instanz-ID mit Fingerprint (niemals den privaten Schlüssel) und die laufende homeESS-Version. An einer geänderten `hostVersion` erkennt ein Adapter ein Update über die interne Updatefunktion und unterscheidet es von einem gewöhnlichen Neustart. |
 | `host.getSecret(key)` | Liest ein Secret aus dem restriktiven, instanzgebundenen Secret-Store. |
 | `host.setSecret(key, value)` | Schreibt ein Secret mit 0600/0700-Rechten außerhalb der normalen Adaptereinstellungen. |
 | `host.deleteSecret(key)` | Entfernt ein Secret der eigenen Instanz. |

@@ -407,7 +407,9 @@ test('Der Stand oben rechts nutzt die korrigierte homeESS-Zeit', () => {
   assert.equal(erwartet, `${parts.date}, ${parts.time.slice(0, 5)}`);
 
   const html = renderWetter({ forecast: { ...forecast, fetchedAt }, pvForecast });
-  assert.match(html, new RegExp(`Stand: ${erwartet.replace(/\./g, '\\.')}`));
+  // Die Beschriftung steht in einem eigenen Element, damit der
+  // Übersetzungskatalog sie trifft; dazwischen liegt daher das schließende Tag.
+  assert.match(html, new RegExp(`Stand:</span> ${erwartet.replace(/\./g, '\\.')}`));
 
   // Derselbe Wortlaut steht im State „Stand der Prognose".
   const stand = buildWeatherValues({ ...forecast, fetchedAt })

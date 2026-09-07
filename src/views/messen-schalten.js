@@ -13,6 +13,10 @@ const { renderLayout } = require('./layout');
 const { escapeHtml, statusText } = require('./components');
 const { FUNCTIONS } = require('../messen-schalten/functions');
 const { LOAD_SHED_PHASES } = require('../messen-schalten/actors');
+// Tooltips setzen sich aus Beschriftung und variabler Angabe zusammen. In einem
+// Attribut greift die Textknoten-Ersetzung nicht, deshalb wird die Beschriftung
+// hier direkt über den Katalog geholt.
+const i18n = require('../i18n');
 
 // Dropdown „Funktion": Gruppen vererben ihre Funktion an Geräte ohne eigene
 // Zuordnung; die Prognose lernt je Funktion ein eigenes Stundenprofil.
@@ -83,13 +87,13 @@ function renderActorRow(actor) {
     ? `<span class="ms-row-counter${actor.counterWarning ? ' ms-row-counter--warn' : ''}" id="ms-counter-${actor.id}" title="${actor.counterWarning ? escapeHtml(actor.counterWarningText) : `Interner Zählerstand (aus dem Zählerfortschritt gebildet) · Rohwert zuletzt ${escapeHtml(actor.counterFreshness)}`}">${escapeHtml(actor.counterDisplay)}${actor.counterWarning ? ' ⚠' : ''}</span>`
     : '<span class="ms-row-counter" aria-hidden="true"></span>';
   const muted = !actor.hasSwitch || (actor.hasSwitch && !actor.alwaysOn);
-  const offlineTitle = actor.offline ? `Nicht verbunden – kein Messwert seit ${actor.offlineSince}` : '';
+  const offlineTitle = actor.offline ? `${i18n.t('measure.offline_since', {}, 'Nicht verbunden – kein Messwert seit')} ${actor.offlineSince}` : '';
   return `              <div class="ms-row${actor.offline ? ' ms-row--offline' : ''}" data-id="${actor.id}">
                 <span class="widget-drag" title="Zum Verschieben ziehen" aria-hidden="true">⠿</span>
-                <span class="${statusDotClass(actor.statusOn)}${staleClass(actor.statusStale)}${actor.offline ? ' is-offline' : ''}" id="ms-status-${actor.id}" title="${actor.offline ? escapeHtml(offlineTitle) : `Status · ${escapeHtml(actor.statusFreshness)}`}"></span>
+                <span class="${statusDotClass(actor.statusOn)}${staleClass(actor.statusStale)}${actor.offline ? ' is-offline' : ''}" id="ms-status-${actor.id}" title="${actor.offline ? escapeHtml(offlineTitle) : `${i18n.t('measure.tooltip_status', {}, 'Status ·')} ${escapeHtml(actor.statusFreshness)}`}"></span>
                 <span class="ms-row-name"><span class="ms-offline-badge" id="ms-offline-${actor.id}"${actor.offline ? ` title="${escapeHtml(offlineTitle)}"` : ' hidden'}>offline</span>${escapeHtml(actor.name)}</span>
                 <span class="ms-prio${muted ? ' ms-prio--muted' : ''}" id="ms-prio-${actor.id}" title="Betriebsart bzw. aktive Priorität, auf die dieses Gerät beim Betriebslevel reagiert">${escapeHtml(metaLabel(actor))}</span>
-                <span class="ms-row-power${staleClass(actor.powerStale)}" id="ms-power-${actor.id}" title="Leistung · ${escapeHtml(actor.powerFreshness)}">${escapeHtml(actor.powerDisplay)}${actor.powerStale ? ' ⚠' : ''}</span>
+                <span class="ms-row-power${staleClass(actor.powerStale)}" id="ms-power-${actor.id}" title="${i18n.t('measure.tooltip_power', {}, 'Leistung ·')} ${escapeHtml(actor.powerFreshness)}">${escapeHtml(actor.powerDisplay)}${actor.powerStale ? ' ⚠' : ''}</span>
                 ${counter}
                 ${toggle}
                 <div class="widget-actions">
@@ -718,7 +722,7 @@ ${renderUngrouped(ungrouped)}
       if (!el) return;
       el.className = 'ms-status-dot ' + (statusOn === true ? 'is-on' : statusOn === false ? 'is-off' : 'is-unknown')
         + (stale ? ' ms-value--stale' : '') + (offlineTitle ? ' is-offline' : '');
-      el.title = offlineTitle || ('Status · ' + (freshness || 'noch kein Wert empfangen'));
+      el.title = offlineTitle || ('Status ·' + ' ' + (freshness || 'noch kein Wert empfangen'));
     }
 
     async function refreshValues() {
@@ -731,7 +735,7 @@ ${renderUngrouped(ungrouped)}
           if (power) {
             power.textContent = a.powerDisplay + (a.powerStale ? ' ⚠' : '');
             power.classList.toggle('ms-value--stale', !!a.powerStale);
-            power.title = 'Leistung · ' + a.powerFreshness;
+            power.title = 'Leistung ·' + ' ' + a.powerFreshness;
           }
           var counter = document.getElementById('ms-counter-' + a.id);
           if (counter && a.counterDisplay != null) {
@@ -741,9 +745,9 @@ ${renderUngrouped(ungrouped)}
             counter.classList.remove('ms-value--stale');
             counter.classList.toggle('ms-row-counter--warn', !!a.counterWarning);
             counter.title = a.counterWarning ? a.counterWarningText
-              : 'Interner Zählerstand (aus dem Zählerfortschritt gebildet) · Rohwert zuletzt ' + a.counterFreshness;
+              : 'Interner Zählerstand (aus dem Zählerfortschritt gebildet) · Rohwert zuletzt' + ' ' + a.counterFreshness;
           }
-          var offlineTitle = a.offline ? ('Nicht verbunden – kein Messwert seit ' + a.offlineSince) : '';
+          var offlineTitle = a.offline ? ('Nicht verbunden – kein Messwert seit' + ' ' + a.offlineSince) : '';
           applyStatusDot(document.getElementById('ms-status-' + a.id), a.statusOn, a.statusStale, a.statusFreshness, offlineTitle);
           var offBadge = document.getElementById('ms-offline-' + a.id);
           if (offBadge) {
@@ -760,8 +764,8 @@ ${renderUngrouped(ungrouped)}
           var prio = document.getElementById('ms-prio-' + a.id);
           if (prio) {
             prio.textContent = !a.hasSwitch ? 'nur Messen'
-              : a.loadShedActive ? ('Lastabwurf · Priorität ' + a.priority + (a.priorityFromGroup ? ' (Gruppe)' : ''))
-              : a.alwaysOn ? ('Immer an · Priorität ' + a.priority + (a.priorityFromGroup ? ' (Gruppe)' : ''))
+              : a.loadShedActive ? ('Lastabwurf · Priorität' + ' ' + a.priority + (a.priorityFromGroup ? ' (Gruppe)' : ''))
+              : a.alwaysOn ? ('Immer an · Priorität' + ' ' + a.priority + (a.priorityFromGroup ? ' (Gruppe)' : ''))
               : 'manuell';
           }
         });

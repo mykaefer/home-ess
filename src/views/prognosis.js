@@ -200,9 +200,9 @@ function renderHeatingDemandChart(model = {}) {
     const hasToday = w.todayPowerW != null;
     const todayPct = hasToday ? Math.min(100, Math.max(0, (Number(w.todayPowerW) || 0) / max * 100)) : 0;
     const mark = hasToday
-      ? `<span class="tb-mark" style="bottom:${todayPct.toFixed(1)}%" title="${escapeHtml(`${w.label} · heute Ø ${fmt(w.todayPowerW)}`)}"></span>`
+      ? `<span class="tb-mark" style="bottom:${todayPct.toFixed(1)}%" title="${escapeHtml(`${w.label} ${i18n.t('forecast.today_avg', {}, '· heute Ø')} ${fmt(w.todayPowerW)}`)}"></span>`
       : '';
-    const title = `${w.label} · Ø ${fmt(value)}${hasToday ? ` · heute ${fmt(w.todayPowerW)}` : ''} · ${empty ? 'keine Messtage' : `${w.days} Messtag${w.days === 1 ? '' : 'e'}`}${clickable ? ' · klicken für 24-Stunden-Kurve' : ''}`;
+    const title = `${w.label} · Ø ${fmt(value)}${hasToday ? ` ${i18n.t('forecast.today_dot', {}, '· heute')} ${fmt(w.todayPowerW)}` : ''} · ${empty ? 'keine Messtage' : `${w.days} Messtag${w.days === 1 ? '' : 'e'}`}${clickable ? ' · klicken für 24-Stunden-Kurve' : ''}`;
     return `<div class="tb-cell${empty ? ' tb-cell--empty' : ''}${clickable ? ' tb-cell--clickable' : ''}"${clickable ? ` data-heat-idx="${index}"` : ''} title="${escapeHtml(title)}">
           <span class="tb-bar" style="height:${pct.toFixed(1)}%;background:hsl(${hue} 68% 50%)"></span>
           ${mark}
@@ -244,7 +244,7 @@ function renderDays(days = [], model = {}) {
     const result = day.gridKwh > 0.05
       ? `<span class="forecast-chip forecast-chip--bad">${formatEnergy(day.gridKwh)} Netz</span>`
       : day.surplusKwh > 0.05
-        ? `<span class="forecast-chip forecast-chip--good">${formatEnergy(day.surplusKwh)} Überschuss</span>`
+        ? `<span class="forecast-chip forecast-chip--good">${i18n.t('forecast.surplus_value', { value: formatEnergy(day.surplusKwh) })}</span>`
         : '<span class="forecast-chip forecast-chip--neutral">ausgeglichen</span>';
     const wallboxes = (day.wallboxes || [])
       .filter((box) => Number(box.energyKwh) > 0.005)
@@ -259,8 +259,8 @@ function renderDays(days = [], model = {}) {
         </div>
         ${renderHourProfile(day, model, index === 0)}
       </div>
-      ${wallboxes ? `<div class="forecast-day-foot">davon Wallbox: ${escapeHtml(wallboxes)}</div>` : ''}
-      <div class="forecast-day-foot forecast-day-foot--battery">Batterie am Tagesende <strong>${formatPercent(day.batterySocEnd)}</strong>${day.batteryFull ? ' · wird voraussichtlich voll' : ''}</div>
+      ${wallboxes ? `<div class="forecast-day-foot"><span>davon Wallbox:</span> ${escapeHtml(wallboxes)}</div>` : ''}
+      <div class="forecast-day-foot forecast-day-foot--battery"><span>Batterie am Tagesende</span> <strong>${formatPercent(day.batterySocEnd)}</strong>${day.batteryFull ? ' · wird voraussichtlich voll' : ''}</div>
     </article>`;
   }).join('');
 }
@@ -332,9 +332,9 @@ function renderPrognosis({ prognosis, message = '', error = '' } = {}) {
         <div class="kpi-row forecast-kpis">
           <div class="kpi-card kpi-card--pv"><div class="kpi-label">PV heute noch</div><div class="kpi-value">${formatEnergy(today.pvKwh)}</div></div>
           <div class="kpi-card"><div class="kpi-label">Verbrauch heute noch</div><div class="kpi-value">${formatEnergy(today.loadKwh)}</div></div>
-          <div class="kpi-card kpi-card--bat"><div class="kpi-label">Batterie nutzbar</div><div class="kpi-value">${formatEnergy(simulation.initialStored)}</div><div class="kpi-subvalue">bis ${formatPercent(simulation.minSoc)} Mindest-SoC</div></div>
+          <div class="kpi-card kpi-card--bat"><div class="kpi-label">Batterie nutzbar</div><div class="kpi-value">${formatEnergy(simulation.initialStored)}</div><div class="kpi-subvalue">${i18n.t('forecast.down_to_min_soc', { value: formatPercent(simulation.minSoc) })}</div></div>
           <div class="kpi-card kpi-card--grid"><div class="kpi-label">Netzbedarf heute</div><div class="kpi-value">${formatEnergy(today.gridKwh)}</div></div>
-          <div class="kpi-card forecast-autark-card"><div class="kpi-label">Heute autark</div><div class="kpi-value forecast-value--${operating.autark ? 'good' : 'bad'}">${operating.autark ? 'Ja' : 'Nein'}</div><div class="kpi-subvalue">${escapeHtml(operating.autarkDaysYear || 'aktuelles Jahr')}: ${escapeHtml(operating.autarkDaysCount)} Tage · ${escapeHtml(operating.autarkDaysPreviousYear || 'Vorjahr')}: ${escapeHtml(operating.autarkDaysPreviousYearCount)} Tage</div></div>
+          <div class="kpi-card forecast-autark-card"><div class="kpi-label">Heute autark</div><div class="kpi-value forecast-value--${operating.autark ? 'good' : 'bad'}">${operating.autark ? 'Ja' : 'Nein'}</div><div class="kpi-subvalue">${i18n.t('forecast.autark_days_pair', { year: escapeHtml(operating.autarkDaysYear || 'aktuelles Jahr'), count: escapeHtml(operating.autarkDaysCount), prevYear: escapeHtml(operating.autarkDaysPreviousYear || 'Vorjahr'), prevCount: escapeHtml(operating.autarkDaysPreviousYearCount) })}</div></div>
         </div>
 
         <section class="panel-card">
@@ -391,7 +391,7 @@ function renderPrognosis({ prognosis, message = '', error = '' } = {}) {
     var originalAutarkPreviousYearTopic = ${JSON.stringify(operating.autarkDaysPreviousYearTopic || '')};
     function askForMqttStart(label, targetId) {
       var adopt = window.confirm(
-        'Soll der bereits im MQTT-Topic vorhandene Wert als Startwert für ' + label + ' übernommen werden?\\n\\n' +
+        'Soll der bereits im MQTT-Topic vorhandene Wert als Startwert für' + ' ' + label + ' ' + 'übernommen werden?' + '\\n\\n' +
         'OK = MQTT-Wert übernehmen\\nAbbrechen = aktuellen HomeESS-Zähler an MQTT senden'
       );
       document.getElementById(targetId).value = adopt ? 'yes' : 'no';
@@ -435,7 +435,7 @@ function renderPrognosis({ prognosis, message = '', error = '' } = {}) {
           var hue = 200 - Math.round(i / 23 * 160); // Nacht (kühl) → Tag (warm)
           var mark = hasToday ? '<span class="hc-mark" style="bottom:' + todayPct.toFixed(1) + '%"></span>' : '';
           var tip = String(i).padStart(2, '0') + ' Uhr · ' + (empty ? 'keine Messdaten' : ('Ø ' + fmtW(value) + ' · ' + (days[i] || 0) + ' Messtag' + ((days[i] || 0) === 1 ? '' : 'e')));
-          if (hasToday) tip += ' · heute ' + fmtW(today[i]);
+          if (hasToday) tip += ' ' + '· heute' + ' ' + fmtW(today[i]);
           var tick = (i % 6 === 0) ? String(i) : '';
           bars += '<div class="hc-cell' + (empty ? ' hc-cell--empty' : '') + '" title="' + tip.replace(/"/g, '&quot;') + '">'
             + '<span class="hc-bar" style="height:' + pct.toFixed(1) + '%;background:hsl(' + hue + ' 68% 50%)"></span>'
@@ -448,7 +448,7 @@ function renderPrognosis({ prognosis, message = '', error = '' } = {}) {
         cell.addEventListener('click', function () {
           var win = windows[Number(cell.getAttribute('data-heat-idx'))];
           if (!win) return;
-          document.getElementById('heatingHourTitle').textContent = 'Heizung / Klima · ' + win.label;
+          document.getElementById('heatingHourTitle').textContent = 'Heizung / Klima ·' + ' ' + win.label;
           document.getElementById('heatingHourSub').textContent = win.days + ' Messtag' + (win.days === 1 ? '' : 'e') + ' · mittlere Leistung je Tagesstunde';
           document.getElementById('heatingHourChart').innerHTML = renderHourChart(win);
           if (typeof dialog.showModal === 'function') dialog.showModal();

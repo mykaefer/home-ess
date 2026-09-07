@@ -76,13 +76,29 @@ const NAV = [...NAV_CORE, ...NAV_MAIN_TRAILING];
 // Mobile Tab-Bar (≤ 768px): die fünf wichtigsten Seiten als Direktzugriff.
 // Alles Weitere über das Titellogo im Header (öffnet das vollflächige
 // Navigations-Sheet) — ein eigener Menü-Tab entfällt.
+// Stromverbrauch und Photovoltaik haben keinen eigenen Tab: die Energieseite ist
+// der Einstieg in beide und markiert sich über `match` auch auf deren Unterseiten
+// als aktiv.
 const MOBILE_TABS = [
   { path: '/dashboard', label: 'Dashboard', icon: '🏠' },
-  { path: '/energie', label: 'Energie', icon: '⚡' },
-  { path: '/stromverbrauch', label: 'Strom', icon: '🔌' },
-  { path: '/photovoltaik', label: 'PV', icon: '☀️' },
+  {
+    path: '/energie',
+    label: 'Energie',
+    icon: '⚡',
+    match: ['/stromverbrauch', '/photovoltaik', '/batterie', '/grid-control'],
+  },
   { path: '/prognose', label: 'Prognose', icon: '📈' },
+  { path: '/messen-schalten', label: 'Messen', icon: '🔌' },
+  { path: '/wetter', label: 'Wetter', icon: '⛅' },
 ];
+
+// Ein Tab ist aktiv, wenn die Seite selbst, eine ihrer Unterseiten (Pfadpräfix)
+// oder eine zugeordnete Seite aus `match` geöffnet ist.
+function mobileTabActive(tab, activePath) {
+  if (tab.path === activePath) return true;
+  if (activePath && activePath.startsWith(`${tab.path}/`)) return true;
+  return (tab.match || []).includes(activePath);
+}
 
 function renderNavItem(item, activePath) {
   const children = item.children || [];
@@ -179,7 +195,7 @@ function renderMobileNav(activePath, access) {
   const tabs = MOBILE_TABS
     .filter((tab) => navItemVisible(tab, access))
     .map((tab) => {
-      const active = tab.path === activePath ? ' active' : '';
+      const active = mobileTabActive(tab, activePath) ? ' active' : '';
       return `<a class="mobile-tab${active}" href="${tab.path}"><span class="mobile-tab-icon" aria-hidden="true">${tab.icon}</span><span class="mobile-tab-label">${escapeHtml(tab.label)}</span></a>`;
     }).join('\n      ');
 
@@ -298,7 +314,7 @@ function renderLiveScript() {
         if (levelNode && data.operatingLevel != null) {
           var level = Math.min(5, Math.max(1, Number(data.operatingLevel) || 1));
           levelNode.setAttribute('data-level', String(level));
-          levelNode.title = 'Betriebslevel ' + level + (data.emergencyMode ? ' · Notstrombetrieb / kein Netz' : '');
+          levelNode.title = 'Betriebslevel' + ' ' + level + (data.emergencyMode ? ' ' + '· Notstrombetrieb / kein Netz' : '');
           levelNode.classList.toggle('operating-level--emergency', !!data.emergencyMode);
           Array.prototype.forEach.call(levelNode.querySelectorAll('.operating-level-bar'), function (bar) {
             bar.classList.toggle('is-active', Number(bar.getAttribute('data-level')) <= level);
@@ -420,7 +436,7 @@ function renderUpdateScript() {
           '<img src="/homeESS.png" alt="homeESS" class="update-progress-logo">' +
           '<div class="update-progress-spinner" aria-hidden="true"></div>' +
           '<h1>homeESS wird aktualisiert</h1>' +
-          '<p class="update-progress-target">Zielversion: <strong></strong></p>' +
+          '<p class="update-progress-target"><span>Zielversion:</span> <strong></strong></p>' +
           '<ol class="update-progress-messages" id="update-progress-messages" aria-live="polite"></ol>' +
           '<p class="update-progress-hint">Dieses Fenster bitte geöffnet lassen. Der Server ist während des Neustarts kurz nicht erreichbar.</p>' +
           '<button type="button" class="update-progress-back" id="update-progress-back" hidden>Zurück zum Dashboard</button>' +
@@ -462,7 +478,7 @@ function renderUpdateScript() {
         targetVersion = status.availableVersion;
         if (pill) {
           pill.hidden = !(status.supported && targetVersion);
-          if (targetVersion) pill.textContent = 'Version ' + targetVersion + ' verfügbar';
+          if (targetVersion) pill.textContent = 'Version' + ' ' + targetVersion + ' ' + 'verfügbar';
         }
         renderOperation(status.operation, status.currentVersion);
         try { document.dispatchEvent(new CustomEvent('homeess:update-status', { detail: status })); } catch (_) {}
@@ -649,7 +665,7 @@ ${extraStylesheets}
     ${access.isAdmin ? `<dialog class="update-confirm-dialog" id="update-confirm-dialog">
       <form method="dialog">
         <h2>homeESS aktualisieren?</h2>
-        <p>Version <strong id="update-confirm-version">—</strong> wird geladen und ersetzt die aktuelle Installation. homeESS wird dabei kurz neu gestartet.</p>
+        <p><span>Version</span> <strong id="update-confirm-version">—</strong> <span>wird geladen und ersetzt die aktuelle Installation. homeESS wird dabei kurz neu gestartet.</span></p>
         <div class="update-confirm-actions">
           <button type="button" class="secondary-button" id="update-confirm-no">Nein</button>
           <button type="button" class="primary-button" id="update-confirm-yes">Ja, jetzt aktualisieren</button>

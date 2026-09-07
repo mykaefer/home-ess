@@ -18,10 +18,22 @@ const ACTIVE_WATCH_INTERVAL_MS = 1000;
 // vollständigen Re-Sync auslösen, nicht pro Ereignis einen. Das Fenster fasst
 // die Bursts zusammen; ein Single-Flight-Schutz verhindert Überlappungen.
 const RESYNC_DEBOUNCE_MS = 2000;
-// So viele transportbedingte getParamset-Fehlschläge in Folge gelten als tote
-// CCU-Verbindung. Einzelne Fehlschläge (Gerät offline, kurzer Netzwerkschluckauf)
-// bleiben wie bisher still.
-const REFRESH_FAILURE_LIMIT = 3;
+// So viele transportbedingte Fehlschläge in Folge gelten als tote CCU-Verbindung.
+// Einzelne Fehlschläge (Gerät offline, kurzer Netzwerkschluckauf, eine gerade
+// beschäftigte CCU) bleiben still. Gilt für Lese- UND Prüfpfad gemeinsam: ein
+// erfolgreicher Aufruf irgendeiner Art belegt die Verbindung und setzt zurück.
+const TRANSPORT_FAILURE_LIMIT = 3;
+// Der Schnittstellenprozess der CCU arbeitet Aufrufe faktisch seriell ab. Ein
+// eigener Steuerbefehl blockiert ihn deshalb, bis er den Funkweg quittiert – bei
+// einem stummen Gerät bis zu dessen CCU-seitigem Geräte-Timeout. In diesem
+// Fenster laufen ALLE parallelen Aufrufe in ihr Zeitlimit, auch der triviale
+// Schnittstellen-Ping, ohne dass der Verbindung etwas fehlt. Solche Zeitüber-
+// schreitungen dürfen daher nicht als Verbindungsabbruch zählen; der Nachlauf
+// deckt den Moment zwischen Quittung und wieder freier Schnittstelle ab.
+const WRITE_GRACE_MS = 5000;
+// Zeitlimit für den Erreichbarkeitstest vor einem Steuerbefehl bei scheinbar
+// getrennter Verbindung. Kurz gehalten: er soll den Schaltvorgang nicht bremsen.
+const PROBE_TIMEOUT_MS = 5000;
 // Ein Steuerbefehl geht über Funk und wird von der CCU erst nach ihrem eigenen
 // Geräte-Timeout quittiert – deutlich länger als ein lokaler Schnittstellen-
 // Aufruf. Ohne eigenes Zeitlimit liefe jeder Befehl an ein trages oder gerade
@@ -84,8 +96,16 @@ module.exports = function createHmRpcAdapter(host) {
   // Bleibt er ein volles Prüfintervall lang stehen, ist die Event-Registrierung
   // auf der CCU möglicherweise verloren (z. B. nach CCU-Neustart) → Re-Init.
   let lastCallbackAt = 0;
-  // Transportbedingte getParamset-Fehlschläge in Folge (siehe refreshChannel).
-  let refreshFailures = 0;
+  // Transportbedingte Fehlschläge in Folge (siehe noteTransportFailure).
+  let transportFailures = 0;
+  // Laufende eigene Steuerbefehle bzw. Zeitpunkt des zuletzt beendeten. Solange
+  // ein Befehl die CCU-Schnittstelle blockiert, sind Zeitüberschreitungen
+  // paralleler Aufrufe erwartbar (siehe WRITE_GRACE_MS).
+  let pendingWrites = 0;
+  let lastWriteEndedAt = 0;
+  // Sofort-Reconnect nach einem Verbindungsverlust, damit nicht bis zum nächsten
+  // Intervall-Tick jeder Schaltbefehl ins Leere liefe.
+  let reconnectSoonTimer = null;
   const descriptions = new Map();
   const channels = new Map();
   const states = new Map();
@@ -319,13 +339,57 @@ module.exports = function createHmRpcAdapter(host) {
   // (kein Funk, kein Duty-Cycle) und beantwortet die einzige Frage, die nach
   // einem fehlgeschlagenen Steuerbefehl zählt: lag es am Gerät oder an der
   // Verbindung?
-  async function interfaceAlive() {
+  async function interfaceAlive(timeout) {
     try {
-      await rpc('system.listMethods', []);
+      await rpc('system.listMethods', [], timeout);
       return true;
     } catch (_) {
       return false;
     }
+  }
+
+  // Blockiert gerade ein eigener Steuerbefehl den CCU-Schnittstellenprozess?
+  // Dann sind Zeitüberschreitungen paralleler Aufrufe hausgemacht und sagen
+  // nichts über die Verbindung aus (siehe WRITE_GRACE_MS).
+  function writeInFlight() {
+    return pendingWrites > 0 || (lastWriteEndedAt > 0 && Date.now() - lastWriteEndedAt < WRITE_GRACE_MS);
+  }
+
+  // Ein geglückter CCU-Aufruf belegt die Verbindung – egal aus welchem Pfad.
+  function noteTransportSuccess() {
+    transportFailures = 0;
+  }
+
+  // Verbindungsverlust melden. Nur beim tatsächlichen Zustandswechsel, damit das
+  // Protokoll den Wechsel zeigt (bisher war ein "getrennt" nirgends sichtbar).
+  function markDisconnected(detail) {
+    const wasRegistered = registered;
+    registered = false;
+    if (wasRegistered) host.error(`Verbindung zur CCU verloren: ${detail}`);
+    host.setConnected(false, `CCU-RPC: ${detail}`);
+  }
+
+  // Nach einem Verbindungsverlust nicht bis zum nächsten Prüfintervall warten:
+  // bis dahin liefe jeder Schaltbefehl in den Erreichbarkeitstest oder ins Leere.
+  function scheduleImmediateReconnect() {
+    if (stopped || registered || reconnectSoonTimer) return;
+    reconnectSoonTimer = setTimeout(() => {
+      reconnectSoonTimer = null;
+      register().catch(() => {});
+    }, 1000);
+  }
+
+  // Transportfehler (Zeitüberschreitung, Verbindungsabbruch, HTTP-Fehler) buchen.
+  // Erst mehrere in Folge gelten als tote Verbindung – ein einzelner Fehlschlag
+  // bedeutet meist nur eine gerade beschäftigte CCU. Blockiert ein eigener
+  // Steuerbefehl die Schnittstelle, zählt der Fehler überhaupt nicht.
+  function noteTransportFailure(err) {
+    if (writeInFlight()) return false;
+    transportFailures += 1;
+    if (transportFailures < TRANSPORT_FAILURE_LIMIT || !registered) return false;
+    markDisconnected(`${err.message} (${transportFailures} Transportfehler in Folge)`);
+    scheduleImmediateReconnect();
+    return true;
   }
 
   async function loadChannel(channel, initialValues) {
@@ -395,7 +459,7 @@ module.exports = function createHmRpcAdapter(host) {
     readThrottle.set(channelAddress, now);
     try {
       const values = await rpc('getParamset', [channelAddress, 'VALUES']);
-      refreshFailures = 0;
+      noteTransportSuccess();
       const burst = [];
       for (const [parameter, value] of Object.entries(values || {})) {
         burst.push([channelAddress, parameter, value]);
@@ -405,16 +469,12 @@ module.exports = function createHmRpcAdapter(host) {
       // CCU-Fault (numerischer XML-RPC-Fehlercode): die CCU hat geantwortet, nur
       // dieser Kanal ist momentan nicht lesbar (Gerät offline o. Ä.) – wie bisher
       // still übergehen; die Verbindung selbst ist nachweislich in Ordnung.
-      if (typeof err.code === 'number') { refreshFailures = 0; return; }
+      if (typeof err.code === 'number') { noteTransportSuccess(); return; }
       // Transportfehler (Timeout, Verbindungsabbruch, HTTP-Fehler): mehrere in
       // Folge bedeuten eine tote CCU-Verbindung. Als getrennt melden, damit der
       // Reconnect-Pfad greift, statt Fehler unbegrenzt still zu schlucken und
       // dabei „verbunden" anzuzeigen, während alle Werte veralten.
-      refreshFailures += 1;
-      if (refreshFailures >= REFRESH_FAILURE_LIMIT && registered) {
-        registered = false;
-        host.setConnected(false, `CCU-RPC: ${err.message}`);
-      }
+      noteTransportFailure(err);
     }
   }
 
@@ -444,8 +504,13 @@ module.exports = function createHmRpcAdapter(host) {
     dripTimer = setTimeout(async () => {
       dripTimer = null;
       if (stopped) return;
-      const channelAddress = dripIndex < dripQueue.length ? dripQueue[dripIndex++] : null;
-      if (channelAddress) await refreshChannel(channelAddress).catch(() => {});
+      // Solange ein eigener Steuerbefehl die CCU-Schnittstelle blockiert, keine
+      // zusätzliche Last auflegen: Die Lesung liefe ohnehin nur in ihr Zeitlimit
+      // und verlängerte die Blockade. Der Kanal bleibt an der Reihe.
+      if (!writeInFlight()) {
+        const channelAddress = dripIndex < dripQueue.length ? dripQueue[dripIndex++] : null;
+        if (channelAddress) await refreshChannel(channelAddress).catch(() => {});
+      }
       scheduleDrip();
     }, delay);
   }
@@ -484,8 +549,16 @@ module.exports = function createHmRpcAdapter(host) {
       for (const channelAddress of channelsOfDevice(deviceAddress)) channelSet.add(channelAddress);
     }
     if (!channelSet.size) return;
-    // force=true umgeht die Drossel – hier ist schnelle Aktualität gewünscht.
-    Promise.all(Array.from(channelSet).map((channelAddress) => refreshChannel(channelAddress, true).catch(() => {})))
+    // Nacheinander, nicht parallel: Der CCU-Schnittstellenprozess arbeitet die
+    // Aufrufe ohnehin seriell ab, ein Bündel gleichzeitiger Lesungen treibt nur
+    // die hinteren in ihr Zeitlimit. force=true umgeht die Drossel – hier ist
+    // schnelle Aktualität gewünscht.
+    (async () => {
+      for (const channelAddress of channelSet) {
+        if (stopped) return;
+        await refreshChannel(channelAddress, true).catch(() => {});
+      }
+    })()
       .finally(() => {
         if (!stopped && activeWatchUntil.size) {
           activeWatchTimer = setTimeout(runActiveWatch, ACTIVE_WATCH_INTERVAL_MS);
@@ -503,21 +576,25 @@ module.exports = function createHmRpcAdapter(host) {
       callbackUrl = `http://${callbackHost}:${server.address().port}`;
       await rpc('init', [callbackUrl, interfaceId()]);
       registered = true;
-      refreshFailures = 0;
+      noteTransportSuccess();
       lastCallbackAt = Date.now();
       await synchronize();
+      host.log(`CCU-RPC verbunden (${channels.size} Geräte/Kanäle), Callback ${callbackUrl}`);
       host.setConnected(true, `CCU-RPC verbunden (${channels.size} Geräte/Kanäle), Callback ${callbackUrl}`);
     } catch (err) {
-      registered = false;
-      host.setConnected(false, `CCU-RPC: ${err.message}`);
+      markDisconnected(err.message);
     } finally {
       connectionCheckRunning = false;
     }
   }
 
-  async function maintainConnection() {
+  async function maintainConnection(pingTimeout) {
     if (stopped || connectionCheckRunning) return;
     if (!registered) { await register(); return; }
+    // Ein eigener Steuerbefehl blockiert die CCU-Schnittstelle gerade. Ein Ping
+    // liefe garantiert in sein Zeitlimit und brächte keine Erkenntnis – der
+    // laufende Befehl selbst prüft die Verbindung ohnehin mit.
+    if (writeInFlight()) return;
     connectionCheckRunning = true;
     try {
       if (Date.now() - lastCallbackAt >= reconnectMs()) {
@@ -530,14 +607,18 @@ module.exports = function createHmRpcAdapter(host) {
         // listDevices-Callbacks, die die Event-Strecke Ende-zu-Ende bestätigen
         // (und lastCallbackAt fortschreiben). In ereignislosen Phasen läuft so
         // schlimmstenfalls je Intervall ein leichter init-Abgleich – kein Funk.
-        await rpc('init', [callbackUrl, interfaceId()]);
+        await rpc('init', [callbackUrl, interfaceId()], pingTimeout);
       } else {
         // Rein lokaler Schnittstellen-Ping der CCU, niemals ein Geräte-/Funk-Read.
-        await rpc('system.listMethods', []);
+        await rpc('system.listMethods', [], pingTimeout);
       }
+      noteTransportSuccess();
     } catch (err) {
-      registered = false;
-      host.setConnected(false, `CCU-RPC: ${err.message}`);
+      // Nicht beim ersten Fehlschlag trennen: die CCU ist regelmäßig für einige
+      // Sekunden mit einem Funkbefehl beschäftigt und antwortet dann gar nicht.
+      // Ein sofortiges „getrennt" ließe bis zum nächsten Tick jeden Schaltbefehl
+      // scheitern, obwohl die Verbindung in Ordnung ist.
+      noteTransportFailure(err);
     } finally {
       connectionCheckRunning = false;
     }
@@ -639,6 +720,7 @@ module.exports = function createHmRpcAdapter(host) {
       if (resyncTimer) clearTimeout(resyncTimer);
       if (dripTimer) clearTimeout(dripTimer);
       if (activeWatchTimer) clearTimeout(activeWatchTimer);
+      if (reconnectSoonTimer) clearTimeout(reconnectSoonTimer);
       if (registered) {
         // Abmeldung: gleiche Callback-URL, leere interface_id (HM XML-RPC API).
         try { await rpc('init', [callbackUrl, '']); } catch (_) { /* CCU ggf. weg */ }
@@ -648,7 +730,6 @@ module.exports = function createHmRpcAdapter(host) {
     },
 
     async write(address, value) {
-      if (!registered) { host.error(`Schreiben ${address} verworfen: CCU nicht verbunden`); return; }
       if (writesBlocked()) {
         host.error(`Schreiben ${address} verworfen: Duty Cycle ${latestDutyCycle}% (Grenze ${dutyLimit()}%)`);
         return;
@@ -675,8 +756,26 @@ module.exports = function createHmRpcAdapter(host) {
       if (description.TYPE !== 'ACTION' && blocksRepeat) {
         return;
       }
+      // Steht der Verbindungsmerker auf getrennt, wird der Befehl NICHT blind
+      // verworfen. Der Merker beschreibt die Event-Registrierung; ein setValue
+      // nimmt die CCU auch ohne sie an. Und er kann schlicht falsch stehen: eine
+      // Zeitüberschreitung während einer beschäftigten CCU reicht dafür. Ein
+      // kurzer Erreichbarkeitstest entscheidet – ist die Schnittstelle da, geht
+      // der Befehl raus und der Reconnect wird nebenbei angestoßen. Blockiert
+      // gerade ein eigener Befehl die CCU, wäre der Test sinnlos und entfällt.
+      if (!registered && !writeInFlight()) {
+        if (!await interfaceAlive(PROBE_TIMEOUT_MS)) {
+          host.error(`Schreiben ${address} verworfen: CCU nicht erreichbar`);
+          return;
+        }
+        scheduleImmediateReconnect();
+      }
+      pendingWrites += 1;
       try {
         await rpc('setValue', [channelAddress, parameter, normalized], WRITE_TIMEOUT_MS);
+        // Der Befehl kam durch – die Verbindung ist damit belegt.
+        noteTransportSuccess();
+        if (!registered) scheduleImmediateReconnect();
         // Optimistisch, bis das Readback-Event nachzieht und den Wert bestätigt.
         lastValues.set(address, { value: normalized, confirmed: false, at: Date.now() });
         // Steuerbefehl gesetzt – das Gerät jetzt kurz aktiv beobachten, damit ein
@@ -688,13 +787,16 @@ module.exports = function createHmRpcAdapter(host) {
         // geantwortet, nur dieses Gerät war nicht erreichbar. Die Schnittstelle
         // ist nachweislich in Ordnung und darf nicht als getrennt gelten – sonst
         // verwirft ein einzelnes stummes Gerät die Steuerbefehle aller anderen.
-        if (typeof err.code === 'number') return;
+        if (typeof err.code === 'number') { noteTransportSuccess(); return; }
         // Transportfehler (Timeout, Verbindungsabbruch): Das kann am Funkweg des
         // Geräts liegen oder an der Verbindung. Ein lokaler Schnittstellen-Ping
         // entscheidet das, statt die Verbindung pauschal fallen zu lassen.
-        if (await interfaceAlive()) return;
-        registered = false;
-        host.setConnected(false, `CCU-RPC: ${err.message}`);
+        if (await interfaceAlive(PROBE_TIMEOUT_MS)) { noteTransportSuccess(); return; }
+        markDisconnected(err.message);
+        scheduleImmediateReconnect();
+      } finally {
+        pendingWrites -= 1;
+        lastWriteEndedAt = Date.now();
       }
     },
     // Aktiver Refresh eines States (angestoßen z. B. vom Live-Tick der Messen-
@@ -707,6 +809,7 @@ module.exports = function createHmRpcAdapter(host) {
       const channelAddress = unsegment(String(address).split('/')[0]);
       await refreshChannel(channelAddress);
     },
+    _test: { maintainConnection, forceDisconnected: () => markDisconnected('Test') },
   };
 };
 

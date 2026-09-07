@@ -5,6 +5,9 @@
 // Heizkosten, Schornsteinfeger-Modus und das Brenner-Laufzeitprotokoll.
 
 const { renderLayout } = require('./layout');
+// Sätze mit eingesetzten Werten laufen über den Katalog: ein zusammengesetzter
+// Textknoten wäre sonst nicht übersetzbar.
+const i18n = require('../i18n');
 const { escapeHtml, statusText } = require('./components');
 const {
   MIN_FLOW_WINDOW_SECONDS, MAX_FLOW_WINDOW_SECONDS, MAX_HOLD_MINUTES, SWEEP_TARGET_TEMP,
@@ -42,7 +45,7 @@ function statsRow(label, entry, unit) {
 function statsBlock(stats, firingSource) {
   const basis = FIRING_SOURCES[firingSource] || FIRING_SOURCES.switch;
   return `          <div class="adapter-block">
-            <div class="adapter-block-head"><div class="adapter-block-title"><strong>Brennerlaufzeit und Heizkosten</strong><span class="muted">Gezählt wird allein, was der Brenner tatsächlich feuert (${escapeHtml(basis)}). Verbrauch = Laufzeit × Verbrauch je Betriebsstunde.</span></div></div>
+            <div class="adapter-block-head"><div class="adapter-block-title"><strong>Brennerlaufzeit und Heizkosten</strong><span class="muted">${i18n.t('heating.central.counting_hint', { basis: escapeHtml(basis) })}</span></div></div>
             <div class="adapter-rows">
               <div class="adapter-row hz-item-row hz-stats-row adapter-row--head"><span>Zeitraum</span><span>Laufzeit</span><span>Verbrauch</span><span>Kosten</span></div>
 ${statsRow('Heute', stats.today, stats.unit)}
@@ -76,8 +79,8 @@ function statusCard(config, state, demandRooms) {
   return `        <div class="hz-central-card">
           <div>
             <strong>Zustand</strong>
-            <p class="muted">Außen ${temp(state.outdoorTemp)} · Vorlauf ${temp(state.flowTemp)} · Rücklauf ${temp(state.returnTemp)}${state.note ? ` · ${escapeHtml(state.note)}` : ''}</p>
-            <p class="muted">${demandRooms.length ? `Wärmeanforderung aus: ${names}` : 'Keine Wärmeanforderung.'}</p>
+            <p class="muted"><span>Außen</span> ${temp(state.outdoorTemp)} · <span>Vorlauf</span> ${temp(state.flowTemp)} · <span>Rücklauf</span> ${temp(state.returnTemp)}${state.note ? ` · <span>${escapeHtml(state.note)}</span>` : ''}</p>
+            <p class="muted">${demandRooms.length ? i18n.t('heating.central.demand_from', { rooms: names }) : 'Keine Wärmeanforderung.'}</p>
           </div>
           <div class="hz-central-state">
             <span class="adapter-badge adapter-badge--${state.boilerOn ? 'on' : 'off'}">Kessel ${state.boilerOn ? 'ein' : 'aus'}</span>
@@ -151,7 +154,7 @@ function renderHeizungZentrale({
   const body = `        <div class="panel-head">
           <div>
             <h1>Zentralheizung</h1>
-            <p class="muted">Im Schornsteinfeger-Modus stellt homeESS alle Räume auf ${SWEEP_TARGET_TEMP} °C, hält die dezentralen Geräte aus und lässt die Zentralheizung durchlaufen.</p>
+            <p class="muted">${i18n.t('heating.central.sweep_hint', { temp: SWEEP_TARGET_TEMP })}</p>
           </div>
           <div class="dashboard-toolbar"><a class="secondary-button" href="/heizung">Zurück zu den Räumen</a></div>
         </div>

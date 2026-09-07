@@ -5993,7 +5993,19 @@ body,
         gap: 8px 14px;
     }
 
-    /* Auch die vierspaltige Übersichtsvariante wird auf dem Telefon zur Karte. */
+    /* Auch die vierspaltige Übersichtsvariante (Energie-Übersicht) wird auf dem
+       Telefon zur Karte. Die Mindestbreite aus dem 720px-Layer muss dabei
+       ausdrücklich zurückgenommen werden — sonst schiebt die Zeile die ganze
+       Seite in die Breite, statt umzubrechen. */
+    .energie-overview--flat {
+        overflow-x: visible;
+    }
+
+    .energie-overview--flat .energy-overview-head,
+    .energie-overview--flat .energy-overview-row {
+        min-width: 0;
+    }
+
     .energie-overview--flat .energy-overview-row {
         grid-template-columns: repeat(2, minmax(0, 1fr));
     }

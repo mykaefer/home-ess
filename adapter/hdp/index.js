@@ -25,6 +25,10 @@ const {
 } = require('./firmware');
 const { ReleaseStore, CHANNELS: releaseChannels } = require('./release-store');
 const { DEFAULT_CATALOG_URL } = require('./firmware-catalog');
+const { CatalogSchedule } = require('./catalog-schedule');
+// Fällt die Hostversion aus (ältere homeESS-Laufzeit ohne `hostVersion`), tritt
+// die Adapterversion an ihre Stelle: Beide ändern sich nur durch ein Update.
+const ADAPTER_VERSION = String(require('./adapter.json').version || '');
 const crypto = require('crypto');
 
 const PROTOCOL_VERSION = '1.0-draft';
@@ -1064,6 +1068,7 @@ function createHdpAdapter(host, dependencies = {}) {
   const pendingFirmware = new Map();
   const activeFirmwareUpdates = new Set();
   const releaseStore = new ReleaseStore();
+  const catalogSchedule = new CatalogSchedule();
   let persistQueue = Promise.resolve();
   let persistDirty = false;
   let persistScheduled = false;
@@ -2802,6 +2807,9 @@ function createHdpAdapter(host, dependencies = {}) {
   // Der Katalog wird ausschließlich vom Adapter über HTTPS gelesen; die Geräte
   // bleiben lokal und bekommen ihr Image weiterhin über den authentifizierten
   // hDP-OTA-Pfad.
+  //
+  // Jeder tatsächlich ausgeführte Abruf — auch der von Hand angestoßene und auch
+  // ein fehlgeschlagener — wird im Tagesplan vermerkt und belegt damit den Tag.
   async function syncFirmwareCatalog() {
     if (stopped || catalogRunning || !String(releaseStore.catalogUrl || '').trim()) {
       return { skipped: true, results: [] };
@@ -2822,7 +2830,41 @@ function createHdpAdapter(host, dependencies = {}) {
       return { skipped: false, results, changed, lastCheck: releaseStore.lastCatalogCheck };
     } finally {
       catalogRunning = false;
+      try {
+        catalogSchedule.record();
+      } catch (error) {
+        // Ohne gespeicherten Plan bliebe die Tagesgrenze nur im Speicher: Der
+        // Abruf lief, aber ein Neustart wüsste nichts davon.
+        host.warn(`hDP Firmwarekatalog: Prüfplan nicht gespeichert (${error.message}).`);
+      }
     }
+  }
+
+  // Der nächste planmäßige Abruf. Der Timer läuft höchstens sechs Stunden und
+  // misst die Fälligkeit danach neu am Kalender, damit Sommerzeit, Standby und
+  // eine korrigierte Systemuhr den Termin nicht verschieben.
+  function scheduleCatalogCheck() {
+    if (catalogPoll) clearTimeout(catalogPoll);
+    catalogPoll = null;
+    // Ohne Katalog-URL gibt es nichts zu planen: Ein Timer liefe sonst endlos
+    // im Leerlauf, weil ein übersprungener Abruf den Tag nicht belegt.
+    if (stopped || !String(releaseStore.catalogUrl || '').trim()) return;
+    catalogPoll = setTimeout(() => {
+      catalogPoll = null;
+      if (!catalogSchedule.due()) {
+        scheduleCatalogCheck();
+        return;
+      }
+      runCatalogCheck();
+    }, catalogSchedule.nextDelayMs());
+  }
+
+  // Erst nach dem Abruf neu planen: Der Tagesvermerk entsteht am Ende von
+  // syncFirmwareCatalog, vorher wäre der nächste Termin noch der heutige.
+  function runCatalogCheck() {
+    return syncFirmwareCatalog()
+      .catch((error) => host.warn(`hDP Firmwarekatalog: ${error.message}`))
+      .then(() => scheduleCatalogCheck());
   }
 
   function deviceFromForm(body, existing) {
@@ -3500,12 +3542,15 @@ function createHdpAdapter(host, dependencies = {}) {
     // hochgeladen hat, soll erkennen, woher die Stände kommen und ob der
     // letzte Blick nach draußen gelungen ist.
     const lastCheck = releaseStore.lastCatalogCheck;
+    const slot = catalogSchedule.describeSlot();
+    const nextCheck = catalogSchedule.nextCheckAt();
     const catalogStatus = !catalogEnabled
       ? '<p class="settings-card-hint">Der Online-Firmwarekatalog ist abgeschaltet. Releases lassen sich nur von Hand hinterlegen.</p>'
-      : `<p class="settings-card-hint">Neue Versionen werden täglich bei homeESS geprüft und automatisch geholt.${
+      : `<p class="settings-card-hint">Neue Versionen werden einmal täglich${slot ? ` gegen ${esc(slot)} Uhr` : ''} bei homeESS geprüft und automatisch geholt.${
         !lastCheck ? ' Die erste Prüfung steht noch aus.'
           : lastCheck.error ? ` Letzte Prüfung ${esc(formatTimestamp(lastCheck.checkedAt))} fehlgeschlagen: ${esc(lastCheck.error)}`
-            : ` Zuletzt geprüft: ${esc(formatTimestamp(lastCheck.checkedAt))}.`}</p>`;
+            : ` Zuletzt geprüft: ${esc(formatTimestamp(lastCheck.checkedAt))}.`}${
+        nextCheck ? ` Nächste Prüfung: ${esc(formatTimestamp(nextCheck.toISOString()))}.` : ''}</p>`;
     const channelOptions = ['<option value="">Nach Vorgabe im Manifest</option>'].concat(
       releaseChannels.map((channel) =>
         `<option value="${channel}">${esc(CHANNEL_LABELS[channel] || channel)}</option>`),
@@ -5296,7 +5341,9 @@ hdp-flash.exe --channel development</code></pre>
       // Firmwareimage den bei jedem Persistieren neu geschriebenen Blob sonst
       // um Größenordnungen aufblähen würde.
       try {
-        releaseStore.attach(await host.getDataDirectory());
+        const dataDirectory = await host.getDataDirectory();
+        releaseStore.attach(dataDirectory);
+        catalogSchedule.attach(dataDirectory);
       } catch (error) {
         host.warn(`Firmwarespeicher nicht verfügbar: ${error.message}`);
       }
@@ -5337,11 +5384,25 @@ hdp-flash.exe --channel development</code></pre>
       }, 6 * 60 * 60 * 1000);
       // Beim ersten Aktivieren der Instanz ist der Firmwarespeicher leer — mit
       // der Installation kommt keine Firmware mehr mit. Der erste Katalogabruf
-      // füllt ihn, blockiert den Start aber nicht; danach wird täglich geprüft.
-      syncFirmwareCatalog().catch((error) => host.warn(`hDP Firmwarekatalog: ${error.message}`));
-      catalogPoll = setInterval(() => {
-        syncFirmwareCatalog().catch((error) => host.warn(`hDP Firmwarekatalog: ${error.message}`));
-      }, 24 * 60 * 60 * 1000);
+      // füllt ihn, blockiert den Start aber nicht; seine Uhrzeit ist zugleich
+      // die Tagesuhrzeit aller weiteren Abrufe.
+      //
+      // Ein Adapterstart allein löst danach keinen Abruf mehr aus: Ein Neustart
+      // des Dienstes, eine geänderte Einstellung und ein Auto-Restart nach einem
+      // Absturz sollen den Katalog nicht jedes Mal erneut fragen. Nur ein Update
+      // über die interne Updatefunktion darf sofort nachsehen, auch wenn der
+      // Tagesabruf schon gelaufen ist.
+      const hostVersion = String((identity && identity.hostVersion) || ADAPTER_VERSION);
+      const afterUpdate = catalogSchedule.updated(hostVersion);
+      catalogSchedule.noteVersion(hostVersion);
+      if (!String(releaseStore.catalogUrl || '').trim()) {
+        // Katalog abgeschaltet: nichts abrufen, nichts planen.
+      } else if (afterUpdate || catalogSchedule.due()) {
+        if (afterUpdate) host.log('hDP Firmwarekatalog: Prüfung nach homeESS-Update.');
+        runCatalogCheck();
+      } else {
+        scheduleCatalogCheck();
+      }
       host.setConnected(true, 'hDP-Discovery aktiv');
       persist();
       host.log(`hDP Adapter gestartet (${identity.instanceId}).`);
@@ -5357,7 +5418,7 @@ hdp-flash.exe --channel development</code></pre>
       rolloutPoll = null;
       if (releaseSourcePoll) clearInterval(releaseSourcePoll);
       releaseSourcePoll = null;
-      if (catalogPoll) clearInterval(catalogPoll);
+      if (catalogPoll) clearTimeout(catalogPoll);
       catalogPoll = null;
       for (const device of devices.values()) {
         if (device.connection) device.connection.stop();

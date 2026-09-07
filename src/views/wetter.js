@@ -126,7 +126,7 @@ function renderCurrent(current, location) {
             <div class="wetter-now-head">
               <div class="wetter-now-temp">${escapeHtml(formatNumber(current.temperature, 1, '°C'))}</div>
               <div class="wetter-now-label">${escapeHtml(formatText(current.label))}</div>
-              <div class="wetter-now-sub">Gefühlt ${escapeHtml(formatNumber(current.apparentTemperature, 1, '°C'))}${ort ? ` · ${escapeHtml(ort)}` : ''}</div>
+              <div class="wetter-now-sub"><span>Gefühlt</span> ${escapeHtml(formatNumber(current.apparentTemperature, 1, '°C'))}${ort ? ` · ${escapeHtml(ort)}` : ''}</div>
             </div>
           </div>
           <div class="wetter-groups">
@@ -204,8 +204,8 @@ function renderHours(hours) {
                 <span>${ICONS.zeit} Uhrzeit</span>
                 <span>${ICONS.temperatur} Temperatur</span>
                 <span>${ICONS.wahrscheinlichkeit} Niederschlagswahrscheinlichkeit</span>
-                <span>${ICONS.regen} Menge</span>
-                <span>${ICONS.wind} Wind in km/h</span>
+                <span>${ICONS.regen} <span>Menge</span></span>
+                <span>${ICONS.wind} <span>Wind in km/h</span></span>
                 <span class="wetter-hours-note">Am Telefon in 3-Stunden-Schritten</span>
               </div>
               <div class="wetter-hours">
@@ -359,7 +359,7 @@ ${renderFurtherDays(furtherDays, pvByDateKey)}`
   const body = `        <div class="page-head page-head--split">
           <h1>Wetter</h1>
           <form action="/wetter/aktualisieren" method="POST" class="wetter-refresh">
-            ${stand ? `<span class="wetter-stand">Stand: ${escapeHtml(stand)}</span>` : ''}
+            ${stand ? `<span class="wetter-stand"><span>Stand:</span> ${escapeHtml(stand)}</span>` : ''}
             <button type="submit" class="secondary-button">Aktualisieren</button>
           </form>
         </div>

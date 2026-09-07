@@ -1,12 +1,12 @@
 {
   "name": "home-ess",
-  "version": "1.6.2",
+  "version": "1.6.3",
   "description": "homeESS – Energy Storage System: abonniert MQTT-Topics und schaltet daraus Lasten.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "test": "node --test"
+    "test": "node --test test/"
   },
   "keywords": [
     "ess",

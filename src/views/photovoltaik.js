@@ -228,7 +228,7 @@ function renderPhotovoltaik({
           var calNode = document.getElementById('pv-calibration-' + plant.id);
           if (calNode) {
             if (plant.autoCalibrate) {
-              calNode.textContent = 'Kalibrierung: ' + plant.calibrationFactor;
+              calNode.textContent = 'Kalibrierung:' + ' ' + plant.calibrationFactor;
               calNode.hidden = false;
             } else {
               calNode.hidden = true;
@@ -273,7 +273,7 @@ function renderPhotovoltaik({
           if (location) location.textContent = '';
           return;
         }
-        if (location) location.textContent = data.location ? ' Wetterdaten für ' + data.location + '.' : '';
+        if (location) location.textContent = data.location ? ' ' + 'Wetterdaten für' + ' ' + data.location + '.' : '';
         row.textContent = '';
         data.days.forEach(function (day, index) {
           var card = document.createElement('div');
@@ -294,10 +294,10 @@ function renderPhotovoltaik({
             card.appendChild(value);
             var bisher = document.createElement('div');
             bisher.className = 'forecast-subvalue';
-            bisher.textContent = 'bis jetzt: ' + (data.todayElapsed || '— kWh');
+            bisher.textContent = 'bis jetzt:' + ' ' + (data.todayElapsed || '— kWh');
             var noch = document.createElement('div');
             noch.className = 'forecast-subvalue';
-            noch.textContent = 'noch erwartet: ' + (data.todayRemaining || '— kWh');
+            noch.textContent = 'noch erwartet:' + ' ' + (data.todayRemaining || '— kWh');
             card.appendChild(bisher);
             card.appendChild(noch);
           } else {
@@ -352,8 +352,8 @@ function forecastCardMarkup(label, total, today) {
     return `              <div class="forecast-card">
                 <div class="forecast-label">${escapeHtml(label)}</div>
                 <div class="forecast-value"><span class="forecast-prefix">gesamt</span> ${escapeHtml(total)}</div>
-                <div class="forecast-subvalue">bis jetzt: ${escapeHtml(today.elapsed)}</div>
-                <div class="forecast-subvalue">noch erwartet: ${escapeHtml(today.remaining)}</div>
+                <div class="forecast-subvalue"><span>bis jetzt:</span> ${escapeHtml(today.elapsed)}</div>
+                <div class="forecast-subvalue"><span>noch erwartet:</span> ${escapeHtml(today.remaining)}</div>
               </div>`;
   }
   return `              <div class="forecast-card">
@@ -379,7 +379,7 @@ function renderForecast(forecast) {
           <div class="panel-head">
             <div>
               <h2>PV-Prognose</h2>
-              <p class="muted">Erwarteter Tagesertrag aus der Wetterprognose (Open-Meteo) und den Anlagendaten.<span id="pv-forecast-location">${location ? ` Wetterdaten für ${escapeHtml(location)}.` : ''}</span></p>
+              <p class="muted">Erwarteter Tagesertrag aus der Wetterprognose (Open-Meteo) und den Anlagendaten.<span id="pv-forecast-location">${location ? ` <span>Wetterdaten für</span> ${escapeHtml(location)}.` : ''}</span></p>
             </div>
           </div>
           <div class="forecast-row" id="pv-forecast-row">
@@ -400,7 +400,7 @@ function renderPlantCard(plant) {
               <div class="plant-main">
                 <div>
                   <h3>${escapeHtml(plant.name)} ${sunIndicatorMarkup(plant.metrics.raw.directSunlight, plant.id)}</h3>
-                  <p class="muted">kWp ${escapeHtml(plant.kwPeak)} · ${escapeHtml(plant.cellType)}${plant.converterType && plant.converterType !== 'Direkt' ? ` · ${escapeHtml(plant.converterType)}` : ''} · Ausrichtung ${escapeHtml(plant.orientation || '—')}° · Neigung ${escapeHtml(plant.tilt)}°${plant.isConsumerSide ? ' · Verbraucherseite' : ''}</p>
+                  <p class="muted"><span>kWp</span> ${escapeHtml(plant.kwPeak)} · ${escapeHtml(plant.cellType)}${plant.converterType && plant.converterType !== 'Direkt' ? ` · ${escapeHtml(plant.converterType)}` : ''} · Ausrichtung ${escapeHtml(plant.orientation || '—')}° · Neigung ${escapeHtml(plant.tilt)}°${plant.isConsumerSide ? ' · Verbraucherseite' : ''}</p>
                 </div>
                 <div class="plant-power-stack">
                   <div class="plant-power" id="pv-current-${plant.id}">${escapeHtml(plant.metrics.formatted.current)}</div>
@@ -408,8 +408,8 @@ function renderPlantCard(plant) {
                 </div>
               </div>
               <div class="plant-meta">
-                <span class="plant-yield">Heute: ${escapeHtml(plant.metrics.formatted.today)}</span>
-                <span class="plant-calibration" id="pv-calibration-${plant.id}"${plant.autoCalibrate ? '' : ' hidden'}>Kalibrierung: ${escapeHtml(plant.metrics.formatted.calibrationFactor)}</span>
+                <span class="plant-yield"><span>Heute:</span> ${escapeHtml(plant.metrics.formatted.today)}</span>
+                <span class="plant-calibration" id="pv-calibration-${plant.id}"${plant.autoCalibrate ? '' : ' hidden'}><span>Kalibrierung:</span> ${escapeHtml(plant.metrics.formatted.calibrationFactor)}</span>
                 <div class="plant-actions">
                   <button type="button" class="secondary-button" onclick="openPlantDialog('edit', ${plant.id})">Bearbeiten</button>
                   <button type="button" class="icon-button" aria-label="PV-Anlage loeschen" title="PV-Anlage loeschen" onclick="openDeleteDialog(${plant.id}, ${toJsStringLiteral(plant.name)})">🗑</button>
