@@ -56,7 +56,7 @@ function boxCard(box, live) {
               <div class="plant-main">
                 <div>
                   <h3>${escapeHtml(box.name)}</h3>
-                  <p class="muted">Max ${escapeHtml(box.maxPowerW)} W · Fahrzeug-Akku ${escapeHtml(box.batteryCapacityKwh)} kWh</p>
+                  <p class="muted"><span>Max</span> ${escapeHtml(box.maxPowerW)} W · <span>Fahrzeug-Akku</span> ${escapeHtml(box.batteryCapacityKwh)} kWh</p>
                   <div class="wallbox-switch-row">
                     <span class="wallbox-switch-label">Ladeplan</span>
                     <div class="pump-mode-btns" id="wb-modes-${box.id}">${modeButtons(box)}</div>
@@ -363,7 +363,7 @@ function renderWallbox({
           set('wb-prev-' + b.id, f.previousYear);
           set('wb-next-' + b.id, f.nextCharge || '—');
           var plug = document.getElementById('wb-plug-' + b.id);
-          if (plug) plug.textContent = b.plugged === true ? ' · 🔌 angesteckt' : b.plugged === false ? ' · nicht angesteckt' : '';
+          if (plug) plug.textContent = b.plugged === true ? ' · ' + '🔌 angesteckt' : b.plugged === false ? ' · ' + 'nicht angesteckt' : '';
           applyModeButtons(b.id, b.mode);
           applyControlButtons(b.id, b.controlMode || 'auto');
         });

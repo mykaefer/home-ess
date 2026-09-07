@@ -1,6 +1,9 @@
 'use strict';
 
 const { renderLayout } = require('./layout');
+// Beschriftungen aus zusammengesetzten Anzeigen kommen direkt aus dem Katalog:
+// in Attributen und Konkatenationen greift die Textknoten-Ersetzung nicht.
+const i18n = require('../i18n');
 const { escapeHtml, statusText } = require('./components');
 const { rowKey } = require('../adapters/state-editor');
 
@@ -107,8 +110,8 @@ function renderStateDialog(instance, editor, { dialogOpen, dialogError, dialogVa
   const fieldOf = (c) => renderColumnField(c, values && Object.prototype.hasOwnProperty.call(values, c.key) ? values[c.key] : c.default);
   const fields = editor.columns.map(fieldOf).join('\n');
   const title = values && dialogOriginalKey
-    ? `Bearbeiten: ${escapeHtml(dialogOriginalKey)}`
-    : `${escapeHtml(editor.label)} anlegen`;
+    ? `${i18n.t('adapter.edit_label', {}, 'Bearbeiten:')} ${escapeHtml(dialogOriginalKey)}`
+    : `${i18n.t('adapter.create_named', { name: escapeHtml(editor.label) })}`;
   return `        <dialog id="stateDialog" class="value-dialog">
           <form id="stateForm" method="POST" action="/adapter/instance/${instance.id}/states/save" class="dialog-form">
             <h3 id="stateDialogTitle">${title}</h3>
@@ -132,7 +135,7 @@ function renderAdapterStates({ adapter, instance, editor, rows = [], message = '
     : '';
 
   const body = `        <h1>${escapeHtml(adapter.name)} – ${escapeHtml(instance.name)}: ${escapeHtml(editor.label)}</h1>
-        <p class="muted" style="margin-bottom:16px;">Adresse: <code>${escapeHtml(adapter.prefix)}://${escapeHtml(instance.name)}/</code> · <a href="/adapter/instance/${instance.id}">Einstellungen</a></p>
+        <p class="muted" style="margin-bottom:16px;"><span>Adresse:</span> <code>${escapeHtml(adapter.prefix)}://${escapeHtml(instance.name)}/</code> · <a href="/adapter/instance/${instance.id}">Einstellungen</a></p>
         ${message ? statusText(message, 'success') : ''}
         ${error ? statusText(error) : ''}
 
@@ -140,7 +143,7 @@ function renderAdapterStates({ adapter, instance, editor, rows = [], message = '
           <div class="settings-card-head" style="display:flex; gap:12px; align-items:center;">
             <h2 style="flex:1;">Angelegte States</h2>
             ${presetsLink}
-            <button type="button" onclick="openStateDialog('add')">${escapeHtml(editor.label)} anlegen</button>
+            <button type="button" onclick="openStateDialog('add')">${i18n.t('adapter.create_named', { name: escapeHtml(editor.label) })}</button>
           </div>
 ${renderRowGroups(editor, rows)}
         </div>
@@ -176,7 +179,7 @@ ${renderStateDialog(instance, editor, { dialogOpen, dialogError, dialogValues, d
         if (!row) return;
         EDITOR_COLS.forEach(function (col) { setField(col, row[col.key]); });
         document.getElementById('originalKey').value = key;
-        title.textContent = 'Bearbeiten: ' + key;
+        title.textContent = 'Bearbeiten:' + ' ' + key;
       } else {
         EDITOR_COLS.forEach(function (col) {
           var el = document.getElementById('col-' + col.key);
@@ -191,7 +194,7 @@ ${renderStateDialog(instance, editor, { dialogOpen, dialogError, dialogValues, d
     function closeStateDialog() { var d = document.getElementById('stateDialog'); if (d) d.close(); }
     function editRow(key) { openStateDialog('edit', key); }
     function deleteRow(key) {
-      if (!confirm('State „' + key + '" löschen?')) return;
+      if (!confirm('State löschen?' + '\n\n' + key)) return;
       document.getElementById('deleteKey').value = key;
       document.getElementById('deleteForm').submit();
     }
@@ -238,13 +241,13 @@ ${renderStateDialog(instance, editor, { dialogOpen, dialogError, dialogValues, d
 function renderAdapterPresets({ adapter, instance, editor, presets = [], hasRows = false, message = '', error = '' } = {}) {
   const list = presets.length
     ? presets.map((p) => `            <div class="adapter-instance-row" style="display:flex; align-items:center; gap:8px; padding:8px 0; border-top:1px solid rgba(0,0,0,0.08);">
-              <span style="flex:1;"><strong>${escapeHtml(p.name)}</strong>${p.device ? ` <span class="muted">(${escapeHtml(p.device)})</span>` : ''}<br><span class="muted" style="font-size:0.85em;">${p.count} Einträge${p.description ? ' · ' + escapeHtml(p.description) : ''}</span></span>
+              <span style="flex:1;"><strong>${escapeHtml(p.name)}</strong>${p.device ? ` <span class="muted">(${escapeHtml(p.device)})</span>` : ''}<br><span class="muted" style="font-size:0.85em;">${i18n.t('adapter.entry_count', { count: p.count })}${p.description ? ' · ' + escapeHtml(p.description) : ''}</span></span>
               <a class="module-toggle-btn" href="/adapter/instance/${instance.id}/presets/${encodeURIComponent(p.file)}">Laden …</a>
             </div>`).join('\n')
     : '            <p class="muted">Keine Presets im Verzeichnis <code>presets/</code> gefunden.</p>';
 
-  const body = `        <h1>${escapeHtml(adapter.name)} – ${escapeHtml(instance.name)}: Presets</h1>
-        <p class="muted" style="margin-bottom:16px;">Presets sind Vorlagen. Beim Laden wählst du, welche Einträge als States in dieser Instanz angelegt werden. · <a href="/adapter/instance/${instance.id}/states">Zurück zu ${escapeHtml(editor.label)}</a></p>
+  const body = `        <h1>${escapeHtml(adapter.name)} – ${escapeHtml(instance.name)}: <span>Presets</span></h1>
+        <p class="muted" style="margin-bottom:16px;">${i18n.t('adapter.presets_hint')} · <a href="/adapter/instance/${instance.id}/states">${i18n.t('adapter.back_to', { name: escapeHtml(editor.label) })}</a></p>
         ${message ? statusText(message, 'success') : ''}
         ${error ? statusText(error) : ''}
 
@@ -352,8 +355,8 @@ ${presetTable(editor, groupEntries)}
       }).join('\n');
   }
 
-  const body = `        <h1>Preset laden: ${escapeHtml(presetName)}</h1>
-        <p class="muted" style="margin-bottom:16px;">Wähle die Einträge, die als States in <code>${escapeHtml(adapter.prefix)}://${escapeHtml(instance.name)}/</code> angelegt werden sollen.</p>
+  const body = `        <h1><span>Preset laden:</span> ${escapeHtml(presetName)}</h1>
+        <p class="muted" style="margin-bottom:16px;">${i18n.t('adapter.choose_entries', { target: `${escapeHtml(adapter.prefix)}://${escapeHtml(instance.name)}/` })}</p>
         ${message ? statusText(message, 'success') : ''}
         ${error ? statusText(error) : ''}
         <form method="POST" action="/adapter/instance/${instance.id}/presets/${encodeURIComponent(file)}/apply">
@@ -367,7 +370,7 @@ ${presetTable(editor, groupEntries)}
               <button type="button" class="module-toggle-btn" onclick="toggleAll(this)">Alle sichtbaren</button>
               <input type="search" id="presetSearch" placeholder="Register suchen …" oninput="filterPresets(this.value)" data-no-state-picker style="flex:1; min-width:160px;">
             </div>
-            <p class="muted" style="font-size:12px; margin:0 0 8px;">${entries.length} Einträge</p>
+            <p class="muted" style="font-size:12px; margin:0 0 8px;">${i18n.t('adapter.entry_count', { count: entries.length })}</p>
 ${listMarkup}
           </div>
         </form>`;

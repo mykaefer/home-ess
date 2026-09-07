@@ -7,6 +7,9 @@
 // views/action-sequences.js, wie beim Heimkino).
 
 const { renderLayout } = require('./layout');
+// Sätze mit eingesetzten Werten laufen über den Katalog: ein zusammengesetzter
+// Textknoten wäre sonst nicht übersetzbar.
+const i18n = require('../i18n');
 const { escapeHtml, statusText } = require('./components');
 const { renderActionSequences } = require('./action-sequences');
 const { PHASES } = require('../heizung/actions');
@@ -49,7 +52,7 @@ function stateLine(room, state) {
   if (!marks.length) marks.push('<span class="condition-enabled is-disabled">Keine Anforderung</span>');
   return `        <p class="hz-state-line">
           <span class="hz-current">${temp(state.temperature)}</span>
-          <span class="muted">Ist (${state.sensorCount || 0} Quelle${state.sensorCount === 1 ? '' : 'n'}) · Soll ${temp(room.targetTemp)}</span>
+          <span class="muted">${i18n.t(state.sensorCount === 1 ? 'heating.room.actual_sources_one' : 'heating.room.actual_sources_many', { count: state.sensorCount || 0 })} · ${i18n.t('heating.room.target_value', { value: temp(room.targetTemp) })}</span>
           ${marks.join(' ')}
           ${state.note ? `<span class="muted">${escapeHtml(state.note)}</span>` : ''}
         </p>`;
@@ -117,7 +120,7 @@ function settingsForm(room, central, hasCoolDevice) {
             <div class="dialog-section-head"><h4>Zentralheizung</h4>
               <label class="remember-row condition-section-toggle"><input type="hidden" name="centralAllowed" value="0"><input type="checkbox" name="centralAllowed" value="1"${centralChecked} onchange="syncHeizungCentral(this)"><span>Dieser Raum darf die Zentralheizung anfordern</span></label>
             </div>
-            <p class="muted condition-section-hint">Maßgeblich ist die <strong>Außentemperatur</strong>: Liegt sie unter der angegebenen Grenze, versorgt die Zentralheizung den Raum <strong>anstelle</strong> des lokalen Heizgerätes; es gilt dieselbe Schalthysterese. Darüber heizt allein das lokale Gerät — ist keines hinterlegt, wird in diesem Bereich bewusst nicht geheizt. Ob der Raum überhaupt Wärme braucht, entscheidet weiterhin seine eigene Temperatur gegen die Soll-Temperatur.${central && central.enabled ? '' : ' <strong>Die Zentralheizung ist derzeit nicht eingerichtet.</strong>'}</p>
+            <p class="muted condition-section-hint"><span>Maßgeblich ist die <strong>Außentemperatur</strong>: Liegt sie unter der angegebenen Grenze, versorgt die Zentralheizung den Raum <strong>anstelle</strong> des lokalen Heizgerätes; es gilt dieselbe Schalthysterese. Darüber heizt allein das lokale Gerät — ist keines hinterlegt, wird in diesem Bereich bewusst nicht geheizt. Ob der Raum überhaupt Wärme braucht, entscheidet weiterhin seine eigene Temperatur gegen die Soll-Temperatur.</span>${central && central.enabled ? '' : ' <strong>Die Zentralheizung ist derzeit nicht eingerichtet.</strong>'}</p>
             <div class="dialog-grid dialog-grid--two">
               <label class="field-block"><span>Zentralheizung ab Außentemperatur unter (°C)</span><input name="centralTemp" type="number" value="${num(room.centralTemp)}" min="${MIN_TEMP}" max="${MAX_TEMP}" step="0.5" data-no-state-picker></label>
               <label class="field-block condition-topic-field"><span>Heizkörperlüfter (optional)</span><span class="field-hint">Wird eingeschaltet, solange dieser Raum Wärme von der Zentralheizung anfordert, und danach wieder aus</span><input name="fanTopic" value="${escapeHtml(room.fanTopic)}" data-state-picker data-state-picker-writable autocomplete="off" placeholder="State auswählen…"></label>
@@ -126,7 +129,7 @@ function settingsForm(room, central, hasCoolDevice) {
           <div class="dialog-section">
             <div class="dialog-section-head"><h4>Klimaanlage</h4></div>
             ${hasCoolDevice ? '' : '<p class="muted condition-section-hint"><strong>Für diesen Raum ist noch kein Kühlgerät eingerichtet</strong> — die Einstellung greift, sobald die Folge „Kühlen ein" Aktionen enthält.</p>'}
-            <p class="muted condition-section-hint">Die Klimaanlage dieses Raums lässt sich über den State <code>${escapeHtml(climateTopic(room))}</code> von Hand übersteuern (0 = Aus, 1 = An, 2 = Automatik). Eine Handschaltung setzt die automatischen Aktionsschleifen aus — die Anlage reagiert dann weder auf einen offenen Kontakt noch auf die Raumtemperatur. Zurück auf Automatik geht sie, sobald der Raum die Soll-Temperatur erreicht — und, wenn hier eine Uhrzeit steht, spätestens zu dieser Zeit. Maßgeblich ist die erste Fälligkeit nach dem Umschalten: wer um 23:00 Uhr auf „An" stellt, dessen Rückkehr um 22:00 Uhr kommt am folgenden Tag.</p>
+            <p class="muted condition-section-hint">${i18n.t('heating.room.climate_override_hint', { topic: escapeHtml(climateTopic(room)) })}</p>
             <div class="dialog-grid dialog-grid--two">
               <label class="field-block"><span>Zurück auf Automatik um (optional)</span><span class="field-hint">Leer = nur beim Erreichen der Soll-Temperatur</span><input name="climateResetTime" type="time" value="${escapeHtml(room.climateResetTime || '')}" data-no-state-picker></label>
             </div>
@@ -175,7 +178,7 @@ function statesBlock(room, stateTopics) {
                 <span class="muted">${entry.writable ? 'beschreibbar' : 'nur lesen'}</span>
               </div>`);
   return `          <div class="adapter-block">
-            <div class="adapter-block-head"><div class="adapter-block-title"><strong>States des Raums</strong><span class="muted">Als Systemwerte unter <code>System / Räume / ${escapeHtml(room.name)}</code> — überall verwendbar: Bedingungen, Dashboard, Wertekatalog.</span></div></div>
+            <div class="adapter-block-head"><div class="adapter-block-title"><strong>States des Raums</strong><span class="muted">${i18n.t('heating.room.system_values_hint', { room: escapeHtml(room.name) })}</span></div></div>
             <div class="adapter-rows">
 ${rows.join('\n')}
             </div>

@@ -287,7 +287,7 @@ function clientScript() {
         var node = document.getElementById('ra-countdown');
         if (!node) return;
         var secs = remainingSeconds();
-        node.textContent = 'Gültig für ' + fmtDuration(secs);
+        node.textContent = 'Gültig für' + ' ' + fmtDuration(secs);
         if (secs <= 0) { node.textContent = 'Gültig für 00:00'; if (!inFlightPoll) pollOnce(); }
       }
 
@@ -621,7 +621,7 @@ function devicesScript() {
       function removeDevice(d) {
         if (!d || !d.deviceId || removing[d.deviceId]) return;
         var name = d.deviceName || 'dieses Gerät';
-        if (!window.confirm('Gerät „' + name + '" wirklich entfernen? Die Kopplung wird über den Relay dauerhaft aufgehoben.')) return;
+        if (!window.confirm('Gerät wirklich entfernen? Die Kopplung wird über den Relay dauerhaft aufgehoben.' + '\n\n' + name)) return;
         removing[d.deviceId] = true;
         delete removeErrors[d.deviceId];
         render(lastView);

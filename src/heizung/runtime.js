@@ -11,8 +11,11 @@
 //   4. Geschaltet wird über **Aktionsfolgen** je Raum (heizung/actions.js), wie
 //      beim Heimkino: Wertzuweisungen, Pausen und Schleifen mit zyklischer
 //      Plausibilitätsprüfung. Je Gerät gibt es eine Folge „ein" und eine „aus";
-//      bei jedem Wechsel läuft die passende einmal ab. Ein Raum hat ein Gerät
-//      genau dann, wenn seine „ein"-Folge Aktionen enthält.
+//      bei jedem Wechsel läuft die passende einmal ab. Maßgeblich ist dabei der
+//      **zuletzt gesendete** Zustand des Gerätes: steht es schon richtig,
+//      bleibt jede weitere Neubewertung folgenlos, und allein die zyklische
+//      Plausibilitätsprüfung einer Schleife wiederholt einen Befehl. Ein Raum
+//      hat ein Gerät genau dann, wenn seine „ein"-Folge Aktionen enthält.
 //   5. Schaltentscheidung mit Offsets und Hysterese:
 //        Wärmebedarf bei Ist < Soll − Heiz-Offset, erfüllt ab Schwelle + Hysterese
 //        Kühlen ein  bei Ist > Soll + Kühl-Offset, aus bei Ist ≤ Schwelle − Hysterese
@@ -119,6 +122,13 @@ const roomState = new Map();
 const published = new Map();
 // Zuletzt geschalteter Heizkörperlüfter (Topic -> { on, at }).
 const commandedFans = new Map();
+// Zuletzt an ein lokales Raumgerät gesendeter Schaltzustand
+// (`<Raum>:<Gerät>` -> true/false). Dieses Gedächtnis ist die einzige Quelle
+// dafür, ob ein Schaltbefehl fällig ist: eine Neubewertung der Regelung — etwa
+// nach einem Levelwechsel der PV-Prognose — darf einem Gerät nicht erneut den
+// Zustand befehlen, in dem es ohnehin schon steht. Wiederholen darf allein die
+// zyklische Plausibilitätsprüfung einer Schleife (siehe checkLoops).
+const commandedDevices = new Map();
 
 // Die Zentralheizung kennt drei getrennte Zustände:
 //   Kessel  – der Schaltzustand der Anlage (das, was homeESS schaltet)
@@ -258,7 +268,27 @@ function forceOff(room, device) {
     if (device === 'heat') state.heating = false;
     else state.cooling = false;
   }
-  runPhase(room, actionsRepo.phaseFor(device, false)).catch(() => {});
+  // Auch hier zählt allein die Abweichung: der Handler ruft bei jedem
+  // Levelwechsel alle gesperrten Verbraucher auf, auch die längst
+  // ausgeschalteten.
+  commandDevice(room, device, false);
+}
+
+function deviceKey(roomId, device) {
+  return `${roomId}:${device}`;
+}
+
+// Ein lokales Raumgerät schalten. Gesendet wird ausschließlich bei Abweichung
+// vom zuletzt gesendeten Zustand; ein noch unbekanntes Gerät gilt als aus,
+// damit ein Neustart für sich genommen keinen Schaltbefehl auslöst.
+function commandDevice(room, device, on) {
+  const key = deviceKey(room.id, device);
+  const last = commandedDevices.get(key) === true;
+  if (last === on) return;
+  // Der Merker wird vor der Folge gesetzt: sie läuft asynchron, und bis zu
+  // ihrem Ende darf kein weiterer Takt denselben Befehl noch einmal auslösen.
+  commandedDevices.set(key, on);
+  runPhase(room, actionsRepo.phaseFor(device, on)).catch(() => {});
 }
 
 // Geräte am Betriebslevel an- bzw. abmelden. Gemeldet wird nur, was es gibt:
@@ -497,7 +527,6 @@ function climateReachedTarget(state, temperature, target) {
 // `outdoor` ist die Außentemperatur (null, wenn unbekannt).
 async function evaluateRoom(room, outdoor, sweep, now) {
   const state = stateFor(room.id);
-  const previous = { heating: state.heating, cooling: state.cooling };
   const cache = bus.getCache();
   const measured = rooms.averageTemperature(cache, sensorsByRoom.get(room.id) || []);
   state.temperature = measured.value;
@@ -611,10 +640,11 @@ async function evaluateRoom(room, outdoor, sweep, now) {
   state.centralDemand = centralDemand;
   state.note = note;
 
-  // Nur ein Wechsel löst eine Folge aus; ein unveränderter Zustand bleibt
-  // folgenlos (die zyklische Prüfung einer Schleife hält ihn nach).
-  if (previous.heating !== heating) runPhase(room, actionsRepo.phaseFor('heat', heating)).catch(() => {});
-  if (previous.cooling !== cooling) runPhase(room, actionsRepo.phaseFor('cool', cooling)).catch(() => {});
+  // Nur eine Abweichung vom zuletzt gesendeten Zustand löst eine Folge aus; ein
+  // unveränderter Zustand bleibt folgenlos (die zyklische Prüfung einer
+  // Schleife hält ihn nach).
+  commandDevice(room, 'heat', heating);
+  commandDevice(room, 'cool', cooling);
   // Der Heizkörperlüfter läuft, solange der Raum Wärme von der Zentralheizung
   // anfordert — ohne Nachlauf: ist die Raumtemperatur erreicht, schließt auch
   // das Thermostatventil, und ob der Brenner noch für einen anderen Raum läuft,
@@ -933,6 +963,7 @@ async function reload() {
     clearSubscriptions();
     clearLevelRegistration(previousRooms);
     roomState.clear();
+    commandedDevices.clear();
     published.clear();
     treesByRoom = new Map();
     loops = [];
@@ -971,6 +1002,13 @@ async function reload() {
   for (const id of [...loopBaselines.keys()]) if (!currentLoopIds.has(id)) loopBaselines.delete(id);
   for (const loop of loops) if (!loopBaselines.has(loop.id)) loopBaselines.set(loop.id, loadedAt);
   for (const id of [...roomState.keys()]) if (!roomList.some((room) => room.id === id)) roomState.delete(id);
+  // Der zuletzt gesendete Gerätezustand überlebt ein Neuladen der
+  // Konfiguration — sonst würde jede Einstellungsänderung die Geräte erneut
+  // schalten. Nur entfernte Räume werden vergessen.
+  for (const key of [...commandedDevices.keys()]) {
+    const roomId = Number(String(key).split(':')[0]);
+    if (!roomList.some((room) => room.id === roomId)) commandedDevices.delete(key);
+  }
   // Nach einem Umbenennen oder Entfernen dürfen die alten Topics nicht als
   // Karteileichen im State-Bus stehen bleiben.
   const liveTopics = new Set();
@@ -1112,6 +1150,7 @@ function stop() {
   loops = [];
   loopBaselines.clear();
   commandedFans.clear();
+  commandedDevices.clear();
   runner.reset();
   boiler = { on: false, offRequestedAt: null, note: '', commandOn: null, commandAt: null };
   pump = { on: false, since: null, stopAt: null };

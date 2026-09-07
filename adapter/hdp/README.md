@@ -65,8 +65,8 @@ Mit der Installation kommt keine Firmware mehr mit. Stattdessen fragt der
 Adapter den **Online-Firmwarekatalog** von homeESS ab
 (`firmwareCatalogUrl`, Vorgabe
 `https://www.homeess.de/wp-json/hdp-firmware/v1/firmware`): beim ersten
-Aktivieren der Instanz, danach täglich und jederzeit über „Jetzt auf neue
-Firmware-Versionen prüfen“ in der Firmwarekachel. Der Katalog nennt je Plattform
+Aktivieren der Instanz, danach genau einmal am Tag und jederzeit über „Jetzt auf
+neue Firmware-Versionen prüfen“ in der Firmwarekachel. Der Katalog nennt je Plattform
 und Branch (development, beta, stable) die neueste Version mit Download-URL,
 Dateiname, Dateigröße, SHA-256, Veröffentlichungszeit und Release Notes; nicht
 belegte Branches kommen als `null` und bleiben leer. Geladen wird nur, wenn der
@@ -75,6 +75,20 @@ ist. Vor der Installation prüft der Adapter Größe und SHA-256 der Datei; erst
 dann wird der Kanal atomar ersetzt. Downloads sind auf HTTPS beim Kataloghost
 beschränkt, und die Geräte greifen nie selbst auf den Katalog zu. Ein leerer
 Wert schaltet den Abruf ab.
+
+**Der automatische Abruf läuft genau einmal am Tag** — zu der Uhrzeit, zu der die
+Instanz den Katalog zum ersten Mal gefragt hat, also beim ersten Abruf nach der
+Neuinstallation. Damit verteilen sich die Instanzen von allein über den Tag. Der
+Plan liegt als `catalog-schedule.json` im Datenverzeichnis der Instanz: Ein
+Neustart des Dienstes, eine geänderte Einstellung und ein Auto-Restart nach einem
+Absturz lösen deshalb **keinen** zusätzlichen Abruf aus. Fehlt ein ganzer
+Kalendertag (der Rechner war zur Uhrzeit aus), wird beim nächsten Start
+nachgeholt. Ein Abruf belegt den Tag auch dann, wenn er fehlschlug — der Knopf in
+der Firmwarekachel prüft davon unabhängig jederzeit sofort.
+
+Einzige Ausnahme ist ein **Update über die interne Updatefunktion**: Ändert sich
+die homeESS-Version, prüft der Adapter beim Start sofort, auch wenn der
+Tagesabruf schon gelaufen ist.
 
 Der Katalog wird in **Schema 1 und 2** gelesen. Schema 2 führt je Eintrag
 `signature`, `signature_algorithm`, `signature_key_id` und `signed_at` sowie

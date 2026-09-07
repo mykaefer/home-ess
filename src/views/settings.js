@@ -248,7 +248,7 @@ ${tabBar}
               <div class="time-source-status" id="timeSourceStatus">
                 <div><span>Lokale Systemzeit</span><strong id="localSystemTime">${escapeHtml(`${i18n.formatDate(clock.local.date)} ${clock.local.time}`)}</strong></div>
                 <div><span>Interne homeESS-Zeit</span><strong id="internalHomeessTime">${escapeHtml(`${i18n.formatDate(clock.internal.date)} ${clock.internal.time}`)}</strong></div>
-                <div><span>MQTT-Abgleich</span><strong id="mqttTimeStatus">${escapeHtml(clock.mqtt.available ? `${clock.mqtt.fresh ? 'aktiv' : 'zuletzt'} · ${clock.mqtt.display} · Versatz ${Number(clock.offsetSeconds).toFixed(2).replace('.', ',')} s` : 'nicht vorhanden · Versatz 0,00 s')}</strong></div>
+                <div><span>MQTT-Abgleich</span><strong id="mqttTimeStatus">${escapeHtml(clock.mqtt.available ? `${clock.mqtt.fresh ? 'aktiv' : 'zuletzt'} · ${clock.mqtt.display} · ${i18n.t('settings.offset', {}, 'Versatz')} ${Number(clock.offsetSeconds).toFixed(2).replace('.', ',')} s` : 'nicht vorhanden · Versatz 0,00 s')}</strong></div>
               </div>
             </section>
 
@@ -385,7 +385,7 @@ ${tabBar}
                 </label>
                 <p class="settings-card-hint">Nur bei https. Ausschalten, wenn der Server ein selbst ausgestelltes Zertifikat verwendet.</p>
               </div>
-              ${dbConfig.sourceLabel ? `<p class="settings-card-hint">Übernommen aus: <strong>${escapeHtml(dbConfig.sourceLabel)}</strong>${dbConfig.updatedAt ? ` am ${escapeHtml(new Date(dbConfig.updatedAt).toLocaleString(locale))}` : ''}. Spätere Änderungen am Adapter wirken hier erst nach einer erneuten Übernahme.</p>` : ''}
+              ${dbConfig.sourceLabel ? `<p class="settings-card-hint">${i18n.t('settings.adopted_from', { source: escapeHtml(dbConfig.sourceLabel) })}${dbConfig.updatedAt ? ` ${i18n.t('settings.adopted_on', { date: escapeHtml(new Date(dbConfig.updatedAt).toLocaleString(locale)) })}` : ''}. Spätere Änderungen am Adapter wirken hier erst nach einer erneuten Übernahme.</p>` : ''}
               <div class="button-row">
                 <button type="submit">Datenbank speichern</button>
                 <button type="button" class="button-secondary" onclick="testDatabase()">Verbindung testen</button>
@@ -521,7 +521,7 @@ ${remote.body}
           if (local) local.textContent = localeDate(status.local.date) + ' ' + status.local.time;
           if (internal) internal.textContent = localeDate(status.internal.date) + ' ' + status.internal.time;
           if (mqtt) mqtt.textContent = status.mqtt.available
-            ? (status.mqtt.fresh ? 'aktiv' : 'zuletzt') + ' · ' + status.mqtt.display + ' · Versatz ' + Number(status.offsetSeconds).toFixed(2).replace('.', ',') + ' s'
+            ? (status.mqtt.fresh ? 'aktiv' : 'zuletzt') + ' · ' + status.mqtt.display + ' · ' + 'Versatz' + ' ' + Number(status.offsetSeconds).toFixed(2).replace('.', ',') + ' s'
             : 'nicht vorhanden · Versatz 0,00 s';
         }).catch(function () {});
     }
@@ -715,7 +715,7 @@ ${remote.body}
         var data = await response.json();
         result.textContent = data.message || 'Unbekanntes Ergebnis.';
       } catch (error) {
-        result.textContent = 'Fehler: ' + error.message;
+        result.textContent = 'Fehler:' + ' ' + error.message;
       }
     }
 

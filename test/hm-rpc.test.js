@@ -790,3 +790,124 @@ test('HM-RPC wiederholt einen unbestätigten Steuerbefehl nach der Karenzzeit', 
   }
   assert.equal(setValues(), 2, 'ein bestätigter Wert löst keinen erneuten Steuerbefehl aus');
 });
+
+test('HM-RPC hält die Verbindung, wenn ein einzelner Schnittstellen-Ping in sein Zeitlimit läuft', async (t) => {
+  // Der Schnittstellenprozess der CCU arbeitet Aufrufe seriell ab und ist
+  // regelmäßig einige Sekunden mit einem Funkbefehl an ein stummes Gerät
+  // beschäftigt – in dieser Zeit beantwortet er gar nichts. Ein einzelner
+  // ausgefallener Ping darf deshalb nicht als Verbindungsabbruch gelten: sonst
+  // verwirft der Adapter bis zum nächsten Prüfintervall jeden Schaltbefehl.
+  let stall = false;
+  const ccu = http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => {
+      const request = xmlrpc.parseCall(Buffer.concat(chunks).toString('utf8'));
+      let result = '';
+      if (request.method === 'listDevices') result = [
+        { ADDRESS: 'ABC', TYPE: 'SWITCH', NAME: 'Lampe' },
+        { ADDRESS: 'ABC:1', TYPE: 'SWITCH_TRANSMITTER', PARENT: 'ABC', NAME: 'Kanal 1', PARAMSETS: ['VALUES'] },
+      ];
+      if (request.method === 'getParamsetDescription') result = { STATE: { TYPE: 'BOOL', OPERATIONS: 7 } };
+      if (request.method === 'getParamset') result = { STATE: false };
+      // Die beschäftigte CCU lässt den Ping unbeantwortet liegen.
+      if (stall && request.method === 'system.listMethods') return;
+      res.writeHead(200, { 'Content-Type': 'text/xml' });
+      res.end(xmlrpc.methodResponse(result));
+    });
+  });
+  const port = await listen(ccu);
+  t.after(() => new Promise((resolve) => ccu.close(resolve)));
+
+  const statuses = [];
+  const adapter = createAdapter({
+    name: 'test',
+    setStates() {}, setStorage() {}, publishState() {}, publishStates() {},
+    setConnected(connected) { statuses.push(connected); }, log() {}, error() {},
+  });
+  await adapter.start({ host: '127.0.0.1', port, callbackHost: '127.0.0.1', reconnectInterval: 3600 });
+  t.after(() => adapter.stop());
+  assert.equal(statuses.at(-1), true, 'nach dem Start verbunden');
+
+  // Zwei stumme Prüfläufe hintereinander – die Verbindung muss stehen bleiben.
+  stall = true;
+  await adapter._test.maintainConnection(500);
+  await adapter._test.maintainConnection(500);
+  assert.equal(statuses.at(-1), true, 'einzelne Ping-Ausfälle trennen die Verbindung nicht');
+});
+
+test('HM-RPC verwirft einen Schaltbefehl nicht, nur weil der Verbindungsmerker auf getrennt steht', async (t) => {
+  // Kern des Fehlers „Licht lässt sich sporadisch nicht schalten": Stand der
+  // Merker nach einer Zeitüberschreitung auf getrennt, wies der Adapter jeden
+  // Steuerbefehl ab – auch wenn die CCU längst wieder antwortete. Der Befehl
+  // muss stattdessen durchgehen und die Verbindung dabei wiederherstellen.
+  const setValues = [];
+  const ccu = http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => {
+      const request = xmlrpc.parseCall(Buffer.concat(chunks).toString('utf8'));
+      let result = '';
+      if (request.method === 'listDevices') result = [
+        { ADDRESS: 'ABC', TYPE: 'SWITCH', NAME: 'Lampe' },
+        { ADDRESS: 'ABC:1', TYPE: 'SWITCH_TRANSMITTER', PARENT: 'ABC', NAME: 'Kanal 1', PARAMSETS: ['VALUES'] },
+      ];
+      if (request.method === 'getParamsetDescription') result = { STATE: { TYPE: 'BOOL', OPERATIONS: 7 } };
+      if (request.method === 'getParamset') result = { STATE: false };
+      if (request.method === 'setValue') setValues.push(request.params);
+      res.writeHead(200, { 'Content-Type': 'text/xml' });
+      res.end(xmlrpc.methodResponse(result));
+    });
+  });
+  const port = await listen(ccu);
+  t.after(() => new Promise((resolve) => ccu.close(resolve)));
+
+  const statuses = [];
+  const adapter = createAdapter({
+    name: 'test',
+    setStates() {}, setStorage() {}, publishState() {}, publishStates() {},
+    setConnected(connected) { statuses.push(connected); }, log() {}, error() {},
+  });
+  await adapter.start({ host: '127.0.0.1', port, callbackHost: '127.0.0.1', reconnectInterval: 3600 });
+  t.after(() => adapter.stop());
+
+  // Merker künstlich auf „getrennt" setzen, CCU bleibt erreichbar.
+  adapter._test.forceDisconnected();
+  await adapter.write('ABC%3A1/STATE', true);
+  assert.equal(setValues.length, 1, 'der Steuerbefehl geht trotz „getrennt" an die CCU');
+  assert.deepEqual(setValues[0], ['ABC:1', 'STATE', true]);
+});
+
+test('HM-RPC weist einen Schaltbefehl ab, wenn die CCU wirklich nicht erreichbar ist', async (t) => {
+  const ccu = http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => {
+      const request = xmlrpc.parseCall(Buffer.concat(chunks).toString('utf8'));
+      let result = '';
+      if (request.method === 'listDevices') result = [
+        { ADDRESS: 'ABC', TYPE: 'SWITCH', NAME: 'Lampe' },
+        { ADDRESS: 'ABC:1', TYPE: 'SWITCH_TRANSMITTER', PARENT: 'ABC', NAME: 'Kanal 1', PARAMSETS: ['VALUES'] },
+      ];
+      if (request.method === 'getParamsetDescription') result = { STATE: { TYPE: 'BOOL', OPERATIONS: 7 } };
+      if (request.method === 'getParamset') result = { STATE: false };
+      res.writeHead(200, { 'Content-Type': 'text/xml' });
+      res.end(xmlrpc.methodResponse(result));
+    });
+  });
+  const port = await listen(ccu);
+
+  const errors = [];
+  const adapter = createAdapter({
+    name: 'test',
+    setStates() {}, setStorage() {}, publishState() {}, publishStates() {},
+    setConnected() {}, log() {}, error(message) { errors.push(message); },
+  });
+  await adapter.start({ host: '127.0.0.1', port, callbackHost: '127.0.0.1', reconnectInterval: 3600 });
+  t.after(() => adapter.stop());
+
+  await new Promise((resolve) => ccu.close(resolve));
+  adapter._test.forceDisconnected();
+  await adapter.write('ABC%3A1/STATE', true);
+  assert.match(errors.at(-1), /nicht erreichbar/, 'ohne erreichbare CCU wird der Befehl mit klarer Meldung verworfen');
+});

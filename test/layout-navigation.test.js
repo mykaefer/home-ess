@@ -57,3 +57,34 @@ test('Module und ihre Menüeinträge stehen alphanumerisch aufsteigend', async (
   for (const key of ['wallbox', 'heimkino', 'pool']) await modules.setEnabled(db, key, false);
   await new Promise((resolve) => db.close(resolve));
 });
+
+// Die mobile Tab-Bar führt die fünf Einstiegsseiten. Stromverbrauch und
+// Photovoltaik sind nicht dabei — sie hängen an der Energieseite, die sich auf
+// ihren Unterseiten mitmarkiert.
+test('Mobile Tab-Bar führt Dashboard, Energie, Prognose, Messen und Wetter', () => {
+  const html = renderLayout({ title: 'Navigation', activePath: '/dashboard', body: '<p>Test</p>' });
+  const tabbar = html.slice(html.indexOf('<nav class="mobile-tabbar"'), html.indexOf('</nav>', html.indexOf('<nav class="mobile-tabbar"')));
+  const paths = [...tabbar.matchAll(/class="mobile-tab[^"]*" href="([^"]+)"/g)].map((match) => match[1]);
+  assert.deepEqual(paths, ['/dashboard', '/energie', '/prognose', '/messen-schalten', '/wetter']);
+});
+
+test('Der Energie-Tab bleibt auf Stromverbrauch und Photovoltaik markiert', () => {
+  for (const activePath of ['/energie', '/stromverbrauch', '/photovoltaik', '/batterie']) {
+    const html = renderLayout({ title: 'Navigation', activePath, body: '<p>Test</p>' });
+    assert.match(html, /class="mobile-tab active" href="\/energie"/, `Energie-Tab fehlt auf ${activePath}`);
+  }
+  // Unterseiten markieren ihren Hauptpunkt ebenfalls.
+  const energiefluss = renderLayout({ title: 'Navigation', activePath: '/messen-schalten/energiefluss', body: '<p>Test</p>' });
+  assert.match(energiefluss, /class="mobile-tab active" href="\/messen-schalten"/);
+});
+
+// Die Energie-Übersicht darf auf dem Telefon nicht breiter werden als der
+// Bildschirm: die Mindestbreite aus dem 720px-Layer wird zurückgenommen.
+test('Die Übersichtstabelle der Energieseite bricht mobil um statt zu scrollen', () => {
+  const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'styles.css'), 'utf8');
+  const reset = css.search(/\.energie-overview--flat \.energy-overview-head,\s*\.energie-overview--flat \.energy-overview-row \{[^}]*min-width:\s*0;/s);
+  const scrollWidth = css.search(/\.energie-overview--flat \.energy-overview-head,\s*\.energie-overview--flat \.energy-overview-row \{[^}]*min-width:\s*620px;/s);
+  assert.ok(reset >= 0, 'Die Mindestbreite muss im Mobil-Layer zurückgenommen werden');
+  assert.ok(scrollWidth >= 0 && scrollWidth < reset, 'Die Rücknahme muss hinter der Regel des 720px-Layers stehen');
+  assert.match(css.slice(reset), /\.energie-overview--flat \.energy-overview-row \{[^}]*grid-template-columns:\s*repeat\(2,/s);
+});

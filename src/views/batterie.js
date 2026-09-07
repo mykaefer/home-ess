@@ -3,7 +3,7 @@
 const { renderLayout } = require('./layout');
 const { escapeHtml, statusText } = require('./components');
 const { BATTERY_PRESETS } = require('../batterie/config');
-function brokerValue(id, value) { return `<span class="topic-current">Broker: <strong id="${id}">${escapeHtml(value == null ? '—' : value)}</strong></span>`; }
+function brokerValue(id, value) { return `<span class="topic-current"><span>Broker:</span> <strong id="${id}">${escapeHtml(value == null ? '—' : value)}</strong></span>`; }
 
 function renderBatterie({
   config = { socTopic: '', powerTopic: '', voltageTopic: '', temperaturTopic: '', minSocTopic: '', remoteTopic: '', minSoc: 20, capacityAh: 200, batteryType: 'lifepo4', cellCount: 16, lowerVoltage: 44.8, upperVoltage: 55.2, chargeEfficiency: 95, dischargeEfficiency: 95 },
@@ -36,7 +36,7 @@ function renderBatterie({
     kpiCards.push(`
           <div class="kpi-card kpi-card--bat">
             <div class="kpi-label">Leistung</div>
-            <div class="kpi-value" id="kpi-power">${escapeHtml(fmtPower.text)}</div>
+            <div class="kpi-value" id="kpi-power">${fmtPower.label ? `<span>${escapeHtml(fmtPower.label)}</span> ` : ''}${escapeHtml(fmtPower.text)}</div>
           </div>`);
   }
   if (hasVoltage) {
@@ -211,8 +211,10 @@ function renderBatterie({
       if (val == null || val === '') return { text: '— W', color: BAT_STANDBY_COLOR };
       var n = parseFloat(val);
       if (!isFinite(n)) return { text: '— W', color: BAT_STANDBY_COLOR };
-      if (n > 0)  return { text: 'Laden · '    + n.toFixed(0) + ' W', color: BAT_CHARGING_COLOR };
-      if (n < 0)  return { text: 'Entladen · ' + Math.abs(n).toFixed(0) + ' W', color: BAT_DISCHARGING_COLOR };
+      // Die Beschriftung steht bewusst als eigenes Stringliteral: nur so ersetzt
+      // sie der Übersetzungskatalog (zusammengesetzt bliebe sie deutsch).
+      if (n > 0)  return { text: 'Laden'    + ' · ' + n.toFixed(0) + ' W', color: BAT_CHARGING_COLOR };
+      if (n < 0)  return { text: 'Entladen' + ' · ' + Math.abs(n).toFixed(0) + ' W', color: BAT_DISCHARGING_COLOR };
       return { text: 'Bereit · 0 W', color: BAT_STANDBY_COLOR };
     }
 
@@ -271,13 +273,16 @@ function renderBatterie({
   return renderLayout({ title: 'Batterie', activePath: '/batterie', body, script });
 }
 
+// `label` trägt die übersetzbare Beschriftung, `text` den Rest. Beides getrennt,
+// weil der Übersetzungskatalog nur vollständige Textknoten ersetzt und die
+// Leistung darin variabel ist.
 function formatPower(raw) {
-  if (raw == null) return { text: '— W', color: null };
+  if (raw == null) return { label: '', text: '— W', color: null };
   const n = parseFloat(raw);
-  if (!isFinite(n)) return { text: '— W', color: null };
-  if (n > 0) return { text: `Laden · ${n.toFixed(0)} W`, color: null };
-  if (n < 0) return { text: `Entladen · ${Math.abs(n).toFixed(0)} W`, color: null };
-  return { text: 'Bereit · 0 W', color: null };
+  if (!isFinite(n)) return { label: '', text: '— W', color: null };
+  if (n > 0) return { label: 'Laden', text: `· ${n.toFixed(0)} W`, color: null };
+  if (n < 0) return { label: 'Entladen', text: `· ${Math.abs(n).toFixed(0)} W`, color: null };
+  return { label: '', text: 'Bereit · 0 W', color: null };
 }
 
 function socBarColor(pct) {

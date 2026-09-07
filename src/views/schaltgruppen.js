@@ -9,6 +9,9 @@
 // Toggle schaltet alle Geräte der Gruppe gemeinsam.
 
 const { renderLayout } = require('./layout');
+// Beschriftungen zusammengesetzter Anzeigen kommen aus dem Katalog: ein
+// gemischter Textknoten wäre sonst nicht übersetzbar.
+const i18n = require('../i18n');
 const { escapeHtml, statusText } = require('./components');
 
 function statusDotClass(statusOn) {
@@ -45,7 +48,7 @@ function renderGroupCard(group) {
     ? `<span class="sg-badge sg-badge--remote" title="Remote-Topic: ${escapeHtml(group.remoteTopic)}">Remote</span>`
     : '';
   const timerBadge = group.timerMinutes > 0
-    ? `<span class="sg-badge" title="Schaltet die ganze Gruppe nach ${escapeHtml(group.timerMinutes)} Minuten aus">Timer ${escapeHtml(group.timerMinutes)} min</span>`
+    ? `<span class="sg-badge" title="Schaltet die ganze Gruppe nach ${escapeHtml(group.timerMinutes)} Minuten aus">${i18n.t('switch.timer_minutes', { minutes: escapeHtml(group.timerMinutes) })}</span>`
     : '';
   return `          <div class="sg-group" data-group-id="${group.id}">
             <div class="sg-group-head">
@@ -331,7 +334,7 @@ ${groupBlocks}
           var btn = document.createElement('button');
           btn.type = 'button';
           btn.className = 'sg-picker-item';
-          btn.textContent = nameEl ? nameEl.textContent : ('Gerät ' + id);
+          btn.textContent = nameEl ? nameEl.textContent : ('Gerät' + ' ' + id);
           btn.onclick = function () { addDeviceToGroup(id); };
           list.appendChild(btn);
         })(rows[i]);

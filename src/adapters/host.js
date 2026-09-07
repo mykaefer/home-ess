@@ -18,6 +18,7 @@ const secretStore = require('./secrets');
 const dataStore = require('./data-store');
 const crypto = require('crypto');
 const i18n = require('../i18n');
+const pkg = require('../../package.json');
 
 const RUNTIME_PATH = path.join(__dirname, 'runtime.js');
 const RESTART_BASE_MS = 1000;
@@ -57,6 +58,11 @@ async function handleHostCall(entry, msg) {
       reply.result = {
         instanceId: `homeess-${identity.fingerprintHex.slice(0, 32)}`,
         fingerprint: identity.fingerprintHex,
+        // Die laufende homeESS-Version. Adapter erkennen daran ein Update über
+        // die interne Updatefunktion und unterscheiden es von einem gewöhnlichen
+        // Neustart — etwa um eine sonst nur tägliche Onlineprüfung sofort
+        // nachzuholen.
+        hostVersion: String(pkg.version || ''),
       };
     } else if (msg.method === 'secret.get') {
       reply.result = secretStore.get(entry.instance.id, msg.key);

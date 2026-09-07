@@ -776,6 +776,65 @@ test('Das Betriebslevel sperrt die lokalen Geräte nach ihrer Priorität', async
   }
 });
 
+test('Ein Gerät bekommt seinen Zustand nur bei Abweichung befohlen', async () => {
+  const db = await freshDb();
+  const room = await rooms.createRoom(db, {
+    ...baseRoom, heatPriority: '4', coolPriority: '4',
+  });
+  const sensor = await rooms.addSensor(db, room.id, { topic: 'hdp://sensor/1' });
+  await addSwitchSequences(db, room.id, 'heat', 'custom://Klima');
+  const capture = captureWrites();
+  try {
+    await runtime.init(db);
+    feed(rooms.sensorCacheKey(sensor), 19);
+    levelHandler.applyLevel(5);
+    await runtime.tick();
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    assert.equal(runtime.snapshot().get(room.id).heating, true);
+    assert.equal(capture.writes.filter((write) => write.topic === 'custom://Klima').length, 1);
+
+    // Weitere Takte bei unverändertem Zustand bleiben stumm — auch wenn die
+    // Regelung dabei jedes Mal neu zu demselben Ergebnis kommt.
+    capture.writes.length = 0;
+    await runtime.tick();
+    await runtime.tick();
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    assert.equal(capture.writes.filter((write) => write.topic === 'custom://Klima').length, 0);
+
+    // Levelabfall schaltet einmal ab.
+    levelHandler.applyLevel(3);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    assert.equal(capture.writes.filter((write) => write.topic === 'custom://Klima').length, 1);
+    assert.equal(lastWrite(capture.writes, 'custom://Klima'), 0);
+
+    // Jede weitere Neubewertung des Levels trifft ein längst ausgeschaltetes
+    // Gerät: sie darf den Aus-Befehl nicht wiederholen.
+    capture.writes.length = 0;
+    levelHandler.applyLevel(2);
+    levelHandler.applyLevel(1);
+    levelHandler.applyLevel(3);
+    await runtime.tick();
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    assert.equal(capture.writes.filter((write) => write.topic === 'custom://Klima').length, 0);
+
+    // Ein Neuladen der Konfiguration ist keine Zustandsänderung.
+    levelHandler.applyLevel(5);
+    await runtime.tick();
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    capture.writes.length = 0;
+    await runtime.reload();
+    await runtime.tick();
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    assert.equal(runtime.snapshot().get(room.id).heating, true);
+    assert.equal(capture.writes.filter((write) => write.topic === 'custom://Klima').length, 0);
+  } finally {
+    levelHandler.applyLevel(5);
+    runtime.stop();
+    capture.restore();
+    await close(db);
+  }
+});
+
 test('Ersatzweise heizt die Zentralheizung, wenn das Level das Gerät sperrt', async () => {
   const db = await freshDb();
   await central.saveCentralConfig(db, {

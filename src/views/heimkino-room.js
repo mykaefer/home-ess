@@ -33,14 +33,14 @@ function renderHeimkinoRoom({ room = null, tree = { on: [], off: [] }, actions =
   const body = `        <div class="panel-head">
           <div>
             <h1>${escapeHtml(room ? room.name : 'Raum')}</h1>
-            <p class="muted">Kinomodus-State: <code>${escapeHtml(room ? room.stateTopic : '')}</code>${room && room.remoteTopic ? ` · Sync-Topic: <code>${escapeHtml(room.remoteTopic)}</code>` : ''}</p>
+            <p class="muted"><span>Kinomodus-State:</span> <code>${escapeHtml(room ? room.stateTopic : '')}</code>${room && room.remoteTopic ? ` · <span>Sync-Topic:</span> <code>${escapeHtml(room.remoteTopic)}</code>` : ''}</p>
           </div>
           <div class="dashboard-toolbar">
             <a class="secondary-button" href="/heimkino">Zurück zur Übersicht</a>
             <form action="/heimkino/rooms/${roomId}/state" method="POST" class="hk-inline-form">
               <input type="hidden" name="redirect" value="room">
               <input type="hidden" name="on" value="${toggleTarget}">
-              <button type="submit" class="secondary-button">Kinomodus ${room && room.cinemaOn ? 'ausschalten' : 'einschalten'}</button>
+              <button type="submit" class="secondary-button">${room && room.cinemaOn ? 'Kinomodus ausschalten' : 'Kinomodus einschalten'}</button>
             </form>
           </div>
         </div>

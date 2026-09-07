@@ -1,6 +1,8 @@
 'use strict';
 
 const { renderLayout } = require('./layout');
+// Beschriftungen neben eingesetzten Werten laufen über den Katalog.
+const i18n = require('../i18n');
 const { escapeHtml, statusText } = require('./components');
 const { currentAccess } = require('../auth/access');
 
@@ -391,10 +393,10 @@ ${fields}
     : '          <div class="info-card"><p class="muted">Dieser Adapter stellt keine Einstellungen bereit.</p></div>';
 
   const editorLink = adapter.stateEditor
-    ? ` · <a href="/adapter/instance/${instance.id}/states">${escapeHtml(adapter.stateEditor.label)} verwalten</a>`
+    ? ` · <a href="/adapter/instance/${instance.id}/states">${i18n.t('adapter.manage_named', { name: escapeHtml(adapter.stateEditor.label) })}</a>`
     : '';
   const tasmotaLink = adapter.devicePage
-    ? ` · <a href="/adapter/instance/${instance.id}/devices">${escapeHtml(adapter.devicePage.label)} ansehen</a>`
+    ? ` · <a href="/adapter/instance/${instance.id}/devices">${i18n.t('adapter.view_named', { name: escapeHtml(adapter.devicePage.label) })}</a>`
     : adapter.id === 'tasmota'
     ? ` · <a href="/adapter/instance/${instance.id}/tasmota-devices">Geräte ansehen</a>`
     : '';
@@ -402,7 +404,7 @@ ${fields}
     ? ` · <a href="/adapter/instance/${instance.id}/manage">${escapeHtml(adapter.managementPage.label)}</a>`
     : '';
   const body = `        <h1>${escapeHtml(adapter.name)} – ${escapeHtml(instance.name)}</h1>
-        <p class="muted" style="margin-bottom:16px;">Adresse: <code>${escapeHtml(adapter.prefix)}://${escapeHtml(instance.name)}/</code>${editorLink}${tasmotaLink}${managementLink}</p>
+        <p class="muted" style="margin-bottom:16px;"><span>Adresse:</span> <code>${escapeHtml(adapter.prefix)}://${escapeHtml(instance.name)}/</code>${editorLink}${tasmotaLink}${managementLink}</p>
         ${message ? statusText(message, 'success') : ''}
         ${error ? statusText(error) : ''}
         ${hints.map((hint) => `<p class="muted">${escapeHtml(hint)}</p>`).join('')}

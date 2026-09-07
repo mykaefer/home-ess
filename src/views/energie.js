@@ -1,6 +1,8 @@
 'use strict';
 
 const { renderLayout } = require('./layout');
+// Sätze mit eingesetzten Werten laufen über den Katalog.
+const i18n = require('../i18n');
 const { escapeHtml } = require('./components');
 const { currentAccess, canSeePage } = require('../auth/access');
 
@@ -9,11 +11,17 @@ const { currentAccess, canSeePage } = require('../auth/access');
 // dient als Einstieg in diese Seiten. Angezeigt wird nur, was der angemeldete
 // Benutzer auch aufrufen darf.
 
+// `subvalue` ist entweder reiner Text oder ein Paar { label, value }. Beim Paar
+// steht die Beschriftung in einem eigenen Element: nur dann bildet sie einen
+// vollständigen Textknoten, den der Übersetzungskatalog ersetzen kann. Der
+// Live-Abgleich schreibt anschließend allein den Wert (subId).
 function kpiCard(label, value, id, variant = '', subvalue = null, subId = '') {
   const cls = variant ? ` kpi-card--${variant}` : '';
   const sub = subvalue == null
     ? ''
-    : `\n            <div class="kpi-subvalue"${subId ? ` id="${subId}"` : ''}>${escapeHtml(subvalue)}</div>`;
+    : (typeof subvalue === 'object'
+      ? `\n            <div class="kpi-subvalue"><span class="kpi-sub-label">${escapeHtml(subvalue.label)}</span> <span${subId ? ` id="${subId}"` : ''}>${escapeHtml(subvalue.value)}</span></div>`
+      : `\n            <div class="kpi-subvalue"${subId ? ` id="${subId}"` : ''}>${escapeHtml(subvalue)}</div>`);
   return `          <div class="kpi-card${cls}">
             <div class="kpi-label">${escapeHtml(label)}</div>
             <div class="kpi-value" id="${id}">${escapeHtml(value)}</div>${sub}
@@ -35,13 +43,13 @@ function renderPhotovoltaikSection(pv) {
   const totals = pv.formatted;
   return `      <section class="panel-card energie-section">
 ${sectionHead('Photovoltaik', '/photovoltaik', pv.plantCount
-    ? `${pv.plantCount} ${pv.plantCount === 1 ? 'Anlage' : 'Anlagen'} – Leistung und Ertrag.`
+    ? i18n.t(pv.plantCount === 1 ? 'pv.plant_count_hint_one' : 'pv.plants_count_hint', { count: pv.plantCount })
     : 'Noch keine PV-Anlage angelegt.')}
         <div class="kpi-row">
 ${kpiCard('Aktuelle Leistung', totals.current, 'en-pv-current', 'pv')}
 ${kpiCard('Ertrag heute', totals.today, 'en-pv-today', 'pv')}
 ${kpiCard('Ertrag diese Woche', totals.week, 'en-pv-week', 'pv')}
-${kpiCard('Ertrag dieses Jahr', totals.year, 'en-pv-year', 'pv', `Vorjahr: ${totals.previousYear}`, 'en-pv-previous-year')}
+${kpiCard('Ertrag dieses Jahr', totals.year, 'en-pv-year', 'pv', { label: 'Vorjahr:', value: totals.previousYear }, 'en-pv-previous-year')}
         </div>
       </section>`;
 }
@@ -88,10 +96,10 @@ function renderBatterieSection(batterie) {
   const f = batterie.formatted;
   const socPct = batterie.socPercent == null ? 0 : batterie.socPercent;
   const cards = `        <div class="kpi-row">
-${kpiCard('Ladezustand (SoC)', f.soc, 'en-bat-soc', 'bat', `Mindestens: ${f.minSoc}`, 'en-bat-min-soc')}
+${kpiCard('Ladezustand (SoC)', f.soc, 'en-bat-soc', 'bat', { label: 'Mindestens:', value: f.minSoc }, 'en-bat-min-soc')}
 ${kpiCard('Leistung', f.power, 'en-bat-power', 'bat')}
-${kpiCard('Nutzbare Energie', f.usable, 'en-bat-usable', 'bat', `Kapazität: ${f.capacity}`, 'en-bat-capacity')}
-${kpiCard('Spannung', f.voltage, 'en-bat-voltage', 'bat', `Temperatur: ${f.temperatur}`, 'en-bat-temperatur')}
+${kpiCard('Nutzbare Energie', f.usable, 'en-bat-usable', 'bat', { label: 'Kapazität:', value: f.capacity }, 'en-bat-capacity')}
+${kpiCard('Spannung', f.voltage, 'en-bat-voltage', 'bat', { label: 'Temperatur:', value: f.temperatur }, 'en-bat-temperatur')}
         </div>
         <div class="soc-bar-wrap">
           <div class="soc-bar-track">
@@ -129,7 +137,7 @@ ${head}
 ${kpiCard('PV heute noch', f.pvRest, 'en-prog-pv', 'pv')}
 ${kpiCard('Verbrauch heute noch', f.loadRest, 'en-prog-load', 'self')}
 ${kpiCard('Netzbedarf heute', f.gridRest, 'en-prog-grid', 'grid')}
-${kpiCard('SoC Tagesende', f.socEnd, 'en-prog-soc-end', 'bat', `Heute autark: ${autark}`, 'en-prog-autark')}
+${kpiCard('SoC Tagesende', f.socEnd, 'en-prog-soc-end', 'bat', { label: 'Heute autark:', value: autark }, 'en-prog-autark')}
         </div>
       </section>`;
 }
@@ -187,7 +195,7 @@ ${sections.length ? sections.join('\n') : '        <div class="info-card"><p cla
         setText('en-pv-today', pv.today);
         setText('en-pv-week', pv.week);
         setText('en-pv-year', pv.year);
-        setText('en-pv-previous-year', 'Vorjahr: ' + pv.previousYear);
+        setText('en-pv-previous-year', pv.previousYear);
       }
       var strom = data.strom ? data.strom.formatted : null;
       if (strom) {
@@ -203,12 +211,12 @@ ${sections.length ? sections.join('\n') : '        <div class="info-card"><p cla
       var bat = data.batterie;
       if (bat) {
         setText('en-bat-soc', bat.formatted.soc);
-        setText('en-bat-min-soc', 'Mindestens: ' + bat.formatted.minSoc);
+        setText('en-bat-min-soc', bat.formatted.minSoc);
         setText('en-bat-power', bat.formatted.power);
         setText('en-bat-usable', bat.formatted.usable);
-        setText('en-bat-capacity', 'Kapazität: ' + bat.formatted.capacity);
+        setText('en-bat-capacity', bat.formatted.capacity);
         setText('en-bat-voltage', bat.formatted.voltage);
-        setText('en-bat-temperatur', 'Temperatur: ' + bat.formatted.temperatur);
+        setText('en-bat-temperatur', bat.formatted.temperatur);
         var bar = document.getElementById('en-bat-soc-bar');
         if (bar) bar.style.width = (bat.socPercent == null ? 0 : bat.socPercent).toFixed(1) + '%';
       }
@@ -222,7 +230,7 @@ ${sections.length ? sections.join('\n') : '        <div class="info-card"><p cla
         setText('en-prog-load', prog.formatted.loadRest);
         setText('en-prog-grid', prog.formatted.gridRest);
         setText('en-prog-soc-end', prog.formatted.socEnd);
-        setText('en-prog-autark', 'Heute autark: ' + (prog.autark == null ? '—' : (prog.autark ? 'Ja' : 'Nein')));
+        setText('en-prog-autark', prog.autark == null ? '—' : (prog.autark ? 'Ja' : 'Nein'));
       }
       var gc = data.gridControl && data.gridControl.state;
       if (gc) {

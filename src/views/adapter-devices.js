@@ -1,6 +1,9 @@
 'use strict';
 
 const { renderLayout } = require('./layout');
+// Beschriftungen aus zusammengesetzten Anzeigen kommen direkt aus dem Katalog:
+// in Attributen und Konkatenationen greift die Textknoten-Ersetzung nicht.
+const i18n = require('../i18n');
 const { escapeHtml, statusText } = require('./components');
 
 function renderStates(states) {
@@ -24,12 +27,12 @@ function renderDevice(instance, device) {
 ${renderStates(channel.states || [])}
               </div>`).join('');
   return `          <details class="state-cat" data-device-key="${instance.id}:${escapeHtml(device.address)}">
-            <summary><span class="state-cat-name">${escapeHtml(title)}</span><span class="state-cat-count">${device.online === false ? 'Offline · ' : ''}${escapeHtml(device.address)}</span></summary>
+            <summary><span class="state-cat-name">${escapeHtml(title)}</span><span class="state-cat-count">${device.online === false ? `${i18n.t('adapter.offline_dot', {}, 'Offline ·')} ` : ''}${escapeHtml(device.address)}</span></summary>
             <div style="padding:12px;">
               <div style="display:flex; gap:12px; align-items:center; margin-bottom:10px; flex-wrap:wrap;">
                 <span class="adapter-badge adapter-badge--${device.online === false ? 'off' : 'on'}">${device.online === false ? 'Offline' : 'Online'}</span>
-                <span class="muted">Typ: ${escapeHtml(device.type || '—')}</span>
-                <span class="muted">Generation: ${escapeHtml(device.generation || '—')}</span>
+                <span class="muted"><span>Typ:</span> ${escapeHtml(device.type || '—')}</span>
+                <span class="muted"><span>Generation:</span> ${escapeHtml(device.generation || '—')}</span>
                 <form method="POST" action="/adapter/instance/${instance.id}/devices/rename" style="display:flex; gap:6px; align-items:center; margin-left:auto;">
                   <input type="hidden" name="address" value="${escapeHtml(device.address)}">
                   <input type="text" name="name" value="${escapeHtml(device.customName || '')}" placeholder="Eigener Gerätename" aria-label="Gerätename" style="min-width:180px;">
@@ -42,7 +45,7 @@ ${renderStates(channel.states || [])}
 
 module.exports = function renderAdapterDevices({ adapter, instance, devices = [], message = '', error = '' }) {
   const body = `        <h1>${escapeHtml(adapter.name)} – ${escapeHtml(instance.name)}: ${escapeHtml(adapter.devicePage.label)}</h1>
-        <p class="muted" style="margin-bottom:16px;">Adresse: <code>${escapeHtml(adapter.prefix)}://${escapeHtml(instance.name)}/&lt;gerät&gt;/...</code> · <a href="/adapter/instance/${instance.id}">Einstellungen</a></p>
+        <p class="muted" style="margin-bottom:16px;"><span>Adresse:</span> <code>${escapeHtml(adapter.prefix)}://${escapeHtml(instance.name)}/&lt;gerät&gt;/...</code> · <a href="/adapter/instance/${instance.id}">Einstellungen</a></p>
         <p class="muted" style="margin-bottom:16px;">Eigene Namen ändern nur die sortierten State-Kategorien; technische Adressen bleiben stabil.</p>
         ${message ? statusText(message, 'success') : ''}${error ? statusText(error) : ''}
         <div class="settings-card"><div class="settings-card-head"><h2>${escapeHtml(adapter.devicePage.label)}</h2></div>

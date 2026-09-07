@@ -6,6 +6,9 @@
 // Anlegen, Umbenennen, Sync-Topic, Entfernen und der Schalter selbst.
 
 const { renderLayout } = require('./layout');
+// Beschriftungen zusammengesetzter Anzeigen kommen aus dem Katalog: ein
+// gemischter Textknoten wäre sonst nicht übersetzbar.
+const i18n = require('../i18n');
 const { escapeHtml, statusText } = require('./components');
 
 function roomNote(room) {
@@ -24,12 +27,12 @@ function roomRow(room) {
                 <span class="adapter-col-addr muted hk-col-state" title="${escapeHtml(room.stateTopic)}">${escapeHtml(room.stateTopic)}</span>
                 <span class="adapter-col-addr muted hk-col-remote" title="${escapeHtml(room.remoteTopic || 'Kein Sync-Topic')}">${room.remoteTopic ? escapeHtml(room.remoteTopic) : '—'}</span>
                 <span class="hk-col-mode"><span class="adapter-badge adapter-badge--${room.cinemaOn ? 'on' : 'off'}">${room.cinemaOn ? 'Kinomodus an' : 'Kinomodus aus'}</span></span>
-                <span class="muted hk-room-counts" title="Aktionen der Folge An / Aus">${room.onCount} An / ${room.offCount} Aus</span>
+                <span class="muted hk-room-counts" title="Aktionen der Folge An / Aus">${i18n.t('cinema.on_off_count', { on: room.onCount, off: room.offCount })}</span>
                 <span class="adapter-row-actions">
                   <a class="module-toggle-btn" href="/heimkino/raum/${room.id}">Aktionsfolgen</a>
                   <form action="/heimkino/rooms/${room.id}/state" method="POST">
                     <input type="hidden" name="on" value="${target}">
-                    <button type="submit" class="module-toggle-btn">Kinomodus ${room.cinemaOn ? 'aus' : 'ein'}</button>
+                    <button type="submit" class="module-toggle-btn">${room.cinemaOn ? 'Kinomodus aus' : 'Kinomodus ein'}</button>
                   </form>
                   <button type="button" class="module-toggle-btn" onclick="openHeimkinoRoomDialog('edit', ${room.id})">Bearbeiten</button>
                   <button type="button" class="module-toggle-btn button-danger" onclick="openHeimkinoRoomDelete(${room.id})">Entfernen</button>

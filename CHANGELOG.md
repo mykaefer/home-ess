@@ -3,6 +3,77 @@
 Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [1.6.3] — 2026-09-05
+
+### Hinzugefügt
+
+- **`host.getInstanceIdentity()` nennt die laufende homeESS-Version.** Das
+  Ergebnis führt zusätzlich zu `instanceId` und `fingerprint` das Feld
+  `hostVersion`. Adapter erkennen daran ein Update über die interne
+  Updatefunktion und können es von einem gewöhnlichen Neustart unterscheiden —
+  etwa um eine sonst nur tägliche Onlineprüfung sofort nachzuholen. Der private
+  Instanzschlüssel bleibt wie bisher außen vor.
+
+### Behoben
+
+- **Die Oberfläche ist durchgängig zweisprachig.** Auf zahlreichen Seiten fehlte
+  die englische Übersetzung teilweise oder vollständig — am deutlichsten bei
+  Heizung & Klima, Wetter und Grid-Control, die zu über 90 % deutsch blieben.
+  Ursache waren fehlende Katalogeinträge: die Bestandsansichten werden nicht
+  über `t()` geführt, sondern über `i18n.localizeText()`, das im fertigen HTML
+  jeden deutschen Ausgangstext aus `languages/de.json` ersetzt — ohne Eintrag
+  bleibt ein Text in jeder Sprache deutsch. Der Katalog deckt jetzt alle
+  server-gerenderten Seiten ab. Zusammengesetzte Anzeigen (Beschriftung +
+  Messwert) wurden so umgebaut, dass die Beschriftung einen eigenen Textknoten
+  bildet bzw. über den Katalog geholt wird; Tooltips in Attributen nutzen dafür
+  `i18n.t()`.
+
+  Nachgezogen wurde außerdem alles, was außerhalb der Views sichtbar wird: die
+  Melde- und Fehlertexte aus Routen und Fachlogik (sie gehen über
+  `i18n.localizePayload()` durch die Felder `error`, `message`, `title`,
+  `detail` und `text`), die Wetterlagen aus `wetter/codes.js` sowie die
+  Beschriftungen der Systemwerte, die auf der States-Seite, im State-Picker und
+  im Wertekatalog erscheinen. Reine Logtexte bleiben bewusst deutsch — sie
+  erreichen die Oberfläche nicht.
+
+  Der hartnäckigste Teil waren Texte, die erst beim Rendern entstehen: eine
+  Beschriftung, die mit einem Messwert in einem Textknoten zusammenfällt
+  (`Kessel ${zustand}`), ein Satz, den ein eingebetteter Wert zerschneidet, und
+  Browserskripte, die eine Marke nach jeder Live-Aktualisierung wieder deutsch
+  zusammensetzen. Solche Stellen laufen jetzt über `i18n.t()` mit Platzhaltern
+  oder setzen die Beschriftung in ein eigenes Element. Der Katalog wächst damit
+  von 508 auf 2249 Schlüssel.
+
+  Abgesichert wird das doppelt: eine Quelltextprüfung über Textknoten,
+  Attribute, Stringliterale und Beschriftungen neben Werten — und ein Test, der
+  23 Seiten tatsächlich auf Englisch rendert und im Ergebnis nach deutschen
+  Resten sucht. Die zweite Prüfung findet, was die erste prinzipbedingt nicht
+  sehen kann.
+
+- **Die Heizungssteuerung wiederholt Schaltbefehle nicht mehr.** Jeder Raum
+  merkt sich je Gerät (Heizen/Kühlen) den zuletzt gesendeten Schaltzustand;
+  eine Aktionsfolge läuft nur noch bei Abweichung davon. Zuvor bekam ein Gerät
+  bei jedem Levelwechsel — etwa bei einer Neubewertung der PV-Prognose — die
+  „aus"-Folge erneut, obwohl es längst aus war, sodass Klimageräte denselben
+  An-/Aus-Befehl immer wieder empfingen. Wiederholen darf jetzt allein die
+  zyklische Plausibilitätsprüfung einer Schleife bei nicht erfüllter Bedingung.
+
+### Geändert
+
+- **Mobile Navigation und Energieseite geschärft.** Die untere Tab-Leiste führt
+  jetzt *Dashboard*, *Energie*, *Prognose*, *Messen* und *Wetter*; die eigenen
+  Tabs für Stromverbrauch und Photovoltaik entfallen, weil die Energieseite der
+  Einstieg in beide ist — sie bleibt auf ihren Unterseiten (Stromverbrauch,
+  Photovoltaik, Batterie, Grid-Control) markiert, ebenso *Messen* auf den
+  Unterseiten von *Messen + Schalten*. Die Übersichtstabelle der Energieseite
+  bricht auf dem Telefon in Karten um, statt die Seite in die Breite zu ziehen.
+
+- **`npm test` läuft nur noch über `test/`.** Ohne Pfadangabe durchsucht
+  `node --test` das gesamte Projektverzeichnis und bricht gelegentlich ab, wenn
+  dabei eine flüchtige Datei der laufenden Instanz verschwindet (etwa das
+  SQLite-Journal unter `data/`). Der Lauf ist damit wieder reproduzierbar; die
+  Zahl der Tests bleibt unverändert.
+
 ## [1.6.2] — 2026-08-30
 
 ### Hinzugefügt

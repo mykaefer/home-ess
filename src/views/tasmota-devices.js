@@ -45,10 +45,10 @@ function renderDevice(instance, device) {
             <div style="padding:12px;">
               <div style="display:flex; gap:12px; align-items:center; margin-bottom:10px; flex-wrap:wrap;">
                 ${deviceBadge(device)}
-                <span class="muted">Client: <code>${escapeHtml(device.clientId || '—')}</code></span>
+                <span class="muted"><span>Client:</span> <code>${escapeHtml(device.clientId || '—')}</code></span>
                 <span class="muted">IP: <code>${escapeHtml(device.ip || '—')}</code></span>
-                <span class="muted">Intervall: <strong>${escapeHtml(formatInterval(device.intervalMs))}</strong></span>
-                <span class="muted">Zuletzt: ${escapeHtml(formatDate(device.lastSeenAt))}</span>
+                <span class="muted"><span>Intervall:</span> <strong>${escapeHtml(formatInterval(device.intervalMs))}</strong></span>
+                <span class="muted"><span>Zuletzt:</span> ${escapeHtml(formatDate(device.lastSeenAt))}</span>
                 <form method="POST" action="/adapter/instance/${instance.id}/tasmota-devices/rename" style="display:flex; gap:6px; align-items:center; margin-left:auto;">
                   <input type="hidden" name="topic" value="${escapeHtml(device.topic)}">
                   <input type="text" name="name" value="${escapeHtml(device.customName || '')}" placeholder="Eigener Gerätename" aria-label="Gerätename" style="min-width:180px;">
@@ -59,15 +59,15 @@ function renderDevice(instance, device) {
                   <button type="submit" class="module-toggle-btn button-danger">Löschen</button>
                 </form>
               </div>
-              <p class="muted" style="margin-bottom:10px;">MAC: <code>${escapeHtml(device.mac || '—')}</code> · Firmware: ${escapeHtml(device.version || '—')} · Modul: ${escapeHtml(device.module || '—')}</p>
+              <p class="muted" style="margin-bottom:10px;"><span>MAC:</span> <code>${escapeHtml(device.mac || '—')}</code> · <span>Firmware:</span> ${escapeHtml(device.version || '—')} · <span>Modul:</span> ${escapeHtml(device.module || '—')}</p>
 ${renderValues(device.values)}
             </div>
           </details>`;
 }
 
 function renderTasmotaDevices({ adapter, instance, devices = [], message = '', error = '' } = {}) {
-  const body = `        <h1>${escapeHtml(adapter.name)} – ${escapeHtml(instance.name)}: Geräte</h1>
-        <p class="muted" style="margin-bottom:16px;">Adresse: <code>${escapeHtml(adapter.prefix)}://${escapeHtml(instance.name)}/&lt;gerät&gt;/...</code> · <a href="/adapter/instance/${instance.id}">Einstellungen</a></p>
+  const body = `        <h1>${escapeHtml(adapter.name)} – ${escapeHtml(instance.name)}: <span>Geräte</span></h1>
+        <p class="muted" style="margin-bottom:16px;"><span>Adresse:</span> <code>${escapeHtml(adapter.prefix)}://${escapeHtml(instance.name)}/&lt;gerät&gt;/...</code> · <a href="/adapter/instance/${instance.id}">Einstellungen</a></p>
         ${message ? statusText(message, 'success') : ''}
         ${error ? statusText(error) : ''}
         <div class="settings-card">
