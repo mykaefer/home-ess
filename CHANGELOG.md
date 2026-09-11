@@ -3,6 +3,97 @@
 Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [1.6.4] — 2026-09-11
+
+### Hinzugefügt
+
+- **Boost je Raum.** Unter *Heizung & Klima → Raum → Regelung* kann ein
+  optionales Boost-Topic hinterlegt werden. Es bleibt bidirektional mit dem
+  beschreibbaren Raum-State `boost` synchron. Solange Boost aktiv ist, wird die
+  Soll-Temperatur ignoriert und die für den aktuellen Außentemperaturbereich
+  zuständige Heizquelle mit maximaler Leistung angefordert. Der Zustand liegt in
+  `heizung_rooms.boost_active`, das Topic in `heizung_rooms.boost_topic`; beide
+  Spalten legt die Migration bestehender Installationen automatisch an.
+
+- **Temperaturverteilung der Räume als Balkendiagramm.** Über der Räume-Kachel
+  von *Heizung & Klima* steht jetzt je Raum ein Balken: seine Höhe ist die
+  Ist-Temperatur, seine Farbe der Regelzustand (grün = gehalten, rot = heizt,
+  blau = kühlt, grau = gesperrt, etwa bei offenem Fenster-/Türkontakt oder wenn
+  das Betriebslevel das Gerät sperrt). Als Heizen gilt dabei auch eine
+  Wärmeanforderung an die Zentralheizung, nicht nur ein eingeschaltetes lokales
+  Heizgerät. Der Raumname steht platzsparend aufrecht darunter; die Höhe der
+  Beschriftungszeile stellt der längste Name, damit keiner abgeschnitten wird.
+  Die Skala wird aus den vorhandenen Werten abgeleitet und auf 5-°C-Schritte
+  gerundet, damit sie nicht bei jedem Messwert springt.
+
+  Die Spaltenbreite ergibt sich aus der Anzahl der Räume und dem verfügbaren
+  Platz. Reicht die Breite nicht mehr — etwa auf dem Telefon —, schrumpfen die
+  Spalten bis zu ihrer Mindestbreite; danach lässt sich der Balkenbereich
+  waagerecht schieben, während die Skala daneben stehen bleibt. Die Scrollleiste
+  erscheint dabei nur bei echtem Platzmangel: Überstehende Bedienelemente des
+  Soll-Strichs lösen keinen scheinbaren horizontalen Überlauf mehr aus. In sehr
+  schmalen Spalten entfällt die Zahl über dem Balken, weil sie sonst über der
+  Nachbarspalte stünde; die Ist-Temperatur steht weiterhin in der Raumzeile
+  darunter.
+
+  Der waagerechte Strich im Balken markiert die Soll-Temperatur und ist zugleich
+  das Bedienelement dafür: ihn zu ziehen (Maus, Finger oder Pfeiltasten,
+  Schrittweite 0,5 °C) verstellt den Sollwert. Geschrieben wird über dieselbe
+  Route wie das Formular der Raumzeile — die Berechtigung „schreiben" bleibt
+  also Voraussetzung.
+
+  Die Griffleiste unter jedem Namen ordnet die Räume im Diagramm um, damit
+  benachbarte Räume nebeneinander liegen können. Verschoben wird über die
+  Ordnung des Rasters und nicht über den DOM-Baum: ein Umhängen während des
+  Ziehens nähme der Griffleiste ihre Zeigererfassung, und das Ziehen bräche nach
+  dem ersten Platz ab. Die Reihenfolge wird in `heizung_rooms.position`
+  gespeichert und betrifft ausschließlich das Diagramm; die Raumliste darunter
+  bleibt alphabetisch.
+
+### Geändert
+
+- **Vierter Platz der mobilen Tab-Leiste gehört jetzt *Heizung & Klima*.** Statt
+  *Messen* führt der Tab (Symbol 🌡️, Beschriftung „Heizung", damit fünf Tabs
+  nebeneinander passen) direkt auf die Heizungsseite und bleibt auch auf deren
+  Unterseiten markiert. Der Tab erscheint nur bei aktivem Modul *Heizung &
+  Klima*; ist es aus, steht dort weiterhin *Messen*. *Messen + Schalten* bleibt
+  in beiden Fällen über das Menü-Sheet erreichbar.
+
+- **Das „Heizkosten-Zählwerk" ist keine eigene Kachel mehr, sondern der
+  Abschnitt „Kosten" in der Kachel der Zentralheizung.** Auf *Heizung & Klima*
+  stand es bislang ganz unten hinter der Raumliste, obwohl es inhaltlich zur
+  Zentralheizung gehört. Jetzt hängt es als durch eine Linie abgesetzter
+  Abschnitt direkt unter deren Zustandszeile — ohne eigenen Rahmen und ohne den
+  wiederholenden Titel. Kennzahlen und Bedienung (Startwert, Zeitraum
+  abschließen) bleiben unverändert; ist die Zentralheizung nicht eingerichtet,
+  entfällt der Abschnitt wie zuvor die Kachel.
+
+### Behoben
+
+- **Die Einstellungen ließen sich nicht mehr umschalten, die Registerseite der
+  Adapter war ohne Funktion.** Beide Seiten lieferten ein Browserskript aus, das
+  gar nicht erst geparst wurde: In `remote-access.js` und `adapter-states.js`
+  stand in einem Template-Literal ein `'\n\n'`, das schon beim Rendern zum
+  echten Zeilenumbruch wurde und das Stringliteral zerriss, das im Browser
+  stehen sollte. Weil damit das gesamte Skript der Seite ausfiel, war keine
+  einzige ihrer Funktionen mehr erreichbar — bei den Einstellungen unter anderem
+  die Tab-Umschaltung, denn die Fernzugriffs-Kachel liefert ihr Skript in
+  denselben Block. Beide Stellen sind entkommen, und jede gerenderte Seite wird
+  jetzt darauf geprüft, dass ihre eingebetteten Skripte syntaktisch gültig sind.
+
+- **Der HM-RPC-Adapter hält die CCU-Verbindung stabil und startet schnell durch**
+  (Adapterversionen 1.1.7 und 1.1.8, Einzelheiten in
+  [adapter/hm-rpc/CHANGELOG.md](adapter/hm-rpc/CHANGELOG.md)). Registrierung und
+  Geräteabgleich sind getrennt, alle ausgehenden Aufrufe laufen über eine
+  gemeinsame Warteschlange, und Parameterbeschreibungen überdauern einen
+  Neustart. Vor allem aber dauert der Geräteabgleich nach einem Neustart wieder
+  Sekunden statt Minuten: Er selbst braucht bei 706 Kanälen 0,8 s — die
+  beobachteten 87 s entstanden durch Funkbefehle an Thermostate, die die CCU als
+  nicht erreichbar führt und erst nach ihrem Geräte-Timeout abweist. Solche
+  Aufträge werden jetzt vorgemerkt und erst bei Rückkehr des Geräts gesendet,
+  ein Sollwert wird vor dem ersten Schreiben gegen den Istwert geprüft, und der
+  erste Abgleich nach dem Start läuft mit Vorrang durch.
+
 ## [1.6.3] — 2026-09-05
 
 ### Hinzugefügt

@@ -68,6 +68,32 @@ test('Mobile Tab-Bar führt Dashboard, Energie, Prognose, Messen und Wetter', ()
   assert.deepEqual(paths, ['/dashboard', '/energie', '/prognose', '/messen-schalten', '/wetter']);
 });
 
+// Ist Heizung & Klima aktiv, belegt das Modul den vierten Tab-Platz; Messen +
+// Schalten bleibt über das Menü-Sheet erreichbar.
+test('Der Heizungs-Tab verdrängt Messen, sobald das Modul aktiv ist', async () => {
+  const sqlite3 = require('sqlite3').verbose();
+  const modules = require('../src/modules');
+  const db = new sqlite3.Database(':memory:');
+  await new Promise((resolve, reject) => db.run(
+    'CREATE TABLE modules (key TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 0)',
+    (error) => (error ? reject(error) : resolve())
+  ));
+  await modules.setEnabled(db, 'heizung', true);
+
+  const html = renderLayout({ title: 'Navigation', activePath: '/heizung', body: '<p>Test</p>' });
+  const tabbar = html.slice(html.indexOf('<nav class="mobile-tabbar"'), html.indexOf('</nav>', html.indexOf('<nav class="mobile-tabbar"')));
+  const paths = [...tabbar.matchAll(/class="mobile-tab[^"]*" href="([^"]+)"/g)].map((match) => match[1]);
+  assert.deepEqual(paths, ['/dashboard', '/energie', '/prognose', '/heizung', '/wetter']);
+  assert.match(tabbar, /class="mobile-tab active" href="\/heizung"/);
+
+  // Unterseiten des Moduls markieren den Tab ebenfalls.
+  const raum = renderLayout({ title: 'Navigation', activePath: '/heizung/zentrale', body: '<p>Test</p>' });
+  assert.match(raum, /class="mobile-tab active" href="\/heizung"/);
+
+  await modules.setEnabled(db, 'heizung', false);
+  await new Promise((resolve) => db.close(resolve));
+});
+
 test('Der Energie-Tab bleibt auf Stromverbrauch und Photovoltaik markiert', () => {
   for (const activePath of ['/energie', '/stromverbrauch', '/photovoltaik', '/batterie']) {
     const html = renderLayout({ title: 'Navigation', activePath, body: '<p>Test</p>' });

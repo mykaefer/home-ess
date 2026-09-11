@@ -203,22 +203,42 @@ function heizungRoutes(db) {
     }
   });
 
-  // Soll-Temperatur schnell verstellen (Übersicht und Raumseite).
+  // Soll-Temperatur schnell verstellen (Übersicht und Raumseite). Das Formular
+  // bekommt eine Umleitung, der Soll-Strich des Temperaturdiagramms JSON — er
+  // zieht seinen Stand selbst nach, ohne die Seite neu aufzubauen.
   router.post('/heizung/raum/:id/soll', requireAuth, requireHeizungEnabled, async (req, res, next) => {
     const roomId = Number(req.params.id);
     const room = String(req.body && req.body.redirect) === 'room';
+    const asJson = String(req.headers.accept || '').includes('application/json');
     try {
-      await rooms.setTargetTemp(db, roomId, req.body && req.body.targetTemp);
+      const targetTemp = await rooms.setTargetTemp(db, roomId, req.body && req.body.targetTemp);
       await runtime.reload();
       await runtime.tick().catch(() => {});
+      if (asJson) return res.json({ ok: true, targetTemp });
       const target = room ? `/heizung/raum/${roomId}` : '/heizung';
-      res.redirect(`${target}?ok=${encodeURIComponent('Soll-Temperatur gesetzt.')}`);
+      return res.redirect(`${target}?ok=${encodeURIComponent('Soll-Temperatur gesetzt.')}`);
     } catch (error) {
       if (!error.validation) return next(error);
+      if (asJson) return res.status(400).json({ error: error.message });
       try {
         if (room) await roomPage(res, roomId, { status: 400, error: error.message });
         else await overview(res, { status: 400, error: error.message });
       } catch (renderError) { next(renderError); }
+      return undefined;
+    }
+  });
+
+  // Reihenfolge der Räume im Temperaturdiagramm (Ziehen an der Griffleiste).
+  // Reine Anordnung — die Regelung bleibt unberührt, deshalb ohne Neuaufbau.
+  router.post('/heizung/raeume/reihenfolge', requireAuth, requireHeizungEnabled, async (req, res, next) => {
+    try {
+      const body = req.body || {};
+      const order = Array.isArray(body.order) ? body.order : String(body.order || '').split(',');
+      await rooms.setRoomOrder(db, order);
+      return res.json({ ok: true });
+    } catch (error) {
+      if (error && error.validation) return res.status(400).json({ error: error.message });
+      return next(error);
     }
   });
 

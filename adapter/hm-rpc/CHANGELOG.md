@@ -5,6 +5,62 @@ wird unabhängig von homeESS versioniert; die Version steht in
 [adapter.json](adapter.json). Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [1.1.8] — 2026-09-11
+
+### Behoben
+
+- **Der Geräteabgleich nach einem Neustart dauert wieder Sekunden statt Minuten.**
+  Gemessen an einer Anlage mit 706 Kanälen: Der Abgleich selbst braucht 0,8 s —
+  alle 613 `getParamset` zusammen, denn das sind reine CCU-Cache-Lesungen
+  (Median 1 ms). Die beobachteten 87 s entstanden fast vollständig durch vier
+  Funkbefehle an Thermostate, die die CCU als nicht erreichbar führt: Jeder wird
+  erst nach dem Geräte-Timeout der CCU (~20 s) mit „Generic error" quittiert und
+  hielt dabei die gemeinsame Warteschlange an. Drei Änderungen beheben das, ohne
+  die Serialisierung aufzugeben — der Schnittstellenprozess der CCU arbeitet
+  Aufrufe weiterhin faktisch seriell ab:
+  - Der erste Abgleich nach dem Start läuft als ein einziger Auftrag mit Vorrang
+    vor Schreibbefehlen. Sonst rutscht ein Schaltbefehl zwischen zwei Kanälen
+    durch und sendet blind, bevor die Istwerte da sind. Spätere Abgleiche reihen
+    sich wie bisher Kanal für Kanal ein, damit Schaltbefehle sofort drankommen.
+  - Vor dem ersten Schreiben auf einen noch nie gelesenen Kanal werden dessen
+    Istwerte geholt. Diese Cache-Lesung kostet Millisekunden und lässt den
+    bestehenden Vergleich greifen: Ein Sollwert, den das Gerät bereits hat, geht
+    gar nicht erst über Funk — das schont auch den Duty Cycle im Normalbetrieb.
+  - Ein Gerät, das sich über seinen Wartungskanal als nicht erreichbar meldet
+    (`UNREACH`), bekommt keinen Funkbefehl. Der Auftrag wird je Adresse
+    vorgemerkt und gesendet, sobald sich das Gerät zurückmeldet; nach 30 Minuten
+    verfällt er, weil der Regelzyklus ohnehin neu schreibt. Gemeldet wird nur der
+    erste bzw. ein geänderter Auftrag, damit ein wiederholender Regelzyklus das
+    Protokoll nicht flutet.
+
+  Wirkung im Nachbau derselben Anlage samt fünf nicht erreichbarer Thermostate:
+  Abgleich nach 0,6 s statt 87 s, und von zwölf Sollwert-Befehlen gehen nur die
+  drei tatsächlich abweichenden über Funk.
+
+## [1.1.7] — 2026-09-09
+
+### Behoben
+
+- Registrierung und Geräteabgleich sind getrennt. Transportfehler beenden den
+  Abgleich sofort; Wiederverbindung mit Backoff bis 60 Sekunden. Kein falsches
+  „verbunden“ nach einem gescheiterten oder veralteten Durchlauf.
+- Alle ausgehenden Aufrufe sind gemeinsam serialisiert. Schreibbefehle haben
+  Vorrang; wartende Sollwerte werden durch den neuesten Sollwert ersetzt,
+  Aktionen bleiben einzeln. Gleichzeitige Kanalabfragen und Erreichbarkeitstests
+  werden zusammengefasst. Die Warteschlange ist zeitlich und mengenmäßig begrenzt.
+- Parameterbeschreibungen werden serverseitig gespeichert und wiederverwendet.
+  Reconnects lesen keinen bereits vollständig geladenen Gerätebestand erneut.
+  Fehlende Beschreibungen werden als ausstehend statt als Schreibverbot gemeldet.
+- Events während eines RPC-Aufrufs behalten Vorrang vor dessen Antwort.
+  Fehlgeschlagene Schreibaufträge bleiben wiederholbar. Der bestehende Wertebus
+  erneuert die Frische unveränderter Werte ohne erneute Änderungsaktionen.
+- Callback-Nachweis als eigener Statusdatenpunkt; eine erfolgreiche Registrierung
+  behauptet nicht mehr, dass bereits ein Callback eingegangen sei.
+- Eventzähler und Zeitpunkt des letzten Werteereignisses zeigen unabhängig von
+  Verwaltungs-Callbacks, ob die CCU tatsächlich neue Gerätewerte sendet.
+- Kein implizites HTTP-Keep-Alive; jeder Aufruf hat ein absolutes Zeitlimit.
+  Abgebrochene und ungültige Antworten geben die Warteschlange zuverlässig frei.
+
 ## [1.1.6] — 2026-08-30
 
 ### Behoben

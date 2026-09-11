@@ -194,7 +194,7 @@ ${renderStateDialog(instance, editor, { dialogOpen, dialogError, dialogValues, d
     function closeStateDialog() { var d = document.getElementById('stateDialog'); if (d) d.close(); }
     function editRow(key) { openStateDialog('edit', key); }
     function deleteRow(key) {
-      if (!confirm('State löschen?' + '\n\n' + key)) return;
+      if (!confirm('State löschen?' + '\\n\\n' + key)) return;
       document.getElementById('deleteKey').value = key;
       document.getElementById('deleteForm').submit();
     }

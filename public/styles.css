@@ -4295,6 +4295,276 @@ a.secondary-button {
 .hz-badge-central { color: #d97706; }
 .hz-inline-form { display: inline-flex; align-items: center; gap: 6px; margin: 0; }
 .hz-inline-form input[type="number"] { width: 82px; }
+
+/* Temperaturverteilung der Räume: Balkendiagramm über der Räume-Kachel.
+   Je Raum ein Balken (Höhe = Ist-Temperatur, Farbe = Regelzustand), darin der
+   Soll-Strich als Bedienelement, darunter der aufrecht stehende Raumname und
+   die Griffleiste zum Umsortieren. Alle Stellungen kommen aus zwei Variablen
+   je Spalte, die das Skript setzt: --hz-fill und --hz-mark. */
+:root {
+    --hz-bar-idle: #3f9a6a;
+    --hz-bar-heat: #cf3a2c;
+    --hz-bar-cool: #3f6fa5;
+    /* Grau: der Raum regelt gerade nicht (offener Kontakt, gesperrtes Level). */
+    --hz-bar-blocked: #9aa7b4;
+    --hz-bar-mark: #1f2937;
+}
+.theme-dark {
+    --hz-bar-idle: #6cc494;
+    --hz-bar-heat: #f2837a;
+    --hz-bar-cool: #9ec9ff;
+    --hz-bar-blocked: #8b97a5;
+    --hz-bar-mark: #e5eaf0;
+}
+
+.hz-chart {
+    margin-bottom: 16px;
+    padding: 14px 16px;
+    border: 1px solid var(--color-line-strong);
+    border-radius: 10px;
+    background: var(--color-surface);
+}
+.hz-chart-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+.hz-chart-legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--color-ink-muted); }
+.hz-legend-item { display: inline-flex; align-items: center; gap: 6px; }
+.hz-legend-item::before {
+    content: "";
+    width: 10px;
+    height: 10px;
+    border-radius: 3px;
+    background: var(--hz-bar-idle);
+}
+.hz-legend-item--heat::before { background: var(--hz-bar-heat); }
+.hz-legend-item--cool::before { background: var(--hz-bar-cool); }
+.hz-legend-item--blocked::before { background: var(--hz-bar-blocked); }
+.hz-legend-item--target::before {
+    width: 14px;
+    height: 0;
+    border-radius: 0;
+    background: none;
+    border-top: 2px solid var(--hz-bar-mark);
+}
+
+/* Links die Skala, rechts die Balken. Beide sind genau --hz-track-height hoch;
+   darunter stehen Name und Griffleiste, die nicht zur Zeichenfläche gehören. */
+.hz-chart-plot {
+    --hz-track-height: 200px;
+    /* Schmalste Spalte, aus der sich alles Weitere ergibt: so viele Spalten je
+       Zeile, wie damit nebeneinander passen. */
+    --hz-col-min: 28px;
+    display: grid;
+    grid-template-columns: 54px minmax(0, 1fr);
+    gap: 0 10px;
+    margin-top: 14px;
+}
+/* Dieselben Rahmen wie ein Balken, nur unsichtbar: so liegen die Zahlen der
+   Skala genau auf den Hilfslinien und nicht um deren Strichstärke daneben. */
+.hz-chart-scale {
+    position: relative;
+    height: var(--hz-track-height);
+    border-top: 1px solid transparent;
+    border-bottom: 1px solid transparent;
+}
+.hz-chart-tick {
+    position: absolute;
+    right: 0;
+    transform: translateY(50%);
+    font-size: 11px;
+    white-space: nowrap;
+    color: var(--color-ink-faint);
+}
+/* Ausschnitt: passen die Räume nicht mehr nebeneinander, wird waagerecht
+   gescrollt statt umgebrochen. Die Skala steht daneben und bleibt deshalb
+   stehen. Oben ein Streifen Luft, den der negative Rand wieder abzieht — sonst
+   schnitte der Ausschnitt den Wert am obersten Soll-Strich ab. */
+.hz-chart-viewport {
+    /* Überstehende Soll-Griffe und ihre Beschriftung zählen beim Browser zur
+       Scrollbreite, obwohl die Balkenspalten selbst passen. Erst das Skript
+       schaltet Scrollen ein, wenn deren echte Mindestbreite nicht mehr reicht. */
+    overflow-x: hidden;
+    overflow-y: hidden;
+    padding-top: 16px;
+    margin-top: -16px;
+    overscroll-behavior-x: contain;
+}
+.hz-chart-viewport--scroll { overflow-x: auto; }
+.hz-chart-bars {
+    position: relative;
+    display: grid;
+    grid-auto-flow: column;
+    /* Die Spalten teilen sich den Platz, schrumpfen aber nie unter ihre
+       Mindestbreite — darunter beginnt das Scrollen. */
+    grid-auto-columns: minmax(var(--hz-col-min), 1fr);
+    /* Kein `start`: alle Spalten sind gleich hoch, damit die Griffleisten trotz
+       unterschiedlich langer Namen auf einer Linie liegen. */
+    align-items: stretch;
+    column-gap: 8px;
+}
+.hz-bar-col {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    /* In der eigenen Rasterzelle mittig, aber nicht beliebig breit: sonst zöge
+       sich der Soll-Strich weniger Räume über die halbe Seite. */
+    width: 100%;
+    max-width: 92px;
+    margin: 0 auto;
+}
+/* Waagerechte Hilfslinien im Abstand der Skalenstriche, in jedem Balken einzeln.
+   --hz-steps ist die Anzahl der Abschnitte; sie ändert sich mit dem
+   Skalenbereich. Umgebrochene Zeilen behalten dadurch ihren Maßstab, auch wenn
+   die Zahlen der Skala nur neben der ersten Zeile stehen. */
+.hz-bar-track {
+    position: relative;
+    width: 100%;
+    height: var(--hz-track-height);
+    border-top: 1px solid var(--color-line);
+    border-bottom: 1px solid var(--color-line-strong);
+    background-image: repeating-linear-gradient(
+        to top, var(--color-line) 0 1px, transparent 1px calc(100% / var(--hz-steps, 3)));
+    touch-action: none;
+}
+.hz-bar-fill {
+    position: absolute;
+    left: 50%;
+    bottom: 0;
+    width: min(100%, 38px);
+    height: var(--hz-fill, 0%);
+    transform: translateX(-50%);
+    border-radius: 5px 5px 0 0;
+    background: var(--hz-bar-idle);
+    transition: height .4s ease, background-color .4s ease;
+}
+.hz-bar-fill--heat { background: var(--hz-bar-heat); }
+.hz-bar-fill--cool { background: var(--hz-bar-cool); }
+.hz-bar-fill--blocked { background: var(--hz-bar-blocked); }
+/* Ohne Messwert bleibt der Balken leer — die Soll-Marke steht trotzdem. */
+.hz-bar-col--empty .hz-bar-fill { background: var(--color-surface-strong); }
+/* Für die Zahl über dem Balken braucht es Platz; in schmalen Spalten stünde sie
+   über der Nachbarspalte. Das Skript setzt die Klasse nach der gemessenen
+   Spaltenbreite. */
+.hz-chart-plot--dense .hz-bar-value { display: none; }
+.hz-bar-value {
+    position: absolute;
+    left: 50%;
+    bottom: min(calc(var(--hz-fill, 0%) + 6px), calc(100% - 15px));
+    transform: translateX(-50%);
+    font-size: 10px;
+    font-weight: 600;
+    white-space: nowrap;
+    color: var(--color-ink-mid);
+    pointer-events: none;
+}
+/* Soll-Strich: zugleich Anzeige und Schieberegler. Die Greiffläche ist höher
+   als der sichtbare Strich, damit sie auch mit dem Finger zu treffen ist. */
+.hz-bar-mark {
+    position: absolute;
+    left: -3px;
+    right: -3px;
+    bottom: var(--hz-mark, 50%);
+    height: 20px;
+    margin-bottom: -10px;
+    cursor: ns-resize;
+    touch-action: none;
+}
+.hz-bar-mark::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 50%;
+    border-top: 2px solid var(--hz-bar-mark);
+}
+.hz-bar-mark::after {
+    content: "";
+    position: absolute;
+    right: 0;
+    top: 50%;
+    width: 9px;
+    height: 9px;
+    transform: translateY(-50%);
+    border: 2px solid var(--hz-bar-mark);
+    border-radius: 50%;
+    background: var(--color-surface);
+}
+.hz-bar-mark:focus-visible { outline: 2px solid var(--color-action); outline-offset: 2px; }
+/* Der Zahlenwert des Sollwerts erscheint beim Zeigen und beim Ziehen — dauerhaft
+   stünde er in schmalen Spalten über der Ist-Temperatur. */
+.hz-bar-mark-value {
+    position: absolute;
+    left: 50%;
+    top: -2px;
+    transform: translate(-50%, -100%);
+    padding: 1px 5px;
+    border-radius: 5px;
+    background: var(--hz-bar-mark);
+    color: var(--color-surface);
+    font-size: 10px;
+    font-weight: 600;
+    white-space: nowrap;
+    opacity: 0;
+    transition: opacity .15s ease;
+    pointer-events: none;
+}
+.hz-bar-mark:hover .hz-bar-mark-value,
+.hz-bar-mark:focus-visible .hz-bar-mark-value,
+.hz-bar-col--adjusting .hz-bar-mark-value { opacity: 1; }
+.hz-bar-col--adjusting .hz-bar-fill { transition: none; }
+/* Raumname aufrecht: von unten nach oben lesbar, damit viele Räume nebeneinander
+   passen. Die Höhe der Zeile stellt der längste Name — das Feld wächst mit
+   seinem Inhalt, nichts wird abgeschnitten. Die kürzeren Namen stehen dadurch
+   bündig über ihrer Griffleiste. */
+.hz-bar-name {
+    display: flex;
+    justify-content: center;
+    flex: 1 1 auto;
+    margin-top: 8px;
+}
+.hz-bar-name > span {
+    writing-mode: vertical-rl;
+    transform: rotate(180deg);
+    white-space: nowrap;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--color-ink-soft);
+}
+.hz-bar-grip {
+    width: 100%;
+    margin-top: 6px;
+    padding: 3px 0;
+    border: 1px solid var(--color-line);
+    border-radius: 6px;
+    background: var(--color-surface-muted);
+    color: var(--color-ink-faint);
+    font-size: 11px;
+    line-height: 1;
+    cursor: grab;
+    touch-action: none;
+}
+.hz-bar-grip:hover { color: var(--color-ink-muted); border-color: var(--color-line-strong); }
+.hz-bar-col--moving { opacity: .6; }
+.hz-bar-col--moving .hz-bar-grip { cursor: grabbing; }
+
+@media (max-width: 768px) {
+    /* Schmale Anzeige: flachere Zeichenfläche, kürzere Namen, keine Zahl über
+       dem Balken — dort ist zwischen den Spalten kein Platz dafür. */
+    .hz-chart-plot {
+        --hz-track-height: 148px;
+        --hz-col-min: 21px;
+        grid-template-columns: 38px minmax(0, 1fr);
+        gap: 0 6px;
+    }
+    .hz-chart-bars { column-gap: 5px; }
+    .hz-bar-value { display: none; }
+    .hz-chart-legend { font-size: 11px; gap: 8px; }
+}
 .hz-item-row {
     grid-template-columns: minmax(0, 1.4fr) minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr);
     align-items: center;
@@ -4305,28 +4575,30 @@ a.secondary-button {
 .hz-item-row .module-toggle-btn { padding: 6px 12px; font-size: 13px; }
 .hz-state-line { display: flex; align-items: center; gap: 12px; margin: 0 0 14px; flex-wrap: wrap; }
 .hz-current { font-size: 26px; font-weight: 600; }
-/* Kopfkarte der Zentralheizung: Zustand links, Schaltflächen rechts. */
+/* Kachel der Zentralheizung: Kopfzeile mit dem Zustand, darunter der Abschnitt
+   der Kosten. */
 .hz-central-card {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-    flex-wrap: wrap;
     padding: 14px 16px;
     margin-bottom: 16px;
     border: 1px solid var(--color-line-strong);
     border-radius: 10px;
     background: var(--color-surface);
 }
+.hz-central-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+}
 .hz-central-card p { margin: 4px 0 0; }
 .hz-central-state { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-/* Zählwerk der Heizkosten: eigenständige Kachel unter der Raumliste. */
+/* Kosten: Abschnitt in der Kachel der Zentralheizung, durch eine Linie
+   abgesetzt statt als eigene Kachel. */
 .hz-billing {
-    margin-top: 16px;
-    padding: 14px 16px;
-    border: 1px solid var(--color-line-strong);
-    border-radius: 10px;
-    background: var(--color-surface);
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid var(--color-line);
 }
 .hz-billing-head {
     display: flex;
@@ -4457,8 +4729,9 @@ a.secondary-button {
     .hz-priorities select { padding: 7px 9px; font-size: 13px; }
     .hz-state-line { gap: 8px; margin-bottom: 10px; }
     .hz-current { font-size: 22px; }
-    .hz-central-card { padding: 11px 12px; gap: 10px; }
-    .hz-billing { padding: 11px 12px; }
+    .hz-central-card { padding: 11px 12px; }
+    .hz-central-head { gap: 10px; }
+    .hz-billing { margin-top: 11px; padding-top: 11px; }
     .hz-billing-figures { grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); gap: 8px; margin-top: 10px; }
     .hz-figure { padding: 8px 10px; }
     .hz-figure-value { font-size: 17px; }

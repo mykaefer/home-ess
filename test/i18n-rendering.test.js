@@ -136,17 +136,36 @@ const NAMED_PAGES = [
   ['adapters.js', 'renderAdapters', { adapters: [], instances: [], statusById: new Map() }],
 ];
 
+function renderAll() {
+  return [
+    ...PAGES.map(([file, input]) => [file, require(path.join(VIEWS, file))(input)]),
+    ...NAMED_PAGES.map(([file, fn, input]) => [file, require(path.join(VIEWS, file))[fn](input)]),
+  ];
+}
+
+// Die eingebetteten Browserskripte entstehen in Template-Literalen. Ein `\n` im
+// Quelltext wird dabei schon beim Rendern zum echten Zeilenumbruch und zerreißt
+// das Stringliteral, das im Browser stehen sollte — die ganze Seite bekommt dann
+// ein Skript, das nicht mehr geparst wird, und keine ihrer Funktionen läuft
+// mehr. Gegen Zeichen zu entkommen ist im Quelltext leicht zu übersehen, also
+// wird hier jedes ausgelieferte Skript geparst.
+test('Jedes eingebettete Browserskript der Seiten ist syntaktisch gültig', () => {
+  const broken = [];
+  for (const [file, html] of renderAll()) {
+    for (const block of html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)) {
+      try { new Function(block[1]); } catch (error) { broken.push(`${file}: ${error.message}`); }
+    }
+  }
+  assert.deepEqual(broken, [], `Diese Seiten liefern ein Skript aus, das der Browser nicht liest:\n${broken.join('\n')}`);
+});
+
 test('Die englische Oberfläche enthält keine deutschen Reste', async () => {
   i18n.scan();
   i18n.setTimezone('UTC');
   await i18n.select('en');
 
   const gaps = [];
-  const rendered = [
-    ...PAGES.map(([file, input]) => [file, require(path.join(VIEWS, file))(input)]),
-    ...NAMED_PAGES.map(([file, fn, input]) => [file, require(path.join(VIEWS, file))[fn](input)]),
-  ];
-  for (const [file, html] of rendered) {
+  for (const [file, html] of renderAll()) {
     for (const text of visibleStrings(html)) {
       if (looksGerman(text)) gaps.push(`${file}: ${text}`);
     }

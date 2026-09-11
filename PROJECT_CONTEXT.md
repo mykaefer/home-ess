@@ -879,7 +879,8 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
     - **States = Systemwerte.** Das Modul ist **kein Adapter** und bekommt
       deshalb **kein eigenes Schema**: seine Werte sind homeESS-Systemwerte unter
       `system://homeess/…`. Je Raum
-      `raeume.<Raumname>.{temperatur, soll, heizen, kuehlen, zentral, fenster}`,
+      `raeume.<Raumname>.{temperatur, soll, boost, heizen, kuehlen, zentral,
+      fenster}` (beschreibbar sind `soll` und `boost`),
       für die Zentralheizung `zentralheizung.{brenner, anforderungen,
       aussentemperatur, vorlauf, ruecklauf, laufzeit_heute, verbrauch_heute,
       kosten_heute, schornsteinfeger}`. Auf der States-Seite ergibt die
@@ -890,6 +891,19 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
       bleiben); ein Umbenennen ändert daher die States, `ensureFreeAddress`
       verhindert Kollisionen und `reload()` räumt die Topics
       umbenannter/entfernter Räume aus dem State-Bus.
+    - **Boost je Raum**: `heizung_rooms.boost_active` hält den Zustand,
+      `heizung_rooms.boost_topic` ein optionales Fremd-Topic. `syncBoost()` in
+      `heizung/runtime.js` hält beide Seiten synchron — nach denselben Regeln wie
+      die Thermostatkopplung, inklusive Echo-Fenster gegen die eigene Schreibung.
+      Ist Boost aktiv, entfallen Sollwertvergleich und Kühlentscheidung; der Raum
+      fordert die für den aktuellen Außentemperaturbereich zuständige Heizquelle
+      mit maximaler Leistung an.
+    - **Temperaturdiagramm**: `src/views/heizung-chart.js` rendert die Balken
+      über der Räume-Kachel. Der Soll-Strich schreibt über dieselbe Route wie das
+      Formular der Raumzeile; die Anordnung liegt in `heizung_rooms.position` und
+      wird beim Ziehen über die Ordnung des CSS-Rasters verschoben, nicht über
+      den DOM-Baum — ein Umhängen während des Ziehens nähme der Griffleiste ihre
+      Zeigererfassung.
     - **Anbindung an die Systemwerte**: `states/system-values.registerValueProvider`
       nimmt den Provider des Moduls entgegen (Vorbild: `registerStatesProvider`
       der Adapter) — dadurch bleibt `system-values.js` frei von einem Import des

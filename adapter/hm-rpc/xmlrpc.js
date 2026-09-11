@@ -110,20 +110,39 @@ function parseResponse(xml) {
 function call(options, method, params = [], timeout = 10000) {
   const body = methodCall(method, params);
   return new Promise((resolve, reject) => {
-    const headers = { 'Content-Type': 'text/xml', 'Content-Length': Buffer.byteLength(body) };
+    let settled = false;
+    let deadline;
+    const finish = (err, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      if (err) reject(err); else resolve(value);
+    };
+    // Kein implizites Keep-Alive des Node-Global-Agent: CCU-RPC-Dienste können
+    // eine offene HTTP-Verbindung nach der ersten Antwort unbrauchbar lassen.
+    const headers = { 'Content-Type': 'text/xml', 'Content-Length': Buffer.byteLength(body), Connection: 'close' };
     if (options.username) headers.Authorization = `Basic ${Buffer.from(`${options.username}:${options.password || ''}`).toString('base64')}`;
-    const req = http.request({ host: options.host, port: options.port, path: '/', method: 'POST', headers, timeout }, (res) => {
+    const req = http.request({ host: options.host, port: options.port, path: '/', method: 'POST', headers, agent: false }, (res) => {
       const chunks = [];
       res.on('data', (chunk) => chunks.push(chunk));
+      res.on('aborted', () => finish(new Error('XML-RPC Antwort abgebrochen')));
+      res.on('error', finish);
       res.on('end', () => {
         try {
           if (res.statusCode < 200 || res.statusCode >= 300) throw new Error(`HTTP ${res.statusCode}`);
-          resolve({ value: parseResponse(Buffer.concat(chunks).toString('utf8')), localAddress: req.socket.localAddress });
-        } catch (err) { reject(err); }
+          const xml = Buffer.concat(chunks).toString('utf8');
+          if (!/<methodResponse[\s>]/.test(xml) || !xml.includes('</methodResponse>')) throw new Error('Ungültige XML-RPC-Antwort');
+          finish(null, { value: parseResponse(xml), localAddress: req.socket.localAddress });
+        } catch (err) { finish(err); }
       });
     });
-    req.on('timeout', () => req.destroy(new Error('XML-RPC Zeitüberschreitung')));
-    req.on('error', reject);
+    // Absolutes Zeitlimit umfasst auch DNS, Verbindungsaufbau und Teilantworten.
+    deadline = setTimeout(() => {
+      const err = new Error('XML-RPC Zeitüberschreitung');
+      finish(err);
+      req.destroy(err);
+    }, timeout);
+    req.on('error', finish);
     req.end(body);
   });
 }

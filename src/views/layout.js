@@ -88,9 +88,21 @@ const MOBILE_TABS = [
     match: ['/stromverbrauch', '/photovoltaik', '/batterie', '/grid-control'],
   },
   { path: '/prognose', label: 'Prognose', icon: '📈' },
-  { path: '/messen-schalten', label: 'Messen', icon: '🔌' },
+  // Heizung & Klima belegt den vierten Platz, sobald das Modul aktiv ist. Der
+  // Tab-Text bleibt kurz („Heizung“), weil fünf Tabs nebeneinander passen
+  // müssen. Ist das Modul aus, rückt Messen + Schalten wie zuvor nach.
+  { path: '/heizung', label: 'Heizung', icon: '🌡️', module: 'heizung' },
+  { path: '/messen-schalten', label: 'Messen', icon: '🔌', hiddenWithModule: 'heizung' },
   { path: '/wetter', label: 'Wetter', icon: '⛅' },
 ];
+
+// Ein Tab erscheint nur, wenn sein Modul aktiv ist (`module`) bzw. solange das
+// verdrängende Modul aus ist (`hiddenWithModule`).
+function mobileTabAvailable(tab) {
+  if (tab.module && !isEnabled(tab.module)) return false;
+  if (tab.hiddenWithModule && isEnabled(tab.hiddenWithModule)) return false;
+  return true;
+}
 
 // Ein Tab ist aktiv, wenn die Seite selbst, eine ihrer Unterseiten (Pfadpräfix)
 // oder eine zugeordnete Seite aus `match` geöffnet ist.
@@ -193,7 +205,7 @@ function renderNavLinks(section, activePath, access) {
 // gerendert, aber nur im Mobile-Layer (styles.css, ≤ 768px) sichtbar.
 function renderMobileNav(activePath, access) {
   const tabs = MOBILE_TABS
-    .filter((tab) => navItemVisible(tab, access))
+    .filter((tab) => mobileTabAvailable(tab) && navItemVisible(tab, access))
     .map((tab) => {
       const active = mobileTabActive(tab, activePath) ? ' active' : '';
       return `<a class="mobile-tab${active}" href="${tab.path}"><span class="mobile-tab-icon" aria-hidden="true">${tab.icon}</span><span class="mobile-tab-label">${escapeHtml(tab.label)}</span></a>`;
