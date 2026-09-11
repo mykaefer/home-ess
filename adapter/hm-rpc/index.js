@@ -1,6 +1,7 @@
 'use strict';
 
 const http = require('http');
+const createQueue = require('./rpc-queue');
 const { call, methodResponse, parseCall } = require('./xmlrpc');
 
 const OPERATIONS_WRITE = 2;
@@ -23,13 +24,7 @@ const RESYNC_DEBOUNCE_MS = 2000;
 // beschäftigte CCU) bleiben still. Gilt für Lese- UND Prüfpfad gemeinsam: ein
 // erfolgreicher Aufruf irgendeiner Art belegt die Verbindung und setzt zurück.
 const TRANSPORT_FAILURE_LIMIT = 3;
-// Der Schnittstellenprozess der CCU arbeitet Aufrufe faktisch seriell ab. Ein
-// eigener Steuerbefehl blockiert ihn deshalb, bis er den Funkweg quittiert – bei
-// einem stummen Gerät bis zu dessen CCU-seitigem Geräte-Timeout. In diesem
-// Fenster laufen ALLE parallelen Aufrufe in ihr Zeitlimit, auch der triviale
-// Schnittstellen-Ping, ohne dass der Verbindung etwas fehlt. Solche Zeitüber-
-// schreitungen dürfen daher nicht als Verbindungsabbruch zählen; der Nachlauf
-// deckt den Moment zwischen Quittung und wieder freier Schnittstelle ab.
+// Hintergrundabfragen nach einem Funkbefehl kurz pausieren.
 const WRITE_GRACE_MS = 5000;
 // Zeitlimit für den Erreichbarkeitstest vor einem Steuerbefehl bei scheinbar
 // getrennter Verbindung. Kurz gehalten: er soll den Schaltvorgang nicht bremsen.
@@ -44,6 +39,17 @@ const WRITE_TIMEOUT_MS = 30000;
 // gesendet werden: Kam der Befehl beim Gerät nie an, bleibt es sonst dauerhaft
 // unschaltbar, weil jeder weitere Klick still am Vergleich hängen bliebe.
 const UNCONFIRMED_REPEAT_MS = 30000;
+// Der erste Geräteabgleich nach dem Start hat Vorrang vor Schreibbefehlen. Er
+// dauert nur Sekundenbruchteile (reine CCU-Cache-Lesungen) und liefert genau die
+// Istwerte, an denen der Schreibpfad überflüssige Funkbefehle erkennt. Nach
+// dieser Frist gilt wieder die normale Reihenfolge, damit ein hängender Abgleich
+// keine Schaltbefehle staut.
+const FIRST_SYNC_PRIORITY_MS = 30000;
+// Ein Funkbefehl an ein Gerät, das sich als nicht erreichbar meldet, wird von der
+// CCU erst nach ihrem Geräte-Timeout (~20 s) mit einem Fehler quittiert und
+// blockiert so lange die gemeinsame Warteschlange. Solche Aufträge werden
+// vorgemerkt und erst gesendet, wenn das Gerät sich zurückmeldet.
+const DEFERRED_WRITE_MAX_AGE_MS = 30 * 60 * 1000;
 
 function segment(value) {
   return encodeURIComponent(String(value));
@@ -83,7 +89,6 @@ module.exports = function createHmRpcAdapter(host) {
   let dripIndex = 0;
   let activeWatchTimer = null;
   const activeWatchUntil = new Map(); // Geräteadresse -> Ablaufzeitpunkt (ms)
-  let syncRunning = false;
   let resyncQueued = false;
   let stopped = false;
   let registered = false;
@@ -92,10 +97,13 @@ module.exports = function createHmRpcAdapter(host) {
   let callbackUrl = '';
   let latestDutyCycle = null;
   let callbackCount = 0;
+  let eventCount = 0;
+  let lastEventLogAt = 0;
   // Zeitpunkt des letzten von der CCU empfangenen Callbacks (Event, listDevices, …).
   // Bleibt er ein volles Prüfintervall lang stehen, ist die Event-Registrierung
   // auf der CCU möglicherweise verloren (z. B. nach CCU-Neustart) → Re-Init.
   let lastCallbackAt = 0;
+  let lastInitAt = 0;
   // Transportbedingte Fehlschläge in Folge (siehe noteTransportFailure).
   let transportFailures = 0;
   // Laufende eigene Steuerbefehle bzw. Zeitpunkt des zuletzt beendeten. Solange
@@ -106,6 +114,24 @@ module.exports = function createHmRpcAdapter(host) {
   // Sofort-Reconnect nach einem Verbindungsverlust, damit nicht bis zum nächsten
   // Intervall-Tick jeder Schaltbefehl ins Leere liefe.
   let reconnectSoonTimer = null;
+  const queue = createQueue();
+  let generation = 0;
+  let nextReconnectAt = 0;
+  let reconnectAttempts = 0;
+  let syncComplete = false;
+  let syncPromise = null;
+  let activeWatchRunning = false;
+  let probePromise = null;
+  let probeResult = false;
+  let probeAt = 0;
+  const channelSchemas = new Map();
+  const initializedChannels = new Set();
+  // Schreibaufträge für nicht erreichbare Geräte: State-Adresse -> { value, at }.
+  // Je Adresse gilt der neueste Wert – wie bei der Ersetzung in der Warteschlange.
+  const deferredWrites = new Map();
+  let startedAt = 0;
+  // true, solange der erste Abgleich als ein einziger Warteschlangen-Auftrag läuft.
+  let syncInline = false;
   const descriptions = new Map();
   const channels = new Map();
   const states = new Map();
@@ -142,6 +168,9 @@ module.exports = function createHmRpcAdapter(host) {
 
   function publishCatalog() {
     const fixed = [
+      { address: 'status/callback-connected', name: 'Callback bestätigt', category: 'Schnittstelle', writable: false },
+      { address: 'status/event-count', name: 'Empfangene Werteereignisse', category: 'Schnittstelle', writable: false },
+      { address: 'status/last-event-at', name: 'Letztes Werteereignis', category: 'Schnittstelle', writable: false },
       { address: 'status/duty-cycle', name: 'Duty Cycle', category: 'Schnittstelle', unit: '%', writable: false },
       { address: 'status/writes-blocked', name: 'Schreibsperre aktiv', category: 'Schnittstelle', writable: false },
     ];
@@ -295,6 +324,41 @@ module.exports = function createHmRpcAdapter(host) {
     }
   }
 
+  // Wartungskanal (":0") des Geräts, zu dem ein Kanal gehört. Dort führt die CCU
+  // UNREACH, CONFIG_PENDING und die Batteriemeldung.
+  function maintenanceChannel(channelAddress) {
+    const address = `${deviceOfChannel(channelAddress)}:0`;
+    return channels.has(address) ? address : null;
+  }
+
+  // CCU-Flags kommen je nach Schnittstelle als BOOL oder als 0/1.
+  function flagSet(value) {
+    return value === true || value === 1 || value === '1';
+  }
+
+  // Meldet die CCU das Gerät als nicht erreichbar? Nur ein bestätigter Wert aus
+  // dem Wartungskanal zählt; ohne Kenntnis wird wie bisher gesendet.
+  function deviceUnreachable(channelAddress) {
+    const maintenance = maintenanceChannel(channelAddress);
+    if (!maintenance) return false;
+    const entry = lastValues.get(stateAddress(maintenance, 'UNREACH'));
+    return !!(entry && entry.confirmed && flagSet(entry.value));
+  }
+
+  // Ein zurückgekehrtes Gerät bekommt seine vorgemerkten Sollwerte. Zu alte
+  // Aufträge verfallen: Nach Stunden wäre der damals gültige Sollwert überholt,
+  // und der reguläre Regelzyklus schreibt ohnehin neu.
+  function flushDeferredWrites(deviceAddresses) {
+    for (const [address, job] of Array.from(deferredWrites)) {
+      const channelAddress = unsegment(String(address).split('/')[0]);
+      if (!deviceAddresses.has(deviceOfChannel(channelAddress))) continue;
+      deferredWrites.delete(address);
+      if (Date.now() - job.at > DEFERRED_WRITE_MAX_AGE_MS) continue;
+      host.log(`Vorgemerktes Schreiben ${address} wird nachgeholt: Gerät meldet sich wieder`);
+      writeState(address, job.value).catch(() => {});
+    }
+  }
+
   function eventValues(channelAddress, parameter, value) {
     const key = `${channelAddress}\0${parameter}`;
     const description = descriptions.get(key) || {};
@@ -315,37 +379,107 @@ module.exports = function createHmRpcAdapter(host) {
     return result;
   }
 
-  function publishEventBurst(events) {
+  function publishEventBurst(events, statusEntries = []) {
     const latest = new Map();
     for (const event of events || []) {
       if (!event || event.length < 3) continue;
       for (const entry of eventValues(event[0], event[1], event[2])) latest.set(entry.address, entry);
     }
+    for (const entry of statusEntries) latest.set(entry.address, entry);
     if (latest.size) {
       // Werte aus der CCU sind belegt (Readback/Refresh) – sie bestätigen einen
       // zuvor optimistisch gemerkten Schreibwert bzw. korrigieren ihn.
+      const returned = new Set();
       for (const entry of latest.values()) {
         lastValues.set(entry.address, { value: entry.value, confirmed: true, at: Date.now() });
+        // UNREACH false meldet ein Gerät zurück – Auslöser für vorgemerkte Aufträge.
+        const parts = String(entry.address).split('/');
+        if (parts.length === 2 && unsegment(parts[1]) === 'UNREACH' && !flagSet(entry.value)) {
+          returned.add(deviceOfChannel(unsegment(parts[0])));
+        }
       }
       host.publishStates(Array.from(latest.values()));
+      if (returned.size && deferredWrites.size) flushDeferredWrites(returned);
     }
   }
 
-  async function rpc(method, params, timeout) {
-    return (await call(rpcOptions, method, params, ...(timeout ? [timeout] : []))).value;
+  function noteIncomingEvents(count) {
+    if (!count) return [];
+    eventCount += count;
+    const now = Date.now();
+    const statusEntries = [
+      { address: 'status/event-count', value: eventCount },
+      { address: 'status/last-event-at', value: new Date(now).toISOString() },
+    ];
+    // Der erste echte Wert nach jeder Registrierung ist der entscheidende
+    // Ende-zu-Ende-Nachweis. Danach höchstens einmal pro Minute protokollieren.
+    if (eventCount === count || now - lastEventLogAt >= 60000) {
+      host.log(`CCU-Werteevents empfangen: ${count} im Batch, ${eventCount} seit Adapterstart`);
+      lastEventLogAt = now;
+    }
+    return statusEntries;
   }
 
-  // Ist die CCU-Schnittstelle selbst noch erreichbar? Der Aufruf ist rein lokal
-  // (kein Funk, kein Duty-Cycle) und beantwortet die einzige Frage, die nach
-  // einem fehlgeschlagenen Steuerbefehl zählt: lag es am Gerät oder an der
-  // Verbindung?
-  async function interfaceAlive(timeout) {
+  // Nur innerhalb der gemeinsamen Warteschlange aufrufen.
+  async function performRpc(method, params, timeout) {
     try {
-      await rpc('system.listMethods', [], timeout);
-      return true;
-    } catch (_) {
-      return false;
+      const result = await call(rpcOptions, method, params, timeout);
+      noteTransportSuccess();
+      return result;
+    } catch (err) {
+      if (typeof err.code === 'number') noteTransportSuccess();
+      throw err;
     }
+  }
+
+  function rpc(method, params, timeout, priority = 0) {
+    const epoch = generation;
+    return queue.run(async () => {
+      if (stopped || epoch !== generation) throw Object.assign(new Error('Veralteter RPC-Auftrag'), { cancelled: true });
+      const result = await performRpc(method, params, timeout);
+      if (stopped || epoch !== generation) throw Object.assign(new Error('Veraltete RPC-Antwort'), { cancelled: true });
+      return result.value;
+    }, { key: `${epoch}:${method}:${JSON.stringify(params)}`, priority });
+  }
+
+  // Aufruf des Geräteabgleichs. Läuft der Abgleich als ein einziger Auftrag
+  // (erster Abgleich nach dem Start, siehe synchronize), dann direkt – ein
+  // verschachtelter Warteschlangen-Auftrag käme nie an die Reihe.
+  async function syncCall(method, params) {
+    if (!syncInline) return rpc(method, params);
+    if (stopped) throw Object.assign(new Error('Veralteter RPC-Auftrag'), { cancelled: true });
+    const result = await performRpc(method, params, undefined);
+    return result.value;
+  }
+
+  // Istwerte eines Kanals innerhalb eines laufenden Warteschlangen-Auftrags
+  // nachziehen. Bewusst ohne queue.run(): Die Warteschlange arbeitet die
+  // Aufträge nacheinander ab, ein verschachtelter Auftrag käme nie an die Reihe.
+  async function primeChannelInline(channelAddress) {
+    try {
+      const values = await performRpc('getParamset', [channelAddress, 'VALUES'], PROBE_TIMEOUT_MS);
+      const burst = Object.entries(values.value || {}).map(([parameter, value]) => [channelAddress, parameter, value]);
+      if (burst.length) publishEventBurst(burst);
+      initializedChannels.add(channelAddress);
+    } catch (err) {
+      // Ein CCU-Fault bedeutet nur: dieser Kanal ist momentan nicht lesbar. Der
+      // Schreibbefehl läuft danach wie bisher – ohne Vergleichswert eben blind.
+      if (typeof err.code !== 'number') throw err;
+    }
+  }
+
+  // Parallel eintreffende Steuerbefehle teilen einen Test, auch bei negativem
+  // Ergebnis. So erzeugen dreizehn Heizungsräume keinen dreizehnfachen Probe-Burst.
+  async function interfaceAlive(timeout) {
+    if (probePromise) return probePromise;
+    if (Date.now() - probeAt < PROBE_TIMEOUT_MS) return probeResult;
+    probePromise = (async () => {
+      try { await performRpc('system.listMethods', [], timeout); probeResult = true; }
+      catch (_) { probeResult = false; }
+      probeAt = Date.now();
+      return probeResult;
+    })();
+    try { return await probePromise; } finally { probePromise = null; }
   }
 
   // Blockiert gerade ein eigener Steuerbefehl den CCU-Schnittstellenprozess?
@@ -365,6 +499,9 @@ module.exports = function createHmRpcAdapter(host) {
   function markDisconnected(detail) {
     const wasRegistered = registered;
     registered = false;
+    if (wasRegistered) generation += 1;
+    for (const [key, entry] of lastValues) lastValues.set(key, { ...entry, confirmed: false, at: 0 });
+    host.publishState('status/callback-connected', false);
     if (wasRegistered) host.error(`Verbindung zur CCU verloren: ${detail}`);
     host.setConnected(false, `CCU-RPC: ${detail}`);
   }
@@ -373,18 +510,19 @@ module.exports = function createHmRpcAdapter(host) {
   // bis dahin liefe jeder Schaltbefehl in den Erreichbarkeitstest oder ins Leere.
   function scheduleImmediateReconnect() {
     if (stopped || registered || reconnectSoonTimer) return;
+    const delay = Math.max(1000, nextReconnectAt - Date.now());
     reconnectSoonTimer = setTimeout(() => {
       reconnectSoonTimer = null;
       register().catch(() => {});
-    }, 1000);
+    }, delay);
   }
 
   // Transportfehler (Zeitüberschreitung, Verbindungsabbruch, HTTP-Fehler) buchen.
   // Erst mehrere in Folge gelten als tote Verbindung – ein einzelner Fehlschlag
-  // bedeutet meist nur eine gerade beschäftigte CCU. Blockiert ein eigener
-  // Steuerbefehl die Schnittstelle, zählt der Fehler überhaupt nicht.
+  // bedeutet meist nur eine gerade beschäftigte CCU. Eigene Aufrufe laufen
+  // bereits seriell; abgebrochene alte Aufträge zählen nicht als Netzfehler.
   function noteTransportFailure(err) {
-    if (writeInFlight()) return false;
+    if (err.cancelled || stopped) return false;
     transportFailures += 1;
     if (transportFailures < TRANSPORT_FAILURE_LIMIT || !registered) return false;
     markDisconnected(`${err.message} (${transportFailures} Transportfehler in Folge)`);
@@ -394,63 +532,120 @@ module.exports = function createHmRpcAdapter(host) {
 
   async function loadChannel(channel, initialValues) {
     if (!Array.isArray(channel.PARAMSETS) || !channel.PARAMSETS.includes('VALUES')) return;
-    let description;
+    const cached = channelSchemas.get(channel.ADDRESS);
+    let description = cached && cached.version === channel.VERSION ? cached.description : null;
     try {
-      description = await rpc('getParamsetDescription', [channel.ADDRESS, 'VALUES']);
-    } catch (err) {
-      host.error(`Parameterbeschreibung ${channel.ADDRESS}: ${err.message}`);
-      return;
-    }
-    for (const [parameter, detail] of Object.entries(description || {})) {
-      descriptions.set(`${channel.ADDRESS}\0${parameter}`, detail || {});
-      rememberState(channel.ADDRESS, parameter, detail || {});
-    }
-    // getParamset liest den bereits in der CCU geführten VALUES-Bestand. Es wird
-    // absichtlich niemals durch einen homeESS-Lesezugriff aufgerufen.
-    try {
-      const values = await rpc('getParamset', [channel.ADDRESS, 'VALUES']);
-      for (const [parameter, value] of Object.entries(values || {})) {
-        initialValues.push([channel.ADDRESS, parameter, value]);
+      if (!description) {
+        description = await syncCall('getParamsetDescription', [channel.ADDRESS, 'VALUES']);
+        channelSchemas.set(channel.ADDRESS, { version: channel.VERSION, description });
       }
+      for (const [parameter, detail] of Object.entries(description || {})) {
+        descriptions.set(`${channel.ADDRESS}\0${parameter}`, detail || {});
+        rememberState(channel.ADDRESS, parameter, detail || {});
+      }
+      if (initializedChannels.has(channel.ADDRESS)) return;
+      const before = new Map(lastValues);
+      const values = await syncCall('getParamset', [channel.ADDRESS, 'VALUES']);
+      for (const [parameter, value] of Object.entries(values || {})) {
+        const address = stateAddress(channel.ADDRESS, parameter);
+        if (lastValues.get(address) === before.get(address)) initialValues.push([channel.ADDRESS, parameter, value]);
+      }
+      initializedChannels.add(channel.ADDRESS);
     } catch (err) {
-      host.error(`Initialwerte ${channel.ADDRESS}: ${err.message}`);
+      if (typeof err.code !== 'number') throw err;
+      host.error(`Gerätedaten ${channel.ADDRESS}: ${err.message}`);
     }
   }
 
-  async function synchronize() {
-    // Single-Flight: läuft bereits ein Sync, wird nur ein Nachlauf vorgemerkt,
-    // statt einen zweiten vollständigen CCU-Durchlauf parallel zu starten.
-    if (syncRunning) { resyncQueued = true; return; }
-    syncRunning = true;
-    try {
-      const devices = await rpc('listDevices', []);
-      channels.clear();
-      for (const entry of devices || []) if (entry && entry.ADDRESS) channels.set(entry.ADDRESS, entry);
-      const initialValues = [];
-      for (const entry of channels.values()) await loadChannel(entry, initialValues);
-      publishCatalog();
-      publishDevices();
-      publishEventBurst(initialValues);
-    } finally {
-      syncRunning = false;
-      if (resyncQueued) { resyncQueued = false; scheduleResync(); }
+  // Ein Durchlauf: Gerätebestand holen und jeden Kanal nachziehen, der noch
+  // keine Werte geliefert hat.
+  async function runSync(epoch) {
+    const devices = await syncCall('listDevices', []);
+    for (const entry of devices || []) if (entry && entry.ADDRESS) {
+      const previous = channels.get(entry.ADDRESS);
+      if (previous && previous.VERSION !== entry.VERSION) initializedChannels.delete(entry.ADDRESS);
+      channels.set(entry.ADDRESS, entry);
     }
+    for (const entry of channels.values()) {
+      if (stopped || !registered || epoch !== generation) return;
+      const values = [];
+      await loadChannel(entry, values);
+      if (stopped || epoch !== generation) return;
+      // Sofort übernehmen: ein später gelesener Kanal darf aktuelle Events
+      // nicht durch einen minutenalten Gesamt-Batch überschreiben.
+      publishEventBurst(values);
+    }
+    syncComplete = true;
+    reconnectAttempts = 0;
+    host.log(`CCU-Geräteabgleich abgeschlossen (${channels.size} Geräte/Kanäle)`);
+  }
+
+  function synchronize() {
+    if (syncPromise) { resyncQueued = true; return syncPromise; }
+    if (stopped || !registered) return Promise.resolve();
+    const epoch = generation;
+    // Der erste Abgleich nach dem Start läuft als EIN Warteschlangen-Auftrag. Er
+    // dauert nur Sekundenbruchteile (reine CCU-Cache-Lesungen) und liefert die
+    // Istwerte, an denen der Schreibpfad überflüssige Funkbefehle erkennt; ein
+    // dazwischen eintreffender Schaltbefehl würde sonst zwischen zwei Kanälen
+    // durchrutschen und blind senden. Spätere Abgleiche reihen sich Kanal für
+    // Kanal ein, damit Schaltbefehle sofort an die Reihe kommen.
+    const zuerst = !syncComplete && Date.now() - startedAt < FIRST_SYNC_PRIORITY_MS;
+    syncPromise = (async () => {
+      try {
+        if (zuerst) {
+          syncInline = true;
+          // Priorität über der von Schreibbefehlen (10); die Frist deckt auch
+          // einen davor laufenden Funkbefehl ab, statt den Abgleich zu verwerfen.
+          await queue.run(() => runSync(epoch), { priority: 15, maxAge: 300000 });
+        } else {
+          await runSync(epoch);
+        }
+      } catch (err) {
+        if (!stopped && err.cancelled && registered) scheduleResync();
+        if (!stopped && !err.cancelled && epoch === generation) {
+          markDisconnected(`Geräteabgleich unterbrochen: ${err.message}`);
+          nextReconnectAt = Date.now() + Math.min(60000, 1000 * 2 ** Math.min(reconnectAttempts++, 6));
+          scheduleImmediateReconnect();
+        }
+      } finally {
+        syncInline = false;
+        syncPromise = null;
+        if (!stopped) {
+          publishCatalog();
+          publishDevices();
+          if (typeof host.setStorage === 'function') host.setStorage('rpcMetadata', {
+            channels: Array.from(channels.values()), schemas: Array.from(channelSchemas.entries()),
+          });
+          if (resyncQueued) { resyncQueued = false; scheduleResync(); }
+        }
+      }
+    })();
+    return syncPromise;
   }
 
   // updateDevice-Bursts der CCU auf einen einzigen Re-Sync zusammenfassen.
-  function scheduleResync() {
-    if (resyncTimer || stopped) return;
+  function scheduleResync(delay = RESYNC_DEBOUNCE_MS) {
+    if (resyncTimer || stopped || !registered) return;
     resyncTimer = setTimeout(() => {
       resyncTimer = null;
       synchronize().catch((err) => host.error(`Geräteaktualisierung: ${err.message}`));
-    }, RESYNC_DEBOUNCE_MS);
+    }, delay);
   }
 
   // Werte eines Kanals aus dem CCU-Cache (VALUES-Paramset) nachladen und
   // republizieren. Kein Funk, kein Duty-Cycle – gleiche Quelle wie beim Sync.
   // Pro Kanal gedrosselt, damit gehäufte Refreshwünsche (mehrere States eines
   // Kanals, On-Demand + Hintergrund) nur EIN getParamset auslösen.
-  async function refreshChannel(channelAddress, force = false) {
+  const refreshes = new Map();
+  function refreshChannel(channelAddress, force = false) {
+    if (refreshes.has(channelAddress)) return refreshes.get(channelAddress);
+    const promise = doRefreshChannel(channelAddress, force).finally(() => refreshes.delete(channelAddress));
+    refreshes.set(channelAddress, promise);
+    return promise;
+  }
+
+  async function doRefreshChannel(channelAddress, force = false) {
     if (!registered || !channelAddress || channelAddress === 'status') return;
     const now = Date.now();
     // Das aktive Beobachtungsfenster (force) fragt bewusst häufiger als die
@@ -458,11 +653,13 @@ module.exports = function createHmRpcAdapter(host) {
     if (!force && now - (readThrottle.get(channelAddress) || 0) < READ_THROTTLE_MS) return;
     readThrottle.set(channelAddress, now);
     try {
+      const before = new Map(lastValues);
       const values = await rpc('getParamset', [channelAddress, 'VALUES']);
       noteTransportSuccess();
       const burst = [];
       for (const [parameter, value] of Object.entries(values || {})) {
-        burst.push([channelAddress, parameter, value]);
+        const address = stateAddress(channelAddress, parameter);
+        if (lastValues.get(address) === before.get(address)) burst.push([channelAddress, parameter, value]);
       }
       if (burst.length) publishEventBurst(burst);
     } catch (err) {
@@ -536,12 +733,12 @@ module.exports = function createHmRpcAdapter(host) {
   function armActiveWatch(deviceAddress) {
     if (!deviceAddress) return;
     activeWatchUntil.set(deviceAddress, Date.now() + ACTIVE_WATCH_MS);
-    if (!activeWatchTimer) runActiveWatch();
+    if (!activeWatchTimer && !activeWatchRunning) runActiveWatch();
   }
 
   function runActiveWatch() {
     activeWatchTimer = null;
-    if (stopped) return;
+    if (stopped || activeWatchRunning) return;
     const now = Date.now();
     const channelSet = new Set();
     for (const [deviceAddress, until] of activeWatchUntil) {
@@ -553,6 +750,7 @@ module.exports = function createHmRpcAdapter(host) {
     // Aufrufe ohnehin seriell ab, ein Bündel gleichzeitiger Lesungen treibt nur
     // die hinteren in ihr Zeitlimit. force=true umgeht die Drossel – hier ist
     // schnelle Aktualität gewünscht.
+    activeWatchRunning = true;
     (async () => {
       for (const channelAddress of channelSet) {
         if (stopped) return;
@@ -560,6 +758,7 @@ module.exports = function createHmRpcAdapter(host) {
       }
     })()
       .finally(() => {
+        activeWatchRunning = false;
         if (!stopped && activeWatchUntil.size) {
           activeWatchTimer = setTimeout(runActiveWatch, ACTIVE_WATCH_INTERVAL_MS);
         }
@@ -567,22 +766,33 @@ module.exports = function createHmRpcAdapter(host) {
   }
 
   async function register() {
-    if (stopped || registered || connectionCheckRunning) return;
+    if (stopped || registered || connectionCheckRunning || Date.now() < nextReconnectAt) return;
     connectionCheckRunning = true;
+    const epoch = generation;
     try {
-      const probe = await call(rpcOptions, 'listDevices', []);
+      const probe = await queue.run(() => performRpc('system.listMethods', [], PROBE_TIMEOUT_MS), { priority: 20 });
+      if (stopped || epoch !== generation) return;
       const callbackHost = String(cfg.callbackHost || probe.localAddress || '').replace(/^::ffff:/, '');
       if (!callbackHost) throw new Error('Callback-Adresse konnte nicht ermittelt werden');
       callbackUrl = `http://${callbackHost}:${server.address().port}`;
-      await rpc('init', [callbackUrl, interfaceId()]);
+      callbackCount = 0;
+      lastCallbackAt = 0;
+      await rpc('init', [callbackUrl, interfaceId()], undefined, 20);
+      lastInitAt = Date.now();
+      if (stopped || epoch !== generation) return;
       registered = true;
-      noteTransportSuccess();
-      lastCallbackAt = Date.now();
-      await synchronize();
-      host.log(`CCU-RPC verbunden (${channels.size} Geräte/Kanäle), Callback ${callbackUrl}`);
-      host.setConnected(true, `CCU-RPC verbunden (${channels.size} Geräte/Kanäle), Callback ${callbackUrl}`);
+      if (syncComplete) reconnectAttempts = 0;
+      nextReconnectAt = 0;
+      host.log(`CCU-RPC erreichbar, Registrierung erneuert; Callback ${callbackUrl}`);
+      host.setConnected(true, `CCU-RPC erreichbar; Callback ${lastCallbackAt ? 'bestätigt' : 'ausstehend'}`);
+      if (!syncComplete) scheduleResync();
     } catch (err) {
-      markDisconnected(err.message);
+      if (!stopped && !err.cancelled) {
+        markDisconnected(err.message);
+        nextReconnectAt = Date.now() + Math.min(60000, 1000 * 2 ** Math.min(reconnectAttempts++, 6));
+        host.error(`CCU-RPC Anmeldung fehlgeschlagen: ${err.message}; neuer Versuch in ${Math.ceil((nextReconnectAt - Date.now()) / 1000)} s`);
+        scheduleImmediateReconnect();
+      }
     } finally {
       connectionCheckRunning = false;
     }
@@ -597,7 +807,7 @@ module.exports = function createHmRpcAdapter(host) {
     if (writeInFlight()) return;
     connectionCheckRunning = true;
     try {
-      if (Date.now() - lastCallbackAt >= reconnectMs()) {
+      if (Date.now() - Math.max(lastCallbackAt, lastInitAt) >= reconnectMs()) {
         // Kein einziger Callback seit dem letzten Prüfintervall. Nach einem
         // CCU-Neustart ist die Event-Registrierung dort verloren, während
         // RPC-Aufrufe (und damit ein reiner Erreichbarkeits-Ping) weiter
@@ -607,10 +817,13 @@ module.exports = function createHmRpcAdapter(host) {
         // listDevices-Callbacks, die die Event-Strecke Ende-zu-Ende bestätigen
         // (und lastCallbackAt fortschreiben). In ereignislosen Phasen läuft so
         // schlimmstenfalls je Intervall ein leichter init-Abgleich – kein Funk.
-        await rpc('init', [callbackUrl, interfaceId()], pingTimeout);
+        const before = callbackCount;
+        await rpc('init', [callbackUrl, interfaceId()], pingTimeout, 20);
+        lastInitAt = Date.now();
+        host.publishState('status/callback-connected', callbackCount > before);
       } else {
         // Rein lokaler Schnittstellen-Ping der CCU, niemals ein Geräte-/Funk-Read.
-        await rpc('system.listMethods', [], pingTimeout);
+        await rpc('system.listMethods', [], pingTimeout, 20);
       }
       noteTransportSuccess();
     } catch (err) {
@@ -625,7 +838,9 @@ module.exports = function createHmRpcAdapter(host) {
   }
 
   function handleCallback(method, params) {
+    if (stopped) return '';
     lastCallbackAt = Date.now();
+    host.publishState('status/callback-connected', true);
     callbackCount += 1;
     // Die ersten Calls nach jeder Registrierung sichtbar machen. So lässt sich
     // unterscheiden, ob die CCU den Callback gar nicht erreicht oder Events erst
@@ -647,20 +862,22 @@ module.exports = function createHmRpcAdapter(host) {
     if (method === 'system.multicall') {
       const calls = Array.isArray(params[0]) ? params[0] : [];
       const events = calls.filter((entry) => entry.methodName === 'event').map((entry) => (entry.params || []).slice(1));
-      publishEventBurst(events);
+      publishEventBurst(events, noteIncomingEvents(events.length));
       return calls.map((entry) => entry.methodName === 'event' ? [''] : [handleCallback(entry.methodName, entry.params || [])]);
     }
     if (method === 'event') {
-      publishEventBurst([[params[1], params[2], params[3]]]);
+      publishEventBurst([[params[1], params[2], params[3]]], noteIncomingEvents(1));
     } else if (method === 'newDevices' && Array.isArray(params[1])) {
-      for (const entry of params[1]) if (entry && entry.ADDRESS) channels.set(entry.ADDRESS, entry);
-      const initialValues = [];
-      Promise.all(params[1].map((entry) => loadChannel(entry, initialValues)))
-        .then(() => { publishCatalog(); publishDevices(); publishEventBurst(initialValues); })
-        .catch((err) => host.error(err.message));
+      for (const entry of params[1]) if (entry && entry.ADDRESS) {
+        channels.set(entry.ADDRESS, entry);
+        channelSchemas.delete(entry.ADDRESS);
+        initializedChannels.delete(entry.ADDRESS);
+      }
+      syncComplete = false;
+      scheduleResync(0);
     } else if (method === 'deleteDevices' && Array.isArray(params[1])) {
       const removed = new Set(params[1].map((entry) => typeof entry === 'string' ? entry : entry.ADDRESS));
-      for (const address of removed) channels.delete(address);
+      for (const address of removed) { channels.delete(address); channelSchemas.delete(address); initializedChannels.delete(address); }
       for (const [address] of states) {
         const channelAddress = unsegment(address.split('/')[0]);
         if (removed.has(channelAddress)) states.delete(address);
@@ -668,26 +885,133 @@ module.exports = function createHmRpcAdapter(host) {
       publishCatalog();
       publishDevices();
     } else if (method === 'updateDevice') {
+      const address = params[1];
+      for (const [key, channel] of channels) if (key === address || channel.PARENT === address) {
+        channelSchemas.delete(key); initializedChannels.delete(key);
+      }
+      syncComplete = false;
       scheduleResync();
     }
     return '';
+  }
+
+  async function writeState(address, value) {
+    const parts = String(address).split('/');
+    if (stopped || parts.length !== 2 || parts[0] === 'status') return;
+    const channelAddress = unsegment(parts[0]);
+    const parameter = unsegment(parts[1]);
+    const description = descriptions.get(`${channelAddress}\0${parameter}`);
+    if (!description) {
+      host.error(`Schreiben ${address} nicht ausgeführt: Parameterbeschreibung noch nicht verfügbar; Nachladen angefordert`);
+      syncComplete = false;
+      scheduleResync();
+      return;
+    }
+    if ((Number(description.OPERATIONS) & OPERATIONS_WRITE) === 0) {
+      host.error(`State ${address} ist laut CCU nicht schreibbar`);
+      return;
+    }
+    const normalized = normalizeValue(value, description);
+    const action = description.TYPE === 'ACTION';
+    try {
+      await queue.run(async () => {
+        if (stopped) return;
+        if (writesBlocked()) {
+          host.error(`Schreiben ${address} verworfen: Duty Cycle ${latestDutyCycle}% (Grenze ${dutyLimit()}%)`);
+          return;
+        }
+        // Vor dem ersten Schreiben auf einen noch nie gelesenen Kanal dessen
+        // Istwerte holen. Diese Cache-Lesung kostet Millisekunden und erspart
+        // einen blind abgesetzten Funkbefehl, den die CCU an ein trages oder
+        // stummes Gerät erst nach ihrem Geräte-Timeout quittiert – während
+        // dieser Zeit steht die gemeinsame Warteschlange still.
+        if (registered && !initializedChannels.has(channelAddress)) {
+          try { await primeChannelInline(channelAddress); } catch (_) { /* Verbindung prüft der Befehl selbst */ }
+          const maintenance = maintenanceChannel(channelAddress);
+          if (maintenance && !initializedChannels.has(maintenance)) {
+            try { await primeChannelInline(maintenance); } catch (_) { /* s. o. */ }
+          }
+        }
+        // Erst unmittelbar vor dem Senden vergleichen. Wartende Gegenbefehle
+        // dürfen nicht am noch alten Istwert verloren gehen.
+        const known = lastValues.get(address);
+        if (!action && known && known.value === normalized
+          && (known.confirmed || Date.now() - known.at < UNCONFIRMED_REPEAT_MS)) return;
+        if (!registered) {
+          if (!await interfaceAlive(PROBE_TIMEOUT_MS)) {
+            host.error(`Schreiben ${address} verworfen: CCU nicht erreichbar`);
+            scheduleImmediateReconnect();
+            return;
+          }
+          scheduleImmediateReconnect();
+        }
+        // Ein Gerät, das sich als nicht erreichbar meldet, quittiert den Befehl
+        // erst nach dem Geräte-Timeout der CCU mit einem Fehler und blockiert
+        // die Warteschlange. Auftrag vormerken statt senden – flushDeferredWrites()
+        // holt ihn nach, sobald UNREACH wieder false meldet.
+        if (deviceUnreachable(channelAddress)) {
+          const previous = deferredWrites.get(address);
+          deferredWrites.set(address, { value, at: Date.now() });
+          // Der Regelzyklus wiederholt denselben Sollwert laufend: nur der erste
+          // bzw. ein geänderter Auftrag wird gemeldet, sonst flutet er das Protokoll.
+          if (!previous || previous.value !== value) {
+            host.error(`Schreiben ${address} vorgemerkt: Gerät ${deviceOfChannel(channelAddress)} meldet sich als nicht erreichbar; wird bei Rückkehr gesendet`);
+          }
+          return;
+        }
+        pendingWrites += 1;
+        const before = lastValues.get(address);
+        try {
+          await performRpc('setValue', [channelAddress, parameter, normalized], WRITE_TIMEOUT_MS);
+          // Ein während setValue empfangenes Event ist neuer und darf nicht
+          // nachträglich zu einem unbestätigten optimistischen Wert werden.
+          if (lastValues.get(address) === before) lastValues.set(address, { value: normalized, confirmed: false, at: Date.now() });
+          armActiveWatch(deviceOfChannel(channelAddress));
+        } catch (err) {
+          lastValues.delete(address); // fehlgeschlagener Auftrag bleibt wiederholbar
+          host.error(`Schreiben ${address} fehlgeschlagen: ${err.message}`);
+          if (typeof err.code !== 'number') {
+            probeAt = 0;
+            if (!await interfaceAlive(PROBE_TIMEOUT_MS)) {
+              markDisconnected(err.message);
+              scheduleImmediateReconnect();
+            }
+          }
+        } finally {
+          pendingWrites -= 1;
+          lastWriteEndedAt = Date.now();
+        }
+      }, { key: action ? undefined : `write:${address}`, replace: !action, priority: 10 });
+    } catch (err) { if (!stopped) host.error(`Schreiben ${address}: ${err.message}`); }
   }
 
   return {
     async start(config) {
       cfg = config || {};
       stopped = false;
+      startedAt = Date.now();
+      deferredWrites.clear();
       callbackCount = 0;
+      eventCount = 0;
+      lastEventLogAt = 0;
       customNames.clear();
       // Zuerst die persistierte Geräteliste wiederherstellen, damit der folgende
       // publishCatalog() den Bestand NICHT auf die zwei Statuswerte eindampft und
       // die Geräteseite sofort – auch ohne CCU-Verbindung – vollständig ist.
       restoreDevices(cfg.devices);
+      for (const entry of cfg.rpcMetadata?.channels || []) if (entry?.ADDRESS) channels.set(entry.ADDRESS, entry);
+      for (const [address, schema] of cfg.rpcMetadata?.schemas || []) {
+        channelSchemas.set(address, schema);
+        for (const [parameter, detail] of Object.entries(schema.description || {})) descriptions.set(`${address}\0${parameter}`, detail);
+      }
       if (!cfg.host) throw new Error('CCU-Adresse fehlt');
       rpcOptions = { host: String(cfg.host).replace(/^https?:\/\//, '').replace(/\/$/, ''), port: Number(cfg.port) || 2010,
         username: cfg.username || '', password: cfg.password || '' };
       publishCatalog();
       host.publishState('status/writes-blocked', false);
+      host.publishState('status/callback-connected', false);
+      host.publishState('status/event-count', 0);
+      host.publishState('status/last-event-at', '');
       server = http.createServer((req, res) => {
         if (req.method !== 'POST') { res.writeHead(405); res.end(); return; }
         const chunks = [];
@@ -709,12 +1033,15 @@ module.exports = function createHmRpcAdapter(host) {
         server.listen(Number(cfg.callbackPort) || 0, '0.0.0.0', resolve);
       });
       await register();
+      if (resyncTimer) { clearTimeout(resyncTimer); resyncTimer = null; }
+      await synchronize();
       reconnectTimer = setInterval(maintainConnection, reconnectMs());
       scheduleDrip(); // optionaler, gleichmäßig verteilter Hintergrund-Refresh (refreshInterval > 0)
     },
 
     async stop() {
       stopped = true;
+      generation += 1;
       if (reconnectTimer) clearInterval(reconnectTimer);
       if (catalogTimer) clearTimeout(catalogTimer);
       if (resyncTimer) clearTimeout(resyncTimer);
@@ -723,82 +1050,15 @@ module.exports = function createHmRpcAdapter(host) {
       if (reconnectSoonTimer) clearTimeout(reconnectSoonTimer);
       if (registered) {
         // Abmeldung: gleiche Callback-URL, leere interface_id (HM XML-RPC API).
-        try { await rpc('init', [callbackUrl, '']); } catch (_) { /* CCU ggf. weg */ }
+        try { await queue.run(() => performRpc('init', [callbackUrl, ''], 2000), { priority: 100 }); } catch (_) { /* CCU ggf. weg */ }
       }
       registered = false;
+      deferredWrites.clear();
+      queue.close();
       if (server) await new Promise((resolve) => server.close(resolve));
     },
 
-    async write(address, value) {
-      if (writesBlocked()) {
-        host.error(`Schreiben ${address} verworfen: Duty Cycle ${latestDutyCycle}% (Grenze ${dutyLimit()}%)`);
-        return;
-      }
-      const parts = String(address).split('/');
-      if (parts.length !== 2 || parts[0] === 'status') return;
-      const channelAddress = unsegment(parts[0]);
-      const parameter = unsegment(parts[1]);
-      const description = descriptions.get(`${channelAddress}\0${parameter}`) || {};
-      if ((Number(description.OPERATIONS) & OPERATIONS_WRITE) === 0) {
-        host.error(`State ${address} ist laut CCU nicht schreibbar`);
-        return;
-      }
-      const normalized = normalizeValue(value, description);
-      // Unveränderter Wert: kein erneuter Steuerbefehl an die CCU. ACTION-Parameter
-      // (Taster-/Trigger-Impulse) sind davon ausgenommen – dort ist das wiederholte
-      // Schreiben desselben „Werts" die eigentliche Aktion und muss durchgehen.
-      // Ein nur optimistisch gemerkter Wert (kein Readback-Event) sperrt die
-      // Wiederholung dagegen nur kurz: Hat das Gerät den Befehl nie ausgeführt,
-      // muss ein späterer Klick ihn erneut senden dürfen.
-      const known = lastValues.get(address);
-      const blocksRepeat = known && known.value === normalized
-        && (known.confirmed || Date.now() - known.at < UNCONFIRMED_REPEAT_MS);
-      if (description.TYPE !== 'ACTION' && blocksRepeat) {
-        return;
-      }
-      // Steht der Verbindungsmerker auf getrennt, wird der Befehl NICHT blind
-      // verworfen. Der Merker beschreibt die Event-Registrierung; ein setValue
-      // nimmt die CCU auch ohne sie an. Und er kann schlicht falsch stehen: eine
-      // Zeitüberschreitung während einer beschäftigten CCU reicht dafür. Ein
-      // kurzer Erreichbarkeitstest entscheidet – ist die Schnittstelle da, geht
-      // der Befehl raus und der Reconnect wird nebenbei angestoßen. Blockiert
-      // gerade ein eigener Befehl die CCU, wäre der Test sinnlos und entfällt.
-      if (!registered && !writeInFlight()) {
-        if (!await interfaceAlive(PROBE_TIMEOUT_MS)) {
-          host.error(`Schreiben ${address} verworfen: CCU nicht erreichbar`);
-          return;
-        }
-        scheduleImmediateReconnect();
-      }
-      pendingWrites += 1;
-      try {
-        await rpc('setValue', [channelAddress, parameter, normalized], WRITE_TIMEOUT_MS);
-        // Der Befehl kam durch – die Verbindung ist damit belegt.
-        noteTransportSuccess();
-        if (!registered) scheduleImmediateReconnect();
-        // Optimistisch, bis das Readback-Event nachzieht und den Wert bestätigt.
-        lastValues.set(address, { value: normalized, confirmed: false, at: Date.now() });
-        // Steuerbefehl gesetzt – das Gerät jetzt kurz aktiv beobachten, damit ein
-        // zugehöriges Status-Topic zeitnah nachzieht (auch ohne Push-Event).
-        armActiveWatch(deviceOfChannel(channelAddress));
-      } catch (err) {
-        host.error(`Schreiben ${address} fehlgeschlagen: ${err.message}`);
-        // CCU-Fault (numerischer XML-RPC-Fehlercode, z. B. UNREACH): Die CCU hat
-        // geantwortet, nur dieses Gerät war nicht erreichbar. Die Schnittstelle
-        // ist nachweislich in Ordnung und darf nicht als getrennt gelten – sonst
-        // verwirft ein einzelnes stummes Gerät die Steuerbefehle aller anderen.
-        if (typeof err.code === 'number') { noteTransportSuccess(); return; }
-        // Transportfehler (Timeout, Verbindungsabbruch): Das kann am Funkweg des
-        // Geräts liegen oder an der Verbindung. Ein lokaler Schnittstellen-Ping
-        // entscheidet das, statt die Verbindung pauschal fallen zu lassen.
-        if (await interfaceAlive(PROBE_TIMEOUT_MS)) { noteTransportSuccess(); return; }
-        markDisconnected(err.message);
-        scheduleImmediateReconnect();
-      } finally {
-        pendingWrites -= 1;
-        lastWriteEndedAt = Date.now();
-      }
-    },
+    write: writeState,
     // Aktiver Refresh eines States (angestoßen z. B. vom Live-Tick der Messen-
     // Schalten-Seite über host.read). Liest den CCU-seitig gepflegten VALUES-
     // Bestand des Kanals per getParamset – das ist KEIN Funkbefehl, sondern die
@@ -809,7 +1069,7 @@ module.exports = function createHmRpcAdapter(host) {
       const channelAddress = unsegment(String(address).split('/')[0]);
       await refreshChannel(channelAddress);
     },
-    _test: { maintainConnection, forceDisconnected: () => markDisconnected('Test') },
+    _test: { maintainConnection, synchronize, refreshChannel, forceDisconnected: () => markDisconnected('Test') },
   };
 };
 

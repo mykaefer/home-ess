@@ -170,7 +170,21 @@ eigenständige Desktop- und Mobilansichten.
   aus und übernimmt beim Abschließen auf Wunsch den abgelesenen Zählerstand —
   optional auch zum Kalibrieren der Schätzung. Der Schornsteinfeger-Modus stellt
   alle Räume auf 28 °C, hält die dezentralen Geräte aus und lässt die
-  Zentralheizung durchlaufen.
+  Zentralheizung durchlaufen. Je Raum lässt sich außerdem ein **Boost**
+  schalten: Solange er aktiv ist, entfallen Soll-Temperatur und
+  Kühlentscheidung, und die für den aktuellen Außentemperaturbereich zuständige
+  Heizquelle wird mit maximaler Leistung angefordert. Bedienbar ist er über den
+  beschreibbaren Raum-State `boost` sowie ein optionales Boost-Topic, das
+  bidirektional damit synchron bleibt.
+- Die Raumübersicht von Heizung & Klima trägt ein **Temperaturdiagramm**: je
+  Raum ein Balken in Höhe der Ist-Temperatur, eingefärbt nach Regelzustand
+  (grün = gehalten, rot = heizt — lokal oder per Anforderung an die
+  Zentralheizung, blau = kühlt, grau = gesperrt). Der Strich im Balken markiert
+  die Soll-Temperatur und verstellt sie durch Ziehen mit Maus, Finger oder
+  Pfeiltasten in 0,5-°C-Schritten; dafür gilt dieselbe Schreibberechtigung wie
+  für das Formular der Raumzeile. Die Griffleiste unter dem Namen ordnet die
+  Räume im Diagramm um (gespeichert in `heizung_rooms.position`); die Raumliste
+  darunter bleibt alphabetisch.
 - Optionale Module lassen sich in den Einstellungen aktivieren, ohne parallele
   Server- oder Authentifizierungsstrukturen anzulegen.
 

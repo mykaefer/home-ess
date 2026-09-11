@@ -8,6 +8,8 @@
 //                        Kühlen, wahlweise sofort oder nach der eingestellten
 //                        Verzögerung (damit kurzes Lüften nichts abschaltet).
 //   3. Soll-Temperatur — optional bidirektional mit einem Thermostat gekoppelt.
+//      Boost ist ebenfalls optional bidirektional gekoppelt und erzwingt eine
+//      Wärmeanforderung unabhängig von der Soll-Temperatur.
 //   4. Geschaltet wird über **Aktionsfolgen** je Raum (heizung/actions.js), wie
 //      beim Heimkino: Wertzuweisungen, Pausen und Schleifen mit zyklischer
 //      Plausibilitätsprüfung. Je Gerät gibt es eine Folge „ein" und eine „aus";
@@ -39,6 +41,9 @@
 //        das **Erreichen der Soll-Temperatur** — oder die optionale
 //        **Rückkehr-Uhrzeit** des Raums — stellt sie auf Automatik zurück.
 //        Das Betriebslevel behält auch hier seinen Vorrang.
+//   9. Bei aktivem **Boost** entfallen Sollwert und Kühlentscheidung. Der Raum
+//      fordert mit maximaler Leistung die Heizquelle an, die nach Außentemperatur
+//      und Betriebslevel auch im Automatikbetrieb für ihn zuständig wäre.
 //
 // Eingestellte Werte werden nie automatisch verändert: steht die Grenze etwa auf
 // 4 °C Außentemperatur und die Soll-Temperatur auf 21 °C, so heizt zwischen
@@ -396,6 +401,7 @@ function stateFor(roomId) {
       temperature: null,
       sensorCount: 0,
       thermostat: emptyThermostat(''),
+      boost: emptyBoost(''),
       note: '',
     };
     roomState.set(roomId, state);
@@ -418,6 +424,10 @@ function contactsOpen(contacts) {
 
 function emptyThermostat(topic) {
   return { topic, seen: null, mirrored: null, wroteValue: null, wroteAt: null };
+}
+
+function emptyBoost(topic) {
+  return { topic, seenOn: null, mirroredOn: null, wroteOn: null, wroteAt: null };
 }
 
 function near(left, right) {
@@ -495,6 +505,47 @@ async function syncThermostat(room, state, sweep, now) {
   return room.targetTemp;
 }
 
+// Boost-State und optionales Fremd-Topic folgen denselben Regeln wie der
+// Thermostat-Sollwert: der erste retained Wert ist die Ausgangsbasis, danach
+// gewinnt eine externe Verstellung; lokale Änderungen werden gespiegelt.
+async function syncBoost(room, state, now) {
+  const topic = room.boostTopic;
+  if (!topic) {
+    state.boost = emptyBoost('');
+    return room.boostActive;
+  }
+  if (!state.boost || state.boost.topic !== topic) state.boost = emptyBoost(topic);
+  const boost = state.boost;
+  const raw = cacheValue(rooms.boostCacheKey(room.id));
+  const known = raw !== undefined && raw !== null && raw !== '';
+  const remoteOn = known ? truthy(raw) : null;
+  const staleEcho = remoteOn != null && boost.wroteAt != null
+    && now - boost.wroteAt < THERMOSTAT_ECHO_MS
+    && remoteOn !== boost.wroteOn;
+
+  if (remoteOn != null && !staleEcho) {
+    if (boost.seenOn == null || remoteOn !== boost.seenOn) {
+      boost.seenOn = remoteOn;
+      boost.mirroredOn = remoteOn;
+      if (remoteOn !== room.boostActive) {
+        await rooms.setBoost(database, room.id, remoteOn).catch(() => {});
+        room.boostActive = remoteOn;
+      }
+      return room.boostActive;
+    }
+  }
+  if (boost.seenOn == null && now - thermostatGraceFrom < THERMOSTAT_GRACE_MS) return room.boostActive;
+  if (boost.mirroredOn !== room.boostActive) {
+    if (mqttClient.publish(topic, switchPayload(room.boostActive, raw))) {
+      boost.mirroredOn = room.boostActive;
+      boost.seenOn = room.boostActive;
+      boost.wroteOn = room.boostActive;
+      boost.wroteAt = now;
+    }
+  }
+  return room.boostActive;
+}
+
 // Betriebsart der Klimaanlage festhalten (Handschaltung über den State und der
 // selbsttätige Rückfall auf Automatik).
 async function applyClimateMode(room, mode, now = Date.now()) {
@@ -544,6 +595,7 @@ async function evaluateRoom(room, outdoor, sweep, now) {
     && now - state.contactOpenSince >= room.contactDelaySeconds * 1000;
 
   const target = await syncThermostat(room, state, sweep, now);
+  const boost = await syncBoost(room, state, now);
   const temperature = state.temperature;
 
   let heatDemand = false;
@@ -557,22 +609,22 @@ async function evaluateRoom(room, outdoor, sweep, now) {
   const heatAllowed = levelHandler.isAllowed(room.heatPriority);
   const coolAllowed = levelHandler.isAllowed(room.coolPriority);
 
-  if (temperature == null) {
-    note = (sensorsByRoom.get(room.id) || []).length
-      ? 'Keine gültige Temperatur — es wird nicht geschaltet.'
-      : 'Keine Temperaturquelle zugeordnet.';
-  } else if (state.blocked) {
+  if (state.blocked) {
     note = 'Fenster/Tür offen — Heizen und Kühlen sind gesperrt.';
   } else if (sweep) {
     // Schornsteinfeger: die dezentralen Geräte bleiben aus, damit sie nicht
     // mitlaufen; die Wärme kommt allein aus der Zentralheizung.
     centralDemand = room.centralAllowed;
     note = 'Schornsteinfeger-Modus — lokale Geräte sind deaktiviert.';
+  } else if (temperature == null && !boost) {
+    note = (sensorsByRoom.get(room.id) || []).length
+      ? 'Keine gültige Temperatur — es wird nicht geschaltet.'
+      : 'Keine Temperaturquelle zugeordnet.';
   } else {
     // Braucht der Raum überhaupt Wärme? Das entscheidet allein seine eigene
     // Temperatur gegen die Soll-Temperatur.
-    heatDemand = hystereticBelow(state.heatDemand, temperature, target - room.heatOffset, room.hysteresis);
-    coolDemand = hystereticAbove(state.coolDemand, temperature, coolThreshold(room, target), room.hysteresis);
+    heatDemand = boost || hystereticBelow(state.heatDemand, temperature, target - room.heatOffset, room.hysteresis);
+    coolDemand = boost ? false : hystereticAbove(state.coolDemand, temperature, coolThreshold(room, target), room.hysteresis);
     // Heizen und Kühlen schließen sich aus.
     if (heatDemand && coolDemand) coolDemand = false;
     // Wer die Wärme liefert, entscheidet die Außentemperatur gegen die Grenze
@@ -598,6 +650,9 @@ async function evaluateRoom(room, outdoor, sweep, now) {
     } else if (coolDemand && !coolAllowed && hasCoolDevice(room)) {
       note = `Betriebslevel ${levelHandler.currentOperatingLevel()} sperrt das Kühlgerät (Priorität ${room.coolPriority}).`;
     }
+    if (boost && !note) {
+      note = 'Boost aktiv — Soll-Temperatur wird ignoriert und mit maximaler Leistung geheizt.';
+    }
   }
 
   // Übersteuerung der Klimaanlage: eine Handschaltung ersetzt die automatische
@@ -605,7 +660,7 @@ async function evaluateRoom(room, outdoor, sweep, now) {
   // Raumtemperatur bleiben dafür ohne Wirkung. Vorrang behält allein das
   // Betriebslevel. Heizen und Zentralheizung bleiben davon unberührt.
   const coolDevice = hasCoolDevice(room);
-  let override = coolDevice && climate.isOverride(room.climateMode);
+  let override = !boost && coolDevice && climate.isOverride(room.climateMode);
   if (override) {
     // Zwei Wege zurück in die Automatik: die erreichte Soll-Temperatur und die
     // optionale Uhrzeit des Raums.
@@ -633,6 +688,7 @@ async function evaluateRoom(room, outdoor, sweep, now) {
   state.hasCoolDevice = coolDevice;
 
   state.heatDemand = heatDemand;
+  state.boostActive = boost;
   state.coolDemand = coolDemand;
   state.outdoorCold = outdoorCold;
   state.heating = heating;
@@ -866,7 +922,10 @@ async function tick(now = Date.now()) {
   if (thermostatEpoch !== epoch) {
     thermostatEpoch = epoch;
     thermostatGraceFrom = now;
-    for (const state of roomState.values()) state.thermostat = emptyThermostat(state.thermostat.topic);
+    for (const state of roomState.values()) {
+      state.thermostat = emptyThermostat(state.thermostat.topic);
+      state.boost = emptyBoost(state.boost ? state.boost.topic : '');
+    }
   }
 
   const config = centralConfig || (centralConfig = await central.loadCentralConfig(database));
@@ -915,6 +974,7 @@ function snapshot() {
       temperature: state ? state.temperature : null,
       sensorCount: state ? state.sensorCount : 0,
       targetTemp: room.targetTemp,
+      boostActive: !!(state ? state.boostActive : room.boostActive),
       heating: !!(state && state.heating),
       cooling: !!(state && state.cooling),
       heatDemand: !!(state && state.heatDemand),
@@ -988,6 +1048,7 @@ async function reload() {
   loadedAt = Date.now();
   for (const room of roomList) {
     desired.set(rooms.thermostatCacheKey(room.id), room.thermostatTopic);
+    desired.set(rooms.boostCacheKey(room.id), room.boostTopic);
     desired.set(rooms.fanCacheKey(room.id), room.fanTopic);
     const tree = await actionsRepo.actionTree(database, room.id);
     treesByRoom.set(room.id, tree);
@@ -1047,16 +1108,20 @@ function roomByAddress(address) {
   return roomList.find((room) => rooms.addressFor(room.name).toLowerCase() === wanted) || null;
 }
 
-// Schreibzugriff auf system://homeess/raeume.<Raum>.soll: setzt die
-// Soll-Temperatur. Alle übrigen Raumwerte sind Messwerte und bleiben gesperrt.
+// Schreibzugriff auf die beschreibbaren Raumwerte: Soll-Temperatur und Boost.
 function handleRoomWrite(id, value) {
   const parts = String(id || '').slice(rooms.ID_PREFIX.length).split('.');
   const suffix = parts.pop();
   const room = roomByAddress(parts.join('_'));
-  if (!room || suffix !== 'soll' || !database) return;
-  rooms.setTargetTemp(database, room.id, value)
-    .then(async (target) => {
-      room.targetTemp = target;
+  if (!room || !database) return;
+  const update = suffix === 'soll'
+    ? rooms.setTargetTemp(database, room.id, value).then((target) => { room.targetTemp = target; })
+    : suffix === 'boost'
+      ? rooms.setBoost(database, room.id, value).then((active) => { room.boostActive = active; })
+      : null;
+  if (!update) return;
+  update
+    .then(async () => {
       await tick().catch(() => {});
     })
     .catch(() => {});

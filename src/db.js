@@ -876,6 +876,8 @@ function openDatabase() {
         cool_min_temp REAL,
         hysteresis REAL NOT NULL DEFAULT 0.5,
         thermostat_topic TEXT NOT NULL DEFAULT '',
+        boost_active INTEGER NOT NULL DEFAULT 0,
+        boost_topic TEXT NOT NULL DEFAULT '',
         heat_topic TEXT NOT NULL DEFAULT '',
         cool_topic TEXT NOT NULL DEFAULT '',
         central_allowed INTEGER NOT NULL DEFAULT 0,
@@ -1053,6 +1055,8 @@ function migrateHeizungDeviceActions(db) {
     // Mindesttemperatur zum Kühlen und die Prioritäten nach Betriebslevel kamen
     // nach den ersten Räumen dazu.
     if (!existing.has('cool_min_temp')) db.run('ALTER TABLE heizung_rooms ADD COLUMN cool_min_temp REAL');
+    if (!existing.has('boost_active')) db.run('ALTER TABLE heizung_rooms ADD COLUMN boost_active INTEGER NOT NULL DEFAULT 0');
+    if (!existing.has('boost_topic')) db.run("ALTER TABLE heizung_rooms ADD COLUMN boost_topic TEXT NOT NULL DEFAULT ''");
     // Optionaler Heizkörperlüfter je Raum.
     if (!existing.has('fan_topic')) {
       db.run("ALTER TABLE heizung_rooms ADD COLUMN fan_topic TEXT NOT NULL DEFAULT ''");

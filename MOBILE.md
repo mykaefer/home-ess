@@ -31,7 +31,13 @@
   Temperatur, Batterie, Betriebslevel und Himmelssymbol bleiben sichtbar.
 - **Sidebar aus**, stattdessen:
   - **Tab-Bar unten** (fixiert, `MOBILE_TABS` in `layout.js`): Dashboard,
-    Strom, PV (Photovoltaik), Batterie, Prognose — ohne eigenen Menü-Tab.
+    Energie, Prognose, Heizung, Wetter — ohne eigenen Menü-Tab. Stromverbrauch,
+    Photovoltaik und Batterie haben keinen eigenen Tab: Die Energieseite ist der
+    Einstieg in alle drei und markiert sich über `match` auch auf deren
+    Unterseiten. Der vierte Platz hängt am Modul *Heizung & Klima* — ist es
+    deaktiviert, steht dort *Messen* (Feld `module` bzw. `hiddenWithModule` eines
+    Tabs, ausgewertet in `mobileTabAvailable`). Die Beschriftungen bleiben kurz,
+    damit fünf Tabs nebeneinander passen.
   - **Titellogo = Menüschaltfläche:** das homeESS-Logo im Header öffnet das
     Menü-Sheet (nur ≤ 768px; am Desktop ist der Logo-Button funktionslos).
     Das Logo im Menü-Sheet hat dieselbe Größe wie im Titel (24px).

@@ -30,6 +30,7 @@ async function freshDb() {
     heat_offset REAL NOT NULL DEFAULT 0, cool_offset REAL NOT NULL DEFAULT 5,
     cool_min_temp REAL,
     hysteresis REAL NOT NULL DEFAULT 0.5, thermostat_topic TEXT NOT NULL DEFAULT '',
+    boost_active INTEGER NOT NULL DEFAULT 0, boost_topic TEXT NOT NULL DEFAULT '',
     heat_priority INTEGER NOT NULL DEFAULT 2, cool_priority INTEGER NOT NULL DEFAULT 4,
     heat_central_fallback INTEGER NOT NULL DEFAULT 0,
     heat_topic TEXT NOT NULL DEFAULT '', cool_topic TEXT NOT NULL DEFAULT '',
@@ -258,6 +259,60 @@ test('Raum heizt, kühlt und meldet Wärmebedarf an die Zentralheizung', async (
     state = runtime.snapshot().get(room.id);
     assert.equal(state.centralDemand, false);
     assert.equal(state.heating, true);
+  } finally {
+    runtime.stop();
+    capture.restore();
+    await close(db);
+  }
+});
+
+test('Boost synchronisiert bidirektional und heizt unabhängig von der Soll-Temperatur', async () => {
+  const db = await freshDb();
+  const room = await rooms.createRoom(db, {
+    ...baseRoom,
+    boostTopic: 'custom://Boost',
+    centralAllowed: '1',
+    centralTemp: '4',
+  });
+  const sensor = await rooms.addSensor(db, room.id, { topic: 'hdp://sensor/boost' });
+  await addSwitchSequences(db, room.id, 'heat', 'custom://Heizung');
+  await addSwitchSequences(db, room.id, 'cool', 'custom://Klima');
+  const capture = captureWrites();
+  const boostState = rooms.stateTopic(room.name, 'boost');
+  try {
+    await runtime.init(db);
+    // Der erste Fremdwert ist die Ausgangsbasis. Obwohl der Raum deutlich
+    // wärmer als Soll ist, fordert Boost bei mildem Wetter das lokale Gerät an.
+    feed(rooms.boostCacheKey(room.id), true);
+    feed(rooms.sensorCacheKey(sensor), 28);
+    feed(ENVIRONMENT_STATE_IDS.outdoorTemperature, 12);
+    await runtime.tick();
+    let state = runtime.snapshot().get(room.id);
+    assert.equal(state.boostActive, true);
+    assert.equal(state.heating, true);
+    assert.equal(state.cooling, false);
+    assert.equal(state.heatDemand, true);
+    assert.equal((await rooms.getRoom(db, room.id)).boostActive, true);
+    assert.equal((await rooms.getRoom(db, room.id)).targetTemp, 21);
+
+    // Im kalten Außentemperaturbereich übernimmt dieselbe Boost-Anforderung
+    // die Zentralheizung; das lokale Gerät geht aus.
+    feed(ENVIRONMENT_STATE_IDS.outdoorTemperature, 3);
+    await runtime.tick();
+    state = runtime.snapshot().get(room.id);
+    assert.equal(state.centralDemand, true);
+    assert.equal(state.heating, false);
+
+    // Eine lokale Änderung am beschreibbaren System-State wird gespeichert,
+    // auf das Boost-Topic gespiegelt und beendet die Anforderung.
+    capture.writes.length = 0;
+    assert.equal(systemRouter.write(boostState, '0'), true);
+    await waitFor(() => runtime.snapshot().get(room.id).boostActive === false);
+    state = runtime.snapshot().get(room.id);
+    assert.equal(state.heatDemand, false);
+    assert.equal(state.centralDemand, false);
+    assert.equal(lastWrite(capture.writes, 'custom://Boost'), 'false');
+    assert.equal((await rooms.getRoom(db, room.id)).boostActive, false);
   } finally {
     runtime.stop();
     capture.restore();

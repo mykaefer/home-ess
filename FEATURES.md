@@ -164,7 +164,19 @@ desktop and mobile layouts.
   reading, shows the monthly instalment and, on closing the period, optionally
   takes the actual meter reading — which can also calibrate the estimate. The
   chimney-sweep mode sets all rooms to 28 °C, keeps the local devices off and
-  lets the central heating run.
+  lets the central heating run. Each room also offers a **boost**: while it is
+  active the setpoint and the cooling decision are bypassed and whichever heat
+  source covers the current outdoor temperature range is requested at full
+  output. It can be operated through the writable room state `boost` and through
+  an optional boost topic that stays in bidirectional sync with it.
+- The room overview of Heating & Climate carries a **temperature chart**: one bar
+  per room at the height of its current temperature, coloured by control state
+  (green = holding, red = heating, either locally or by requesting the central
+  heating, blue = cooling, grey = blocked). The line across the bar marks the
+  setpoint and adjusts it by dragging with mouse, finger or arrow keys in steps
+  of 0.5 °C; it requires the same write permission as the form in the room row.
+  The handle below each name reorders the rooms within the chart (stored in
+  `heizung_rooms.position`); the room list below stays alphabetical.
 - Optional modules can be enabled or disabled from the settings page without
   creating parallel server or authentication structures.
 

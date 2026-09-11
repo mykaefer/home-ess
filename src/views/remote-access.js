@@ -621,7 +621,7 @@ function devicesScript() {
       function removeDevice(d) {
         if (!d || !d.deviceId || removing[d.deviceId]) return;
         var name = d.deviceName || 'dieses Gerät';
-        if (!window.confirm('Gerät wirklich entfernen? Die Kopplung wird über den Relay dauerhaft aufgehoben.' + '\n\n' + name)) return;
+        if (!window.confirm('Gerät wirklich entfernen? Die Kopplung wird über den Relay dauerhaft aufgehoben.' + '\\n\\n' + name)) return;
         removing[d.deviceId] = true;
         delete removeErrors[d.deviceId];
         render(lastView);

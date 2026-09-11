@@ -53,3 +53,19 @@ test('Registerseite ohne Kategoriefeld rendert keine merkbaren Kategorien', () =
   // Ohne Kategorien gibt es keine <details>-Gruppen (einfache Tabelle).
   assert.ok(!html.includes('data-cat-key='));
 });
+
+// Das Skript der Registerseite entsteht in einem Template-Literal: ein `\n` im
+// Quelltext wird schon beim Rendern zum Zeilenumbruch und zerreißt das
+// Stringliteral, das im Browser stehen soll. Der Browser liest dann gar kein
+// Skript mehr — Dialoge, Kategorien und Löschen wären tot.
+test('Die Registerseite liefert ein syntaktisch gültiges Browserskript aus', () => {
+  const html = renderAdapterStates({
+    adapter: { name: 'Modbus TCP', prefix: 'modbus' },
+    instance: { id: 42, name: 'wr1' },
+    editor,
+    rows: [{ address: '1', name: 'A', category: 'Zähler', unit: 'kWh' }],
+  });
+  for (const block of html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)) {
+    assert.doesNotThrow(() => new Function(block[1]));
+  }
+});

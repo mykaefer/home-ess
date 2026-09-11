@@ -12,6 +12,7 @@ const { renderLayout } = require('./layout');
 const i18n = require('../i18n');
 const { escapeHtml, statusText } = require('./components');
 const { MIN_TEMP, MAX_TEMP, MIN_HYSTERESIS, MAX_HYSTERESIS, MAX_OFFSET } = require('../heizung/rooms');
+const { chartCard, chartScript } = require('./heizung-chart');
 
 function temp(value) {
   return value == null || !Number.isFinite(Number(value)) ? '—' : `${Number(value).toFixed(1).replace('.', ',')} °C`;
@@ -120,30 +121,37 @@ ${rows}
           </div>`;
 }
 
-// Kopfzeile der Zentralheizung: Zustand und Weg zu ihren Einstellungen.
-function centralCard(central, state) {
+// Kachel der Zentralheizung: Zustand, Weg zu ihren Einstellungen und — sobald
+// sie eingerichtet ist — der Abschnitt „Kosten" mit dem laufenden
+// Abrechnungszeitraum.
+function centralCard(central, state, billing) {
   if (!central.enabled) {
     return `        <div class="hz-central-card">
-          <div><strong>Zentralheizung</strong><p class="muted">Nicht eingerichtet — Räume regeln bislang nur ihre eigenen Geräte.</p></div>
-          <a class="secondary-button" href="/heizung/zentrale">Einrichten</a>
+          <div class="hz-central-head">
+            <div><strong>Zentralheizung</strong><p class="muted">Nicht eingerichtet — Räume regeln bislang nur ihre eigenen Geräte.</p></div>
+            <a class="secondary-button" href="/heizung/zentrale">Einrichten</a>
+          </div>
         </div>`;
   }
   const modeLabel = central.mode === 'modbus' ? 'Modbus/State' : 'Schaltaktor';
   const sweep = central.sweepEnabled
     ? '<span class="adapter-badge adapter-badge--warn">Schornsteinfeger-Modus</span>' : '';
   return `        <div class="hz-central-card">
-          <div>
-            <strong>Zentralheizung</strong>
-            <p class="muted"><span>${escapeHtml(modeLabel)}</span> · <span>Außen</span> <span data-hz-outdoor>${temp(state.outdoorTemp)}</span> · <span>Vorlauf</span> <span data-hz-flow>${temp(state.flowTemp)}</span> · <span>Rücklauf</span> <span data-hz-return>${temp(state.returnTemp)}</span><span data-hz-central-note>${state.note ? ` · <span>${escapeHtml(state.note)}</span>` : ''}</span></p>
+          <div class="hz-central-head">
+            <div>
+              <strong>Zentralheizung</strong>
+              <p class="muted"><span>${escapeHtml(modeLabel)}</span> · <span>Außen</span> <span data-hz-outdoor>${temp(state.outdoorTemp)}</span> · <span>Vorlauf</span> <span data-hz-flow>${temp(state.flowTemp)}</span> · <span>Rücklauf</span> <span data-hz-return>${temp(state.returnTemp)}</span><span data-hz-central-note>${state.note ? ` · <span>${escapeHtml(state.note)}</span>` : ''}</span></p>
+            </div>
+            <div class="hz-central-state">
+              <span data-hz-sweep>${sweep}</span>
+              <span class="adapter-badge adapter-badge--${state.boilerOn ? 'on' : 'off'}" data-hz-boiler>${state.boilerOn ? 'Kessel ein' : 'Kessel aus'}</span>
+              <span class="adapter-badge adapter-badge--${state.burnerOn ? 'on' : 'off'}" data-hz-burner>${state.burnerOn ? 'Brenner an' : 'Brenner aus'}</span>
+              ${central.mode === 'relais' && central.pumpTopic ? `<span class="adapter-badge adapter-badge--${state.pumpOn ? 'on' : 'off'}" data-hz-pump>${state.pumpOn ? 'Pumpe läuft' : 'Pumpe aus'}</span>` : ''}
+              <span class="muted" data-hz-demand>${i18n.t(state.demandCount === 1 ? 'heating.demand_count_one' : 'heating.demand_count_many', { count: state.demandCount }, `${state.demandCount} Anforderung${state.demandCount === 1 ? '' : 'en'}`)}</span>
+              <a class="secondary-button" href="/heizung/zentrale">Zentralheizung</a>
+            </div>
           </div>
-          <div class="hz-central-state">
-            <span data-hz-sweep>${sweep}</span>
-            <span class="adapter-badge adapter-badge--${state.boilerOn ? 'on' : 'off'}" data-hz-boiler>${state.boilerOn ? 'Kessel ein' : 'Kessel aus'}</span>
-            <span class="adapter-badge adapter-badge--${state.burnerOn ? 'on' : 'off'}" data-hz-burner>${state.burnerOn ? 'Brenner an' : 'Brenner aus'}</span>
-            ${central.mode === 'relais' && central.pumpTopic ? `<span class="adapter-badge adapter-badge--${state.pumpOn ? 'on' : 'off'}" data-hz-pump>${state.pumpOn ? 'Pumpe läuft' : 'Pumpe aus'}</span>` : ''}
-            <span class="muted" data-hz-demand>${i18n.t(state.demandCount === 1 ? 'heating.demand_count_one' : 'heating.demand_count_many', { count: state.demandCount }, `${state.demandCount} Anforderung${state.demandCount === 1 ? '' : 'en'}`)}</span>
-            <a class="secondary-button" href="/heizung/zentrale">Zentralheizung</a>
-          </div>
+${billingSection(billing)}
         </div>`;
 }
 
@@ -180,33 +188,34 @@ function stamp(value) {
   return value ? new Date(Number(value)).toLocaleDateString('de-DE') : '—';
 }
 
-// Zählwerk der Heizkosten: der laufende Abrechnungszeitraum bis zur nächsten
-// Zählerablesung, daneben der zuletzt abgeschlossene.
-function billingCard(billing, central) {
-  if (!central.enabled || !billing) return '';
+// Abschnitt „Kosten" innerhalb der Zentralheizungs-Kachel: der laufende
+// Abrechnungszeitraum bis zur nächsten Zählerablesung, daneben der zuletzt
+// abgeschlossene.
+function billingSection(billing) {
+  if (!billing) return '';
   const unit = escapeHtml(billing.unit || '');
   const previous = billing.previous;
-  return `        <div class="hz-billing">
-          <div class="hz-billing-head">
-            <div>
-              <strong>Heizkosten-Zählwerk</strong>
-              <p class="muted">${i18n.t('heating.billing.period_running', { date: stamp(billing.startedAt), days: billing.days })}</p>
+  return `          <div class="hz-billing">
+            <div class="hz-billing-head">
+              <div>
+                <strong>${escapeHtml(i18n.t('heating.billing.counter_title', {}, 'Kosten'))}</strong>
+                <p class="muted">${i18n.t('heating.billing.period_running', { date: stamp(billing.startedAt), days: billing.days })}</p>
+              </div>
+              <div class="hz-billing-actions">
+                <button type="button" class="secondary-button" onclick="document.getElementById('heizungStartwertDialog').showModal()">Startwert</button>
+                <button type="button" class="secondary-button" onclick="document.getElementById('heizungResetDialog').showModal()">Zeitraum abschließen</button>
+              </div>
             </div>
-            <div class="hz-billing-actions">
-              <button type="button" class="secondary-button" onclick="document.getElementById('heizungStartwertDialog').showModal()">Startwert</button>
-              <button type="button" class="secondary-button" onclick="document.getElementById('heizungResetDialog').showModal()">Zeitraum abschließen</button>
-            </div>
-          </div>
-          <div class="hz-billing-figures">
-            <div class="hz-figure"><span class="hz-figure-label">Verbrauch</span><span class="hz-figure-value">${num(billing.consumption)} ${unit}</span><span class="hz-figure-note muted">${i18n.t('heating.billing.of_which_start', { value: num(billing.startConsumption), unit })}</span></div>
-            <div class="hz-figure"><span class="hz-figure-label">Kosten</span><span class="hz-figure-value">${num(billing.cost)} €</span><span class="hz-figure-note muted">seit Beginn des Zeitraums</span></div>
-            <div class="hz-figure hz-figure--accent"><span class="hz-figure-label">Monatsabschlag</span><span class="hz-figure-value">${num(billing.monthly)} €</span><span class="hz-figure-note muted">Kosten ÷ 12 Monate</span></div>
-            <div class="hz-figure"><span class="hz-figure-label">Vorheriger Zeitraum</span><span class="hz-figure-value">${previous ? `${num(previous.cost)} €` : '—'}</span><span class="hz-figure-note muted">${previous
+            <div class="hz-billing-figures">
+              <div class="hz-figure"><span class="hz-figure-label">Verbrauch</span><span class="hz-figure-value">${num(billing.consumption)} ${unit}</span><span class="hz-figure-note muted">${i18n.t('heating.billing.of_which_start', { value: num(billing.startConsumption), unit })}</span></div>
+              <div class="hz-figure"><span class="hz-figure-label">Kosten</span><span class="hz-figure-value">${num(billing.cost)} €</span><span class="hz-figure-note muted">seit Beginn des Zeitraums</span></div>
+              <div class="hz-figure hz-figure--accent"><span class="hz-figure-label">Monatsabschlag</span><span class="hz-figure-value">${num(billing.monthly)} €</span><span class="hz-figure-note muted">Kosten ÷ 12 Monate</span></div>
+              <div class="hz-figure"><span class="hz-figure-label">Vorheriger Zeitraum</span><span class="hz-figure-value">${previous ? `${num(previous.cost)} €` : '—'}</span><span class="hz-figure-note muted">${previous
     ? `${stamp(previous.startedAt)} – ${stamp(previous.endedAt)} · ${num(previous.metered == null ? previous.consumption : previous.metered)} ${unit}${previous.metered == null ? ` ${i18n.t('heating.billing.estimated')}` : ` ${i18n.t('heating.billing.read')}`} · ${i18n.t('heating.billing.per_month', { value: num(previous.monthly) })}`
     : 'Noch kein Zeitraum abgeschlossen'}</span></div>
-          </div>
-          ${billing.lastCalibrationFactor ? `<p class="muted hz-billing-hint">${i18n.t('heating.billing.last_calibration', { date: stamp(billing.lastCalibrationAt), factor: num(billing.lastCalibrationFactor, 3) })}</p>` : ''}
-        </div>`;
+            </div>
+            ${billing.lastCalibrationFactor ? `<p class="muted hz-billing-hint">${i18n.t('heating.billing.last_calibration', { date: stamp(billing.lastCalibrationAt), factor: num(billing.lastCalibrationFactor, 3) })}</p>` : ''}
+          </div>`;
 }
 
 function billingDialogs(billing) {
@@ -235,11 +244,11 @@ function renderHeizung({
   const safeInitial = JSON.stringify(initialDialog).replace(/</g, '\\u003c');
   const body = `        <div class="panel-head"><div><h1>Heizung &amp; Klima</h1></div><div class="dashboard-toolbar"><a class="secondary-button" href="/heizung/zentrale">Zentralheizung</a><button type="button" class="secondary-button" onclick="openHeizungRoomDialog()">Raum hinzufügen</button></div></div>
         ${statusText(error)}${statusText(message, 'success')}
-${centralCard(central, centralState)}
+${centralCard(central, centralState, billing)}
+${chartCard(rooms)}
         <div class="adapter-list hz-rooms" id="heizungRooms">
 ${roomBlock(rooms)}
         </div>
-${billingCard(billing, central)}
         ${roomDialog()}${deleteDialog()}${billingDialogs(billing)}`;
 
   const script = `
@@ -358,6 +367,7 @@ ${billingCard(billing, central)}
         sweepNode.innerHTML = central.sweepEnabled
           ? '<span class="adapter-badge adapter-badge--warn">Schornsteinfeger-Modus</span>' : '';
       }
+      heizungChartApply(data.rooms);
     }
     function heizungPoll() {
       fetch('/heizung/status', { headers: { Accept: 'application/json' } })
@@ -367,6 +377,7 @@ ${billingCard(billing, central)}
     }
     heizungPoll();
     setInterval(heizungPoll, 5000);
+${chartScript(rooms)}
   `;
   return renderLayout({ title: 'Heizung & Klima', activePath: '/heizung', body, script });
 }

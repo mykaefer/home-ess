@@ -87,6 +87,22 @@ test.after(async () => {
   fs.rmSync(TMP, { recursive: true, force: true });
 });
 
+// Schneidet die Kachel der Zentralheizung samt ihres Inhalts aus der Seite,
+// indem die <div>-Ebenen ab ihrem Anfang mitgezählt werden.
+function centralCardHtml(page) {
+  const start = page.indexOf('<div class="hz-central-card">');
+  assert.ok(start > -1, 'Die Kachel der Zentralheizung fehlt.');
+  let depth = 0;
+  const tag = /<div\b|<\/div>/g;
+  tag.lastIndex = start;
+  let match;
+  while ((match = tag.exec(page))) {
+    depth += match[0] === '</div>' ? -1 : 1;
+    if (depth === 0) return page.slice(start, match.index + match[0].length);
+  }
+  throw new Error('Die Kachel der Zentralheizung ist nicht geschlossen.');
+}
+
 test('Ohne aktives Modul führt /heizung zurück zur Modulverwaltung', async () => {
   const response = await fetch(`${baseUrl}/heizung`, { redirect: 'manual' });
   assert.equal(response.status, 302);
@@ -119,12 +135,13 @@ test('Räume, Temperaturquellen und Kontakte laufen über die Seiten', async () 
   // Einstellungen des Raums inkl. Zentralheizungs-Freigabe.
   const saved = await fetch(`${baseUrl}/heizung/raum/${room.id}`, form({
     name: 'Wohnzimmer', targetTemp: '21', heatOffset: '0', coolOffset: '5', coolMinTemp: '28',
-    hysteresis: '0.4', centralAllowed: '1', centralTemp: '4', fanTopic: 'custom://Luefter',
+    hysteresis: '0.4', boostTopic: 'custom://Boost', centralAllowed: '1', centralTemp: '4', fanTopic: 'custom://Luefter',
     contactDelaySeconds: '300',
   }));
   assert.equal(saved.status, 302);
   const updated = await rooms.getRoom(db, room.id);
   assert.equal(updated.fanTopic, 'custom://Luefter');
+  assert.equal(updated.boostTopic, 'custom://Boost');
   assert.equal(updated.hysteresis, 0.4);
   assert.equal(updated.coolMinTemp, 28);
   assert.equal(updated.centralAllowed, true);
@@ -157,6 +174,8 @@ test('Räume, Temperaturquellen und Kontakte laufen über die Seiten', async () 
   const page = await fetch(`${baseUrl}/heizung/raum/${room.id}`).then((res) => res.text());
   assert.match(page, /Mindesttemperatur zum Kühlen/);
   assert.match(page, /Heizkörperlüfter/);
+  assert.match(page, /name="boostTopic" value="custom:\/\/Boost"/);
+  assert.match(page, /system:\/\/homeess\/raeume\.Wohnzimmer\.boost/);
   assert.match(page, /hDP Fensterseite/);
   assert.match(page, /Terrassentür/);
   assert.match(page, /system:\/\/homeess\/raeume\.Wohnzimmer\.temperatur/);
@@ -408,7 +427,7 @@ test('Prioritäten und Ersatzschaltung laufen über ein eigenes Formular', async
   assert.match(await rejected.text(), /nur einspringen, wenn der Raum sie anfordern darf/);
 });
 
-test('Das Zählwerk steht als Kachel auf der Übersicht und lässt sich abschließen', async () => {
+test('Die Kosten stehen als Abschnitt in der Zentralheizungs-Kachel und lassen sich abschließen', async () => {
   // Die Zentralheizung ist aus dem vorigen Test eingerichtet.
   await central.saveCentralConfig(db, {
     enabled: '1', mode: 'modbus', switchTopic: 'custom://Brenner', outdoorTopic: 'custom://Aussen',
@@ -416,7 +435,9 @@ test('Das Zählwerk steht als Kachel auf der Übersicht und lässt sich abschlie
   });
 
   const page = await fetch(`${baseUrl}/heizung`).then((res) => res.text());
-  assert.match(page, /Heizkosten-Zählwerk/);
+  // Der Kostenabschnitt steht innerhalb der Kachel der Zentralheizung, nicht
+  // mehr als eigene Kachel darunter.
+  assert.match(centralCardHtml(page), /class="hz-billing"/);
   assert.match(page, /Monatsabschlag/);
   assert.match(page, /Zeitraum abschließen/);
   assert.match(page, /Kosten ÷ 12 Monate/);
