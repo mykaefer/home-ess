@@ -43,6 +43,26 @@ function actorState(id) {
   return s;
 }
 
+// Unbestätigte Befehle werden nicht bei jedem 30-s-Tick wiederholt, aber auch
+// nie endgültig verworfen: Geht ein Befehl verloren (Gerät nach Stromausfall neu
+// gestartet, Verbindung weg), folgt nach wachsender Wartezeit ein neuer Versuch.
+const PENDING_RETRY_BASE_MS = 60 * 1000;
+const PENDING_RETRY_MAX_MS = 10 * 60 * 1000;
+
+function isPending(pending, command, now) {
+  return !!pending && pending.command === command && now < pending.retryAt;
+}
+
+function nextPending(previous, command, now) {
+  const attempt = previous && previous.command === command ? previous.attempt + 1 : 0;
+  const delay = Math.min(PENDING_RETRY_MAX_MS, PENDING_RETRY_BASE_MS * 2 ** attempt);
+  return { command, attempt, retryAt: now + delay };
+}
+
+function isConfirmed(pending, on) {
+  return !!pending && pending.command === (on ? 'on' : 'off');
+}
+
 function load(loader, db) {
   return new Promise((resolve) => loader(db, resolve));
 }
@@ -55,14 +75,15 @@ function sendSwitch(actor, on) {
   if (!actor.switchTopic) return;
   const s = actorState(actor.id);
   const command = on ? 'on' : 'off';
+  const now = Date.now();
   // Solange der Ist-Zustand einen bereits gesendeten Befehl nicht bestätigt
-  // hat, denselben Funk-/MQTT-Befehl nicht bei jedem 30-s-Tick wiederholen.
-  if (s.pendingSwitch === command) return false;
+  // hat, denselben Funk-/MQTT-Befehl erst nach Ablauf der Wartezeit wiederholen.
+  if (isPending(s.pendingSwitch, command, now)) return false;
   mqttClient.publish(actor.switchTopic, on ? '1' : '0');
-  s.pendingSwitch = command;
-  if (actor.remoteTopic && s.pendingRemote !== command) {
+  s.pendingSwitch = nextPending(s.pendingSwitch, command, now);
+  if (actor.remoteTopic && !isPending(s.pendingRemote, command, now)) {
     mqttClient.publish(actor.remoteTopic, on ? '1' : '0');
-    s.pendingRemote = command;
+    s.pendingRemote = nextPending(s.pendingRemote, command, now);
   }
   return true;
 }
@@ -71,9 +92,10 @@ function sendRemote(actor, on) {
   if (!actor.remoteTopic) return false;
   const s = actorState(actor.id);
   const command = on ? 'on' : 'off';
-  if (s.pendingRemote === command) return false;
+  const now = Date.now();
+  if (isPending(s.pendingRemote, command, now)) return false;
   mqttClient.publish(actor.remoteTopic, on ? '1' : '0');
-  s.pendingRemote = command;
+  s.pendingRemote = nextPending(s.pendingRemote, command, now);
   return true;
 }
 
@@ -160,10 +182,10 @@ async function tick(db) {
     const remote = actor.remoteTopic ? readCachedBool(cache, cacheKey(actor.id, 'remote')) : null;
     const remoteChanged = remote && remote.on !== s.remoteSeenOn;
     if (remoteChanged) s.remoteSeenOn = remote.on;
-    // Erst eine bestätigte Zustandsmeldung gibt denselben Befehl wieder frei.
-    // Weicht das Gerät später erneut ab, kann die Regel genau einmal reagieren.
-    if (actual && s.pendingSwitch === (actual.on ? 'on' : 'off')) s.pendingSwitch = null;
-    if (remote && s.pendingRemote === (remote.on ? 'on' : 'off')) s.pendingRemote = null;
+    // Eine bestätigte Zustandsmeldung gibt denselben Befehl sofort wieder frei;
+    // ohne Bestätigung erst der Ablauf der Wartezeit (siehe nextPending).
+    if (actual && isConfirmed(s.pendingSwitch, actual.on)) s.pendingSwitch = null;
+    if (remote && isConfirmed(s.pendingRemote, remote.on)) s.pendingRemote = null;
 
     if (!loadShedActive || !actor.loadShedEnabled) {
       s.loadShedOff = false;

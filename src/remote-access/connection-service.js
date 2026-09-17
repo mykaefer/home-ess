@@ -122,6 +122,21 @@ function removeLink(deviceId) {
   return connection.removeLink(deviceId);
 }
 
+// Sendet eine Push-Benachrichtigung über den bestehenden authentifizierten
+// Origin-WebSocket. Es wird keine zweite Verbindung geöffnet und nichts
+// persistiert: ist der Subdienst aus oder die Verbindung nicht authentifiziert,
+// scheitert allein der Push. Die Empfänger bestimmt der Relay über seine aktiven
+// Kopplungen; homeESS kennt weder Geräte-IDs noch Push-Token.
+function pushNotification(payload) {
+  if (!connection) {
+    return Promise.reject(new RemoteAccessError('remote_access_not_connected', 'Fernzugriff nicht initialisiert.'));
+  }
+  if (!enabled) {
+    return Promise.reject(new RemoteAccessError('remote_access_not_connected', 'Fernzugriff deaktiviert.'));
+  }
+  return connection.pushNotification(payload);
+}
+
 function shutdown() {
   if (connection) connection.shutdown();
 }
@@ -143,6 +158,7 @@ module.exports = {
   disconnect,
   reconnect,
   removeLink,
+  pushNotification,
   getStatus,
   shutdown,
   _reset,

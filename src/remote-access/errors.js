@@ -27,6 +27,10 @@ const REMOTE_ACCESS_ERROR_CODES = new Set([
   'remote_access_not_connected',
   'remote_access_link_removal_timeout',
   'remote_access_link_removal_failed',
+  // Push-Benachrichtigung über den authentifizierten Origin-WebSocket.
+  // Die Empfänger bestimmt allein der Relay aus seinen aktiven Kopplungen.
+  'remote_access_push_timeout',
+  'remote_access_push_failed',
 ]);
 
 // Fehler mit stabilem, maschinenlesbarem Code. `detail` ist rein technisch und

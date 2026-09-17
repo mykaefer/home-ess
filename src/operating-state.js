@@ -20,12 +20,20 @@ let autarkDaysPreviousYearTopic = '';
 let unsubscribeMqtt = null;
 let ignoreExternalUntil = 0;
 const levelListeners = new Set();
+const emergencyListeners = new Set();
 
 // Abonnieren von Betriebslevel-Änderungen. Gibt eine Unsubscribe-Funktion zurück.
 function onOperatingLevelChanged(callback) {
   if (typeof callback !== 'function') return () => {};
   levelListeners.add(callback);
   return () => levelListeners.delete(callback);
+}
+
+// Abonnieren von Wechseln des Notstrombetriebs. Gibt eine Unsubscribe-Funktion zurück.
+function onEmergencyModeChanged(callback) {
+  if (typeof callback !== 'function') return () => {};
+  emergencyListeners.add(callback);
+  return () => emergencyListeners.delete(callback);
 }
 
 function notifyLevelChanged() {
@@ -115,7 +123,11 @@ async function setEmergencyMode(db, active) {
   const next = !!active;
   if (next === emergencyMode) return getState();
   emergencyMode = next;
-  return persist(db);
+  const result = await persist(db);
+  for (const callback of emergencyListeners) {
+    try { callback(emergencyMode); } catch (_) {}
+  }
+  return result;
 }
 
 async function updateAutarkForDay(db, dayKey, minimumSocGridActive) {
@@ -240,5 +252,5 @@ module.exports = {
   setAutarkDaysPreviousYearTopic, setAutarkDaysPreviousYearCount,
   publishAutarkDays, AUTARK_DAYS_STATE_ID,
   AUTARK_DAYS_PREVIOUS_YEAR_STATE_ID,
-  suppressExternalSync, onOperatingLevelChanged,
+  suppressExternalSync, onOperatingLevelChanged, onEmergencyModeChanged,
 };

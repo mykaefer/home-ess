@@ -20,6 +20,13 @@ const metrics = require('../runtime-metrics');
 // dieses Fenster sind, gelten als unbekannt (null) statt als gültige Messung.
 const FREQUENCY_MAX_AGE_MS = 60000;
 
+// Oberhalb dieser Frequenz liegt kein öffentliches Netz an: Erzeugungsanlagen
+// trennen sich laut VDE-AR-N 4105 spätestens bei 51,5 Hz. Ein höherer Wert am
+// Netzeingang bedeutet deshalb Netzausfall – außer der Batteriewechselrichter
+// hebt die Frequenz im Inselbetrieb an, um AC-gekoppelte PV abzuregeln. Das
+// geschieht nur oberhalb der oberen SoC-Schwelle (siehe frequencyShiftPossible).
+const GRID_FREQUENCY_MAX_HZ = 51.5;
+
 // Bestätigung der Ziel-Topics (geschlossene Regelschleife): Nach dem Schreiben
 // eines Schaltbefehls muss der Broker den Soll-Wert zurückmelden. Bleibt das
 // aus, wird der Befehl wiederholt, bis er bestätigt ist.
@@ -54,6 +61,9 @@ const state = {
   gridWarned: false, feedInWarned: false,
   gridFault: false, feedInFault: false,
   gridZeroSince: 0,
+  // SoC im Bereich der oberen Schwelle (mit Hysterese) oder unbekannt: Eine
+  // Frequenzanhebung durch den Wechselrichter ist möglich und zählt nicht als Netzausfall.
+  frequencyShiftPossible: true,
   loadOffSince: 0,
   gridFrequencies: [null, null, null],
   inverterLoads: [null, null, null],
@@ -232,6 +242,7 @@ function loadRuntimeState(db) {
     state.gridPublished = null;
     state.feedInPublished = null;
     state.gridZeroSince = 0;
+    state.frequencyShiftPossible = true;
   }
   return new Promise((resolve) => {
     db.get('SELECT load_active, load_off_since, initialized FROM grid_control_runtime WHERE id = 1', (err, row) => {
@@ -266,12 +277,17 @@ function saveRuntimeState(db) {
   });
 }
 
-function hasPhaseFailure(frequencies) {
-  return frequencies.some((frequency) => frequency === 0);
+// Netzausfall auf mindestens einer Phase: Frequenz 0 oder – sofern keine
+// Frequenzanhebung durch den Wechselrichter möglich ist – oberhalb des Netzbereichs.
+function hasPhaseFailure(frequencies, { frequencyShiftPossible = true } = {}) {
+  return frequencies.some((frequency) => frequency === 0
+    || (!frequencyShiftPossible && frequency != null && frequency > GRID_FREQUENCY_MAX_HZ));
 }
 
+// Entriegelung nur mit plausibler Netzfrequenz auf allen Phasen. Eine
+// angehobene Inselfrequenz ist nie ein zurückgekehrtes Netz.
 function allPhasesPresent(frequencies) {
-  return frequencies.every((frequency) => frequency != null && frequency > 0);
+  return frequencies.every((frequency) => frequency != null && frequency > 0 && frequency <= GRID_FREQUENCY_MAX_HZ);
 }
 
 function currentDayKey(cache, now = new Date()) {
@@ -500,6 +516,12 @@ async function tick(db) {
 
   state.socLow = socWindows.low;
   state.socHigh = socWindows.high;
+  // Unabhängig davon, ob das SoC-Fenster das Netz schaltet: dieselbe obere
+  // Schwelle samt Hysterese entscheidet, ob eine Frequenzanhebung möglich ist.
+  // Ohne SoC-Wert ist sie nicht auszuschließen.
+  state.frequencyShiftPossible = soc == null || updateExtremeWindows(
+    soc, lowSocThreshold, highSocThreshold, cfg.socHysteresis, false, state.frequencyShiftPossible
+  ).high;
   state.voltageLow = voltageWindows.low;
   state.voltageHigh = voltageWindows.high;
   state.temperature = !!(cfg.temperatureEnabled && warningValue != null && comparable(warningValue) === comparable(cfg.temperatureWarningValue));
@@ -581,13 +603,17 @@ async function tick(db) {
     }
   }
 
-  // Ein expliziter Frequenzwert 0 auf einer beliebigen Phase startet die
-  // Erkennungszeit. Danach bleibt die Verriegelung bis zur Rückkehr aller Phasen.
-  if (!globalState.emergencyMode && cfg.gridCommandTopic && state.gridActual && hasPhaseFailure(frequencies)) {
+  // Ein expliziter Frequenzwert 0 – unterhalb der oberen SoC-Schwelle auch eine
+  // zu hohe Frequenz – auf einer beliebigen Phase startet die Erkennungszeit.
+  // Danach bleibt die Verriegelung bis zur Rückkehr aller Phasen.
+  const phaseFailure = hasPhaseFailure(frequencies, { frequencyShiftPossible: state.frequencyShiftPossible });
+  if (!globalState.emergencyMode && cfg.gridCommandTopic && state.gridActual && phaseFailure) {
     if (!state.gridZeroSince) state.gridZeroSince = now;
     if (now - state.gridZeroSince >= Number(cfg.gridDetectionSeconds) * 1000) {
       await operatingState.setEmergencyMode(db, true);
-      publishWarning(cfg, 'Kein Netz erkannt. Es wurde in den Notstrombetrieb gewechselt.', db);
+      publishWarning(cfg, frequencies.some((frequency) => frequency === 0)
+        ? 'Kein Netz erkannt. Es wurde in den Notstrombetrieb gewechselt.'
+        : 'Netzfrequenz außerhalb des Netzbereichs, kein Netz erkannt. Es wurde in den Notstrombetrieb gewechselt.', db);
       globalState = operatingState.getState();
       state.gridActual = true;
       state.feedInActual = false;
@@ -741,4 +767,4 @@ function init(db) {
   runNow(db).catch(() => {});
 }
 
-module.exports = { init, runNow, getState, acknowledgeWarnings, isRelevantEvent, updateExtremeWindows, updateLoadSwitch, updateLoadSwitchDelayed, hasPhaseFailure, allPhasesPresent, currentDayKey };
+module.exports = { init, runNow, getState, acknowledgeWarnings, isRelevantEvent, updateExtremeWindows, updateLoadSwitch, updateLoadSwitchDelayed, hasPhaseFailure, allPhasesPresent, currentDayKey, GRID_FREQUENCY_MAX_HZ };

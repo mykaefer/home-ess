@@ -250,6 +250,28 @@ eigenständige Desktop- und Mobilansichten.
 - Schreibbare States und berechnete Werte lassen sich an konfigurierte Ziele
   zurückpublizieren.
 
+## Nachrichten
+
+- Die Seite „Nachrichten" verwaltet benutzerdefinierte Regeln, die aus einer
+  Änderung an einem bestehenden State eine Push-Benachrichtigung an gekoppelte
+  Geräte machen. Der State wird über den gemeinsamen State-Picker gewählt; es
+  gibt keine zweite State-Verwaltung.
+- Fünf Trigger werten jeweils eine Flanke aus: Wert ändert sich, ist gleich, ist
+  ungleich, steigt über, fällt unter. Ein erneut empfangener identischer Wert und
+  ein dauerhaft überschrittener Grenzwert lösen deshalb nicht erneut aus.
+  Grenzwerte stehen nur für numerische States zur Verfügung.
+- Je Regel entprellt ein Cooldown in Sekunden (Standard 5, 0 erlaubt) flatternde
+  Sensoren und Taster. Titel, Nachricht, Ereignistyp und Priorität (normal oder
+  kritisch) werden serverseitig geprüft.
+- Der Versand läuft über die bestehende authentifizierte Relay-Verbindung. Die
+  Empfänger bestimmt allein der Relay aus seinen aktiven Kopplungen; homeESS
+  sendet nie Instanz- oder Geräte-IDs, Empfängerlisten oder Push-Token. Ist der
+  Relay nicht verbunden, scheitert nur der Push — die auslösende Funktion läuft
+  weiter. Eine Offline-Warteschlange gibt es bewusst nicht.
+- Jede Regel lässt sich einzeln testen, aktivieren, deaktivieren und löschen.
+  Der Testversand verändert weder den State noch den letzten Trigger. Regeln auf
+  gelöschte States werden als ungültig markiert, statt entfernt zu werden.
+
 ## Fernzugriff und Updates
 
 - Der optionale gekoppelte Fernzugriff folgt dem Pfad Browser → homeESS →

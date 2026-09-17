@@ -235,6 +235,27 @@ desktop and mobile layouts.
 - Writable states and calculated values can be published back to configured
   targets.
 
+## Messages
+
+- The "Messages" page manages user-defined rules that turn a change on an
+  existing state into a push notification to linked devices. The state is chosen
+  through the shared state picker; there is no second state management.
+- Five triggers each evaluate an edge: value changes, equals, does not equal,
+  rises above, falls below. A repeated identical value and a permanently
+  exceeded limit therefore do not trigger again. Limits are available for
+  numeric states only.
+- A per-rule cooldown in seconds (default 5, 0 allowed) debounces flapping
+  sensors and push buttons. Title, message, event type and priority (normal or
+  critical) are validated server-side.
+- Delivery uses the existing authenticated relay connection. Recipients are
+  determined solely by the relay from its active pairings; homeESS never sends
+  instance or device IDs, recipient lists or push tokens. If the relay is not
+  connected, only the push fails — the triggering function carries on. There is
+  deliberately no offline queue.
+- Every rule can be tested, enabled, disabled and deleted individually. The test
+  send changes neither the state nor the last trigger. Rules pointing at deleted
+  states are marked invalid rather than removed.
+
 ## Remote access and updates
 
 - Optional paired remote access follows the flow Browser → homeESS → essrelay.

@@ -3,6 +3,100 @@
 Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [1.7.0] — 2026-09-17
+
+### Neu
+
+- **Zentrales Nachrichtensystem mit der Seite „Nachrichten".** homeESS kann jetzt
+  Push-Benachrichtigungen an gekoppelte Geräte senden, ausgelöst von den States
+  der Anlage. Unter `Nachrichten` lassen sich Regeln anlegen: State aus der
+  bestehenden State-Liste wählen, Trigger bestimmen, Titel, Nachricht,
+  Ereignistyp und Priorität (normal oder kritisch) festlegen. Jede Regel kann
+  einzeln getestet, aktiviert, deaktiviert und gelöscht werden.
+
+  Fünf Trigger werten jeweils eine **Flanke** aus — `Wert ändert sich`,
+  `Ist gleich`, `Ist ungleich`, `Steigt über`, `Fällt unter`. Ein erneut
+  empfangener identischer Wert und ein dauerhaft überschrittener Grenzwert lösen
+  deshalb nicht erneut aus: Ein Klingeltaster meldet nur den Übergang
+  `false → true`, ein Temperaturalarm nur das tatsächliche Überschreiten.
+  Grenzwerte stehen nur für numerische States zur Verfügung. Zusätzlich entprellt
+  ein Cooldown je Regel (Standard 5 Sekunden, 0 erlaubt) flatternde Sensoren; ein
+  während des Cooldowns unterdrückter Push verlängert diesen nicht.
+
+  Der Versand läuft über die **bestehende authentifizierte Relay-Verbindung** —
+  kein zweiter Server, kein eigener Kanal, keine Firebase-Zugangsdaten. Gesendet
+  werden nur Titel, Text, Ereignistyp und Priorität: Instanz- und Geräte-IDs,
+  Empfängerlisten und Push-Token verlassen homeESS nie und werden auch nicht in
+  einer Regel gespeichert. Die Empfänger bestimmt allein der Relay aus seinen
+  aktiven Kopplungen. Ist der Relay nicht verbunden, scheitert ausschließlich der
+  Push — die auslösende homeESS-Funktion und die State-Verarbeitung laufen
+  unverändert weiter. Eine persistente Offline-Warteschlange gibt es bewusst
+  nicht.
+
+  Die Auswertung hängt an der bestehenden zentralen State-Infrastruktur
+  (`state-bus`, Ad-hoc-Abos); es gibt keine Polling-Schleife und keine zweite
+  State-Verwaltung. Eine Regel auf einen inzwischen gelöschten State löst nicht
+  aus, wird in der Übersicht als ungültig markiert und bleibt zum Reparieren
+  erhalten, statt still zu verschwinden. States werden dabei über die gemeinsame
+  Auflösungsgrenze `states/catalog.resolveStates()` aufgelöst, damit auch
+  berechnete Systemwerte (`system://homeess/…`) korrekt erkannt werden. Protokolliert werden nur Metadaten
+  (Regel-ID, Ereignistyp, Priorität, Empfängeranzahl, Grund) — nie der
+  Nachrichtentext.
+
+### Behoben
+
+- **Schieberegler „Mindest-Ladezustand" auf der Batterieseite ist direkt
+  verknüpft.** Der Regler war nur ein Feld des Einstellungsformulars: Ohne
+  „Konfiguration speichern" blieb eine Änderung wirkungslos und war nach dem
+  Neuladen verschwunden, und eine Änderung über das Remote-Topic erschien erst
+  nach dem Neuladen. Beim Loslassen übernimmt der Regler den Wert jetzt sofort
+  (`POST /batterie/min-soc`, 5-%-Schritte) und sendet ihn wie das Formular an
+  Ziel- und Remote-Topic; die übrigen Batterieeinstellungen bleiben unberührt.
+  `/batterie/data` liefert die gespeicherte Einstellung mit, sodass der Regler
+  externen Änderungen live folgt – außer während er gerade bedient wird.
+
+- **Betriebslevel 1 nur noch im Notstrombetrieb.** Die Prognose senkte das
+  Betriebslevel auf 1, sobald der SoC unter dem Mindest-SoC lag – auch bei
+  zugeschaltetem Netz. Am 14.09.2026 genügte dafür das Anheben des Mindest-SoC
+  von 10 % auf 20 % bei SoC 10 %: Alles ab Priorität 2 wurde abgeschaltet,
+  obwohl das Netz den Bedarf deckte. Level 1 ist jetzt ausschließlich zulässig,
+  wenn kein Netz vorhanden und der Notstrombetrieb erkannt ist; sonst ist
+  Level 2 die Untergrenze – für die Mindest-SoC-Regel ebenso wie für beide
+  Verhaltensmodelle. Beginn und Ende des Notstrombetriebs lösen die Bewertung
+  sofort aus; ein bestehendes Level 1 wird mit Rückkehr des Netzes auch ohne
+  aktives Verhaltensmodell verlassen.
+
+- **Änderungen des Mindest-SoC werden mit Quelle protokolliert.** Jede Änderung
+  der Einstellung schreibt eine Zeile `[batterie minSoc]` ins Journal – mit
+  Quelle (Oberfläche oder Remote-Topic), altem und neuem Wert sowie beim
+  Remote-Topic dem empfangenen Rohwert und Zeitpunkt. Damit lässt sich belegen,
+  wenn ein extern gemeldeter Wert eine gerade gespeicherte Einstellung
+  zurückdreht.
+
+- **Netzausfall wird auch bei zu hoher Netzfrequenz erkannt.** Grid-Control hat
+  einen Netzausfall bisher nur an einer Frequenz von genau 0 Hz erkannt. Meldete
+  der Netzeingang des Batteriewechselrichters bei zugeschaltetem Netz stattdessen
+  eine angehobene Frequenz (am 14.09.2026: 52 Hz ohne jeden Netzbezug), blieben
+  Notstrombetrieb und Warnung aus, bis der Akku unter den Mindest-SoC fiel.
+  Jetzt zählt eine Frequenz über 51,5 Hz nach derselben Wartezeit ebenfalls als
+  Netzausfall — allerdings nur, solange der SoC unterhalb der oberen
+  Grid-Control-SoC-Schwelle liegt (mit deren Hysterese). Oberhalb hebt der
+  Wechselrichter die Frequenz bewusst an, um AC-gekoppelte PV abzuregeln; das
+  wird nicht als Ausfall gewertet, ebenso wenig bei unbekanntem SoC. 0 Hz bleibt
+  unabhängig vom SoC ein Netzausfall. Entriegelt wird der Notstrombetrieb nur
+  noch mit plausibler Netzfrequenz (> 0 und ≤ 51,5 Hz) auf allen drei Phasen;
+  eine angehobene Inselfrequenz hebt ihn nicht mehr auf. Die Warnung nennt die
+  Frequenz als Ursache.
+
+- **„Immer an"-Geräte bleiben nach einem verlorenen Einschaltbefehl nicht mehr
+  dauerhaft aus.** Messen + Schalten sendet einen Schaltbefehl nicht bei jedem
+  30-s-Tick erneut, solange das Gerät ihn nicht bestätigt hat. Bisher galt diese
+  Sperre ohne Ablauf: Ging der Befehl verloren – etwa weil eine Steckdose nach
+  einem Stromausfall neu gestartet war –, wurde nie wieder gesendet, und das
+  Gerät blieb trotz „Immer an" und freigegebenem Betriebslevel aus. Ein
+  unbestätigter Befehl wird jetzt nach 1, 2, 4 und 8 Minuten und danach alle
+  10 Minuten wiederholt, bis das Gerät den Zustand meldet.
+
 ## [1.6.4] — 2026-09-11
 
 ### Hinzugefügt

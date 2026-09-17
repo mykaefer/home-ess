@@ -58,6 +58,7 @@ const PAGES = [
   { key: 'prognose', label: 'Prognose', prefix: '/prognose' },
   { key: 'messen-schalten', label: 'Messen + Schalten', prefix: '/messen-schalten' },
   { key: 'conditions', label: 'Bedingungen', prefix: '/conditions' },
+  { key: 'notifications', label: 'Nachrichten', prefix: '/notifications' },
   { key: 'adapter', label: 'Adapter', prefix: '/adapter' },
   { key: 'states', label: 'States', prefix: '/states' },
   { key: 'output', label: 'Output', prefix: '/output' },

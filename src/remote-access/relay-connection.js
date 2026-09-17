@@ -60,8 +60,16 @@ const MAX_STATUS_DEVICES = 256;
 const LINKED_DEVICES_FIELDS = new Set(['type', 'instanceId', 'revision', 'complete', 'generatedAt', 'devices']);
 const LINK_REMOVED_FIELDS = new Set(['type', 'requestId', 'instanceId', 'deviceId', 'removedAt']);
 
+// Erlaubte Feldnamen der Push-Bestätigung (push_notification_result). Die
+// Nachricht ist eine reine Quittung: sie trägt weder Empfängerlisten noch
+// Geräte-IDs, nur die Anzahl der vom Relay bedienten Kopplungen.
+const PUSH_RESULT_FIELDS = new Set(['type', 'accepted', 'recipients', 'reason']);
+
 // Timeout für eine remove_link-Anfrage (bis link_removed eintrifft).
 const REMOVAL_TIMEOUT_MS = 15000;
+// Timeout für eine push_notification-Anfrage (bis push_notification_result
+// eintrifft). Bewusst kurz: der Aufrufer (Nachrichtensystem) darf nie warten.
+const PUSH_TIMEOUT_MS = 10000;
 const TUNNEL_MESSAGE_TYPES = new Set(['tunnel_request_start', 'tunnel_request_body', 'tunnel_request_end', 'tunnel_cancel']);
 
 function loadDefaultWebSocketImpl() {
@@ -88,6 +96,7 @@ function createRelayConnection(options = {}) {
   // ein Fehler darf die Verbindung nie stören.
   const onLinkedDevices = typeof options.onLinkedDevices === 'function' ? options.onLinkedDevices : () => {};
   const removalTimeoutMs = Number.isFinite(options.removalTimeoutMs) ? options.removalTimeoutMs : REMOVAL_TIMEOUT_MS;
+  const pushTimeoutMs = Number.isFinite(options.pushTimeoutMs) ? options.pushTimeoutMs : PUSH_TIMEOUT_MS;
   const originTunnel = options.originTunnel || createOriginTunnel({
     WebSocketImpl,
     logger,
@@ -121,6 +130,10 @@ function createRelayConnection(options = {}) {
   const processedChallenges = new Set();
   // Offene remove_link-Anfragen: requestId -> { deviceId, resolve, reject, timer }.
   const pendingRemovals = new Map();
+  // Offene push_notification-Anfragen in Sendereihenfolge. Die Quittung trägt
+  // bewusst keine Korrelations-ID (der Payload enthält nichts als Titel, Text,
+  // Ereignistyp und Priorität), deshalb wird streng FIFO zugeordnet.
+  const pendingPushes = [];
 
   function setState(next, reason) {
     if (state === next) return;
@@ -134,6 +147,7 @@ function createRelayConnection(options = {}) {
     if (prev === STATE.AUTHENTICATED && next !== STATE.AUTHENTICATED) {
       try { originTunnel.abortAll('connection_closed'); } catch (_) { /* Tunnel-Cleanup darf den Reconnect nie stören. */ }
       rejectPendingRemovals('remote_access_not_connected');
+      rejectPendingPushes('remote_access_not_connected');
       try { onDisconnected(); } catch (_) { /* Laufzeitstatus darf nie stören. */ }
     }
   }
@@ -146,6 +160,17 @@ function createRelayConnection(options = {}) {
       try { p.reject(new RemoteAccessError(code || 'remote_access_not_connected', 'Verbindung getrennt.')); } catch (_) { /* egal */ }
     }
     pendingRemovals.clear();
+  }
+
+  // Offene Push-Anfragen scheitern lassen (Verbindung getrennt). Der Aufrufer
+  // erhält ein strukturiertes „nicht zugestellt"; die auslösende homeESS-
+  // Funktion läuft davon unberührt weiter.
+  function rejectPendingPushes(code) {
+    while (pendingPushes.length) {
+      const entry = pendingPushes.shift();
+      if (entry.timer) clearTimeout(entry.timer);
+      try { entry.reject(new RemoteAccessError(code || 'remote_access_not_connected', 'Verbindung getrennt.')); } catch (_) { /* egal */ }
+    }
   }
 
   function getStatus() {
@@ -379,6 +404,9 @@ function createRelayConnection(options = {}) {
       case 'linked_devices':
         logDispatch('linked_devices', 'handleLinkedDevices', true, null, null);
         return handleLinkedDevices(msg, gen);
+      case 'push_notification_result':
+        logDispatch('push_notification_result', 'handlePushResult', true, null, null);
+        return handlePushResult(msg, gen);
       case 'error':
         logDispatch('error', 'handleErrorMessage', true, null, null);
         return handleErrorMessage(msg, gen);
@@ -563,6 +591,33 @@ function createRelayConnection(options = {}) {
         pending.reject(new RemoteAccessError('remote_access_link_removal_failed', 'Antwort betrifft ein anderes Gerät.'));
       }
     }
+    return undefined;
+  }
+
+  // Quittung einer Push-Benachrichtigung. Anders als bei den übrigen Nachrichten
+  // führt ein Schemafehler hier bewusst NICHT zum Protokollabbruch: der Push ist
+  // ein Nebenweg, und eine getrennte Verbindung würde Fernzugriff und Tunnel für
+  // alle gekoppelten Geräte mitreißen. Stattdessen scheitert nur die zugehörige
+  // Anfrage — die auslösende homeESS-Funktion bleibt davon unberührt.
+  function handlePushResult(msg, gen) {
+    if (gen !== generation) return undefined;
+    const entry = pendingPushes.shift();
+    if (!entry) return undefined;
+    if (entry.timer) clearTimeout(entry.timer);
+    const unknownField = Object.keys(msg).find((key) => !PUSH_RESULT_FIELDS.has(key));
+    if (unknownField || typeof msg.accepted !== 'boolean') {
+      logger('Push-Quittung verworfen', { reason: unknownField ? 'unknown_field' : 'invalid_accepted' });
+      entry.reject(new RemoteAccessError('remote_access_push_failed', 'Ungültige Push-Quittung.'));
+      return undefined;
+    }
+    const recipients = Number.isInteger(msg.recipients) && msg.recipients >= 0 ? msg.recipients : 0;
+    if (!msg.accepted) {
+      logger('Push abgelehnt', { recipients });
+      entry.reject(new RemoteAccessError('remote_access_push_failed', 'Push wurde nicht angenommen.'));
+      return undefined;
+    }
+    logger('Push quittiert', { recipients });
+    entry.resolve({ accepted: true, recipients });
     return undefined;
   }
 
@@ -752,6 +807,35 @@ function createRelayConnection(options = {}) {
     });
   }
 
+  // Sendet eine Push-Benachrichtigung über den authentifizierten Origin-
+  // WebSocket. Der Payload trägt ausschließlich Titel, Text, Ereignistyp und
+  // Priorität: die Instanz ergibt sich aus der Ed25519-authentifizierten
+  // Verbindung, die Empfänger bestimmt allein der Relay aus seinen aktiven
+  // Kopplungen. Es werden nie instanceId, deviceId, FCM-Token oder
+  // Empfängerlisten gesendet.
+  function pushNotification(payload) {
+    if (state !== STATE.AUTHENTICATED) {
+      return Promise.reject(new RemoteAccessError('remote_access_not_connected', 'Origin-WebSocket nicht authentifiziert.'));
+    }
+    const message = {
+      type: 'push_notification',
+      title: String(payload && payload.title),
+      body: String(payload && payload.body),
+      eventType: String(payload && payload.eventType),
+      severity: payload && payload.severity === 'critical' ? 'critical' : 'normal',
+    };
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const index = pendingPushes.findIndex((item) => item.timer === timer);
+        if (index >= 0) pendingPushes.splice(index, 1);
+        reject(new RemoteAccessError('remote_access_push_timeout', 'Zeitüberschreitung beim Push.'));
+      }, pushTimeoutMs);
+      if (typeof timer.unref === 'function') timer.unref();
+      pendingPushes.push({ resolve, reject, timer });
+      sendJson(message);
+    });
+  }
+
   function sendJson(obj) {
     const socket = ws;
     if (!socket) return;
@@ -773,6 +857,7 @@ function createRelayConnection(options = {}) {
   function shutdown() {
     stopped = true;
     clearAllTimers();
+    rejectPendingPushes('remote_access_not_connected');
     try { originTunnel.abortAll('connection_closed'); } catch (_) { /* egal */ }
     const socket = ws;
     ws = null;
@@ -790,6 +875,7 @@ function createRelayConnection(options = {}) {
     disconnect,
     reconnect,
     removeLink,
+    pushNotification,
     getStatus,
     shutdown,
     STATE,
@@ -832,6 +918,7 @@ function dispatchNameFor(type) {
     case 'connection_status': return 'handleConnectionStatus';
     case 'link_removed': return 'handleLinkRemoved';
     case 'linked_devices': return 'handleLinkedDevices';
+    case 'push_notification_result': return 'handlePushResult';
     case 'error': return 'handleErrorMessage';
     default:
       return typeof type === 'string' && type.startsWith('tunnel_') ? 'originTunnel.handleMessage' : null;

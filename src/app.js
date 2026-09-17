@@ -39,6 +39,7 @@ const adapterRoutes = require('./routes/adapters');
 const statesRoutes = require('./routes/states');
 const databaseRoutes = require('./routes/database');
 const conditionsRoutes = require('./routes/conditions');
+const notificationRoutes = require('./routes/notifications');
 const remoteAccessRoutes = require('./routes/remote-access');
 const updateRoutes = require('./routes/update');
 const pairingState = require('./remote-access/pairing-state');
@@ -70,6 +71,7 @@ const jobs = require('./job-scheduler');
 const { updatePoolEnergyModel } = require('./pool/energy-model');
 const i18n = require('./i18n');
 const conditionEngine = require('./conditions/engine');
+const notificationEngine = require('./notifications/engine');
 const heimkinoRuntime = require('./heimkino/runtime');
 const heizungRuntime = require('./heizung/runtime');
 
@@ -138,6 +140,7 @@ function createApp() {
   app.use(statesRoutes(db));
   app.use(databaseRoutes(db));
   app.use(conditionsRoutes(db));
+  app.use(notificationRoutes(db));
   app.use(remoteAccessRoutes());
   app.use(updateRoutes());
 
@@ -198,6 +201,10 @@ function createApp() {
     .then(async (defs) => {
       mqttClient.setStateDefinitions(defs);
       await conditionEngine.init(db);
+      // Nachrichtensystem: Regeln laden und ihre States abonnieren. Ein Fehler
+      // darf den MQTT-Start nie blockieren — ohne Engine bleibt homeESS
+      // vollständig bedienbar, es werden nur keine Pushs ausgelöst.
+      await notificationEngine.init(db).catch((err) => console.error('[notifications] Init fehlgeschlagen:', err && err.message));
       loadMqttConfig(db, (cfg) => {
         i18n.setTimezone(cfg.timezone);
         if (cfg.host) mqttClient.connect(cfg);
@@ -205,6 +212,7 @@ function createApp() {
     })
     .catch((error) => {
       if (error) console.error('[startup] State-/Bedingungs-Init fehlgeschlagen:', error && error.message);
+      notificationEngine.init(db).catch((err) => console.error('[notifications] Init fehlgeschlagen:', err && err.message));
       conditionEngine.init(db).catch((err) => console.error('[conditions] Fallback-Init fehlgeschlagen:', err && err.message)).finally(() => {
         loadMqttConfig(db, (cfg) => {
           i18n.setTimezone(cfg.timezone);

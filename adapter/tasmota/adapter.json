@@ -2,7 +2,7 @@
   "id": "tasmota",
   "name": "Tasmota",
   "prefix": "tasmota",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Stellt einen lokalen MQTT-Endpunkt für Tasmota-Geräte bereit, erkennt deren Werte automatisch und führt registrierte Geräte mit Online-/Offline-Erkennung.",
   "copyright": "Copyright (C) 2026 Kevin Käfer",
   "multiInstance": true,

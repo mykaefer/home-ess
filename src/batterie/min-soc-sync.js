@@ -32,6 +32,12 @@ function save(db, cfg) {
   });
 }
 
+// Jede Änderung der Mindest-SoC-Einstellung mit Quelle ins Journal, damit sich
+// ein unerwartetes Zurückdrehen (z. B. durch einen externen Remote-Wert) belegen lässt.
+function logMinSocChange(source, from, to, details = {}) {
+  console.log('[batterie minSoc]', JSON.stringify({ ts: new Date().toISOString(), source, from, to, ...details }));
+}
+
 function roundToStep(value) {
   return Math.round(Math.min(100, Math.max(0, value)) / 5) * 5;
 }
@@ -47,8 +53,11 @@ let lastAppliedReceivedAt = 0;
 // Cache liegender älterer Remote-Wert beim direkt folgenden Sync-Lauf als
 // „externe Änderung" gewertet und die gerade gespeicherte Einstellung wieder
 // zurückdrehen. Erst ein danach eintreffender, echt neuerer Remote-Wert zählt.
+let lastLocalChangeAt = 0;
+
 function noteLocalChange() {
   lastAppliedReceivedAt = Date.now();
+  lastLocalChangeAt = lastAppliedReceivedAt;
 }
 
 async function runSync(db) {
@@ -62,6 +71,12 @@ async function runSync(db) {
   if (!Number.isFinite(parsed)) return;
   const rounded = roundToStep(parsed);
   if (rounded !== cfg.minSoc) {
+    logMinSocChange('remote-topic', cfg.minSoc, rounded, {
+      topic: cfg.remoteTopic,
+      remoteValue: remote.value,
+      remoteReceivedAt: new Date(remote.receivedAt).toISOString(),
+      localChangeAt: lastLocalChangeAt ? new Date(lastLocalChangeAt).toISOString() : null,
+    });
     await save(db, { ...cfg, minSoc: rounded });
     // Das Steuer-Topic (und damit z. B. der Wechselrichter) folgt der Übernahme.
     if (cfg.minSocTopic) mqttClient.publish(cfg.minSocTopic, rounded);
@@ -71,6 +86,35 @@ async function runSync(db) {
   if (String(remote.value) !== String(rounded)) {
     mqttClient.publish(cfg.remoteTopic, rounded);
   }
+}
+
+// Eine lokal gespeicherte Einstellung (Formular oder Regler) an Steuer- und
+// Remote-Topic weitergeben. noteLocalChange sorgt dafür, dass ein noch im Cache
+// liegender älterer Remote-Wert die gerade gespeicherte Einstellung nicht sofort
+// wieder zurückdreht.
+function publishLocalMinSoc(previous, config, source) {
+  if (previous && previous.minSoc !== config.minSoc) {
+    logMinSocChange(source, previous.minSoc, config.minSoc);
+  }
+  if (config.minSocTopic) mqttClient.publish(config.minSocTopic, config.minSoc);
+  if (config.remoteTopic) {
+    noteLocalChange();
+    mqttClient.publish(config.remoteTopic, config.minSoc);
+  }
+}
+
+// Nur den Mindest-SoC ändern (Schieberegler), alle übrigen Einstellungen bleiben.
+async function setLocalMinSoc(db, value) {
+  const parsed = Number(String(value == null ? '' : value).replace(',', '.'));
+  if (!Number.isFinite(parsed)) {
+    const error = new Error('Ungültiger Mindest-Ladezustand.');
+    error.validation = true;
+    throw error;
+  }
+  const previous = await load(db);
+  const saved = await save(db, { ...previous, minSoc: roundToStep(parsed) });
+  publishLocalMinSoc(previous, saved, 'oberflaeche');
+  return saved;
 }
 
 let _tickChain = Promise.resolve();
@@ -106,6 +150,10 @@ function init(db) {
 
 function resetForTests() {
   lastAppliedReceivedAt = 0;
+  lastLocalChangeAt = 0;
 }
 
-module.exports = { init, runNow, runSync, noteLocalChange, isRelevantEvent, resetForTests };
+module.exports = {
+  init, runNow, runSync, noteLocalChange, logMinSocChange, publishLocalMinSoc, setLocalMinSoc,
+  isRelevantEvent, resetForTests,
+};

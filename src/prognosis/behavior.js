@@ -89,21 +89,35 @@ function offGridLevel(metrics) {
   return { level: 4, reason: 'Autarker Regelbetrieb mit guter Reserve' };
 }
 
+// Level 1 schaltet alles ab Priorität 2 ab. Das ist nur zulässig, wenn kein Netz
+// vorhanden ist, also ausschließlich im erkannten Notstrombetrieb. Mit Netz deckt
+// das Netz jeden Engpass (Grid-Control schaltet es unter dem Mindest-SoC zu);
+// Untergrenze ist dann Level 2 – egal welches Modell Level 1 empfiehlt.
+function limitToGridAvailability(recommendation, emergencyMode) {
+  if (emergencyMode || recommendation.level >= 2) return recommendation;
+  return { ...recommendation, level: 2, reason: `${recommendation.reason} – Netz verfügbar, Level 1 nur im Notstrombetrieb` };
+}
+
 function evaluateBehaviorLevel(prognosis, context = {}) {
   const config = prognosis.config || {};
   const metrics = forecastMetrics(prognosis);
   const recommendation = config.behaviorModel === 'off_grid'
     ? offGridLevel(metrics)
     : gridParallelLevel(metrics, context);
-  return { ...recommendation, model: config.behaviorModel || 'grid_parallel', metrics };
+  const emergencyMode = context.emergencyMode == null
+    ? operatingState.getState().emergencyMode
+    : !!context.emergencyMode;
+  return { ...limitToGridAvailability(recommendation, emergencyMode), model: config.behaviorModel || 'grid_parallel', metrics };
 }
 
 async function loadBehaviorContext(db) {
-  if (!isEnabled('grid-control')) return { fullSocThreshold: 90, gridControlActive: false };
+  const { emergencyMode } = operatingState.getState();
+  if (!isEnabled('grid-control')) return { fullSocThreshold: 90, gridControlActive: false, emergencyMode };
   const config = await new Promise((resolve) => loadGridControlConfig(db, resolve));
   return {
     fullSocThreshold: Math.min(100, Math.max(0, 100 - number(config.socUpperOffset, 5))),
     gridControlActive: true,
+    emergencyMode,
   };
 }
 
@@ -116,15 +130,22 @@ async function applyBehaviorLevel(db, prognosis) {
   const currentSoc = number(prognosis.battery && prognosis.battery.soc, null);
   const minSoc = number(prognosis.simulation && prognosis.simulation.minSoc, 20);
   if (currentSoc == null) return null;
+  const { emergencyMode, operatingLevel } = operatingState.getState();
   // Sicherheits-Level 1 gehört vollständig der Prognose und greift auch ohne
-  // aktiviertes Modell, damit deaktiviertes Grid-Control keine Lücke erzeugt.
-  if (currentSoc < minSoc) {
-    const recommendation = { level: 1, reason: 'Mindest-SoC unterschritten', model: prognosis.config.behaviorModel };
+  // aktiviertes Modell – aber nur im Notstrombetrieb (siehe limitToGridAvailability).
+  if (currentSoc < minSoc && emergencyMode) {
+    const recommendation = { level: 1, reason: 'Mindest-SoC unterschritten im Notstrombetrieb', model: prognosis.config.behaviorModel };
     await operatingState.setOperatingLevel(db, 1);
     return recommendation;
   }
-  if (!prognosis.config.behaviorActive) return null;
-  if (!prognosis.simulation || !prognosis.simulation.available) return null;
+  const modelInactive = !prognosis.config.behaviorActive || !prognosis.simulation || !prognosis.simulation.available;
+  if (modelInactive) {
+    // Ohne Modell bleibt das Level stehen; ein Level 1 ohne Notstrombetrieb
+    // (z. B. Netz zurück) wird aber sofort auf die Untergrenze angehoben.
+    if (emergencyMode || operatingLevel !== 1) return null;
+    await operatingState.setOperatingLevel(db, 2);
+    return { level: 2, reason: 'Netz verfügbar, Level 1 nur im Notstrombetrieb', model: prognosis.config.behaviorModel };
+  }
   const recommendation = await getBehaviorRecommendation(db, prognosis);
   await operatingState.setOperatingLevel(db, recommendation.level);
   return recommendation;
@@ -163,11 +184,15 @@ function isRelevantEvent(event) {
   });
 }
 
+let unsubscribeEmergency = null;
+
 function init(db) {
   if (!unsubscribe) unsubscribe = mqttClient.onValuesChanged((event) => {
     if (isRelevantEvent(event)) scheduleRun(db);
     else metrics.counter('prognosis.irrelevantEvents');
   });
+  // Beginn und Ende des Notstrombetriebs ändern die zulässige Level-Untergrenze.
+  if (!unsubscribeEmergency) unsubscribeEmergency = operatingState.onEmergencyModeChanged(() => scheduleRun(db));
   if (!timer) timer = setInterval(() => metrics.measure('prognosis.behavior', () => runSerialized(db)).catch(() => {}), 30000);
   return runSerialized(db);
 }

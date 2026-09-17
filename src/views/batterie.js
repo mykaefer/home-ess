@@ -129,12 +129,13 @@ function renderBatterie({
           <div class="settings-card">
             <div class="settings-card-head">
               <h2>Mindest-Ladezustand</h2>
-              <p class="settings-card-hint">Wird in 5-%-Schritten gespeichert und an das konfigurierte Ziel-Topic gesendet.</p>
+              <p class="settings-card-hint">Wird beim Loslassen des Reglers sofort in 5-%-Schritten übernommen und an Ziel- und Remote-Topic gesendet. Externe Änderungen über das Remote-Topic zeigt der Regler live an.</p>
             </div>
             <div class="range-field">
               <input type="range" id="minSoc" name="minSoc" min="0" max="100" step="5" value="${escapeHtml(config.minSoc)}">
               <output id="minSocValue" for="minSoc">${escapeHtml(config.minSoc)} %</output>
             </div>
+            <p class="muted" id="minSocStatus" role="status" aria-live="polite"></p>
           </div>
           <div class="settings-card">
             <div class="settings-card-head">
@@ -187,9 +188,45 @@ function renderBatterie({
 
     var minSocSlider = document.getElementById('minSoc');
     var minSocValue = document.getElementById('minSocValue');
-    if (minSocSlider) minSocSlider.addEventListener('input', function () {
-      minSocValue.textContent = minSocSlider.value + ' %';
-    });
+    var minSocStatus = document.getElementById('minSocStatus');
+    // Während der Bedienung bzw. bis zur Antwort überschreibt die Live-Aktualisierung
+    // den Regler nicht.
+    var minSocBusy = false;
+    function showMinSoc(value) {
+      minSocSlider.value = value;
+      minSocValue.textContent = value + ' %';
+    }
+    function setMinSocStatus(text) {
+      if (minSocStatus) minSocStatus.textContent = text;
+    }
+    if (minSocSlider) {
+      minSocSlider.addEventListener('input', function () {
+        minSocBusy = true;
+        minSocValue.textContent = minSocSlider.value + ' %';
+      });
+      minSocSlider.addEventListener('change', function () {
+        minSocBusy = true;
+        setMinSocStatus('Wird gespeichert …');
+        fetch('/batterie/min-soc', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({ minSoc: minSocSlider.value })
+        })
+          .then(function(r) { return r.json().then(function(body) { return { ok: r.ok, body: body }; }); })
+          .then(function(result) {
+            if (!result.ok) throw new Error(result.body && result.body.error);
+            showMinSoc(result.body.minSoc);
+            setMinSocStatus('Mindest-Ladezustand übernommen.');
+          })
+          .catch(function() {
+            setMinSocStatus('Mindest-Ladezustand konnte nicht gespeichert werden.');
+          })
+          .then(function() {
+            minSocBusy = false;
+            refreshData();
+          });
+      });
+    }
     function applyBatteryPreset() {
       var type = document.getElementById('batteryType').value;
       var cells = parseInt(document.getElementById('cellCount').value, 10);
@@ -223,6 +260,11 @@ function renderBatterie({
         .then(function(r) { return r.ok ? r.json() : null; })
         .then(function(d) {
           if (!d) return;
+
+          if (minSocSlider && !minSocBusy && d.minSocSetting != null &&
+              String(d.minSocSetting) !== minSocSlider.value) {
+            showMinSoc(d.minSocSetting);
+          }
 
           var brokerMap = {
             'broker-battery-soc': 'soc', 'broker-battery-power': 'power',
