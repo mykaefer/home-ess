@@ -5,6 +5,42 @@ wird unabhängig von homeESS versioniert; die Version steht in
 [adapter.json](adapter.json). Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [1.2.14] — 2026-09-12
+
+### Behoben
+
+- **Gekoppelte Geräte fallen nicht mehr dauerhaft aus dem Verbindungsaufbau.**
+  Ein Gerät konnte bis zum nächsten Adapterneustart stumm bleiben, obwohl es im
+  Netz erreichbar war: Es wurde als „offline“ angezeigt, ohne Fehlermeldung und
+  ohne dass überhaupt noch ein Verbindungsversuch stattfand. Drei Ursachen
+  wirkten zusammen und sind jetzt einzeln abgestellt.
+- **Ein Binding-Abgleich, der nicht zurückkehrt, sperrt das Gerät nicht mehr.**
+  Der Abgleich setzt für die Dauer seines Laufs eine Sperre, die jeden weiteren
+  Versuch verhindert. Kehrte er nie zurück, blieb sie für immer bestehen. Sie hat
+  jetzt eine Frist; läuft sie ab, wird sie aufgehoben und protokolliert.
+- **Eine abbrechende HTTP-Antwort lässt keine Anfrage mehr offen stehen.** Kappte
+  ein Gerät die Verbindung mitten in einer angekündigten Antwort, feuerte weder
+  `end` noch `error` noch der Socket-Timeout — die Anfrage wartete unbegrenzt und
+  hielt damit die Sperre. Der Antwortstrom wird jetzt auf Abbrüche überwacht, und
+  jede Anfrage endet spätestens mit einer festen Frist.
+- **Ein Gerät, das mDNS nicht mehr beantwortet, wird weiter gesucht.** Der
+  Verbindungsaufbau hing allein an Discovery-Ereignissen. Blieben sie aus, gab es
+  keinen Versuch mehr. Ein Verbindungswächter prüft jetzt alle 30 Sekunden jedes
+  gekoppelte Gerät unabhängig von mDNS und spricht es unter seiner zuletzt
+  bekannten Adresse an.
+
+### Geändert
+
+- **Eine abgelehnte Authentifizierung ist kein Endzustand mehr.** Eine Verbindung,
+  die nach einem `401` keine Neuversuche mehr zuließ, blieb bis zum
+  Adapterneustart liegen. Der Wächter erkennt diesen und jeden anderen Stillstand
+  — auch einen Socket, der die Aufbauphase nie verlässt — verwirft die Verbindung
+  und baut über einen frischen Binding-Abgleich neu auf.
+- Die erzwungenen Versuche laufen mit gedeckeltem Backoff (0 s, 30 s, 60 s,
+  120 s, danach 5 Minuten). Ein unerreichbares Gerät wird damit seltener
+  angesprochen, aber niemals aufgegeben; eine mDNS-Rückmeldung oder eine
+  aufgebaute Sitzung setzt den Abstand sofort zurück.
+
 ## [1.2.13] — 2026-08-31
 
 ### Geändert

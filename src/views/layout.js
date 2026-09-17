@@ -47,6 +47,10 @@ const NAV_CORE = [
   // Bedingungen wertet die Geräte aus Messen + Schalten aus und steht deshalb
   // direkt dahinter, noch vor den technischen Seiten (Adapter, States).
   { path: '/conditions', label: 'Bedingungen', section: 'main' },
+  // Nachrichten schickt Push-Benachrichtigungen aus State-Änderungen und steht
+  // direkt hinter den Bedingungen: beide werten dieselben States aus, die eine
+  // Seite schaltet daraufhin, die andere benachrichtigt.
+  { path: '/notifications', label: 'Nachrichten', section: 'main' },
   { path: '/adapter', label: 'Adapter', section: 'main' },
   {
     // Output schreibt berechnete Werte an Ziel-States zurück und gehört damit

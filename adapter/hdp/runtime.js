@@ -10,6 +10,10 @@ const HELLO_TIMEOUT_MS = 5000;
 const HEARTBEAT_MS = 15000;
 const HEARTBEAT_TIMEOUT_MS = 45000;
 const RECONNECT_DELAYS = [1000, 2000, 5000, 10000, 30000];
+// Handschlag (3000 ms) und Sitzungsaufbau (5000 ms) sind eng begrenzt. Bleibt
+// ein Socket darüber hinaus in der Aufbauphase, feuert keiner der beiden
+// Timer mehr und die Verbindung käme von allein nie zurück.
+const CONNECT_STALL_MS = 30000;
 
 function connectionErrorMessage(error, context = {}) {
   if (error && error.code === 'HPE_INVALID_HEADER_TOKEN') {
@@ -194,6 +198,7 @@ class RuntimeConnection extends EventEmitter {
     this.heartbeatTimer = null;
     this.helloTimer = null;
     this.lastValidAt = 0;
+    this.connectStartedAt = 0;
     this.remoteConfigRevision = null;
     this.configSync = Promise.resolve();
     this.reconnectForbidden = false;
@@ -230,6 +235,7 @@ class RuntimeConnection extends EventEmitter {
   connect() {
     if (this.stopped || this.socket || this.reconnectForbidden) return;
     const attempt = this.reconnectAttempt + 1;
+    this.connectStartedAt = Date.now();
     this.emit('connectionState', { state: 'connecting', attempt });
     let socket;
     try {
@@ -559,6 +565,18 @@ class RuntimeConnection extends EventEmitter {
     this.helloTimer = null;
   }
 
+  // Eine Verbindung arbeitet nur dann noch auf eine Sitzung hin, wenn sie
+  // verbunden ist, gerade einen Socket aufbaut oder einen Neuversuch geplant
+  // hat. Jeder andere Zustand ist ein Stillstand, aus dem sie von allein nicht
+  // zurückkehrt — der Verbindungswächter muss ihn erkennen können.
+  get stalled() {
+    if (this.stopped || this.reconnectForbidden) return true;
+    if (this.ready) return false;
+    if (this.reconnectTimer) return false;
+    if (!this.socket) return true;
+    return Date.now() - this.connectStartedAt > CONNECT_STALL_MS;
+  }
+
   reconnectDelay() {
     const index = Math.min(this.reconnectAttempt, RECONNECT_DELAYS.length - 1);
     const base = RECONNECT_DELAYS[index];
@@ -620,7 +638,7 @@ class RuntimeConnection extends EventEmitter {
 
 module.exports = {
   MAX_MESSAGE_BYTES, HELLO_TIMEOUT_MS, HEARTBEAT_MS, HEARTBEAT_TIMEOUT_MS,
-  RECONNECT_DELAYS, connectionErrorMessage, validEnvelope, validBinaryMessage,
+  RECONNECT_DELAYS, CONNECT_STALL_MS, connectionErrorMessage, validEnvelope, validBinaryMessage,
   validSensorSample, validSensorMessage, validFingerprintMessage,
   validIrCode, validIrMessage,
   RuntimeConnection,

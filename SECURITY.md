@@ -125,6 +125,32 @@ Pairing-Zustand wird nicht über einen Neustart hinaus persistiert.
 - **Kein unsicherer Fallback.** Bei inkompatibler Relay-Version oder Beschädigung
   wird nicht auf ein altes Schema zurückgefallen und nicht still herabgestuft.
 
+## Push-Benachrichtigungen (Nachrichtensystem)
+
+Die Seite „Nachrichten" erzeugt aus State-Änderungen Push-Benachrichtigungen.
+Der Versand folgt demselben Vertrauensmodell wie der übrige Fernzugriff:
+
+- **Kein eigener Kanal.** Gesendet wird ausschließlich über die eine bestehende,
+  Ed25519-authentifizierte homeESS→Relay-Verbindung. Es gibt keinen zweiten
+  Client, keine Firebase-Zugangsdaten und keine direkte Verbindung des Browsers
+  zum Relay.
+- **Die Instanz bestimmt die Authentifizierung.** Der Payload trägt nur
+  `title`, `body`, `eventType` und `severity`. `instanceId`, `deviceId`,
+  Empfängerlisten und FCM-Token werden nie gesendet und nie gespeichert. Ein
+  Benutzer kann über eine Regel deshalb strukturell keine fremde homeESS-Instanz
+  und keinen bestimmten Empfänger adressieren.
+- **Empfänger bestimmt allein der Relay** aus seinen aktiven Kopplungen. homeESS
+  führt keine Geräteauswahl und keine Push-Token-Verwaltung.
+- **Serverseitige Validierung.** Titel (1–120), Nachricht (1–500), Ereignistyp
+  (1–64, `^[a-z0-9_-]+$`) und Priorität (`normal`/`critical`) werden im
+  NotificationService geprüft — bei jeder Regel, bei jedem Testversand und bei
+  jedem internen Aufruf.
+- **Logging ohne Inhalt.** Protokolliert werden nur Regel-ID, Ereignistyp,
+  Priorität, Empfängeranzahl und Grund. Nachrichtentext, Push-Token und
+  personenbezogene Inhalte erscheinen nie im Log.
+- **Keine Offline-Queue.** Eine nicht zustellbare Nachricht wird verworfen statt
+  persistiert; Nachrichteninhalte liegen damit nicht auf der Platte.
+
 ## App, Relay und Lizenz
 
 Die Android-App und der essrelay-Server sind ein eigenständiges Add-on und nicht

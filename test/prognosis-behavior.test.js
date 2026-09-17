@@ -89,9 +89,13 @@ test('Netzparallelbetrieb gibt Level 4 bei sicherer Deckung auch unter 80 Prozen
   assert.equal(evaluateBehaviorLevel(data).level, 4);
 });
 
-test('Netzparallelbetrieb setzt Level 1 erst unterhalb Mindest-SoC', () => {
-  assert.notEqual(evaluateBehaviorLevel(prognosis('grid_parallel', { soc: 20, endSoc: 20 })).level, 1);
-  assert.equal(evaluateBehaviorLevel(prognosis('grid_parallel', { soc: 19, endSoc: 19 })).level, 1);
+test('Netzparallelbetrieb setzt Level 1 erst unterhalb Mindest-SoC und nur im Notstrombetrieb', () => {
+  const emergency = { emergencyMode: true };
+  assert.notEqual(evaluateBehaviorLevel(prognosis('grid_parallel', { soc: 20, endSoc: 20 }), emergency).level, 1);
+  assert.equal(evaluateBehaviorLevel(prognosis('grid_parallel', { soc: 19, endSoc: 19 }), emergency).level, 1);
+  const withGrid = evaluateBehaviorLevel(prognosis('grid_parallel', { soc: 19, endSoc: 19 }), { emergencyMode: false });
+  assert.equal(withGrid.level, 2, 'mit Netz ist Level 2 die Untergrenze');
+  assert.match(withGrid.reason, /Level 1 nur im Notstrombetrieb/);
 });
 
 test('Autarkbetrieb reagiert auf mehrtägige Risiken früher', () => {
@@ -107,7 +111,8 @@ test('Autarkbetrieb gibt Level 5 erst oberhalb 98 Prozent und bei Überschuss', 
 
 test('Autarkbetrieb kann bei absehbarem Mindeststand vorausschauend Level 1 setzen', () => {
   const minimum = { dayOffset: 1, hour: 5, soc: 20 };
-  assert.equal(evaluateBehaviorLevel(prognosis('off_grid', { minimum })).level, 1);
+  assert.equal(evaluateBehaviorLevel(prognosis('off_grid', { minimum }), { emergencyMode: true }).level, 1);
+  assert.equal(evaluateBehaviorLevel(prognosis('off_grid', { minimum }), { emergencyMode: false }).level, 2);
 });
 
 test('Prognose verwaltet Level 1 auch ohne aktives Verhaltensmodell', async () => {
@@ -131,4 +136,58 @@ test('Prognose verwaltet Level 1 auch ohne aktives Verhaltensmodell', async () =
   assert.equal(operatingState.getState().operatingLevel, 1);
 
   await new Promise((resolve) => db.close(resolve));
+});
+
+test('Mindest-SoC-Unterschreitung mit Netz senkt nicht auf Level 1, nur der Notstrombetrieb', async () => {
+  // Nachgestellt 14.09.2026: Mindest-SoC auf 20 % angehoben, SoC 10 %, Netz zugeschaltet.
+  const db = new sqlite3.Database(':memory:');
+  await new Promise((resolve, reject) => db.exec(`
+    CREATE TABLE operating_state (id INTEGER PRIMARY KEY, operating_level INTEGER, emergency_mode INTEGER);
+    INSERT INTO operating_state VALUES (1, 2, 0);
+  `, (err) => err ? reject(err) : resolve()));
+  await operatingState.init(db);
+  try {
+    const low = prognosis('grid_parallel', { soc: 10, endSoc: 10, futureEnd: 10 });
+    low.config.behaviorActive = false;
+    await applyBehaviorLevel(db, low);
+    assert.equal(operatingState.getState().operatingLevel, 2, 'ohne Modell: kein Level 1 mit Netz');
+
+    low.config.behaviorActive = true;
+    low.simulation.available = true;
+    await applyBehaviorLevel(db, low);
+    assert.equal(operatingState.getState().operatingLevel, 2, 'mit Modell: kein Level 1 mit Netz');
+
+    await operatingState.setEmergencyMode(db, true);
+    await applyBehaviorLevel(db, low);
+    assert.equal(operatingState.getState().operatingLevel, 1, 'Notstrombetrieb unter Mindest-SoC');
+
+    // Netz zurück: Level 1 wird auch ohne aktives Modell sofort verlassen.
+    await operatingState.setEmergencyMode(db, false);
+    low.config.behaviorActive = false;
+    await applyBehaviorLevel(db, low);
+    assert.equal(operatingState.getState().operatingLevel, 2);
+  } finally {
+    await operatingState.setEmergencyMode(db, false);
+    await new Promise((resolve) => db.close(resolve));
+  }
+});
+
+test('Wechsel des Notstrombetriebs wird gemeldet', async () => {
+  const db = new sqlite3.Database(':memory:');
+  await new Promise((resolve, reject) => db.exec(`
+    CREATE TABLE operating_state (id INTEGER PRIMARY KEY, operating_level INTEGER, emergency_mode INTEGER);
+    INSERT INTO operating_state VALUES (1, 2, 0);
+  `, (err) => err ? reject(err) : resolve()));
+  await operatingState.init(db);
+  const seen = [];
+  const unsubscribe = operatingState.onEmergencyModeChanged((active) => seen.push(active));
+  try {
+    await operatingState.setEmergencyMode(db, true);
+    await operatingState.setEmergencyMode(db, true);
+    await operatingState.setEmergencyMode(db, false);
+    assert.deepEqual(seen, [true, false]);
+  } finally {
+    unsubscribe();
+    await new Promise((resolve) => db.close(resolve));
+  }
 });

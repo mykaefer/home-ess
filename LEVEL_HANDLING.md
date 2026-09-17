@@ -20,11 +20,15 @@ zusätzlich Auto-Ein nach erneuter Freigabe).
    1 = strengster Sparbetrieb, 5 = freier Betrieb (Überschuss).
 
    Im **Netzparallelbetrieb** bedeuten die Zwischenstufen konkret: Level 1 bei
-   bereits unterschrittenem Mindest-SoC, Level 2 bei roter Ampel, Level 3 bei
+   bereits unterschrittenem Mindest-SoC im Notstrombetrieb, Level 2 bei roter Ampel, Level 3 bei
    gelber Ampel, Level 4 bei grüner Ampel und Level 5 bei freiem Überschuss und
    vollem Akku. Der **Autarkbetrieb**
    bewertet dagegen den gesamten sichtbaren Prognosehorizont und kann früher
    vorsorglich abregeln.
+
+   **Level 1 nur ohne Netz:** Unabhängig vom Modell wird Level 1 ausschließlich
+   im erkannten Notstrombetrieb gesetzt. Solange Netz vorhanden ist, ist Level 2
+   die Untergrenze.
 
 2. **Priorität = Freigabe-Level.** Jeder Verbraucher hat eine Priorität (1–5). Die Priorität
    ist das Betriebslevel, **ab dem** der Verbraucher laufen darf:

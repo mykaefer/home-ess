@@ -38,6 +38,17 @@ const SECRET_PREFIX = 'device-';
 // Pins einrichten und WLAN aufbauen muss: rund 70 Sekunden. Ein endgültiger
 // Fehlschlag des Geräts bricht die Wartezeit ohnehin sofort ab.
 const kRestartVerificationMilliseconds = 180000;
+// Takt des Verbindungswächters. Er prüft jedes gekoppelte Gerät unabhängig von
+// mDNS und ist die einzige Instanz, die einen Stillstand von sich aus auflöst.
+const SUPERVISOR_INTERVAL_MS = 30000;
+// Abstände zwischen zwei erzwungenen Verbindungsversuchen. Der erste Versuch
+// läuft immer sofort; ein stummes Gerät wird danach seltener gesucht, aber
+// niemals aufgegeben: Der letzte Wert gilt unbegrenzt weiter.
+const SUPERVISOR_DELAYS = [30000, 60000, 120000, 300000];
+// Obergrenze für einen Binding-Abgleich. Alle darin enthaltenen HTTP-Aufrufe
+// sind einzeln befristet; wer diese Spanne überschreitet, kehrt nicht zurück
+// und darf das Gerät nicht länger blockieren.
+const RECONCILE_DEADLINE_MS = 180000;
 
 function esc(value) {
   return String(value == null ? '' : value)
@@ -350,6 +361,9 @@ function sanitizeDevice(device) {
   delete copy.unsubscribers;
   delete copy.pendingFirmware;
   delete copy.reconciling;
+  delete copy.reconcilingSince;
+  delete copy.bindingAttempt;
+  delete copy.nextBindingAttemptAt;
   delete copy.pairingInProgress;
   delete copy.sourceTimes;
   delete copy.outputClient;
@@ -1056,6 +1070,7 @@ function createHdpAdapter(host, dependencies = {}) {
   let discovery = null;
   let stopped = true;
   let firmwarePoll = null;
+  let supervisorPoll = null;
   let rolloutPoll = null;
   let releaseSourcePoll = null;
   let catalogPoll = null;
@@ -1797,6 +1812,7 @@ function createHdpAdapter(host, dependencies = {}) {
       device.connectionState = 'connected';
       device.reconnectAttempt = 0;
       device.nextReconnectAt = null;
+      resetBindingBackoff(device);
       device.lastError = '';
       device.lastConnectedAt = new Date().toISOString();
       publishDevice(device);
@@ -1981,6 +1997,9 @@ function createHdpAdapter(host, dependencies = {}) {
         discoveredOnline: found.online,
         online: local.bindingState === 'active' ? local.online : found.online,
       });
+      // Eine echte Discovery-Änderung — etwa ein zurückgekehrtes oder unter
+      // neuer Adresse gemeldetes Gerät — darf nicht auf den Backoff warten.
+      if (found.online === true) resetBindingBackoff(local);
       clientFor(local).update(local, {
         instanceId: identity.instanceId, bindingKey: local.bindingKey,
       });
@@ -2032,6 +2051,10 @@ function createHdpAdapter(host, dependencies = {}) {
     if (!local || local.bindingState !== 'active' || local.paired !== true
         || local.connection || local.reconciling || found.online !== true) return;
     local.discoveredOnline = true;
+    // Lebenszeichen treffen im Sekundentakt ein. Ohne dieselbe Buchführung wie
+    // im Wächter würde ein Gerät, das antwortet aber keine Sitzung aufbaut,
+    // ununterbrochen angefunkt.
+    if (!claimBindingAttempt(local, Date.now())) return;
     clientFor(local).update(local, {
       instanceId: identity.instanceId, bindingKey: local.bindingKey,
     });
@@ -2080,9 +2103,16 @@ function createHdpAdapter(host, dependencies = {}) {
     publishDevice(device);
   }
 
-  async function reconcileBinding(device) {
-    if (device.reconciling || !device.bindingKey || !device.discoveredOnline) return;
+  // `force` kommt ausschließlich vom Verbindungswächter: Ein Gerät, das mDNS
+  // nicht mehr beantwortet, muss unter seiner zuletzt bekannten Adresse weiter
+  // gesucht werden. Ohne diesen Weg bliebe es bis zum Adapterneustart stumm.
+  async function reconcileBinding(device, options = {}) {
+    if (device.reconciling || !device.bindingKey) return;
+    const reachable = device.discoveredOnline
+      || (options.force === true && !!(device.address || device.hostname));
+    if (!reachable) return;
     device.reconciling = true;
+    device.reconcilingSince = Date.now();
     try {
       const status = await clientFor(device).pairingStatus(true);
       if (status.binding_status === 'match') {
@@ -2118,6 +2148,63 @@ function createHdpAdapter(host, dependencies = {}) {
       }
     } finally {
       device.reconciling = false;
+      device.reconcilingSince = null;
+    }
+  }
+
+  function supervisorDelay(attempt) {
+    return SUPERVISOR_DELAYS[Math.min(Math.max(attempt, 1) - 1, SUPERVISOR_DELAYS.length - 1)];
+  }
+
+  // Ein zurückgekehrtes oder frisch verbundenes Gerät startet den Backoff neu,
+  // damit es nach einer langen Abwesenheit nicht zusätzlich warten muss.
+  function resetBindingBackoff(device) {
+    device.bindingAttempt = 0;
+    device.nextBindingAttemptAt = null;
+  }
+
+  // Gemeinsame Buchführung für alle erzwungenen Verbindungsversuche. Sie
+  // verhindert, dass ein stummes Gerät im Takt angefunkt wird, und gibt den
+  // nächsten Versuch immer wieder frei — der Backoff ist gedeckelt, nie endgültig.
+  function claimBindingAttempt(device, now) {
+    if (now < (device.nextBindingAttemptAt || 0)) return false;
+    device.bindingAttempt = (device.bindingAttempt || 0) + 1;
+    device.nextBindingAttemptAt = now + supervisorDelay(device.bindingAttempt);
+    return true;
+  }
+
+  // Kein gekoppeltes Gerät darf dauerhaft aus dem Verbindungsaufbau fallen.
+  // Discovery-Ereignisse allein genügen dafür nicht: Ein Gerät, das mDNS nicht
+  // mehr beantwortet, löst keines mehr aus, und ein Abgleich, der nicht
+  // zurückkehrt, sperrt jeden weiteren Versuch. Der Wächter prüft deshalb in
+  // festem Takt jedes gekoppelte Gerät und ist die einzige Stelle, die einen
+  // solchen Stillstand von sich aus auflöst.
+  function superviseConnections(now = Date.now()) {
+    for (const device of devices.values()) {
+      if (device.bindingState !== 'active' || device.paired !== true || !device.bindingKey) continue;
+      if (device.reconciling) {
+        if (now - (device.reconcilingSince || now) < RECONCILE_DEADLINE_MS) continue;
+        // Der Abgleich ist nicht zurückgekehrt. Die Sperre jetzt zu halten
+        // hieße, das Gerät bis zum Adapterneustart aufzugeben.
+        device.reconciling = false;
+        device.reconcilingSince = null;
+        host.warn(`hDP ${device.deviceId}: Binding-Abgleich blieb ohne Antwort; Sperre aufgehoben.`);
+      }
+      if (device.connection && !device.connection.stalled) continue;
+      // Ohne bekannte Adresse gibt es nichts anzusprechen; ein solches Gerät
+      // wartet auf die Discovery und behält seine Verbindung.
+      if (!device.address && !device.hostname) continue;
+      if (!claimBindingAttempt(device, now)) continue;
+      // Eine stillstehende Verbindung kommt von allein nicht zurück. Sie wird
+      // verworfen; der Abgleich klärt das Binding und baut eine frische auf.
+      if (device.connection) {
+        device.connection.stop();
+        device.connection = null;
+        device.outputClient = null;
+        device.legacyOutput = null;
+      }
+      reconcileBinding(device, { force: true })
+        .catch((error) => setError(device, error, 'Verbindungswächter'));
     }
   }
 
@@ -5361,6 +5448,10 @@ hdp-flash.exe --channel development</code></pre>
       discovery.on('seen', onSeen);
       discovery.on('warning', (err) => host.warn(`mDNS: ${err.message}`));
       discovery.start();
+      // Der Wächter läuft unabhängig von mDNS und vom Zustand einzelner
+      // Verbindungen. Er ist die Garantie dafür, dass jedes gekoppelte Gerät
+      // immer wieder gesucht wird.
+      supervisorPoll = setInterval(() => superviseConnections(), SUPERVISOR_INTERVAL_MS);
       firmwarePoll = setInterval(() => {
         for (const device of devices.values()) {
           if (device.online) refreshFirmware(device).catch((err) => {
@@ -5412,6 +5503,8 @@ hdp-flash.exe --channel development</code></pre>
       stopped = true;
       if (discovery) discovery.stop();
       discovery = null;
+      if (supervisorPoll) clearInterval(supervisorPoll);
+      supervisorPoll = null;
       if (firmwarePoll) clearInterval(firmwarePoll);
       firmwarePoll = null;
       if (rolloutPoll) clearInterval(rolloutPoll);
@@ -5438,6 +5531,7 @@ hdp-flash.exe --channel development</code></pre>
     },
 
     handleManagementRequest,
+    superviseConnections,
   };
 }
 

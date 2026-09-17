@@ -139,3 +139,42 @@ test('isRelevantEvent erkennt nur Änderungen am Remote-Topic', () => {
   assert.equal(minSocSync.isRelevantEvent({ changedKeys: [STATE_IDS.minSoc] }), false);
   assert.equal(minSocSync.isRelevantEvent({ changedKeys: [STATE_IDS.soc] }), false);
 });
+
+test('Schieberegler übernimmt den Mindest-SoC sofort und sendet an Ziel- und Remote-Topic', async () => {
+  const db = await freshDb({ minSoc: 10 });
+  // Älterer Remote-Wert im Cache darf die Reglereinstellung nicht zurückdrehen.
+  mqttClient.getCache().set(STATE_IDS.minSocRemote, { value: '10', receivedAt: Date.now() - 60000 });
+  const logs = [];
+  const origLog = console.log;
+  console.log = (...args) => logs.push(args.join(' '));
+  try {
+    await withPublishCapture(async (published) => {
+      const saved = await minSocSync.setLocalMinSoc(db, '22');
+      assert.equal(saved.minSoc, 20, 'auf 5-%-Schritte gerundet');
+      assert.deepEqual(published, [['battery.0.minimumSoc', '20'], ['0_userdata.0.minSoc', '20']]);
+      await minSocSync.runSync(db);
+      assert.equal(published.length, 2, 'kein Zurückdrehen durch den älteren Remote-Wert');
+    });
+  } finally {
+    console.log = origLog;
+  }
+  assert.equal(await readMinSoc(db), 20);
+  assert.ok(logs.some((line) => /\[batterie minSoc\].*"source":"oberflaeche","from":10,"to":20/.test(line)));
+  await new Promise((resolve) => db.close(resolve));
+});
+
+test('Schieberegler lässt die übrigen Batterieeinstellungen unverändert und prüft die Eingabe', async () => {
+  const db = await freshDb({ minSoc: 10 });
+  await dbRun(db, 'UPDATE batterie_config SET capacity_ah = 560, soc_topic = ? WHERE id = 1', ['battery.0.soc']);
+  // Konfigurations-Cache des Moduls auf diese Datenbank neu aufbauen.
+  await new Promise((resolve, reject) => loadBatterieConfig(db, (cfg) => saveBatterieConfig(db, { ...cfg, capacityAh: 560, socTopic: 'battery.0.soc' }, (err) => (err ? reject(err) : resolve()))));
+  await withPublishCapture(async () => {
+    await minSocSync.setLocalMinSoc(db, 25);
+    await assert.rejects(minSocSync.setLocalMinSoc(db, 'abc'), (err) => err.validation === true);
+  });
+  const cfg = await new Promise((resolve) => loadBatterieConfig(db, resolve));
+  assert.equal(cfg.minSoc, 25);
+  assert.equal(cfg.capacityAh, 560);
+  assert.equal(cfg.socTopic, 'battery.0.soc');
+  await new Promise((resolve) => db.close(resolve));
+});

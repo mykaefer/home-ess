@@ -9,6 +9,10 @@ const OFFLINE_FACTOR = 2.5;
 const STATUS_REQUEST_DELAY_MS = 500;
 const STORE_DEBOUNCE_MS = 250;
 const CATALOG_DEBOUNCE_MS = 100;
+// MQTT 3.1.1, 3.1.2.10: Ohne Paket innerhalb des 1,5-fachen Keep-Alive gilt der
+// Client als getrennt. Fallback für Clients ohne Keep-Alive: TCP-Keepalive.
+const KEEPALIVE_GRACE_FACTOR = 1.5;
+const TCP_KEEPALIVE_DELAY_MS = 60000;
 
 function normalizeIp(ip) {
   if (!ip) return '';
@@ -521,6 +525,27 @@ module.exports = function createTasmotaAdapter(host) {
     }
   }
 
+  // Verbindung eines Geräts für Befehle. Die jüngste gewinnt: Nach einem
+  // Stromausfall bleibt die alte TCP-Verbindung serverseitig halb offen, bis
+  // Keep-Alive oder Client-ID-Übernahme sie schließen – Befehle dorthin gingen
+  // ohne Fehler verloren.
+  function socketForDevice(topic, device) {
+    const candidates = Array.from(sockets).filter((entry) => entry._authenticated && !entry.destroyed &&
+      (entry._deviceKey === topic || (device.clientId && entry._clientId === device.clientId)));
+    return candidates.length ? candidates[candidates.length - 1] : null;
+  }
+
+  // MQTT 3.1.1, 3.1.4-2: Verbindet sich eine bereits verbundene Client-ID neu,
+  // trennt der Broker die bestehende Verbindung.
+  function closeSupersededSockets(socket) {
+    if (!socket._clientId) return;
+    sockets.forEach((entry) => {
+      if (entry === socket || !entry._authenticated || entry._clientId !== socket._clientId) return;
+      host.log(`${socket._clientId} erneut verbunden, alte Verbindung von ${normalizeIp(entry.remoteAddress) || 'unbekannt'} wird getrennt`);
+      entry.destroy();
+    });
+  }
+
   function sendDeviceCommand(address, value) {
     const topics = Array.from(devices.keys()).sort((a, b) => b.length - a.length);
     const topic = topics.find((candidate) => String(address).startsWith(`${candidate}/`));
@@ -528,9 +553,11 @@ module.exports = function createTasmotaAdapter(host) {
     const endpoint = String(address).slice(topic.length + 1);
     if (!/^POWER\d*$/i.test(endpoint)) return;
     const device = devices.get(topic);
-    const socket = Array.from(sockets).find((entry) => entry._authenticated &&
-      (entry._deviceKey === topic || (device.clientId && entry._clientId === device.clientId)));
-    if (!socket || !device.commandTopic) return;
+    const socket = socketForDevice(topic, device);
+    if (!socket || !device.commandTopic) {
+      host.log(`Schaltbefehl ${address} verworfen: ${socket ? 'Befehls-Topic unbekannt' : 'Gerät nicht verbunden'}`);
+      return;
+    }
     const commandTopic = device.commandTopic.replace(/\/STATUS$/i, `/${endpoint.toUpperCase()}`);
     const enabled = value === true || value === 1 || /^(1|on|true)$/i.test(String(value));
     sendPacket(socket, {
@@ -558,6 +585,7 @@ module.exports = function createTasmotaAdapter(host) {
   function attachSocket(socket) {
     const parser = mqttPacket.parser({ protocolVersion: 4 });
     socket.setNoDelay(true);
+    socket.setKeepAlive(true, TCP_KEEPALIVE_DELAY_MS);
     sockets.add(socket);
 
     parser.on('packet', (packet) => {
@@ -579,6 +607,9 @@ module.exports = function createTasmotaAdapter(host) {
           return;
         }
         socket._authenticated = true;
+        closeSupersededSockets(socket);
+        const keepaliveSeconds = Number(packet.keepalive) || 0;
+        if (keepaliveSeconds > 0) socket.setTimeout(Math.round(keepaliveSeconds * 1000 * KEEPALIVE_GRACE_FACTOR));
         const knownDevice = consolidateClient(socket._clientId);
         socket._deviceKey = knownDevice
           ? knownDevice.topic
@@ -646,6 +677,10 @@ module.exports = function createTasmotaAdapter(host) {
     });
     socket.on('data', (chunk) => parser.parse(chunk));
     socket.on('error', () => {});
+    socket.on('timeout', () => {
+      host.log(`${socket._clientId || normalizeIp(socket.remoteAddress) || 'unbekannt'}: Keep-Alive überschritten, Verbindung wird getrennt`);
+      socket.destroy();
+    });
     socket.on('close', () => onSocketClosed(socket));
   }
 
@@ -771,8 +806,7 @@ module.exports = function createTasmotaAdapter(host) {
       const topic = topics.find((candidate) => String(address).startsWith(`${candidate}/`));
       const device = topic ? devices.get(topic) : null;
       if (!device || !device.commandTopic) return;
-      const socket = Array.from(sockets).find((entry) => entry._authenticated &&
-        (entry._deviceKey === topic || (device.clientId && entry._clientId === device.clientId)));
+      const socket = socketForDevice(topic, device);
       if (!socket) return;
       const now = Date.now();
       if (now - (device.lastReadRequestAt || 0) < 3000) return;

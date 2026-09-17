@@ -108,6 +108,19 @@ function requestJson(base, path, options = {}) {
   };
   return new Promise((resolve, reject) => {
     let completed = false;
+    let settled = false;
+    // Jede Anfrage muss genau einmal enden. Ohne diese Klammer bliebe das
+    // Promise offen, sobald ein Antwortstrom abbricht, ohne dass 'end',
+    // 'error' oder 'timeout' noch feuern -- der Aufrufer wartete dann ewig.
+    const finish = (handler, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      handler(value);
+    };
+    const done = (value) => finish(resolve, value);
+    const fail = (error) => finish(reject, error);
+    let deadline = null;
     const req = http.request(url, {
       method: options.method || 'GET',
       headers,
@@ -116,6 +129,14 @@ function requestJson(base, path, options = {}) {
     }, (res) => {
       const chunks = [];
       let length = 0;
+      // Ein abbrechender Antwortstrom meldet sich nur hier. Ohne diese beiden
+      // Handler endete die Anfrage in diesem Fall überhaupt nicht.
+      res.on('aborted', () => fail(new HdpError('hDP-Antwort wurde vorzeitig abgebrochen.', {
+        code: 'DEVICE_OFFLINE', status: 502, uncertain: body !== null && !completed,
+      })));
+      res.on('error', (cause) => fail(new HdpError('hDP-Antwort wurde vorzeitig abgebrochen.', {
+        code: 'DEVICE_OFFLINE', status: 502, uncertain: body !== null && !completed, cause,
+      })));
       res.on('data', (chunk) => {
         length += chunk.length;
         if (length > JSON_RESPONSE_LIMIT) {
@@ -128,7 +149,7 @@ function requestJson(base, path, options = {}) {
         const cacheControl = String(res.headers['cache-control'] || '').toLowerCase()
           .split(',').map((part) => part.trim());
         if (contentType !== 'application/json' || !cacheControl.includes('no-store')) {
-          reject(new HdpError('hDP-JSON-Antwort verletzt Content-Type oder Cache-Control.', {
+          fail(new HdpError('hDP-JSON-Antwort verletzt Content-Type oder Cache-Control.', {
             code: 'INVALID_REQUEST', status: 502,
           }));
           return;
@@ -136,7 +157,7 @@ function requestJson(base, path, options = {}) {
         const text = Buffer.concat(chunks).toString('utf8');
         let payload;
         try { payload = JSON.parse(text); } catch (cause) {
-          reject(new HdpError(`Ungültige JSON-Antwort (HTTP ${res.statusCode}).`, {
+          fail(new HdpError(`Ungültige JSON-Antwort (HTTP ${res.statusCode}).`, {
             code: 'INVALID_REQUEST', status: 502, cause,
           }));
           return;
@@ -144,13 +165,13 @@ function requestJson(base, path, options = {}) {
         try {
           const data = unwrap(payload);
           if (res.statusCode < 200 || res.statusCode >= 300) {
-            reject(new HdpError(`Fehlerstatus HTTP ${res.statusCode} mit Erfolgs-Envelope.`, {
+            fail(new HdpError(`Fehlerstatus HTTP ${res.statusCode} mit Erfolgs-Envelope.`, {
               code: 'INVALID_REQUEST', status: 502,
             }));
-          } else resolve(data);
+          } else done(data);
         } catch (error) {
           if (error instanceof HdpError && res.statusCode >= 400) error.status = res.statusCode;
-          reject(error);
+          fail(error);
         }
       });
     });
@@ -158,8 +179,8 @@ function requestJson(base, path, options = {}) {
       code: 'DEVICE_OFFLINE', status: 504, uncertain: body !== null,
     })));
     req.on('error', (cause) => {
-      if (cause instanceof HdpError) reject(cause);
-      else reject(new HdpError('hDP-Gerät antwortet nicht.', {
+      if (cause instanceof HdpError) fail(cause);
+      else fail(new HdpError('hDP-Gerät antwortet nicht.', {
         code: 'DEVICE_OFFLINE', status: 502, uncertain: body !== null && !completed, cause,
       }));
     });
@@ -171,6 +192,16 @@ function requestJson(base, path, options = {}) {
       socket.once('connect', () => clearTimeout(timer));
       req.once('close', () => clearTimeout(timer));
     });
+    // Letzte Instanz: Der Socket-Timeout greift nur auf einem lebenden Socket.
+    // Diese Frist gilt unabhängig davon, in welchem Zustand die Verbindung
+    // stehen bleibt, und beendet die Anfrage in jedem Fall.
+    deadline = setTimeout(() => {
+      const expired = new HdpError('hDP-Gerät hat die Anfrage nicht fristgerecht beendet.', {
+        code: 'DEVICE_OFFLINE', status: 504, uncertain: body !== null,
+      });
+      req.destroy(expired);
+      fail(expired);
+    }, (options.timeoutMs || 5000) + (options.connectTimeoutMs || 2000) + 1000);
     req.end(body || undefined);
   });
 }

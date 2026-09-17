@@ -575,11 +575,15 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   und kann vorausschauend auch Level 1 setzen. `prognosis/behavior.js` läuft als
   eigenständige, serialisierte Regelung bei MQTT-Änderungen, spätestens alle
   30 Sekunden sowie unmittelbar beim Aktivieren und besitzt exklusiv
-  alle Level 1–5. Unter Mindest-SoC setzt es Level 1 auch bei deaktiviertem
-  Verhaltensmodell. Im Autarkbetrieb erfordert Level 5 SoC > 98 % plus Überschuss;
+  alle Level 1–5. **Level 1 ist ausschließlich im erkannten Notstrombetrieb
+  (`emergencyMode`) zulässig**; mit Netz ist Level 2 die Untergrenze, auch wenn
+  ein Modell oder die Mindest-SoC-Unterschreitung Level 1 ergäbe. Im
+  Notstrombetrieb setzt es unter Mindest-SoC Level 1 auch bei deaktiviertem
+  Verhaltensmodell; endet der Notstrombetrieb, wird Level 1 sofort verlassen. Im Autarkbetrieb erfordert Level 5 SoC > 98 % plus Überschuss;
   Im Netzparallelbetrieb bedeutet Level 4 sichere Deckung bis zum nächsten
   Ladebeginn. Die Prognoseampel ist direkt zugeordnet: Grün = Level 4, Gelb =
-  Level 3, Rot = Level 2; Level 1 greift erst unter Mindest-SoC. Dort gilt die
+  Level 3, Rot = Level 2; Level 1 greift erst unter Mindest-SoC im
+  Notstrombetrieb. Dort gilt die
   obere Grid-Control-SoC-Schwelle als voll, bei
   deaktiviertem Grid-Control ersatzweise 90 %. Grid-Control verwaltet nur noch
   das Ein- und Ausschalten des persistenten Notstromzustands.
@@ -589,8 +593,12 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
   schaltet das Netz nur zu, wenn **Überschusseinspeisung aktiviert** ist.
   Veröffentlicht Warnungen und stellt fünf Grid-Zustände im Wert-Katalog bereit.
   Netzfrequenz 0 nach konfigurierbarer Wartezeit auf einer beliebigen Phase
-  verriegelt einen persistenten Notstromzustand; erst L1/L2/L3 jeweils > 0
-  entriegeln ihn. Überalterte Frequenzwerte (Frische-Prüfung) entriegeln **nicht**.
+  verriegelt einen persistenten Notstromzustand. Eine Frequenz über 51,5 Hz
+  zählt ebenso als Netzausfall, aber nur solange der SoC unterhalb der oberen
+  Grid-Control-SoC-Schwelle (samt Hysterese) liegt und bekannt ist — darüber hebt
+  der Batteriewechselrichter die Frequenz zum Abregeln der AC-PV an. Erst
+  L1/L2/L3 jeweils > 0 und ≤ 51,5 Hz entriegeln ihn. Überalterte Frequenzwerte
+  (Frische-Prüfung) entriegeln **nicht**.
   Dreiphasige Lastschaltung auf Basis der bestehenden Eigenverbrauchsleistung
   L1–L3 mit separaten Ein-/Ausschaltschwellen und `grid.byLoad`. Die
   Verriegelung rastet bei Überlast **immer** ein und hält das Netz zugeschaltet,
@@ -700,6 +708,53 @@ ist ein Web-Dashboard mit vorgeschaltetem Login.
     noch ihre Prüfung abschalten.
   - Solange eine Folge läuft (Pausen, Schleifen), löst dieselbe Bedingung nicht
     erneut aus; der laufende Durchgang wird zu Ende geführt.
+- **Nachrichten** (`/notifications`, `src/notifications/`, Menü direkt hinter
+  den Bedingungen): benutzerdefinierte Regeln, die aus einer State-Änderung eine
+  **Push-Benachrichtigung** an gekoppelte Geräte machen. Tabelle mit Name,
+  State, Trigger, Nachricht, Priorität, Aktiv, letztem Trigger und den Aktionen
+  Bearbeiten / Testen / Aktivieren-Deaktivieren / Löschen.
+  - **NotificationService** (`notifications/service.js`) ist der einzige
+    Aufrufpunkt für alle homeESS-Funktionen:
+    `push({ title, body, type, severity })`. Er validiert serverseitig (Titel
+    1–120, Nachricht 1–500, Ereignistyp 1–64 mit `^[a-z0-9_-]+$`, Priorität
+    `normal|critical`) und liefert ein strukturiertes Ergebnis
+    (`accepted`/`recipients` bzw. `reason`: `relay_unavailable`,
+    `not_authenticated`, `send_failed`, `timeout`). Kein anderes Modul kennt
+    Relay, FCM oder Push-Protokolldetails.
+  - **Versandweg**: ausschließlich die bestehende, Ed25519-authentifizierte
+    Origin-WebSocket-Verbindung (`remote-access/connection-service` →
+    `relay-connection.pushNotification()`). Gesendet wird genau
+    `{ type, title, body, eventType, severity }` — **nie** `instanceId`,
+    `deviceId`, Empfängerlisten oder Push-Token. Die Empfänger bestimmt allein
+    der Relay aus seinen aktiven Kopplungen. **Keine Offline-Queue**: ohne
+    Verbindung scheitert nur der Push, die auslösende Funktion läuft weiter.
+  - **State-Auflösung** über `states/catalog.resolveStates()` (gemeinsame Grenze
+    mit der Output-Engine). Nötig, weil berechnete Systemwerte im flachen
+    Wertekatalog unter der Kurz-ID (`operating.notstrom`) stehen, adressiert aber
+    über `system://homeess/operating.notstrom` werden — was der State-Picker
+    einträgt und die Engine abonniert.
+  - **NotificationRuleEngine** (`notifications/engine.js`): abonniert die States
+    der aktiven Regeln über `mqttClient.subscribeAdHoc()` unter je eigenem
+    Cache-Schlüssel (`notification:<id>`) und hängt am `values`-Ereignis des
+    `state-bus` — **kein Polling**. Den alten Wert führt sie selbst mit (der Bus
+    überschreibt seinen Cache vor dem Ereignis); der eigene Schlüssel je Regel
+    macht mehrere Regeln auf demselben State voneinander unabhängig.
+  - **Trigger** (`notifications/triggers.js`, alle flankenbasiert): `changed`
+    (`alt != neu`), `equals` (`alt != Wert` und `neu == Wert`), `not_equals`
+    (`alt == Wert` und `neu != Wert`), `above` (`alt <= Wert` und `neu > Wert`),
+    `below` (`alt >= Wert` und `neu < Wert`). Ein unbekannter Vorwert löst nie
+    aus — der erste Wert nach dem Start ist nur die Ausgangsbasis.
+    `above`/`below` sind ausschließlich für numerische States zulässig (Boolean
+    zählt dabei nicht als Zahl) und werden sonst in Oberfläche und Repository
+    gesperrt.
+  - **Cooldown** je Regel (`cooldown_seconds`, Standard 5, `0` erlaubt): trifft
+    sie währenddessen erneut zu, wird nichts gesendet und `last_triggered_at`
+    bleibt unverändert (der Cooldown verlängert sich nicht); der mitgeführte
+    Vorwert wird dagegen immer fortgeschrieben.
+  - **Testen** sendet die Nachricht sofort über den Dienst, ohne den State zu
+    verändern, ohne die Triggerbedingung zu simulieren und ohne
+    `last_triggered_at` fortzuschreiben. Regeln auf **gelöschte States** lösen
+    nicht aus, werden als ungültig markiert und **nicht** automatisch entfernt.
 - **Optionale Module** (`src/modules/index.js`): generische Registry +
   In-Memory-Enabled-State; Seite `/module` zum Aktivieren/Deaktivieren.
   Aktivierte Module erscheinen automatisch in der Sidebar. Aktuell:
@@ -1219,6 +1274,13 @@ src/
     engine.js             Auswertung: Trigger, Wenn-Pruefung, Dann-/Sonst-Folge
                           und zyklische Schleifenpruefung
     values.js             Wert-/Topic-Erkennung, Rechenfunktionen, Rundung
+  notifications/
+    service.js            Zentraler NotificationService: Validierung + Versand
+                          ueber den bestehenden Relay-WebSocket
+    engine.js             Rule Engine: State-Abos, Flankenerkennung, Cooldown
+    rules.js              Regeln (notification_rules): CRUD + Validierung
+    triggers.js           Trigger-Typen, Werttypen, Flankenlogik
+    log.js                Strukturierte Logs (nur Metadaten, nie Nachrichtentext)
   energie/
     overview.js           Eckdaten der Energieseiten (read-only) fuer /energie
   stromverbrauch/
@@ -1587,6 +1649,15 @@ Eckpunkte:
   discharge_offset, previous_year_charge/discharge_total, last_power_ts,
   last_rollover_date, week/month/year_key)` — per Leistungsintegration erfasste
   Netto-Akkuladung nach Tag/Woche/Monat/Jahr + Vorjahr.
+- `notification_rules(id, name UNIQUE, enabled, state_id, trigger_type
+  'changed'|'equals'|'not_equals'|'above'|'below', trigger_value, title, body,
+  event_type, severity 'normal'|'critical', cooldown_seconds, position,
+  created_at, updated_at, last_triggered_at)` — Regeln der Seite „Nachrichten".
+  `state_id` ist die kanonische State-Adresse aus der bestehenden
+  State-Verwaltung (keine zweite State-Datenbank). Bewusst **ohne**
+  `instance_id`, `device_id`, Push-Token oder Firebase-Daten: eine Regel kann
+  damit weder eine fremde Instanz noch einen bestimmten Empfänger adressieren —
+  die Empfänger bestimmt allein der Relay über seine aktiven Kopplungen.
 - `daily_metric_history(metric, day_key, value, updated_at)` — je Kennzahl
   (`pv`, `strom.netzbezug`, `strom.eigenverbrauch`) ein abgeschlossener
   Tageswert pro Tag; Grundlage für die statistischen Jahreswerte (gestern,
@@ -1616,7 +1687,11 @@ registriert alle `mqttReadCandidates` als Routen und abonniert alle
 werden beim Subscribe und beim Reconnect gesendet. Cache-Keys: `pool:<topic>`.
 Abgerufen über `readPoolValue(cache, topic)`. Die Output-Regelschleife verwendet
 pro Ziel-State einen gemeinsamen `output.readback:<topic>`-Cache-Key und fordert
-den Istwert zusätzlich alle 30 Sekunden aktiv an.
+den Istwert zusätzlich alle 30 Sekunden aktiv an. Die Rule Engine des
+Nachrichtensystems abonniert die States ihrer aktiven Regeln unter je einem
+eigenen Cache-Key `notification:<regel-id>`; ein eigener Key je Regel hält
+mehrere Regeln auf demselben State voneinander unabhängig und trägt den für die
+Flankenerkennung nötigen Vorwert.
 
 ## Adapter-Schnittstelle (Geräte-Anbindung)
 

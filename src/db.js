@@ -827,6 +827,36 @@ function openDatabase() {
     db.run(
       'CREATE INDEX IF NOT EXISTS idx_automation_items_condition_kind ON automation_condition_items (condition_id, kind, position, id)'
     );
+    // Nachrichtensystem: benutzerdefinierte Regeln, die aus einer Änderung an
+    // einem bestehenden homeESS-State eine Push-Benachrichtigung machen.
+    // `state_id` ist die kanonische State-Adresse (dieselbe, die Bedingungen und
+    // Output verwenden) – es gibt keine zweite State-Verwaltung.
+    // Bewusst NICHT gespeichert: instanceId, deviceId, Push-Token oder
+    // Firebase-Daten. Eine Regel kann damit weder eine fremde Instanz noch einen
+    // bestimmten Empfänger adressieren; die Empfänger bestimmt allein der Relay
+    // über seine aktiven Kopplungen.
+    db.run(
+      `CREATE TABLE IF NOT EXISTS notification_rules (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        state_id TEXT NOT NULL,
+        trigger_type TEXT NOT NULL CHECK (trigger_type IN ('changed', 'equals', 'not_equals', 'above', 'below')),
+        trigger_value TEXT NOT NULL DEFAULT '',
+        title TEXT NOT NULL,
+        body TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        severity TEXT NOT NULL DEFAULT 'normal' CHECK (severity IN ('normal', 'critical')),
+        cooldown_seconds INTEGER NOT NULL DEFAULT 5,
+        position INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        last_triggered_at INTEGER
+      )`
+    );
+    db.run(
+      'CREATE INDEX IF NOT EXISTS idx_notification_rules_state ON notification_rules (state_id, enabled)'
+    );
     // Heimkino (optionales Modul): frei benannte Räume mit je einem
     // beschreibbaren Kinomodus. Zu jedem Raum gehören zwei Aktionsfolgen
     // (`phase` an/aus), die bei einer Zustandsänderung nacheinander abgearbeitet

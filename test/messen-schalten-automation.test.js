@@ -113,6 +113,62 @@ test('Unbestätigter Schaltbefehl wird nicht in jedem Tick wiederholt', async ()
   await new Promise((resolve) => db.close(resolve));
 });
 
+test('Verlorener Einschaltbefehl nach Levelfreigabe wird mit wachsender Wartezeit wiederholt', async () => {
+  // Nachgestellt: Level 2 → 1 schaltet die Steckdose ab, das Gerät startet nach
+  // einem Stromausfall neu und der EIN-Befehl bei Level 1 → 2 geht verloren.
+  const db = await freshDb();
+  await dbRun(db, "INSERT INTO mess_schalt_actors (id, name, switch_topic, priority, always_on) VALUES (13, 'Steckdose', 'retry.0.state', 2, 1)");
+  const origNow = Date.now;
+  let now = 100000;
+  Date.now = () => now;
+  setActual(13, true);
+  try {
+    await withPublishCapture(async (captured) => {
+      // Nur eigene Befehle zählen; andere Tests hinterlassen Level-Registrierungen.
+      const own = () => captured.filter((p) => p[0] === 'retry.0.state');
+      levelHandler.applyLevel(2);
+      await automation.tick(db);
+      levelHandler.applyLevel(1);
+      assert.deepEqual(own(), [['retry.0.state', '0']]);
+      setActual(13, false);
+      await automation.tick(db);
+
+      captured.length = 0;
+      now += 3600 * 1000;
+      levelHandler.applyLevel(2);
+      await automation.tick(db);
+      assert.deepEqual(own(), [['retry.0.state', '1']]);
+
+      now += 30000;
+      await automation.tick(db);
+      assert.equal(own().length, 1, 'innerhalb der ersten Minute keine Wiederholung');
+
+      now += 31000;
+      await automation.tick(db);
+      assert.equal(own().length, 2, 'nach einer Minute ohne Bestätigung erneut senden');
+
+      now += 61000;
+      await automation.tick(db);
+      assert.equal(own().length, 2, 'zweite Wiederholung wartet zwei Minuten');
+
+      now += 60000;
+      await automation.tick(db);
+      assert.equal(own().length, 3);
+
+      setActual(13, true);
+      await automation.tick(db);
+      now += 3600 * 1000;
+      await automation.tick(db);
+      assert.equal(own().length, 3, 'bestätigter Zustand beendet die Wiederholungen');
+    });
+  } finally {
+    Date.now = origNow;
+    levelHandler.applyLevel(5);
+    clearActual(13);
+    await new Promise((resolve) => db.close(resolve));
+  }
+});
+
 test('Ohne „Immer an" wird das Gerät unterhalb der Priorität ausgeschaltet', async () => {
   const db = await freshDb();
   await dbRun(db, "INSERT INTO mess_schalt_actors (id, name, switch_topic, priority, always_on) VALUES (20, 'Licht', 'licht.0.state', 4, 0)");

@@ -54,6 +54,117 @@ Vergleiche und die Rechenfunktionen der Aktionen (Grundrechenarten, Rest,
 Minimum, Maximum, optionale Rundung) verlangen auf beiden Seiten Zahlen;
 boolesche Zustände zählen dabei als numerisch.
 
+## Nachrichtensystem (Push-Benachrichtigungen)
+
+Die Seite „Nachrichten" (`/notifications`, `src/routes/notifications.js`,
+`src/views/notifications.js`) verwaltet benutzerdefinierte Regeln, die aus einer
+Änderung an einem bestehenden homeESS-State eine Push-Benachrichtigung machen.
+Es gibt dafür genau **einen** Aufrufpunkt und genau **einen** Versandweg.
+
+**Zentraler NotificationService** (`src/notifications/service.js`). Jede
+homeESS-Funktion, die benachrichtigen will, ruft nur
+`push({ title, body, type, severity })` auf. Titel (1–120 Zeichen), Nachricht
+(1–500), Ereignistyp (1–64, Muster `^[a-z0-9_-]+$`) und Priorität
+(`normal` | `critical`) werden dabei **immer serverseitig** geprüft — unabhängig
+davon, ob die Nachricht aus einer Regel, aus der Testfunktion oder aus einer
+anderen Funktion stammt. Kein anderes Modul kennt Relay, WebSocket, FCM oder
+Push-Protokolldetails.
+
+**Versand über den bestehenden Relay-WebSocket.** Der Dienst nutzt
+ausschließlich die EINE bereits vorhandene, Ed25519-authentifizierte
+homeESS→Relay-Verbindung (`remote-access/connection-service` →
+`relay-connection.pushNotification()`). Gesendet wird genau
+`{ type: 'push_notification', title, body, eventType, severity }` — nie
+`instanceId`, `deviceId`, Empfängerlisten, FCM-Token oder Firebase-Daten. Die
+Instanz ergibt sich allein aus der Authentifizierung der Verbindung, die
+Empfänger bestimmt allein der Relay aus seinen aktiven Kopplungen. Eine Regel
+kann damit strukturell weder eine fremde Instanz noch einen bestimmten Empfänger
+adressieren. Die Quittung `push_notification_result` wird streng in
+Sendereihenfolge zugeordnet; sie trägt keine Korrelations-ID, weil der Payload
+bewusst keine enthält.
+
+Der Rückgabewert ist strukturiert: `{ accepted: true, recipients }` oder
+`{ accepted: false, recipients: 0, reason }` mit `relay_unavailable`,
+`not_authenticated`, `send_failed` oder `timeout`. Ist der Relay nicht verbunden
+oder nicht authentifiziert, scheitert **nur** der Push — die auslösende
+homeESS-Funktion läuft unverändert weiter. Es gibt bewusst **keine persistente
+Offline-Warteschlange**: eine nicht zugestellte Nachricht ist verloren, statt
+später verspätet und ohne Bezug zur Lage aufzuschlagen. Anders als bei den
+übrigen Relay-Nachrichten führt eine fehlerhafte Push-Quittung **nicht** zum
+Protokollabbruch: der Push ist ein Nebenweg, ein Verbindungsabbruch würde
+Fernzugriff und Relay-Tunnel für alle gekoppelten Geräte mitreißen.
+
+**Datenmodell.** `notification_rules` (Migration in `src/db.js`) hält `name`,
+`enabled`, `state_id`, `trigger_type`, `trigger_value`, `title`, `body`,
+`event_type`, `severity`, `cooldown_seconds`, `position`, `created_at`,
+`updated_at` und `last_triggered_at`. `state_id` ist die kanonische
+State-Adresse, die auch Bedingungen, Output und Dashboard verwenden
+(`system://…`, `custom://…`, `prefix://instanz/adresse`) — es gibt keine zweite
+State-Verwaltung und keine Kopie der State-Liste. Der State wird im Dialog
+ausschließlich über den gemeinsamen State-Picker gewählt.
+
+Aufgelöst wird ausschließlich über `states/catalog.resolveStates()` — dieselbe
+gemeinsame Auflösungsgrenze, die auch die Output-Engine verwendet. Das ist hier
+zwingend: berechnete Systemwerte stehen im flachen Wertekatalog unter ihrer
+fachlichen Kurz-ID (`operating.notstrom`), adressiert werden sie aber über ihr
+kanonisches Topic (`system://homeess/operating.notstrom`). Ein direkter Abgleich
+gegen den Katalog meldete solche States fälschlich als gelöscht und ließe zudem
+die Typprüfung (Grenzwerte nur auf Zahlen) ins Leere laufen.
+
+**NotificationRuleEngine** (`src/notifications/engine.js`). Die Engine abonniert
+die States ihrer aktiven Regeln über `mqttClient.subscribeAdHoc()` unter einem
+eigenen Cache-Schlüssel je Regel (`notification:<id>`) und hängt sich an das
+`values`-Ereignis des `state-bus`. Es gibt keine Polling-Schleife. Weil der Bus
+seinen Cache überschreibt, bevor er das Ereignis auslöst, führt die Engine den
+**alten Wert je Regel selbst mit** — genau das ist die Grundlage der
+Flankenerkennung. Der eigene Schlüssel je Regel macht mehrere Regeln auf
+demselben State vollständig unabhängig voneinander.
+
+**Trigger-Typen und Flankenerkennung** (`src/notifications/triggers.js`). Alle
+fünf Trigger werten eine Flanke aus, nie einen Zustand:
+
+| Trigger | löst aus, wenn |
+| --- | --- |
+| `changed` | `alt != neu` |
+| `equals` | `alt != Wert` **und** `neu == Wert` |
+| `not_equals` | `alt == Wert` **und** `neu != Wert` |
+| `above` | `alt <= Wert` **und** `neu > Wert` |
+| `below` | `alt >= Wert` **und** `neu < Wert` |
+
+Damit erzeugt weder ein erneut empfangener identischer Wert noch ein dauerhaft
+erfüllter Grenzwert wiederholte Pushs. Ist der alte Wert unbekannt (Regel neu,
+Server gerade gestartet, State ohne Wert), gibt es keine Flanke: der erste Wert
+dient nur als Ausgangsbasis — sonst löste jeder Neustart eine Welle von
+Benachrichtigungen aus. Werttypen (`boolean`, `number`, `string`) werden aus dem
+aktuellen State-Wert abgeleitet; `above`/`below` sind ausschließlich für
+numerische States zulässig und werden in der Oberfläche wie im Repository
+gesperrt. Boolesche Zustände zählen dabei **nicht** als Zahl.
+
+**Cooldown.** Jede Regel hat `cooldown_seconds` (Standard 5, `0` erlaubt). Trifft
+sie innerhalb des Cooldowns erneut zu, wird kein Push gesendet und
+`last_triggered_at` bleibt unverändert — der Cooldown verlängert sich also nicht.
+`last_triggered_at` wird sofort beim Auslösen gesetzt, noch bevor die Quittung
+des Relays vorliegt, damit ein flatternder Sensor auch dann entprellt bleibt.
+Der mitgeführte Vorwert wird dagegen **immer** fortgeschrieben, auch bei
+unterdrücktem Push, sonst stünde die Flankenerkennung danach auf einem veralteten
+Wert.
+
+**Gelöschte States.** Zeigt eine Regel auf einen nicht mehr vorhandenen State,
+löst sie nicht aus (es kommt nie ein Wert), wird in der Übersicht deutlich als
+ungültig markiert und erzeugt keinen Serverfehler. Sie wird **nicht** automatisch
+gelöscht, damit sie repariert werden kann.
+
+**Testfunktion.** „Testen" sendet die Nachricht der Regel sofort über den
+NotificationService, unabhängig vom Trigger. Dabei wird weder der State
+verändert noch die Triggerbedingung simuliert noch `last_triggered_at`
+fortgeschrieben.
+
+**Logging.** `notification_rule_triggered`, `notification_rule_suppressed`,
+`notification_push_accepted` und `notification_push_failed` mit Regel-ID,
+Ereignistyp, Priorität, Empfängeranzahl und Grund. `src/notifications/log.js`
+lässt ausschließlich diese Metadatenfelder durch: Nachrichtentext, Push-Token und
+personenbezogene Inhalte erscheinen nie im Log.
+
 ## Internationalisierung und Sprachdateien
 
 homeESS besitzt genau **eine systemweite Sprachwahl**. Die Registry unter

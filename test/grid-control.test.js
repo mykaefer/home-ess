@@ -48,6 +48,16 @@ test('one failed phase is enough, but all phases are required for recovery', () 
   assert.equal(allPhasesPresent([50, 50, 50]), true);
 });
 
+test('zu hohe Frequenz gilt nur ohne mögliche Frequenzanhebung als Netzausfall', () => {
+  assert.equal(hasPhaseFailure([52, 52, 52], { frequencyShiftPossible: false }), true);
+  assert.equal(hasPhaseFailure([50.1, 51.5, 50.1], { frequencyShiftPossible: false }), false);
+  assert.equal(hasPhaseFailure([52, 52, 52], { frequencyShiftPossible: true }), false);
+  assert.equal(hasPhaseFailure([52, 52, 52]), false, 'ohne Angabe wird eine Anhebung nicht ausgeschlossen');
+  assert.equal(hasPhaseFailure([0, 52, 52], { frequencyShiftPossible: true }), true, '0 Hz bleibt immer ein Ausfall');
+  assert.equal(allPhasesPresent([52, 52, 52]), false, 'angehobene Inselfrequenz entriegelt nicht');
+  assert.equal(allPhasesPresent([50.1, 51.5, 49.9]), true);
+});
+
 test('load switches on by any phase and off only below all three return thresholds', () => {
   const on = [4000, 4000, 4000];
   const off = [3000, 3000, 3000];
@@ -406,6 +416,127 @@ test('emergency mode stays latched until grid frequency returns', async () => {
 
   mqttClient.publish = originalPublish;
   await new Promise((resolve) => db.close(resolve));
+});
+
+// Szenario 14.09.2026: Netz zugeschaltet, Netzbezug weg, Netzeingang meldet 52 Hz.
+async function setupFrequencyDetectionDb() {
+  const db = new sqlite3.Database(':memory:');
+  const exec = (sql) => new Promise((resolve, reject) => db.exec(sql, (err) => err ? reject(err) : resolve()));
+  await exec(`
+    CREATE TABLE modules (key TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE operating_state (id INTEGER PRIMARY KEY, operating_level INTEGER, emergency_mode INTEGER);
+    INSERT INTO operating_state VALUES (1, 2, 0);
+    CREATE TABLE batterie_config (
+      id INTEGER PRIMARY KEY, soc_topic TEXT, power_topic TEXT, voltage_topic TEXT,
+      temperatur_topic TEXT, min_soc_topic TEXT, min_soc INTEGER, battery_type TEXT,
+      cell_count INTEGER, lower_voltage REAL, upper_voltage REAL
+    );
+    INSERT INTO batterie_config VALUES (1, 'battery.soc', '', '', '', '', 20, 'lifepo4', 16, 44.8, 55.2);
+    CREATE TABLE grid_control_config (
+      id INTEGER PRIMARY KEY, grid_command_topic TEXT, feed_in_command_topic TEXT,
+      temperature_warning_topic TEXT, temperature_warning_value TEXT,
+      warning_text_topic TEXT, warning_active_topic TEXT, soc_enabled INTEGER,
+      voltage_enabled INTEGER, temperature_enabled INTEGER, feed_in_allowed INTEGER,
+      soc_lower_offset INTEGER, soc_upper_offset INTEGER, soc_hysteresis INTEGER,
+      voltage_hysteresis REAL, grid_frequency_l1_topic TEXT,
+      grid_frequency_l2_topic TEXT, grid_frequency_l3_topic TEXT,
+      grid_detection_seconds INTEGER
+    );
+    INSERT INTO grid_control_config VALUES
+      (1, 'grid.command', 'feedin.command', '', '1', 'warning.text', 'warning.active', 1, 0, 0, 1, 0, 5, 2, 0.5,
+       'grid.frequency.l1', 'grid.frequency.l2', 'grid.frequency.l3', 1);
+  `);
+  await operatingState.init(db);
+  await operatingState.setEmergencyMode(db, false);
+  await modulesState.setEnabled(db, 'grid-control', true);
+  return db;
+}
+
+function setFrequencies(cache, values) {
+  ['L1', 'L2', 'L3'].forEach((phase, index) => {
+    cache.set(`gridcontrol.gridFrequency${phase}`, { value: values[index], receivedAt: Date.now() });
+  });
+}
+
+// Zwei Durchläufe im Abstand der Erkennungszeit (1 s).
+async function runPastDetection(automation, db) {
+  await automation.runNow(db);
+  await new Promise((resolve) => setTimeout(resolve, 1050));
+  await automation.runNow(db);
+}
+
+test('zu hohe Netzfrequenz unterhalb der oberen SoC-Schwelle löst den Notstrombetrieb aus', async () => {
+  const db = await setupFrequencyDetectionDb();
+  const cache = mqttClient.getCache();
+  cache.clear();
+  cache.set('mqtt.clockDate', { value: '2026-09-14', receivedAt: Date.now() });
+  cache.set('batterie.soc', { value: 10, receivedAt: Date.now() }); // unter Mindest-SoC ⇒ Netz an
+  setFrequencies(cache, [52, 52, 52]);
+  const published = [];
+  const originalPublish = mqttClient.publish;
+  const originalGetStatus = mqttClient.getStatus;
+  mqttClient.publish = (topic, value) => { published.push([topic, value]); return true; };
+  mqttClient.getStatus = () => ({ connected: true });
+  const automation = require('../src/grid-control/automation');
+  try {
+    await runPastDetection(automation, db);
+    assert.equal(automation.getState().gridActual, true);
+    assert.equal(operatingState.getState().emergencyMode, true, '52 Hz bei SoC 10 % ist kein Netz');
+    assert.ok(published.some(([topic, value]) => topic === 'warning.text' && /Netzfrequenz außerhalb des Netzbereichs/.test(String(value))));
+
+    // Die angehobene Frequenz entriegelt den Notstrombetrieb nicht, erst ein echtes Netz.
+    await automation.runNow(db);
+    assert.equal(operatingState.getState().emergencyMode, true);
+    setFrequencies(cache, [50.1, 50.1, 50.1]);
+    await automation.runNow(db);
+    assert.equal(operatingState.getState().emergencyMode, false);
+  } finally {
+    mqttClient.publish = originalPublish;
+    mqttClient.getStatus = originalGetStatus;
+    await operatingState.setEmergencyMode(db, false);
+    await new Promise((resolve) => db.close(resolve));
+  }
+});
+
+test('Frequenzanhebung oberhalb der oberen SoC-Schwelle wird nicht als Netzausfall erkannt', async () => {
+  const db = await setupFrequencyDetectionDb();
+  const cache = mqttClient.getCache();
+  cache.clear();
+  cache.set('mqtt.clockDate', { value: '2026-09-14', receivedAt: Date.now() });
+  // Obere Schwelle 95 %, Hysterese 2 %; Überschusseinspeisung schaltet das Netz zu.
+  cache.set('batterie.soc', { value: 96, receivedAt: Date.now() });
+  setFrequencies(cache, [52.5, 52.5, 52.5]);
+  const originalPublish = mqttClient.publish;
+  const originalGetStatus = mqttClient.getStatus;
+  mqttClient.publish = () => true;
+  mqttClient.getStatus = () => ({ connected: true });
+  const automation = require('../src/grid-control/automation');
+  try {
+    await runPastDetection(automation, db);
+    assert.equal(automation.getState().gridActual, true);
+    assert.equal(operatingState.getState().emergencyMode, false, 'Anhebung über der oberen Schwelle');
+
+    // Innerhalb der Hysterese bleibt die Anhebung möglich.
+    cache.set('batterie.soc', { value: 94, receivedAt: Date.now() });
+    await runPastDetection(automation, db);
+    assert.equal(operatingState.getState().emergencyMode, false, 'Hystereseband der oberen Schwelle');
+
+    // Ohne SoC-Wert ist eine Anhebung nicht auszuschließen.
+    cache.delete('batterie.soc');
+    await runPastDetection(automation, db);
+    assert.equal(operatingState.getState().emergencyMode, false, 'unbekannter SoC');
+
+    // 0 Hz bleibt auch oberhalb der oberen Schwelle ein Netzausfall.
+    cache.set('batterie.soc', { value: 96, receivedAt: Date.now() });
+    setFrequencies(cache, [0, 52.5, 52.5]);
+    await runPastDetection(automation, db);
+    assert.equal(operatingState.getState().emergencyMode, true, '0 Hz');
+  } finally {
+    mqttClient.publish = originalPublish;
+    mqttClient.getStatus = originalGetStatus;
+    await operatingState.setEmergencyMode(db, false);
+    await new Promise((resolve) => db.close(resolve));
+  }
 });
 
 test('grid command is verified against broker readback and re-asserted on divergence', async () => {

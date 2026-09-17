@@ -598,6 +598,85 @@ test('Tasmota-Adapter nimmt MQTT-Verbindung an, fragt STATUS an und publiziert W
   await adapter.stop();
 });
 
+function createTasmotaTestAdapter(logs = []) {
+  return createTasmotaAdapter({
+    setStates() {},
+    publishState() {},
+    publishStates() {},
+    setStorage() {},
+    setConnected() {},
+    log(message) { logs.push(message); },
+  });
+}
+
+async function connectTasmotaClient(port, clientId, options = {}) {
+  const mqtt = require('mqtt');
+  const client = mqtt.connect(`mqtt://127.0.0.1:${port}`, { clientId, reconnectPeriod: 0, ...options });
+  const received = [];
+  client.on('message', (topic, payload) => received.push({ topic, payload: payload.toString('utf8') }));
+  client.on('error', () => {});
+  await new Promise((resolve, reject) => {
+    client.once('error', reject);
+    client.once('connect', resolve);
+  });
+  await new Promise((resolve, reject) => client.subscribe('cmnd/plug1/#', (err) => (err ? reject(err) : resolve())));
+  await new Promise((resolve, reject) => client.publish('tele/plug1/STATE', JSON.stringify({ POWER: 'OFF' }), (err) => (err ? reject(err) : resolve())));
+  return { client, received };
+}
+
+test('Tasmota-Adapter schaltet nach Reconnect über die neue Verbindung statt über die tote alte', async () => {
+  // Nachgestellt: Steckdose startet nach Stromausfall neu und verbindet sich mit
+  // derselben Client-ID; die alte TCP-Verbindung ist serverseitig noch offen.
+  const port = await getFreePort();
+  const logs = [];
+  const adapter = createTasmotaTestAdapter(logs);
+  await adapter.start({ port, devices: [] });
+  const before = await connectTasmotaClient(port, 'DVES_TEST');
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  const oldClosed = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('alte Verbindung wurde nicht getrennt')), 3000);
+    before.client.stream.once('close', () => { clearTimeout(timer); resolve(); });
+  });
+
+  const after = await connectTasmotaClient(port, 'DVES_TEST');
+  await oldClosed;
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.ok(logs.some((line) => /DVES_TEST erneut verbunden/.test(line)));
+
+  adapter.write('plug1/POWER', true);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.ok(after.received.some((entry) => entry.topic === 'cmnd/plug1/POWER' && entry.payload === 'ON'));
+  assert.equal(before.received.some((entry) => entry.topic === 'cmnd/plug1/POWER'), false);
+
+  before.client.end(true);
+  await new Promise((resolve) => after.client.end(false, resolve));
+  await adapter.stop();
+});
+
+test('Tasmota-Adapter trennt Verbindungen nach überschrittenem Keep-Alive', async () => {
+  const mqttPacket = require('mqtt-packet');
+  const port = await getFreePort();
+  const logs = [];
+  const adapter = createTasmotaTestAdapter(logs);
+  await adapter.start({ port, devices: [] });
+  const socket = net.connect(port, '127.0.0.1');
+  await new Promise((resolve) => socket.once('connect', resolve));
+  socket.on('data', () => {});
+  const closed = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Verbindung trotz Keep-Alive nicht getrennt')), 5000);
+    socket.once('close', () => { clearTimeout(timer); resolve(); });
+  });
+  socket.write(mqttPacket.generate({
+    cmd: 'connect', protocolId: 'MQTT', protocolVersion: 4, clean: true, clientId: 'DVES_STILL', keepalive: 1,
+  }));
+  const started = Date.now();
+  await closed;
+  const elapsed = Date.now() - started;
+  assert.ok(elapsed >= 1000 && elapsed < 4000, `nach ${elapsed} ms getrennt`);
+  assert.ok(logs.some((line) => /DVES_STILL: Keep-Alive überschritten/.test(line)));
+  await adapter.stop();
+});
+
 test('Tasmota-Adapter erkennt frei angeordnetes FullTopic', () => {
   const parsed = createTasmotaAdapter.parseTasmotaTopic('house/kitchen/plug1/tele/SENSOR');
   assert.deepEqual(parsed, {

@@ -28,6 +28,9 @@ const EXEMPT = new Set([
   'homeESS', 'homeess', 'http', 'https', 'kWh', 'Android', 'Smartphone', 'Server', 'Version',
   'Fingerprint', 'Remote', 'Theme', 'Picker', 'Pause', 'Operation', 'Round', 'Error',
   'Topic', 'Value', 'Value2', 'Boolean', 'Integer', 'Floating Point', 'JSON',
+  // Schaltzustände als State-Wert (Nachrichten-Vergleichswert): in jeder Sprache
+  // genau diese Zeichenfolge, weil sie so gespeichert und verglichen wird.
+  'true', 'false',
   'Grid actual', 'Grid by Load', 'Grid by SoC', 'Grid by Voltage',
   'MyKaefer Apps', 'Segoe UI', 'xMidYMid meet', 'DOMContentLoaded', 'Enter',
   'Content-Type', 'X-HomeESS-Request', 'X-HomeESS-Update', 'X-Upload-Filename',
