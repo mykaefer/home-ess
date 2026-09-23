@@ -565,14 +565,16 @@ test('Ohne hinterlegten Standort erklärt die Seite den fehlenden Wert', () => {
   assert.doesNotMatch(html, /wetter-short-row/);
 });
 
-test('Die Wetterprognose steht an letzter Stelle im Hauptmenü', () => {
+test('Die Wetterprognose schließt das Hauptmenü ab, nur die Logs folgen ihr', () => {
   const html = renderLayout({ title: 'Navigation', activePath: '/wetter', body: '<p>Test</p>' });
   const link = html.indexOf('href="/wetter"');
   assert.ok(link > 0, 'der Menüpunkt ist vorhanden');
-  // Kein anderer Hauptmenüpunkt steht dahinter.
-  for (const item of NAV.filter((entry) => entry.section === 'main' && entry.path !== '/wetter')) {
+  // Kein anderer Hauptmenüpunkt steht dahinter — ausgenommen die Logs, die als
+  // reine Diagnoseseite bewusst an letzter Stelle stehen.
+  for (const item of NAV.filter((entry) => entry.section === 'main' && !['/wetter', '/logs'].includes(entry.path))) {
     assert.ok(html.indexOf(`href="${item.path}"`) < link, `${item.path} muss vor der Wetterprognose stehen`);
   }
+  assert.ok(html.indexOf('href="/logs"') > link, 'die Logs stehen hinter der Wetterprognose');
   // Die Seite ist im Rechtemodell hinterlegt, damit sie ausgeblendet werden kann.
   assert.ok(PAGES.some((page) => page.key === 'wetter' && page.prefix === '/wetter'));
 });

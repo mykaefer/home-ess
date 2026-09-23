@@ -63,6 +63,7 @@ const PAGES = [
   { key: 'states', label: 'States', prefix: '/states' },
   { key: 'output', label: 'Output', prefix: '/output' },
   { key: 'wetter', label: 'Wetter', prefix: '/wetter' },
+  { key: 'logs', label: 'Logs', prefix: '/logs' },
   { key: 'pool', label: 'Poolsteuerung', prefix: '/pool' },
   { key: 'grid-control', label: 'Grid-Control', prefix: '/grid-control' },
   { key: 'wallbox', label: 'Wallbox', prefix: '/wallbox' },

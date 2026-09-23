@@ -33,7 +33,8 @@ async function freshDb({ minSoc = 20, minSocTopic = 'battery.0.minimumSoc', remo
     lower_voltage REAL NOT NULL DEFAULT 44.8,
     upper_voltage REAL NOT NULL DEFAULT 55.2,
     charge_efficiency REAL NOT NULL DEFAULT 95,
-    discharge_efficiency REAL NOT NULL DEFAULT 95
+    discharge_efficiency REAL NOT NULL DEFAULT 95,
+    dynamic_min_soc INTEGER NOT NULL DEFAULT 0
   )`);
   await dbRun(
     db,
@@ -160,6 +161,42 @@ test('Schieberegler übernimmt den Mindest-SoC sofort und sendet an Ziel- und Re
   }
   assert.equal(await readMinSoc(db), 20);
   assert.ok(logs.some((line) => /\[batterie minSoc\].*"source":"oberflaeche","from":10,"to":20/.test(line)));
+  await new Promise((resolve) => db.close(resolve));
+});
+
+test('die Automatik setzt ohne Raster in 1-%-Schritten', async () => {
+  const db = await freshDb({ minSoc: 20 });
+  await withPublishCapture(async (published) => {
+    const saved = await minSocSync.setLocalMinSoc(db, 43, {
+      source: 'dynamischer-mindest-soc', snapToStep: false,
+    });
+    assert.equal(saved.minSoc, 43, 'nicht auf 5-%-Schritte gerastet');
+    assert.deepEqual(published, [['battery.0.minimumSoc', '43'], ['0_userdata.0.minSoc', '43']]);
+  });
+  assert.equal(await readMinSoc(db), 43);
+  await new Promise((resolve) => db.close(resolve));
+});
+
+test('ein Remote-Echo des 1-%-Werts rastet ihn nicht auf das 5-%-Raster', async () => {
+  const db = await freshDb({ minSoc: 43 });
+  // Externes System spiegelt den von der Automatik gesetzten Wert zurück.
+  mqttClient.getCache().set(STATE_IDS.minSocRemote, { value: '43', receivedAt: Date.now() });
+  await withPublishCapture(async (published) => {
+    await minSocSync.runSync(db);
+    assert.deepEqual(published, [], 'keine Korrektur auf 45');
+  });
+  assert.equal(await readMinSoc(db), 43);
+  await new Promise((resolve) => db.close(resolve));
+});
+
+test('ein echter externer Remote-Wert wird weiterhin auf 5-%-Schritte gerundet', async () => {
+  const db = await freshDb({ minSoc: 43 });
+  mqttClient.getCache().set(STATE_IDS.minSocRemote, { value: '33', receivedAt: Date.now() });
+  await withPublishCapture(async (published) => {
+    await minSocSync.runSync(db);
+    assert.deepEqual(published, [['battery.0.minimumSoc', '35'], ['0_userdata.0.minSoc', '35']]);
+  });
+  assert.equal(await readMinSoc(db), 35);
   await new Promise((resolve) => db.close(resolve));
 });
 

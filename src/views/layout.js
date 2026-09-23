@@ -8,10 +8,13 @@ const { currentAccess, canSeePage, pageForPath, themeBodyClass } = require('../a
 const i18n = require('../i18n');
 const systemWarning = require('../system-warning');
 
+// Sichtbare Version der Installation. Maßgeblich ist VERSION.json im
+// Stammverzeichnis – dieselbe Quelle, aus der die Updateprüfung liest; ohne sie
+// gilt package.json. So zeigen Fußzeile und Updatekarte nie verschiedene Stände.
 let pkgVersion = '—';
 try {
   // eslint-disable-next-line global-require
-  pkgVersion = require('../../package.json').version || '—';
+  pkgVersion = require('../update/version').readLocalVersion() || '—';
 } catch (_) {
   /* Version bleibt unbekannt */
 }
@@ -67,10 +70,12 @@ const NAV_CORE = [
 ];
 
 // Punkte, die im Hauptmenü hinter allem anderen stehen — auch hinter den
-// optionalen Modulen. Wetter ist eine Nachschlageseite ohne Steuerfunktion und
-// schließt die Navigation ab.
+// optionalen Modulen. Wetter ist eine Nachschlageseite ohne Steuerfunktion;
+// Logs zeigt die Laufzeitmeldungen der Hintergrunddienste und steht als reine
+// Diagnoseseite ganz am Ende.
 const NAV_MAIN_TRAILING = [
   { path: '/wetter', label: 'Wetter', section: 'main' },
+  { path: '/logs', label: 'Logs', section: 'main' },
 ];
 
 // NAV wird von außen noch als Array erwartet (z. B. in Tests) — exportieren wir

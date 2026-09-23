@@ -52,6 +52,22 @@ the web interface on port `3000`.
 Open `http://<server-ip>:3000` and sign in with the initial account
 `admin` / `admin`. Change this password immediately after the first login.
 
+### Installing the development branch
+
+To follow or test the upcoming state, install the `development` branch instead
+of the released `main` branch:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mykaefer/home-ess/development/install-dev.sh | sudo bash
+```
+
+Each branch carries its own version number in its `VERSION.json`, and that file is
+what the update check reads. An installation stays on its branch — running the
+regular installer again does not move it. Switch branches in the web interface
+under *Settings → General → homeESS updates → Branch*; the next update then
+moves the installation to the selected branch. The development branch may carry
+unfinished work and does not belong on a system you depend on.
+
 ### Updating an existing installation
 
 Run the same command again. Application code and installed official adapters

@@ -17,7 +17,14 @@ const REQUEST_FILE = path.join(UPDATE_DIR, 'request.json');
 const STATUS_FILE = path.join(UPDATE_DIR, 'status.json');
 const ADAPTER_SELECTION_FILE = path.join(DATA_DIR, 'adapter-selection.json');
 const REPOSITORY_URL = 'https://github.com/mykaefer/home-ess.git';
-const RELEASE_API = 'https://api.github.com/repos/mykaefer/home-ess/releases/latest';
+// Maßgeblich ist die VERSION.json des Zweigs, nicht mehr ein Release-Tag:
+// `main` und `development` führen unabhängige Versionsnummern.
+const RAW_BASE = 'https://raw.githubusercontent.com/mykaefer/home-ess';
+// Feste Zweigliste. Die Anforderung kommt zwar nur vom lokalen Dienst, aber die
+// Prüfung bleibt hier: aus einer Anforderung darf nie ein fremder Zweig oder
+// gar eine fremde Adresse entstehen.
+const BRANCHES = ['main', 'development'];
+const DEFAULT_BRANCH = 'main';
 const INSTALLED_HELPER = '/usr/local/lib/home-ess/self-update.js';
 const SYSTEMD_DIR = '/etc/systemd/system';
 const VERSION_RE = /^\d+\.\d+\.\d+$/;
@@ -75,20 +82,39 @@ function report(state, text, extra = {}) {
   atomicJson(STATUS_FILE, status);
 }
 
-async function latestVersion() {
-  const response = await fetch(RELEASE_API, {
-    headers: {
-      Accept: 'application/vnd.github+json',
-      'User-Agent': 'homeESS-self-updater',
-      'X-GitHub-Api-Version': '2022-11-28',
-    },
+// Version aus einer VERSION.json lesen: { "version": "1.7.2" }.
+function parseVersionFile(text) {
+  try {
+    const document = JSON.parse(String(text || ''));
+    const version = document && typeof document === 'object' ? String(document.version || '') : '';
+    return VERSION_RE.test(version) ? version : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function branchOf(value) {
+  const branch = String(value || '').trim().toLowerCase();
+  return BRANCHES.includes(branch) ? branch : DEFAULT_BRANCH;
+}
+
+function localVersion(dir) {
+  const fromFile = (() => {
+    try { return parseVersionFile(fs.readFileSync(path.join(dir, 'VERSION.json'), 'utf8')); } catch (_) { return null; }
+  })();
+  if (fromFile) return fromFile;
+  return JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')).version;
+}
+
+async function branchVersion(branch) {
+  const response = await fetch(`${RAW_BASE}/${branchOf(branch)}/VERSION.json`, {
+    headers: { Accept: 'application/json', 'User-Agent': 'homeESS-self-updater' },
     signal: AbortSignal.timeout(15000),
   });
   if (!response.ok) throw new Error(`GitHub antwortet mit HTTP ${response.status}.`);
-  const body = await response.json();
-  const version = String(body.tag_name || '').replace(/^v/, '');
-  if (!VERSION_RE.test(version) || body.draft || body.prerelease) {
-    throw new Error('GitHub liefert kein gültiges stabiles Release.');
+  const version = parseVersionFile(await response.text());
+  if (!version || !VERSION_RE.test(version)) {
+    throw new Error('Die Versionsdatei des Zweigs enthält keine gültige Version.');
   }
   return version;
 }
@@ -98,7 +124,7 @@ function readRequest() {
   fs.unlinkSync(REQUEST_FILE);
   const version = String(body.version || '');
   if (!VERSION_RE.test(version)) throw new Error('Die Updateanforderung enthält keine gültige Version.');
-  return version;
+  return { version, branch: branchOf(body.branch) };
 }
 
 async function waitForVersion(version, timeoutMs = 60000) {
@@ -150,7 +176,7 @@ async function rollback(error, targetVersion) {
   if (fs.existsSync(APP_DIR)) fs.renameSync(APP_DIR, FAILED_DIR);
   if (fs.existsSync(BACKUP_DIR)) fs.renameSync(BACKUP_DIR, APP_DIR);
   await command('/usr/bin/systemctl', ['start', 'home-ess.service']);
-  const restoredVersion = JSON.parse(fs.readFileSync(path.join(APP_DIR, 'package.json'), 'utf8')).version;
+  const restoredVersion = localVersion(APP_DIR);
   const restored = await waitForVersion(restoredVersion, 60000);
   if (fs.existsSync(FAILED_DIR)) fs.rmSync(FAILED_DIR, { recursive: true, force: true });
   report(restored ? 'failed' : 'failed_rollback', restored
@@ -161,26 +187,33 @@ async function rollback(error, targetVersion) {
 }
 
 async function main() {
-  const requestedVersion = readRequest();
+  const { version: requestedVersion, branch } = readRequest();
   const previous = (() => {
     try { return JSON.parse(fs.readFileSync(STATUS_FILE, 'utf8')); } catch (_) { return {}; }
   })();
-  status = { ...previous, targetVersion: requestedVersion, startedAt: previous.startedAt || new Date().toISOString() };
+  status = {
+    ...previous,
+    targetVersion: requestedVersion,
+    targetBranch: branch,
+    startedAt: previous.startedAt || new Date().toISOString(),
+  };
 
-  report('validating', 'Release wird unabhängig bei GitHub geprüft.');
-  const latest = await latestVersion();
-  if (latest !== requestedVersion) throw new Error(`Version ${requestedVersion} ist nicht das aktuelle stabile Release ${latest}.`);
+  report('validating', 'Die Version wird unabhängig bei GitHub geprüft.');
+  const latest = await branchVersion(branch);
+  if (latest !== requestedVersion) throw new Error(`Version ${requestedVersion} ist nicht der aktuelle Stand des Zweigs ${branch} (${latest}).`);
 
   stageDir = `/opt/.home-ess-update-${process.pid}`;
   if (fs.existsSync(stageDir)) fs.rmSync(stageDir, { recursive: true, force: true });
   report('downloading', `Version ${requestedVersion} wird von GitHub geladen.`);
-  await command('/usr/bin/git', ['clone', '--depth', '1', '--branch', `v${requestedVersion}`, '--single-branch', REPOSITORY_URL, stageDir], {
+  await command('/usr/bin/git', ['clone', '--depth', '1', '--branch', branch, '--single-branch', REPOSITORY_URL, stageDir], {
     env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
   });
 
-  const stagedPackage = JSON.parse(fs.readFileSync(path.join(stageDir, 'package.json'), 'utf8'));
-  if (stagedPackage.version !== requestedVersion) {
-    throw new Error(`Release-Tag und package.json stimmen nicht überein (${stagedPackage.version}).`);
+  // Geladen wird ein Zweig, kein unveränderliches Tag: der Arbeitsstand muss
+  // dieselbe Version tragen wie die eben geprüfte Versionsdatei.
+  const stagedVersion = localVersion(stageDir);
+  if (stagedVersion !== requestedVersion) {
+    throw new Error(`Der geladene Stand trägt Version ${stagedVersion} statt ${requestedVersion}.`);
   }
 
   report('dependencies', 'Produktionsabhängigkeiten werden im neuen Release installiert.');
@@ -234,7 +267,7 @@ async function main() {
   } catch (error) {
     report('finishing', `Die alte Arbeitskopie konnte noch nicht entfernt werden: ${error.message}`);
   }
-  report('completed', `Update auf Version ${requestedVersion} wurde erfolgreich abgeschlossen.`, {
+  report('completed', `Update auf Version ${requestedVersion} (${branch}) wurde erfolgreich abgeschlossen.`, {
     finishedAt: new Date().toISOString(),
   });
 }

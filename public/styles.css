@@ -7601,6 +7601,275 @@ body.theme-dark {
    mehr scannbar. */
 .theme-dark .remote-access-qr { background: #ffffff; }
 
+
+/* ── Seite „Logs" ───────────────────────────────────────────────────────────
+   Laufzeitmeldungen der Hintergrunddienste. Die Zeilen tragen ihre Stufe als
+   Farbe (Fehler rot, Warnung gelb, Info neutral, Debug zurückgenommen); alle
+   Farben kommen aus den Themenvariablen und gelten damit auch im dunklen Thema. */
+.logs-card {
+    display: grid;
+    gap: 14px;
+}
+
+.logs-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 12px 18px;
+}
+
+.logs-field {
+    display: grid;
+    gap: 4px;
+}
+
+.logs-field > label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--color-ink-muted);
+}
+
+.logs-field--search {
+    flex: 1 1 260px;
+}
+
+.logs-field--search input {
+    width: 100%;
+}
+
+.logs-field--levels {
+    flex: 0 1 auto;
+}
+
+.logs-field--pause {
+    margin-left: auto;
+}
+
+.log-level-toggles {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+/* Ein Stufenschalter: Kästchen, Beschriftung, Anzahl im Puffer. */
+.log-level-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    border: 1px solid var(--color-line);
+    border-radius: 999px;
+    background: var(--color-surface-muted);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    user-select: none;
+}
+
+.log-level-toggle input {
+    width: auto;
+    margin: 0;
+    accent-color: var(--color-action);
+}
+
+.log-level-count {
+    min-width: 18px;
+    padding: 0 5px;
+    border-radius: 999px;
+    background: var(--color-surface);
+    color: var(--color-ink-muted);
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+}
+
+.log-level-toggle--error { color: var(--color-bad-ink); background: var(--color-bad-tint); }
+.log-level-toggle--warn { color: var(--color-warn-ink); background: var(--color-warn-tint); }
+.log-level-toggle--info { color: var(--color-info-ink); background: var(--color-info-tint); }
+.log-level-toggle--debug { color: var(--color-ink-muted); }
+
+.logs-pause {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 128px;
+    justify-content: center;
+}
+
+.logs-pause.is-paused {
+    background: var(--color-warn-tint);
+    color: var(--color-warn-ink);
+}
+
+.logs-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 16px;
+    font-size: 12px;
+    color: var(--color-ink-muted);
+}
+
+.logs-meta-item {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+}
+
+.logs-meta-label { color: var(--color-ink-faint); }
+
+.logs-meta-value {
+    color: var(--color-ink);
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+}
+
+/* Betriebsanzeige: läuft (grün) oder angehalten (gelb). */
+.logs-state {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-weight: 600;
+}
+
+.logs-state::before {
+    content: '';
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: currentColor;
+}
+
+.logs-state--live { color: var(--color-ok-ink); background: var(--color-ok-tint); }
+.logs-state--paused { color: var(--color-warn-ink); background: var(--color-warn-tint); }
+
+.log-list-head,
+.log-row {
+    display: grid;
+    grid-template-columns: 104px 78px 168px minmax(0, 1fr);
+    gap: 10px;
+    align-items: baseline;
+}
+
+.log-list-head {
+    padding: 0 10px 6px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--color-ink-faint);
+    border-bottom: 1px solid var(--color-line);
+}
+
+.log-list {
+    max-height: min(62vh, 720px);
+    min-height: 240px;
+    overflow: auto;
+    border: 1px solid var(--color-line);
+    border-radius: 10px;
+    background: var(--color-surface);
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    font-size: 12px;
+}
+
+.log-row {
+    padding: 5px 10px;
+    border-bottom: 1px solid var(--color-line-soft);
+    border-left: 3px solid transparent;
+}
+
+.log-row:last-child { border-bottom: none; }
+
+.log-time {
+    color: var(--color-ink-faint);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+
+.log-level {
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.log-source {
+    color: var(--color-ink-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Meldungen dürfen mehrzeilig sein (Stapelspuren) und behalten ihre Umbrüche. */
+.log-line {
+    color: var(--color-ink);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.log-row--error { border-left-color: var(--color-bad-ink-bright); background: var(--color-bad-wash); }
+.log-row--error .log-level { color: var(--color-bad-ink); }
+.log-row--error .log-line { color: var(--color-bad-ink); }
+.log-row--warn { border-left-color: #eab308; background: var(--color-warn-wash); }
+.log-row--warn .log-level { color: var(--color-warn-ink); }
+.log-row--info { border-left-color: var(--color-info-tint); }
+.log-row--info .log-level { color: var(--color-info-ink); }
+.log-row--debug { border-left-color: transparent; }
+.log-row--debug .log-level,
+.log-row--debug .log-line,
+.log-row--debug .log-source { color: var(--color-ink-faint); }
+
+.log-empty {
+    padding: 28px 16px;
+    text-align: center;
+    color: var(--color-ink-faint);
+}
+
+.logs-pager {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+}
+
+.logs-pager button {
+    min-width: 92px;
+    padding: 6px 14px;
+}
+
+.logs-pager button:disabled { opacity: 0.45; cursor: default; }
+
+.logs-pager-label { font-size: 13px; color: var(--color-ink-muted); }
+
+.logs-pager-info {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--color-ink);
+    font-variant-numeric: tabular-nums;
+}
+
+.logs-hint { font-size: 12px; }
+
+/* Smartphone: die Zeile bricht in zwei Ebenen um — Kopfdaten oben, Meldung
+   darunter über die volle Breite. Die Kopfzeile der Liste entfällt dabei. */
+@media (max-width: 768px) {
+    .logs-field--pause { margin-left: 0; }
+
+    .logs-pause { width: 100%; }
+
+    .log-list-head { display: none; }
+
+    .log-row {
+        grid-template-columns: auto auto 1fr;
+        gap: 4px 8px;
+        padding: 8px 10px;
+    }
+
+    .log-line { grid-column: 1 / -1; }
+
+    .log-source { justify-self: start; }
+}
+
+
 /* ---------------------------------------------------------------------------
    Wetterprognose
    Die Seite arbeitet ausschliesslich mit den Farbtoken der Oberflaeche, damit
@@ -8486,4 +8755,19 @@ body.dash-editing .widget-card--weather .weather-head { padding-right: 76px; }
 .notification-check input[type="checkbox"] {
     width: auto;
     margin: 0;
+}
+
+/* Dynamischer Mindest-SoC: Checkbox samt Erläuterung und Tagesstatus unter dem
+   Mindest-SoC-Regler. */
+.dynamic-min-soc {
+    margin-top: 16px;
+    padding-top: 14px;
+    border-top: 1px solid #e6e8eb;
+    display: grid;
+    gap: 6px;
+}
+
+.dynamic-min-soc small {
+    color: #6b7280;
+    line-height: 1.45;
 }

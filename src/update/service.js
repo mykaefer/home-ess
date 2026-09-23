@@ -4,11 +4,11 @@ const fs = require('fs');
 const path = require('path');
 const config = require('../config');
 const timeHandler = require('../time-handler');
-const { fetchLatestRelease } = require('./release-client');
-const { normalizeVersion, compareVersions } = require('./version');
+const { fetchBranchVersion } = require('./release-client');
+const { normalizeVersion, compareVersions, readLocalVersion } = require('./version');
 const updateSettingsRepo = require('./settings');
+const branches = require('./branches');
 
-const pkg = require('../../package.json');
 const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 // Nach einer fehlgeschlagenen Prüfung früher erneut versuchen: eine kurze
 // Netzstörung darf nicht das gesamte Prüfintervall blockieren.
@@ -34,8 +34,13 @@ function writeJsonAtomic(file, value) {
 class UpdateService {
   constructor(options = {}) {
     this.dataDir = options.dataDir || config.DATA_DIR;
-    this.currentVersion = normalizeVersion(options.currentVersion || pkg.version);
-    this.fetchLatest = options.fetchLatest || fetchLatestRelease;
+    // Maßgeblich ist VERSION.json im Installationsverzeichnis (package.json nur
+    // als Rückfall) – so führt jeder Zweig seine eigene Nummer.
+    this.currentVersion = normalizeVersion(options.currentVersion || readLocalVersion());
+    // Zweig, der tatsächlich installiert ist. Weicht er vom eingestellten ab,
+    // ist der nächste Update ein Zweigwechsel.
+    this.installedBranch = branches.normalizeBranch(options.installedBranch || branches.installedBranch());
+    this.fetchLatest = options.fetchLatest || fetchBranchVersion;
     this.now = options.now || (() => Date.now());
     this.calendar = options.calendar || ((instant) => timeHandler.calendar(instant));
     this.infrastructureFile = options.infrastructureFile || UPDATE_UNIT;
@@ -69,37 +74,66 @@ class UpdateService {
     return this.check && this.check.error ? Math.min(interval, CHECK_RETRY_MS) : interval;
   }
 
+  // Steht die geprüfte Version zur Installation an?
+  //
+  // Innerhalb desselben Zweigs zählt nur eine höhere Nummer. Bei einem
+  // Zweigwechsel zählt jede gültige Version — die Zweige führen unabhängige
+  // Nummern, und ein Wechsel auf `main` wäre sonst nicht mehr möglich, sobald
+  // `development` weiter vorn liegt.
+  isBranchSwitch() {
+    return this.branch() !== this.installedBranch;
+  }
+
   availableVersion() {
+    if (!this.checkMatchesBranch()) return null;
     const latest = normalizeVersion(this.check.latestVersion);
-    return latest && compareVersions(latest, this.currentVersion) > 0 ? latest : null;
+    if (!latest) return null;
+    if (this.isBranchSwitch()) return latest;
+    return compareVersions(latest, this.currentVersion) > 0 ? latest : null;
+  }
+
+  // Zweig, aus dem geprüft und installiert wird.
+  branch() {
+    return branches.normalizeBranch(this.settings.branch);
+  }
+
+  // Der zwischengespeicherte Stand gilt nur für den Zweig, aus dem er stammt.
+  checkMatchesBranch() {
+    return branches.normalizeBranch(this.check.branch) === this.branch();
   }
 
   async checkNow({ force = false } = {}) {
     if (this.checkPromise) return this.checkPromise;
     const checkedAt = Date.parse(this.check.checkedAt || '');
     const intervalMs = this.currentCheckDelayMs();
-    if (!force && Number.isFinite(checkedAt) && this.now() - checkedAt < intervalMs) {
+    // Nach einem Zweigwechsel ist der gespeicherte Stand wertlos – dann wird
+    // unabhängig vom Prüfintervall sofort neu geprüft.
+    if (!force && this.checkMatchesBranch() && Number.isFinite(checkedAt) && this.now() - checkedAt < intervalMs) {
       return this.getStatus();
     }
 
     this.checkPromise = (async () => {
       const previous = { ...this.check };
+      const branch = this.branch();
+      const sameBranch = this.checkMatchesBranch();
       try {
-        const release = await this.fetchLatest({ etag: force ? null : previous.etag });
+        const release = await this.fetchLatest({ branch, etag: force || !sameBranch ? null : previous.etag });
         this.check = release.notModified
-          ? { ...previous, checkedAt: new Date(this.now()).toISOString(), error: null }
+          ? { ...previous, branch, checkedAt: new Date(this.now()).toISOString(), error: null }
           : {
               checkedAt: new Date(this.now()).toISOString(),
+              branch,
               latestVersion: release.version,
               releaseUrl: release.url,
               publishedAt: release.publishedAt,
               etag: release.etag || null,
               error: null,
-              ...(previous.automaticAttemptKey ? { automaticAttemptKey: previous.automaticAttemptKey } : {}),
+              ...(previous.automaticAttemptKey && sameBranch ? { automaticAttemptKey: previous.automaticAttemptKey } : {}),
             };
       } catch (error) {
         this.check = {
           ...previous,
+          branch,
           checkedAt: new Date(this.now()).toISOString(),
           error: error && error.message ? error.message : 'Updateprüfung fehlgeschlagen.',
         };
@@ -120,6 +154,9 @@ class UpdateService {
       nextCheckAt: this.nextCheckAt ? new Date(this.nextCheckAt).toISOString() : null,
       checkError: this.check.error || null,
       supported: this.isSupported(),
+      branch: this.branch(),
+      installedBranch: this.installedBranch,
+      branchSwitch: this.isBranchSwitch(),
       settings: { ...this.settings },
       operation: operation && typeof operation === 'object' ? operation : null,
     };
@@ -134,16 +171,19 @@ class UpdateService {
       throw new Error('Das angeforderte Release ist nicht mehr das neueste verfügbare Release.');
     }
     if (fs.existsSync(this.requestFile)) throw new Error('Ein Update wurde bereits angefordert.');
+    const branch = this.branch();
     const startedAt = new Date(this.now()).toISOString();
     writeJsonAtomic(this.statusFile, {
       state: 'requested',
       targetVersion: wanted,
+      targetBranch: branch,
       startedAt,
       updatedAt: startedAt,
       messages: [{ at: startedAt, text: `Update auf Version ${wanted} wurde angefordert.` }],
     });
-    // Zuletzt und atomar anlegen: home-ess-update.path reagiert auf genau diese Datei.
-    writeJsonAtomic(this.requestFile, { version: wanted, requestedAt: startedAt });
+    // Zuletzt und atomar anlegen: home-ess-update.path reagiert auf genau diese
+    // Datei. Der Zweig reist mit, damit der Helper nicht selbst raten muss.
+    writeJsonAtomic(this.requestFile, { version: wanted, branch, requestedAt: startedAt });
     return this.getStatus();
   }
 
@@ -155,7 +195,13 @@ class UpdateService {
   }
 
   configure(settings) {
+    const previousBranch = this.settings ? branches.normalizeBranch(this.settings.branch) : null;
     this.settings = updateSettingsRepo.normalize(settings);
+    // Ein anderer Zweig heißt: anderer Versionsstand. Der gespeicherte Stand
+    // wird verworfen und beim nächsten Lauf frisch geholt.
+    if (previousBranch && previousBranch !== this.branch() && this.started) {
+      this.checkNow({ force: true }).catch(() => {});
+    }
     if (this.started) this.scheduleNextCheck();
     return { ...this.settings };
   }
@@ -185,7 +231,7 @@ class UpdateService {
     const calendar = this.calendar(new Date(this.now()));
     const localTime = `${String(calendar.hours).padStart(2, '0')}:${String(calendar.minutes).padStart(2, '0')}`;
     if (!updateSettingsRepo.timeInWindow(localTime, this.settings.maintenanceStart, this.settings.maintenanceEnd)) return false;
-    const attemptKey = `${calendar.dateKey}:${version}`;
+    const attemptKey = `${calendar.dateKey}:${this.branch()}:${version}`;
     if (this.check.automaticAttemptKey === attemptKey) return false;
 
     // Vor dem Netzaufruf merken, damit ein nicht erreichbares GitHub nicht jede

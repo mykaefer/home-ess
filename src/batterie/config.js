@@ -21,7 +21,7 @@ const BATTERY_PRESETS = {
 const DEFAULTS = {
   socTopic: '', powerTopic: '', voltageTopic: '', temperaturTopic: '', minSocTopic: '', remoteTopic: '',
   minSoc: 20, capacityAh: 200, batteryType: 'lifepo4', cellCount: 16, lowerVoltage: 44.8, upperVoltage: 55.2,
-  chargeEfficiency: 95, dischargeEfficiency: 95,
+  chargeEfficiency: 95, dischargeEfficiency: 95, dynamicMinSoc: false,
 };
 let configCacheDb = null;
 let configCache = null;
@@ -31,6 +31,14 @@ function clamp(value, min, max, fallback) {
   if (!text) return fallback;
   const n = Number(text);
   return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
+}
+
+// Checkbox-Werte kommen als 'on'/'true'/'1' aus dem Formular und als echter
+// Boolean aus JSON-Aufrufen.
+function toBoolean(value) {
+  if (typeof value === 'boolean') return value;
+  const text = String(value == null ? '' : value).trim().toLowerCase();
+  return text === 'on' || text === 'true' || text === '1' || text === 'yes';
 }
 
 function loadBatterieConfig(db, callback) {
@@ -54,6 +62,7 @@ function loadBatterieConfig(db, callback) {
       upperVoltage: row.upper_voltage == null ? DEFAULTS.upperVoltage : row.upper_voltage,
       chargeEfficiency: clamp(row.charge_efficiency, 50, 100, DEFAULTS.chargeEfficiency),
       dischargeEfficiency: clamp(row.discharge_efficiency, 50, 100, DEFAULTS.dischargeEfficiency),
+      dynamicMinSoc: !!row.dynamic_min_soc,
     };
     configCacheDb = db;
     configCache = cfg;
@@ -70,7 +79,10 @@ function saveBatterieConfig(db, input, callback) {
     temperaturTopic: normalizeMqttTopic(input.temperaturTopic || ''),
     minSocTopic: normalizeMqttTopic(input.minSocTopic || ''),
     remoteTopic: normalizeMqttTopic(input.remoteTopic || ''),
-    minSoc: Math.round(clamp(input.minSoc, 0, 100, DEFAULTS.minSoc) / 5) * 5,
+    // Ganze Prozent: das 5-%-Raster gehört zum Schieberegler und zum
+    // Remote-Topic (min-soc-sync.js), nicht zur Speicherung. Die dynamische
+    // Automatik setzt bewusst in 1-%-Schritten.
+    minSoc: Math.round(clamp(input.minSoc, 0, 100, DEFAULTS.minSoc)),
     capacityAh: clamp(input.capacityAh, 0.1, 100000, DEFAULTS.capacityAh),
     batteryType,
     cellCount: Math.round(clamp(input.cellCount, 1, 100, DEFAULTS.cellCount)),
@@ -78,6 +90,7 @@ function saveBatterieConfig(db, input, callback) {
     upperVoltage: clamp(input.upperVoltage, 0.1, 1000, DEFAULTS.upperVoltage),
     chargeEfficiency: clamp(input.chargeEfficiency, 50, 100, DEFAULTS.chargeEfficiency),
     dischargeEfficiency: clamp(input.dischargeEfficiency, 50, 100, DEFAULTS.dischargeEfficiency),
+    dynamicMinSoc: toBoolean(input.dynamicMinSoc),
   };
   if (cfg.lowerVoltage >= cfg.upperVoltage) {
     const error = new Error('Die obere Batteriespannung muss über der unteren liegen.');
@@ -87,8 +100,8 @@ function saveBatterieConfig(db, input, callback) {
     `INSERT INTO batterie_config
       (id, soc_topic, power_topic, voltage_topic, temperatur_topic, min_soc_topic, remote_topic,
        min_soc, capacity_ah, battery_type, cell_count, lower_voltage, upper_voltage,
-       charge_efficiency, discharge_efficiency)
-     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       charge_efficiency, discharge_efficiency, dynamic_min_soc)
+     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
        soc_topic=excluded.soc_topic, power_topic=excluded.power_topic,
        voltage_topic=excluded.voltage_topic, temperatur_topic=excluded.temperatur_topic,
@@ -98,10 +111,11 @@ function saveBatterieConfig(db, input, callback) {
        battery_type=excluded.battery_type, cell_count=excluded.cell_count,
        lower_voltage=excluded.lower_voltage, upper_voltage=excluded.upper_voltage,
        charge_efficiency=excluded.charge_efficiency,
-       discharge_efficiency=excluded.discharge_efficiency`,
+       discharge_efficiency=excluded.discharge_efficiency,
+       dynamic_min_soc=excluded.dynamic_min_soc`,
     [cfg.socTopic, cfg.powerTopic, cfg.voltageTopic, cfg.temperaturTopic, cfg.minSocTopic, cfg.remoteTopic,
       cfg.minSoc, cfg.capacityAh, cfg.batteryType, cfg.cellCount, cfg.lowerVoltage, cfg.upperVoltage,
-      cfg.chargeEfficiency, cfg.dischargeEfficiency],
+      cfg.chargeEfficiency, cfg.dischargeEfficiency, cfg.dynamicMinSoc ? 1 : 0],
     (err) => {
       if (!err) { configCacheDb = db; configCache = cfg; }
       callback(err, cfg);

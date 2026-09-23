@@ -37,9 +37,18 @@ Skripte — nicht erfinden und keine Prüfungen abschalten, um Fehler zu umgehen
 ## Versionierung
 
 Versionsnummer **nicht** nach Semver raten. Die bestehende Konvention zählt die
-**Patch-Stelle** hoch (…, 1.2.6 → 1.2.7). `package.json` `version` ist die
-sichtbare Version (Footer der Weboberfläche). Änderungen unter `## [Unreleased]`
-in [CHANGELOG.md](CHANGELOG.md) sammeln.
+**Patch-Stelle** hoch (…, 1.2.6 → 1.2.7). Maßgeblich ist [VERSION.json](VERSION.json)
+im Stammverzeichnis (`{ "version": "1.2.7" }`): Fußzeile der Weboberfläche und
+Updateprüfung lesen von dort.
+`package.json` `version` wird auf denselben Wert gesetzt — **beide Dateien immer
+gemeinsam ändern**. Jeder Zweig (`main`, `development`) führt seine eigene
+Nummer; ein Merge darf die fremde Nummer nicht übernehmen.
+
+Wer die Nummer erhöht, legt sie im selben Zug als eigenen Abschnitt in
+[CHANGELOG.md](CHANGELOG.md) an (`## [1.2.7] — JJJJ-MM-TT`) und trägt die
+Änderungen dort ein. Unter `## [Unreleased]` steht ausschließlich, was **noch
+keine** Nummer trägt — sonst lässt sich später nicht mehr zuordnen, welche
+Änderung zu welcher Version gehört.
 
 ## Commit/Push
 

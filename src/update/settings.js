@@ -1,5 +1,7 @@
 'use strict';
 
+const branches = require('./branches');
+
 const INTERVALS = Object.freeze({
   hourly: 60 * 60 * 1000,
   daily: 24 * 60 * 60 * 1000,
@@ -19,6 +21,8 @@ const DEFAULTS = Object.freeze({
   maintenanceStart: '03:00',
   maintenanceEnd: '04:00',
   checkInterval: 'daily',
+  // Zweig, aus dem geprüft und installiert wird. Standard ist der stabile.
+  branch: branches.DEFAULT_BRANCH,
 });
 
 function normalizeTime(value, fallback) {
@@ -36,6 +40,7 @@ function normalize(input = {}) {
     maintenanceStart: normalizeTime(input.maintenanceStart || input.maintenance_start, DEFAULTS.maintenanceStart),
     maintenanceEnd: normalizeTime(input.maintenanceEnd || input.maintenance_end, DEFAULTS.maintenanceEnd),
     checkInterval: Object.hasOwn(INTERVALS, interval) ? interval : DEFAULTS.checkInterval,
+    branch: branches.normalizeBranch(input.branch),
   };
 }
 
@@ -45,7 +50,8 @@ function load(db) {
       `SELECT automatic_enabled AS automaticEnabled,
               maintenance_start AS maintenanceStart,
               maintenance_end AS maintenanceEnd,
-              check_interval AS checkInterval
+              check_interval AS checkInterval,
+              branch
          FROM update_config WHERE id = 1`,
       (error, row) => error ? reject(error) : resolve(normalize(row || DEFAULTS))
     );
@@ -57,14 +63,15 @@ function save(db, input) {
   return new Promise((resolve, reject) => {
     db.run(
       `INSERT INTO update_config
-        (id, automatic_enabled, maintenance_start, maintenance_end, check_interval)
-       VALUES (1, ?, ?, ?, ?)
+        (id, automatic_enabled, maintenance_start, maintenance_end, check_interval, branch)
+       VALUES (1, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          automatic_enabled = excluded.automatic_enabled,
          maintenance_start = excluded.maintenance_start,
          maintenance_end = excluded.maintenance_end,
-         check_interval = excluded.check_interval`,
-      [value.automaticEnabled ? 1 : 0, value.maintenanceStart, value.maintenanceEnd, value.checkInterval],
+         check_interval = excluded.check_interval,
+         branch = excluded.branch`,
+      [value.automaticEnabled ? 1 : 0, value.maintenanceStart, value.maintenanceEnd, value.checkInterval, value.branch],
       (error) => error ? reject(error) : resolve(value)
     );
   });

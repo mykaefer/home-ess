@@ -39,6 +39,10 @@ eigenständige Desktop- und Mobilansichten.
   anlagenspezifischer Selbstkalibrierung in 15-Minuten-Fenstern.
 - Batterieseite für Ladezustand, Leistung, Spannung, Temperatur,
   Wirkungsgrade, Kapazität und konfigurierbaren Mindest-Ladezustand.
+- Dynamischer Mindest-SoC: setzt den Mindest-Ladezustand einmal täglich am
+  prognostizierten Akku-Höchststand in 1-%-Schritten so, dass der Akku am
+  Folgetag planmäßig wieder 100 % erreicht (nie unter 10 %, nie über den
+  aktuellen SoC minus 1 %).
 - Bidirektionale Synchronisierung ausgewählter Einstellungen und Liveanzeigen
   für Batterie, Leistungen, Temperatur, Zeit und Betriebszustand im Kopfbereich.
 
@@ -280,6 +284,31 @@ eigenständige Desktop- und Mobilansichten.
   und ist vom normalen lokalen Betrieb unabhängig.
 - Integrierte Releaseprüfungen unterstützen manuelle und geplante Updates mit
   Wartungsfenster, Fortschrittsanzeige, Healthcheck und automatischem Rollback.
+- Maßgeblich für die Prüfung ist `VERSION.json` des eingestellten Zweigs. `main`
+  und `development` führen damit eigene Versionsnummern; der Zweig ist in den
+  Updateeinstellungen wählbar, und der nächste Update wechselt die Installation
+  darauf. Installiert wird wahlweise mit `install.sh` (stabil) oder
+  `install-dev.sh` (Entwicklungszweig).
 - Dauerhafte Daten liegen außerhalb des austauschbaren
   Anwendungsverzeichnisses; der systemd-Dienst läuft bei Standardinstallationen
   mit eingeschränkter Dateisystemsicht.
+
+## Logs
+
+- Eigene Seite als letzter Punkt des Hauptmenüs: Sie zeigt die Laufzeitmeldungen
+  aller Hintergrunddienste (Adapter, MQTT, Fernzugriff, Prognose, Update …) in
+  einer gemeinsamen Liste — ohne Zugriff auf Journal oder Konsole.
+- Mitgeschnitten wird in einem Ringpuffer im Arbeitsspeicher (bis zu 5000
+  Zeilen). Die gewohnte Prozessausgabe bleibt unverändert; geschrieben wird
+  weder in die Datenbank noch in eine Datei, ein Neustart beginnt leer.
+- Gefiltert wird nach Art (Fehler · Warnung · Info · Debug, je mit Anzahl) und
+  nach Quelle; Adapter erscheinen dabei einzeln je Instanz. Die Suche greift auf
+  Meldungstext und Quelle zu. Jede Zeile ist nach Dringlichkeit eingefärbt.
+- 200 Zeilen je Seite, Blättern in beide Richtungen; beim Verlassen der ersten
+  Seite hält ein Anker die Folgeseiten ruhig, während vorn neue Meldungen
+  eintreffen.
+- Die Anzeige aktualisiert sich fortlaufend im wählbaren Takt (1 · 5 · 10 · 30 ·
+  60 s, voreingestellt 1 s); der Server begrenzt zusätzlich den Abstand zweier
+  Abrufe je Sitzung und meldet einen unveränderten Stand ohne die Liste. Der
+  Pause-Knopf hält die Aktualisierung an, bis wieder auf Play gedrückt wird —
+  dieser Zustand wird bewusst nicht gespeichert.
