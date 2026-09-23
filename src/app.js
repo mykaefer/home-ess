@@ -42,6 +42,7 @@ const conditionsRoutes = require('./routes/conditions');
 const notificationRoutes = require('./routes/notifications');
 const remoteAccessRoutes = require('./routes/remote-access');
 const updateRoutes = require('./routes/update');
+const logStore = require('./logging/log-store');
 const pairingState = require('./remote-access/pairing-state');
 const identityStore = require('./remote-access/identity-store');
 const connectionService = require('./remote-access/connection-service');
@@ -51,6 +52,7 @@ const { buildActorSnapshot } = require('./messen-schalten/aggregation');
 const { recordFunctionSamples, currentFunctionPowerW } = require('./messen-schalten/functions');
 const prognosisRoutes = require('./routes/prognosis');
 const wetterRoutes = require('./routes/wetter');
+const logsRoutes = require('./routes/logs');
 const { refreshWeatherForecast } = require('./wetter/forecast');
 const { initModules, isEnabled } = require('./modules');
 const adapterHost = require('./adapters/host');
@@ -66,6 +68,7 @@ const { checkSamplingHealth, markSampleHealthy } = require('./prognosis/sampling
 const { logSamplingEvent } = require('./prognosis/sampling-log');
 const { updateBatteryEnergy } = require('./batterie/energy');
 const batterieMinSocSync = require('./batterie/min-soc-sync');
+const batterieDynamicMinSoc = require('./batterie/dynamic-min-soc');
 const prognosisBehavior = require('./prognosis/behavior');
 const jobs = require('./job-scheduler');
 const { updatePoolEnergyModel } = require('./pool/energy-model');
@@ -78,6 +81,10 @@ const heizungRuntime = require('./heizung/runtime');
 // Baut die Express-App zusammen: DB öffnen, Middleware, Routen registrieren,
 // MQTT-Verbindung mit gespeicherter Konfiguration starten.
 function createApp() {
+  // Mitschnitt der Laufzeitmeldungen aktivieren, bevor die erste Meldung
+  // fällt. Die Prozessausgabe bleibt unverändert – der Ringpuffer kommt nur
+  // hinzu und versorgt die Seite „Logs“.
+  logStore.install();
   const db = openDatabase();
   const app = express();
 
@@ -127,6 +134,7 @@ function createApp() {
   app.use(batterieRoutes(db));
   app.use(prognosisRoutes(db));
   app.use(wetterRoutes(db));
+  app.use(logsRoutes());
   app.use(settingsRoutes(db));
   app.use(outputRoutes(db));
   app.use(liveRoutes(db));
@@ -233,6 +241,7 @@ function createApp() {
       operatingLevelHandler.init();
       gridControlAutomation.init(db);
       batterieMinSocSync.init(db);
+      batterieDynamicMinSoc.init(db);
       return prognosisBehavior.init(db);
     })
     .catch(() => {
@@ -242,6 +251,7 @@ function createApp() {
       operatingLevelHandler.init();
       gridControlAutomation.init(db);
       batterieMinSocSync.init(db);
+      batterieDynamicMinSoc.init(db);
       prognosisBehavior.init(db).catch(() => {});
     });
 

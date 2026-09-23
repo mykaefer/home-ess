@@ -12,6 +12,7 @@ const {
 const renderBatterie = require('../views/batterie');
 const gridControlAutomation = require('../grid-control/automation');
 const batterieMinSocSync = require('../batterie/min-soc-sync');
+const batterieDynamicMinSoc = require('../batterie/dynamic-min-soc');
 
 function batterieRoutes(db) {
   const router = express.Router();
@@ -19,7 +20,9 @@ function batterieRoutes(db) {
   router.get('/batterie', requireAuth, (req, res) => {
     loadBatterieConfig(db, (config) => {
       const data = readBatterieData(mqttClient.getCache());
-      res.send(renderBatterie({ config, data }));
+      batterieDynamicMinSoc.readStatus(db)
+        .catch(() => null)
+        .then((dynamicStatus) => res.send(renderBatterie({ config, data, dynamicStatus })));
     });
   });
 
@@ -39,11 +42,16 @@ function batterieRoutes(db) {
           batterieMinSocSync.publishLocalMinSoc(previous, config, 'oberflaeche');
         })
         .then(() => gridControlAutomation.runNow(db))
+        // Gerade aktivierte Automatik sofort bewerten, statt bis zum nächsten
+        // Intervall zu warten. Der Tagesschlüssel verhindert weiterhin eine
+        // zweite Anpassung am selben Tag.
+        .then(() => batterieDynamicMinSoc.runSerialized(db))
         .catch(() => {})
-        .finally(() => {
+        .then(() => batterieDynamicMinSoc.readStatus(db).catch(() => null))
+        .then((dynamicStatus) => loadBatterieConfig(db, (current) => {
           const data = readBatterieData(mqttClient.getCache());
-          res.send(renderBatterie({ config, data, message: 'Konfiguration gespeichert.' }));
-        });
+          res.send(renderBatterie({ config: current, data, dynamicStatus, message: 'Konfiguration gespeichert.' }));
+        }));
     }));
   });
 
@@ -63,7 +71,14 @@ function batterieRoutes(db) {
   // Änderungen (Remote-Topic) ohne Seitenreload folgt.
   router.get('/batterie/data', requireAuth, (req, res) => {
     loadBatterieConfig(db, (config) => {
-      res.json({ ...readBatterieData(mqttClient.getCache()), minSocSetting: config.minSoc });
+      batterieDynamicMinSoc.readStatus(db)
+        .catch(() => null)
+        .then((dynamicStatus) => res.json({
+          ...readBatterieData(mqttClient.getCache()),
+          minSocSetting: config.minSoc,
+          dynamicMinSoc: config.dynamicMinSoc,
+          dynamicStatus,
+        }));
     });
   });
 

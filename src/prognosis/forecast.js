@@ -677,6 +677,12 @@ function simulateDays({ forecast, model, config, batteryConfig, batteryData }) {
     let reachedFull = false;
     let chargeStartSoc = null;
     let chargeStartHour = null;
+    // Ungedeckeltes Ladepotenzial des Tages: die Energie, die aus dem
+    // PV-Überschuss in den Akku ginge, wenn er beliebig viel Platz hätte
+    // (bereits um den Ladewirkungsgrad gemindert). Anders als `batterySocEnd`
+    // hängt der Wert nicht vom aktuellen Ladestand ab und beantwortet damit die
+    // Frage „wie viel ließe sich an diesem Tag nachladen?".
+    let chargePotentialKwh = 0;
     // Erwartete Stundenlast des Tages (Haus + Funktionen + Wallbox + Pool) für
     // das 24-h-Balkendiagramm; bereits verstrichene Stunden von heute sind null.
     const hourlyLoadKwh = Array(24).fill(null);
@@ -684,6 +690,10 @@ function simulateDays({ forecast, model, config, batteryConfig, batteryData }) {
     // der Grundlast im Stundenprofil. Rein additive Anzeige, die Grundlast selbst
     // bleibt unberührt.
     const climateByHour = Array(24).fill(null);
+    // Erwarteter PV-Ertrag je Stunde (kWh), parallel zu hourlyLoadKwh. Aus dem
+    // Vergleich beider Reihen lässt sich ablesen, ab wann an diesem Tag kein
+    // Überschuss mehr zu erwarten ist (dauerhafte Entladung).
+    const hourlyPvKwh = Array(24).fill(null);
     const weekday = weekdayForDateKey(pvDay.dateKey);
     const dayProfile = model.profilesByWeekday && model.profilesByWeekday[weekday]
       ? model.profilesByWeekday[weekday]
@@ -697,6 +707,13 @@ function simulateDays({ forecast, model, config, batteryConfig, batteryData }) {
       const raw = forecastPvForHour(forecast, pvDay.dateKey, hour);
       return dayIndex === 0 && hour === currentHour ? raw * (1 - currentMinute / 60) : raw;
     });
+    // Tagesmaximum über ALLE 24 Stunden – auch die bereits vergangenen. Nur so
+    // bleibt erkennbar, ob der PV-Höhepunkt des Tages schon überschritten ist.
+    const fullDayPv = Array.from({ length: 24 }, (_, hour) => forecastPvForHour(forecast, pvDay.dateKey, hour));
+    const pvPeakHour = fullDayPv.reduce(
+      (best, value, hour) => (value > 0.0001 && (best == null || value > fullDayPv[best]) ? hour : best),
+      null
+    );
     const rawPvTotal = pvHourly.reduce((sum, value) => sum + value, 0);
     const targetPvTotal = dayIndex === 0
       ? Math.max(0, num(forecast.todayRemainingKwh) || 0)
@@ -723,11 +740,13 @@ function simulateDays({ forecast, model, config, batteryConfig, batteryData }) {
       poolFilterKwh += poolLoad.filterKwh;
       functionsKwh += functionsLoad;
       hourlyLoadKwh[hour] = load;
+      hourlyPvKwh[hour] = pv;
       pvKwh += pv;
       const direct = Math.min(load, pv);
       const shortfall = load - direct;
       const excess = pv - direct;
       if (excess > 0) {
+        chargePotentialKwh += excess * chargeEfficiency;
         const roomInput = (usableCapacity - stored) / chargeEfficiency;
         const chargedInput = Math.min(excess, Math.max(0, roomInput));
         if (chargedInput > 0.001 && chargeStartSoc == null) {
@@ -797,7 +816,10 @@ function simulateDays({ forecast, model, config, batteryConfig, batteryData }) {
       poolFilterKwh,
       wallboxes: wallboxForecast.perBox,
       hourlyLoadKwh,
+      hourlyPvKwh,
       climateByHour,
+      chargePotentialKwh,
+      pvPeakHour,
     };
   });
 
@@ -824,7 +846,7 @@ function simulateDays({ forecast, model, config, batteryConfig, batteryData }) {
     ? null
     : (gridBeforeCharge > 0.05 || minimumBeforeCharge ? 0 : (assessmentSoc < minSoc + 10 ? 1 : 2));
   return {
-    days, today, status, available, minSoc, soc, usableCapacity, initialStored,
+    days, today, status, available, minSoc, soc, capacityKwh: capacity, usableCapacity, initialStored,
     nextChargeStart, minimumReached, minimumBeforeCharge, assessmentSoc, gridBeforeCharge,
   };
 }

@@ -6,8 +6,9 @@ const { BATTERY_PRESETS } = require('../batterie/config');
 function brokerValue(id, value) { return `<span class="topic-current"><span>Broker:</span> <strong id="${id}">${escapeHtml(value == null ? '—' : value)}</strong></span>`; }
 
 function renderBatterie({
-  config = { socTopic: '', powerTopic: '', voltageTopic: '', temperaturTopic: '', minSocTopic: '', remoteTopic: '', minSoc: 20, capacityAh: 200, batteryType: 'lifepo4', cellCount: 16, lowerVoltage: 44.8, upperVoltage: 55.2, chargeEfficiency: 95, dischargeEfficiency: 95 },
+  config = { socTopic: '', powerTopic: '', voltageTopic: '', temperaturTopic: '', minSocTopic: '', remoteTopic: '', minSoc: 20, capacityAh: 200, batteryType: 'lifepo4', cellCount: 16, lowerVoltage: 44.8, upperVoltage: 55.2, chargeEfficiency: 95, dischargeEfficiency: 95, dynamicMinSoc: false },
   data = { soc: null, power: null, voltage: null, temperatur: null, minSocRemote: null },
+  dynamicStatus = null,
   message = '',
   error = '',
 } = {}) {
@@ -129,13 +130,22 @@ function renderBatterie({
           <div class="settings-card">
             <div class="settings-card-head">
               <h2>Mindest-Ladezustand</h2>
-              <p class="settings-card-hint">Wird beim Loslassen des Reglers sofort in 5-%-Schritten übernommen und an Ziel- und Remote-Topic gesendet. Externe Änderungen über das Remote-Topic zeigt der Regler live an.</p>
+              <p class="settings-card-hint">Wird beim Loslassen des Reglers sofort in 5-%-Schritten übernommen und an Ziel- und Remote-Topic gesendet. Externe Änderungen über das Remote-Topic zeigt der Regler live an. Die dynamische Automatik unten setzt dagegen in 1-%-Schritten; der Regler zeigt einen solchen Zwischenwert unverändert an.</p>
             </div>
             <div class="range-field">
-              <input type="range" id="minSoc" name="minSoc" min="0" max="100" step="5" value="${escapeHtml(config.minSoc)}">
+              <input type="range" id="minSoc" name="minSoc" min="0" max="100" step="1" value="${escapeHtml(config.minSoc)}">
               <output id="minSocValue" for="minSoc">${escapeHtml(config.minSoc)} %</output>
             </div>
             <p class="muted" id="minSocStatus" role="status" aria-live="polite"></p>
+            <div class="dynamic-min-soc">
+              <label class="checkbox-field"><input type="checkbox" id="dynamicMinSoc" name="dynamicMinSoc"${config.dynamicMinSoc ? ' checked' : ''}> Dynamischer Mindest-SoC</label>
+              <small>Setzt den Mindest-Ladezustand einmal täglich automatisch in 1-%-Schritten – genau dann, wenn
+              der Akku laut Prognose seinen Tageshöchststand überschritten hat und dauerhaft entlädt. Der Wert wird
+              so gewählt, dass der Akku am Folgetag planmäßig wieder 100 % erreicht; er bleibt dabei immer bei
+              mindestens 10 % und höchstens 1 % unter dem aktuellen Ladezustand. Am selben Tag wird nicht
+              nachkorrigiert.</small>
+              <p class="muted"><span>Letzte automatische Anpassung</span> <strong id="dynamicMinSocStatus">${escapeHtml(dynamicStatusText(dynamicStatus, config))}</strong></p>
+            </div>
           </div>
           <div class="settings-card">
             <div class="settings-card-head">
@@ -199,12 +209,20 @@ function renderBatterie({
     function setMinSocStatus(text) {
       if (minSocStatus) minSocStatus.textContent = text;
     }
+    // Das Markup lässt 1-%-Schritte zu, damit ein von der Automatik gesetzter
+    // Zwischenwert (z. B. 43 %) unverfälscht angezeigt wird. Die Bedienung
+    // selbst rastet weiterhin auf 5 % ein.
+    function snapToStep(value) {
+      return Math.round(Math.min(100, Math.max(0, parseFloat(value) || 0)) / 5) * 5;
+    }
     if (minSocSlider) {
       minSocSlider.addEventListener('input', function () {
         minSocBusy = true;
+        minSocSlider.value = snapToStep(minSocSlider.value);
         minSocValue.textContent = minSocSlider.value + ' %';
       });
       minSocSlider.addEventListener('change', function () {
+        minSocSlider.value = snapToStep(minSocSlider.value);
         minSocBusy = true;
         setMinSocStatus('Wird gespeichert …');
         fetch('/batterie/min-soc', {
@@ -276,6 +294,14 @@ function renderBatterie({
             document.getElementById(id).textContent = value == null ? '—' : String(value);
           });
 
+          var dynEl = document.getElementById('dynamicMinSocStatus');
+          if (dynEl) {
+            var dynStatus = d.dynamicMinSoc ? d.dynamicStatus : null;
+            dynEl.textContent = !dynStatus || !dynStatus.dayKey
+              ? '\u2014'
+              : dynStatus.dayKey + ' \u00b7 ' + (dynStatus.minSoc == null ? '\u2014' : dynStatus.minSoc + ' %');
+          }
+
           var socEl   = document.getElementById('kpi-soc');
           var barEl   = document.getElementById('soc-bar');
           var pctEl   = document.getElementById('soc-pct');
@@ -331,6 +357,15 @@ function socBarColor(pct) {
   if (pct < 20) return '#e74c3c';
   if (pct < 50) return '#d4a500';
   return 'linear-gradient(90deg, #27ae60, #2ecc71)';
+}
+
+// Reiner Datenwert zur Beschriftung „Letzte automatische Anpassung": Tag und
+// gesetzter Wert. Der ausführliche Grund steht im Tagesprotokoll und im Journal,
+// nicht in der Oberfläche — er ist von Tag zu Tag verschieden und damit nicht
+// über den Übersetzungskatalog führbar.
+function dynamicStatusText(status, config) {
+  if (!config.dynamicMinSoc || !status || !status.dayKey) return '—';
+  return status.minSoc == null ? `${status.dayKey} · —` : `${status.dayKey} · ${status.minSoc} %`;
 }
 
 module.exports = renderBatterie;

@@ -38,8 +38,15 @@ function logMinSocChange(source, from, to, details = {}) {
   console.log('[batterie minSoc]', JSON.stringify({ ts: new Date().toISOString(), source, from, to, ...details }));
 }
 
+// Das 5-%-Raster gilt für die beiden Bedienwege: den Schieberegler und einen
+// extern gesetzten Remote-Wert. Die dynamische Mindest-SoC-Automatik arbeitet
+// dagegen in 1-%-Schritten und umgeht das Raster bewusst.
 function roundToStep(value) {
   return Math.round(Math.min(100, Math.max(0, value)) / 5) * 5;
+}
+
+function roundToPercent(value) {
+  return Math.round(Math.min(100, Math.max(0, value)));
 }
 
 // Zeitstempel der zuletzt verarbeiteten Remote-Nachricht. Verhindert, dass
@@ -69,6 +76,10 @@ async function runSync(db) {
   lastAppliedReceivedAt = remote.receivedAt;
   const parsed = Number(String(remote.value).replace(',', '.'));
   if (!Number.isFinite(parsed)) return;
+  // Spiegelt das Remote-Topic exakt die aktuelle Einstellung zurück, ist das
+  // keine externe Änderung. Ohne diese Ausnahme würde ein von der Automatik
+  // gesetzter 1-%-Wert (z. B. 43) beim Echo auf 45 gerastet.
+  if (roundToPercent(parsed) === cfg.minSoc) return;
   const rounded = roundToStep(parsed);
   if (rounded !== cfg.minSoc) {
     logMinSocChange('remote-topic', cfg.minSoc, rounded, {
@@ -103,8 +114,12 @@ function publishLocalMinSoc(previous, config, source) {
   }
 }
 
-// Nur den Mindest-SoC ändern (Schieberegler), alle übrigen Einstellungen bleiben.
-async function setLocalMinSoc(db, value) {
+// Nur den Mindest-SoC ändern (Schieberegler oder Automatik), alle übrigen
+// Einstellungen bleiben. `source` landet im Journal, damit sich eine Änderung
+// später der Bedienung bzw. der dynamischen Automatik zuordnen lässt.
+// `snapToStep` rastet auf das 5-%-Raster des Schiebereglers; die dynamische
+// Automatik schaltet es ab und setzt in 1-%-Schritten.
+async function setLocalMinSoc(db, value, { source = 'oberflaeche', snapToStep = true } = {}) {
   const parsed = Number(String(value == null ? '' : value).replace(',', '.'));
   if (!Number.isFinite(parsed)) {
     const error = new Error('Ungültiger Mindest-Ladezustand.');
@@ -112,8 +127,9 @@ async function setLocalMinSoc(db, value) {
     throw error;
   }
   const previous = await load(db);
-  const saved = await save(db, { ...previous, minSoc: roundToStep(parsed) });
-  publishLocalMinSoc(previous, saved, 'oberflaeche');
+  const minSoc = snapToStep ? roundToStep(parsed) : roundToPercent(parsed);
+  const saved = await save(db, { ...previous, minSoc });
+  publishLocalMinSoc(previous, saved, source);
   return saved;
 }
 

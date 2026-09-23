@@ -67,10 +67,12 @@ const NAV_CORE = [
 ];
 
 // Punkte, die im Hauptmenü hinter allem anderen stehen — auch hinter den
-// optionalen Modulen. Wetter ist eine Nachschlageseite ohne Steuerfunktion und
-// schließt die Navigation ab.
+// optionalen Modulen. Wetter ist eine Nachschlageseite ohne Steuerfunktion;
+// Logs zeigt die Laufzeitmeldungen der Hintergrunddienste und steht als reine
+// Diagnoseseite ganz am Ende.
 const NAV_MAIN_TRAILING = [
   { path: '/wetter', label: 'Wetter', section: 'main' },
+  { path: '/logs', label: 'Logs', section: 'main' },
 ];
 
 // NAV wird von außen noch als Array erwartet (z. B. in Tests) — exportieren wir

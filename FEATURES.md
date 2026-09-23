@@ -37,6 +37,10 @@ desktop and mobile layouts.
   per-plant self-calibration in 15-minute windows.
 - Battery dashboard for state of charge, power, voltage, temperature,
   efficiencies, capacity and configurable minimum state of charge.
+- Dynamic minimum SoC: once a day, at the forecast battery peak, sets the
+  minimum state of charge in 1 % steps so the battery is scheduled to reach
+  100 % again the next day (never below 10 %, never above the current SoC
+  minus 1 %).
 - Bidirectional synchronization of selected settings and live header indicators
   for battery, power, temperature, time and operating state.
 
@@ -266,3 +270,22 @@ desktop and mobile layouts.
   window, progress reporting, health verification and automatic rollback.
 - Persistent data lives outside the replaceable application directory and the
   systemd service runs with a restricted filesystem view on standard installs.
+
+## Logs
+
+- A dedicated page as the last main menu entry: it shows the runtime messages of
+  all background services (adapters, MQTT, remote access, forecast, updates …) in
+  a single list — no journal or console access required.
+- Messages are captured in an in-memory ring buffer (up to 5000 lines). The usual
+  process output stays untouched; nothing is written to the database or to a
+  file, so a restart starts out empty.
+- Filtering works by kind (error · warning · info · debug, each with a count) and
+  by source, with adapters listed per instance. The search covers message text
+  and source. Every line is colour-coded by urgency.
+- 200 lines per page with paging in both directions; leaving the first page sets
+  an anchor so the following pages stay put while new messages keep arriving.
+- The view refreshes continuously at a selectable interval (1 · 5 · 10 · 30 ·
+  60 s, defaulting to 1 s); the server additionally limits how often a session may
+  poll and reports an unchanged state without resending the list. The pause
+  button stops the refresh until play is pressed again — that state is
+  deliberately not persisted.

@@ -3,6 +3,84 @@
 Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [Unreleased]
+
+### Neu
+
+- **Dynamischer Mindest-SoC (Batterieseite).** Eine aktivierbare Option setzt den
+  Mindest-Ladezustand **einmal täglich** automatisch. Ausgelöst wird genau am
+  prognostizierten Tageshöchststand des Akkus, also beim Übergang in die
+  dauerhafte Entladung: Der PV-Höhepunkt des Tages ist überschritten, für keine
+  verbleibende Stunde wird laut Prognose noch ein PV-Überschuss über dem
+  erwarteten Verbrauch erwartet (es ist also keine erneut einsetzende Ladung
+  mehr zu erwarten), und der Akku lädt auch real nicht mehr. Die letzte
+  Bedingung filtert das kurze Pendeln der Ladeleistung um 100 % heraus, das noch
+  keine echte Entladung ist.
+
+  Der Wert ergibt sich aus dem Ladepotenzial des **Folgetags**: Die Prognose
+  liefert, wie viel Prozent des Akkus morgen aus dem PV-Überschuss nachgeladen
+  werden können; der Mindest-SoC wird auf die verbleibende Lücke zu 100 %
+  gesetzt. So erreicht der Akku am Folgetag planmäßig wieder 100 %, und in
+  ertragsarmen Nächten bleibt genau so viel Reserve stehen, wie am nächsten Tag
+  nicht mehr nachgeladen werden kann.
+
+  Grenzen: nie unter **10 %** und nie über den **aktuellen SoC minus 1 %**.
+  Gesetzt wird in **1-%-Schritten** — das 5-%-Raster gilt weiterhin nur für den
+  Schieberegler. Der Zielwert wird auf volle Prozent aufgerundet, die Obergrenze
+  dagegen abgerundet. Lässt der aktuelle Ladezustand keinen gültigen Wert zu,
+  bleibt der Mindest-SoC unverändert.
+
+  Ein in der Datenbank festgehaltener Tagesschlüssel sperrt jede weitere
+  Anpassung am selben Tag – auch über einen Neustart hinweg. Der Mindest-SoC
+  schwankt dadurch nicht ständig hoch und runter. Der gesetzte Wert läuft über
+  denselben Weg wie der Schieberegler und erreicht damit Ziel- und Remote-Topic;
+  jede Änderung steht mit der Quelle `dynamischer-mindest-soc` im Journal. Die
+  Batterieseite zeigt Tag und Wert der letzten automatischen Anpassung.
+
+- **Neue Seite „Logs".** Der letzte Punkt im Hauptmenü (hinter „Wetter") zeigt
+  die Laufzeitmeldungen aller Hintergrunddienste — Adapter, MQTT, Fernzugriff,
+  Prognose, Update und alles Weitere — in einer gemeinsamen Liste, ohne Zugriff
+  auf Journal oder Konsole.
+
+  Mitgeschnitten wird in einem Ringpuffer im Arbeitsspeicher
+  (`src/logging/log-store.js`, bis zu 5000 Zeilen): Die gewohnte Prozessausgabe
+  bleibt unverändert, der Mitschnitt kommt nur hinzu. Nichts davon wird in die
+  Datenbank oder in eine Datei geschrieben, ein Neustart beginnt mit leerem
+  Puffer.
+
+  Die Seite filtert nach **Art** (Fehler · Warnung · Info · Debug, jeweils mit
+  Anzahl) und **Quelle** (aus dem Präfix der Meldung, z. B. `adapters`, `mqtt`,
+  `remote-access`) und durchsucht Meldungstext und Quelle. Jede Zeile ist nach
+  Dringlichkeit eingefärbt. Angezeigt werden **200 Zeilen je Seite**; beim
+  Blättern hält ein Anker die Folgeseiten ruhig, während vorn weiter Meldungen
+  eintreffen.
+
+  Die Anzeige aktualisiert sich fortlaufend im wählbaren Takt (1 · 5 · 10 · 30 ·
+  60 s), voreingestellt ist **1 s**. Der Server begrenzt den Abstand zweier
+  Abrufe je Sitzung zusätzlich auf mindestens 0,75 s und antwortet bei
+  unverändertem Stand nur mit einem Kennzeichen statt der ganzen Liste — im
+  ruhigen Betrieb kostet ein Takt damit kaum mehr als die Anfrage selbst. Der **Pause-Knopf** hält die Aktualisierung an, bis
+  wieder auf Play gedrückt wird; dieser Zustand ist bewusst flüchtig — ein
+  erneuter Aufruf der Seite läuft wieder.
+
+  Die Seite ist im Rechtemodell als `logs` hinterlegt und lässt sich damit je
+  Benutzer ausblenden.
+
+### Geändert
+
+- **Der Mindest-Ladezustand wird in ganzen Prozent gespeichert.** Das
+  5-%-Raster liegt jetzt dort, wo es hingehört: beim Schieberegler und bei
+  einem extern über das Remote-Topic gesetzten Wert. Der Regler rastet beim
+  Bedienen unverändert auf 5 %, zeigt einen von der Automatik gesetzten
+  Zwischenwert (z. B. 43 %) aber unverfälscht an. Spiegelt das Remote-Topic
+  genau den aktuellen Wert zurück, gilt das nicht mehr als externe Änderung —
+  sonst würde ein solches Echo einen 1-%-Wert auf das Raster ziehen.
+- Die Mehrtagessimulation der Prognose liefert je Tag zusätzlich das
+  ungedeckelte **Ladepotenzial** (kWh, die der PV-Überschuss in einen beliebig
+  großen Akku laden würde), den **PV-Ertrag je Stunde** und die Stunde des
+  **PV-Tagesmaximums**. Anders als der Endladestand hängen diese Werte nicht vom
+  aktuellen Ladestand ab.
+
 ## [1.7.0] — 2026-09-17
 
 ### Neu

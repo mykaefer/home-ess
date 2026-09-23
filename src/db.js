@@ -225,7 +225,20 @@ function openDatabase() {
         lower_voltage REAL NOT NULL DEFAULT 44.8,
         upper_voltage REAL NOT NULL DEFAULT 55.2,
         charge_efficiency REAL NOT NULL DEFAULT 95,
-        discharge_efficiency REAL NOT NULL DEFAULT 95
+        discharge_efficiency REAL NOT NULL DEFAULT 95,
+        dynamic_min_soc INTEGER NOT NULL DEFAULT 0
+      )`
+    );
+    // Tagesprotokoll der dynamischen Mindest-SoC-Automatik. Der Tagesschlüssel
+    // sperrt eine zweite Anpassung am selben Tag – auch über einen Neustart
+    // hinweg, damit der Mindest-SoC nicht mehrfach nachgezogen wird.
+    db.run(
+      `CREATE TABLE IF NOT EXISTS battery_dynamic_min_soc_state (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        day_key TEXT NOT NULL DEFAULT '',
+        applied_min_soc INTEGER,
+        applied_at TEXT NOT NULL DEFAULT '',
+        note TEXT NOT NULL DEFAULT ''
       )`
     );
     db.run(
@@ -1714,6 +1727,7 @@ function migrateBatterieConfig(db) {
       { name: 'upper_voltage', sql: 'ALTER TABLE batterie_config ADD COLUMN upper_voltage REAL NOT NULL DEFAULT 55.2' },
       { name: 'charge_efficiency', sql: 'ALTER TABLE batterie_config ADD COLUMN charge_efficiency REAL NOT NULL DEFAULT 95' },
       { name: 'discharge_efficiency', sql: 'ALTER TABLE batterie_config ADD COLUMN discharge_efficiency REAL NOT NULL DEFAULT 95' },
+      { name: 'dynamic_min_soc', sql: 'ALTER TABLE batterie_config ADD COLUMN dynamic_min_soc INTEGER NOT NULL DEFAULT 0' },
     ];
     for (const addition of additions) {
       if (!existing.has(addition.name)) {
