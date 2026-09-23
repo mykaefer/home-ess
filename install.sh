@@ -405,7 +405,7 @@ EOF
 }
 
 # Versionsnummer der Installation. Maßgeblich ist VERSION.json
-# ({ "version": "1.7.3" }); fehlt sie (sehr alter Stand) oder trägt sie keine
+# ({ "version": "1.7.2" }); fehlt sie (sehr alter Stand) oder trägt sie keine
 # gültige Nummer, gilt die Angabe aus package.json. Beide Dateien sind JSON und
 # werden mit dem ohnehin installierten Node.js gelesen, nicht mit Textmustern.
 installed_version() {

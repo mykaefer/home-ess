@@ -5,6 +5,49 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 
 ## [Unreleased]
 
+Noch keine Änderungen für die nächste Versionsnummer.
+
+## [1.7.2] — 2026-09-23
+
+### Neu
+
+- **Installer für den Entwicklungszweig.** Neben `install.sh` (Zweig `main`)
+  gibt es `install-dev.sh`, das aus `development` installiert:
+
+  ```bash
+  curl -fsSL https://raw.githubusercontent.com/mykaefer/home-ess/development/install-dev.sh | sudo bash
+  ```
+
+  Es bringt keine zweite Installationslogik mit, sondern lädt den regulären
+  Installer desselben Zweigs und ruft ihn mit `--branch development` auf.
+  `install.sh` kennt dafür neu `--branch <main|development>`; ohne Angabe bleibt
+  ein Update auf dem Zweig, der bereits installiert ist. Beide Wege sind in
+  [README.md](README.md) und [README_de.md](README_de.md) beschrieben.
+
+- **Zweig in den Updateeinstellungen wählbar.** Unter *Einstellungen → Allgemein
+  → homeESS-Updates* steht neben dem Prüfintervall die Auswahl `Stabil (main)` /
+  `Entwicklung (development)`; daneben zeigt die Karte, welcher Zweig tatsächlich
+  installiert ist. Nach dem Umstellen wird sofort neu geprüft (der
+  zwischengespeicherte Stand gehört immer zu genau einem Zweig), und der nächste
+  Update wechselt die Installation auf den gewählten Zweig. Beim Zweigwechsel
+  zählt auch eine gleiche oder kleinere Versionsnummer als Ziel — sonst käme man
+  von `development` nie wieder auf `main` zurück.
+
+- **[VERSION.json](VERSION.json) ist die maßgebliche Versionsangabe.** Die
+  Updateprüfung liest nicht mehr das neueste GitHub-Release, sondern die
+  Versionsdatei des eingestellten Zweigs
+  (`raw.githubusercontent.com/…/<zweig>/VERSION.json`, ein JSON-Objekt mit dem
+  Feld `version`). Nur so können `main` und
+  `development` gleichzeitig eigene Nummern führen. Lokal gilt dieselbe Datei —
+  für die Fußzeile der Weboberfläche ebenso wie für den Vergleich; fehlt sie,
+  greift weiterhin `package.json`. Der privilegierte Self-Updater klont
+  entsprechend den Zweig statt eines Release-Tags und prüft vorher unabhängig,
+  dass dessen Versionsdatei die angeforderte Version trägt. Repository und
+  Zweigliste bleiben fest im Code verdrahtet: aus einer Anforderung kann keine
+  fremde Adresse entstehen.
+
+## [1.7.1] — 2026-09-23
+
 ### Neu
 
 - **Dynamischer Mindest-SoC (Batterieseite).** Eine aktivierbare Option setzt den
@@ -65,41 +108,6 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 
   Die Seite ist im Rechtemodell als `logs` hinterlegt und lässt sich damit je
   Benutzer ausblenden.
-
-- **Installer für den Entwicklungszweig.** Neben `install.sh` (Zweig `main`)
-  gibt es `install-dev.sh`, das aus `development` installiert:
-
-  ```bash
-  curl -fsSL https://raw.githubusercontent.com/mykaefer/home-ess/development/install-dev.sh | sudo bash
-  ```
-
-  Es bringt keine zweite Installationslogik mit, sondern lädt den regulären
-  Installer desselben Zweigs und ruft ihn mit `--branch development` auf.
-  `install.sh` kennt dafür neu `--branch <main|development>`; ohne Angabe bleibt
-  ein Update auf dem Zweig, der bereits installiert ist. Beide Wege sind in
-  [README.md](README.md) und [README_de.md](README_de.md) beschrieben.
-
-- **Zweig in den Updateeinstellungen wählbar.** Unter *Einstellungen → Allgemein
-  → homeESS-Updates* steht neben dem Prüfintervall die Auswahl `Stabil (main)` /
-  `Entwicklung (development)`; daneben zeigt die Karte, welcher Zweig tatsächlich
-  installiert ist. Nach dem Umstellen wird sofort neu geprüft (der
-  zwischengespeicherte Stand gehört immer zu genau einem Zweig), und der nächste
-  Update wechselt die Installation auf den gewählten Zweig. Beim Zweigwechsel
-  zählt auch eine gleiche oder kleinere Versionsnummer als Ziel — sonst käme man
-  von `development` nie wieder auf `main` zurück.
-
-- **[VERSION.json](VERSION.json) ist die maßgebliche Versionsangabe.** Die
-  Updateprüfung liest nicht mehr das neueste GitHub-Release, sondern die
-  Versionsdatei des eingestellten Zweigs
-  (`raw.githubusercontent.com/…/<zweig>/VERSION.json`, ein JSON-Objekt mit dem
-  Feld `version`). Nur so können `main` und
-  `development` gleichzeitig eigene Nummern führen. Lokal gilt dieselbe Datei —
-  für die Fußzeile der Weboberfläche ebenso wie für den Vergleich; fehlt sie,
-  greift weiterhin `package.json`. Der privilegierte Self-Updater klont
-  entsprechend den Zweig statt eines Release-Tags und prüft vorher unabhängig,
-  dass dessen Versionsdatei die angeforderte Version trägt. Repository und
-  Zweigliste bleiben fest im Code verdrahtet: aus einer Anforderung kann keine
-  fremde Adresse entstehen.
 
 ### Geändert
 
