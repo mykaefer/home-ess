@@ -1,8 +1,11 @@
 'use strict';
 
-// homeESS-Releases verwenden ausschließlich numerische Versionen mit drei
-// Stellen. Bewusst kein Semver-Paket: Vorab-Releases werden von GitHubs
-// /releases/latest ohnehin ausgeschlossen und sollen hier nicht erraten werden.
+const fs = require('fs');
+const path = require('path');
+
+// homeESS-Versionen bestehen ausschließlich aus drei Zahlen. Bewusst kein
+// Semver-Paket: Vorab-Kennzeichen (Beta, Release Candidate) gibt es nicht, und
+// sie sollen hier auch nicht erraten werden.
 const VERSION_RE = /^(?:v)?(\d+)\.(\d+)\.(\d+)$/;
 
 function normalizeVersion(value) {
@@ -23,4 +26,37 @@ function compareVersions(left, right) {
   return 0;
 }
 
-module.exports = { normalizeVersion, compareVersions };
+// VERSION.json ist die maßgebliche Versionsangabe – lokal wie online. Sie löst
+// den früheren Release-Tag ab, damit `main` und `development` unabhängig
+// voneinander eine eigene Nummer führen können.
+//
+// Inhalt ist ein JSON-Objekt mit dem Feld `version`:
+//   { "version": "1.7.3" }
+const VERSION_FILE = 'VERSION.json';
+
+function parseVersionFile(text) {
+  try {
+    const document = JSON.parse(String(text == null ? '' : text));
+    if (!document || typeof document !== 'object' || Array.isArray(document)) return null;
+    return normalizeVersion(document.version);
+  } catch (_) {
+    return null;
+  }
+}
+
+// Version der Installation: VERSION.json im Stammverzeichnis, ersatzweise
+// package.json. Der Rückfall hält ältere Arbeitskopien lauffähig, in denen die
+// Datei noch fehlt.
+function readLocalVersion(rootDir = path.join(__dirname, '..', '..')) {
+  try {
+    const fromFile = parseVersionFile(fs.readFileSync(path.join(rootDir, VERSION_FILE), 'utf8'));
+    if (fromFile) return fromFile;
+  } catch (_) { /* Rückfall auf package.json */ }
+  try {
+    return normalizeVersion(JSON.parse(fs.readFileSync(path.join(rootDir, 'package.json'), 'utf8')).version);
+  } catch (_) {
+    return null;
+  }
+}
+
+module.exports = { normalizeVersion, compareVersions, parseVersionFile, readLocalVersion, VERSION_FILE };

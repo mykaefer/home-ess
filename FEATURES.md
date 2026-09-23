@@ -268,6 +268,10 @@ desktop and mobile layouts.
   independent from normal local operation.
 - Built-in release checks support manual and scheduled updates with a maintenance
   window, progress reporting, health verification and automatic rollback.
+- The check reads `VERSION.json` of the configured branch, so `main` and
+  `development` carry their own version numbers. The branch is selectable in the
+  update settings and the next update moves the installation to it. Install with
+  either `install.sh` (stable) or `install-dev.sh` (development branch).
 - Persistent data lives outside the replaceable application directory and the
   systemd service runs with a restricted filesystem view on standard installs.
 

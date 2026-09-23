@@ -8,10 +8,13 @@ const { currentAccess, canSeePage, pageForPath, themeBodyClass } = require('../a
 const i18n = require('../i18n');
 const systemWarning = require('../system-warning');
 
+// Sichtbare Version der Installation. Maßgeblich ist VERSION.json im
+// Stammverzeichnis – dieselbe Quelle, aus der die Updateprüfung liest; ohne sie
+// gilt package.json. So zeigen Fußzeile und Updatekarte nie verschiedene Stände.
 let pkgVersion = '—';
 try {
   // eslint-disable-next-line global-require
-  pkgVersion = require('../../package.json').version || '—';
+  pkgVersion = require('../update/version').readLocalVersion() || '—';
 } catch (_) {
   /* Version bleibt unbekannt */
 }

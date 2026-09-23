@@ -144,7 +144,7 @@
     "update.save": "Save update settings",
     "update.current": "homeESS is up to date.",
     "update.new_available": "A new version is available.",
-    "update.checking": "Checking the GitHub release …",
+    "update.checking": "Checking the branch …",
     "update.check_failed": "Update check failed.",
     "update.confirm": "Update homeESS?",
     "update.confirm_yes": "Yes, update now",
@@ -1071,7 +1071,7 @@
     "settings.tls_hint": "Only with https. Switch off if the server uses a self-signed certificate.",
     "settings.save_database": "Save database",
     "settings.test_connection": "Test connection",
-    "settings.update_hint": "Checks stable releases from the official GitHub repository. The check runs independently; automatic installation is separate from it, switched off by default and takes place exclusively within the defined maintenance window.",
+    "settings.update_hint": "Checks the selected branch of the official GitHub repository. The check runs on its own; automatic installation is independent of it, switched off by default and only happens inside the configured maintenance window.",
     "settings.next_check": "Next check",
     "settings.auto_check": "Check for updates automatically",
     "settings.check_interval_hint": "This interval applies regardless of automatic installation. As soon as a newer version is available, the notice appears in the header. After a failed check the next attempt is brought forward.",
@@ -1500,9 +1500,9 @@
     "error.folder_cycle": "Directories must not form a cycle.",
     "error.target_folder_missing": "Target directory not found.",
     "error.invalid_assignment": "Invalid assignment.",
-    "error.release_no_stable": "The latest GitHub release does not have a valid stable version.",
+    "error.release_no_stable": "The branch's version file does not contain a valid version.",
     "error.release_invalid": "GitHub did not return a valid release response.",
-    "error.release_too_large": "The GitHub response is unexpectedly large.",
+    "error.release_too_large": "The version file is unexpectedly large.",
     "error.release_timeout": "GitHub timeout.",
     "error.release_outdated": "The requested release is no longer the latest available release.",
     "error.updater_missing": "The self-updater is not installed on this system.",
@@ -2341,6 +2341,12 @@
     "logs.older": "Older",
     "logs.empty": "No log lines available.",
     "logs.hint": "Recorded are the messages of the background services since the last server start. The buffer is limited, older lines drop out.",
-    "logs.too_many": "Too many requests."
+    "logs.too_many": "Too many requests.",
+    "update.branch": "Branch",
+    "update.installed_branch": "Installed branch",
+    "update.branch_main": "Stable (main)",
+    "update.branch_development": "Development (development)",
+    "update.branch_hint": "The version file of the selected branch is authoritative; both branches carry their own version numbers. The development branch may contain unfinished work and is only meant for development and testing. Switching triggers an immediate check; the next update moves the installation to that branch.",
+    "update.branch_switch": "The configured branch differs. The next update will switch branches."
   }
 }

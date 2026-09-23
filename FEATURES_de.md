@@ -284,6 +284,11 @@ eigenständige Desktop- und Mobilansichten.
   und ist vom normalen lokalen Betrieb unabhängig.
 - Integrierte Releaseprüfungen unterstützen manuelle und geplante Updates mit
   Wartungsfenster, Fortschrittsanzeige, Healthcheck und automatischem Rollback.
+- Maßgeblich für die Prüfung ist `VERSION.json` des eingestellten Zweigs. `main`
+  und `development` führen damit eigene Versionsnummern; der Zweig ist in den
+  Updateeinstellungen wählbar, und der nächste Update wechselt die Installation
+  darauf. Installiert wird wahlweise mit `install.sh` (stabil) oder
+  `install-dev.sh` (Entwicklungszweig).
 - Dauerhafte Daten liegen außerhalb des austauschbaren
   Anwendungsverzeichnisses; der systemd-Dienst läuft bei Standardinstallationen
   mit eingeschränkter Dateisystemsicht.

@@ -20,7 +20,7 @@ function fixture() {
   return { root, unit };
 }
 
-test('Versionsvergleich akzeptiert Release-Tags und vergleicht numerisch', () => {
+test('Versionsvergleich akzeptiert führendes v und vergleicht numerisch', () => {
   assert.equal(normalizeVersion('v1.3.36'), '1.3.36');
   assert.equal(normalizeVersion('1.3'), null);
   assert.equal(compareVersions('1.10.0', '1.9.99'), 1);
@@ -43,15 +43,17 @@ test('Updateeinstellungen werden dauerhaft in SQLite gespeichert', async (t) => 
   await new Promise((resolve, reject) => db.run(
     `CREATE TABLE update_config (
       id INTEGER PRIMARY KEY, automatic_enabled INTEGER, maintenance_start TEXT,
-      maintenance_end TEXT, check_interval TEXT
+      maintenance_end TEXT, check_interval TEXT, branch TEXT
     )`,
     (error) => error ? reject(error) : resolve()
   ));
   const saved = await updateSettings.save(db, {
     automaticEnabled: 'on', maintenanceStart: '23:30', maintenanceEnd: '01:15', checkInterval: 'weekly',
+    branch: 'development',
   });
   assert.deepEqual(saved, {
     automaticEnabled: true, maintenanceStart: '23:30', maintenanceEnd: '01:15', checkInterval: 'weekly',
+    branch: 'development',
   });
   assert.deepEqual(await updateSettings.load(db), saved);
 });

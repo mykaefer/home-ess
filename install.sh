@@ -22,6 +22,12 @@ readonly MIN_NODE_MINOR=17
 INSTALL_MODE="install"
 RESTORE_ALL_ADAPTERS=0
 ADAPTER_BACKUP_DIR=""
+# Zweig, aus dem installiert wird. `main` trägt den veröffentlichten Stand,
+# `development` den kommenden. Beide führen in ihrer VERSION.json eine eigene
+# Versionsnummer. install-dev.sh ruft dieses Skript mit --branch development auf.
+readonly DEFAULT_BRANCH="main"
+BRANCH="${DEFAULT_BRANCH}"
+BRANCH_EXPLICIT=0
 
 info() {
   printf '\n\033[1;34m[homeESS]\033[0m %s\n' "$*"
@@ -45,14 +51,47 @@ on_error() {
 
 trap 'on_error "${LINENO}" "${BASH_COMMAND}"' ERR
 
+# Nur Zweige dieses Repositorys sind zulässig; ein freier Wert könnte sonst in
+# die git-Aufrufe gelangen.
+validate_branch() {
+  case "${1}" in
+    main|development) return 0 ;;
+    *) fail "Unbekannter Zweig: ${1}. Zulässig sind main und development." ;;
+  esac
+}
+
+set_branch() {
+  validate_branch "${1}"
+  BRANCH="${1}"
+  BRANCH_EXPLICIT=1
+}
+
 parse_arguments() {
-  local argument
-  for argument in "$@"; do
-    case "${argument}" in
+  while [[ $# -gt 0 ]]; do
+    case "${1}" in
       --all) RESTORE_ALL_ADAPTERS=1 ;;
-      *) fail "Unbekannte Option: ${argument}. Unterstützt wird ausschließlich --all."
+      --branch=*) set_branch "${1#--branch=}" ;;
+      --branch)
+        [[ $# -ge 2 ]] || fail "--branch erwartet einen Zweignamen (main oder development)."
+        set_branch "${2}"
+        shift
+        ;;
+      *) fail "Unbekannte Option: ${1}. Unterstützt werden --all und --branch <main|development>."
     esac
+    shift
   done
+}
+
+# Beim Update ohne ausdrückliche Angabe bleibt der Zweig erhalten, der bereits
+# installiert ist: ein Update darf niemanden unbemerkt von development auf main
+# (oder umgekehrt) ziehen.
+adopt_existing_branch() {
+  [[ ${BRANCH_EXPLICIT} -eq 0 ]] || return 0
+  local current
+  current="$(git -C "${INSTALL_DIR}" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  case "${current}" in
+    main|development) BRANCH="${current}" ;;
+  esac
 }
 
 require_root() {
@@ -187,8 +226,8 @@ stop_service_for_update() {
 }
 
 clone_application() {
-  info "Lade homeESS von GitHub"
-  GIT_TERMINAL_PROMPT=0 git clone --depth 1 --branch main "${REPOSITORY_URL}" "${INSTALL_DIR}"
+  info "Lade homeESS von GitHub (Zweig ${BRANCH})"
+  GIT_TERMINAL_PROMPT=0 git clone --depth 1 --branch "${BRANCH}" "${REPOSITORY_URL}" "${INSTALL_DIR}"
   reconcile_adapter_selection
   rm -rf "${INSTALL_DIR}/test"
   set_application_permissions
@@ -238,7 +277,8 @@ set_application_permissions() {
 }
 
 update_application() {
-  info "Aktualisiere homeESS aus GitHub"
+  adopt_existing_branch
+  info "Aktualisiere homeESS aus GitHub (Zweig ${BRANCH})"
   cd "${INSTALL_DIR}"
 
   local remote_url
@@ -250,9 +290,9 @@ update_application() {
     git remote set-url origin "${REPOSITORY_URL}"
   fi
 
-  GIT_TERMINAL_PROMPT=0 git fetch --depth 1 origin main
+  GIT_TERMINAL_PROMPT=0 git fetch --depth 1 origin "${BRANCH}"
   backup_adapter_directory
-  git checkout -B main FETCH_HEAD
+  git checkout -B "${BRANCH}" FETCH_HEAD
   git reset --hard FETCH_HEAD
   reconcile_adapter_selection
   rm -rf "${INSTALL_DIR}/test"
@@ -364,6 +404,25 @@ EOF
   fi
 }
 
+# Versionsnummer der Installation. Maßgeblich ist VERSION.json
+# ({ "version": "1.7.3" }); fehlt sie (sehr alter Stand) oder trägt sie keine
+# gültige Nummer, gilt die Angabe aus package.json. Beide Dateien sind JSON und
+# werden mit dem ohnehin installierten Node.js gelesen, nicht mit Textmustern.
+installed_version() {
+  local dir="${1:-${INSTALL_DIR}}"
+  local version=""
+  local file
+  for file in VERSION.json package.json; do
+    [[ -r ${dir}/${file} ]] || continue
+    version="$(/usr/bin/node -e 'const p = require("path"); process.stdout.write(String(require(p.resolve(process.argv[1])).version || ""))' "${dir}/${file}" 2>/dev/null || true)"
+    if [[ ${version} =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+      break
+    fi
+    version=""
+  done
+  printf '%s' "${version:-unbekannt}"
+}
+
 verify_installation() {
   info "Prüfe Installation"
   if ! systemctl is-active --quiet "${APP_NAME}.service"; then
@@ -380,6 +439,7 @@ verify_installation() {
   else
     printf '\n\033[1;32mhomeESS wurde erfolgreich installiert.\033[0m\n'
   fi
+  printf 'Zweig: %s (Version %s)\n' "${BRANCH}" "$(installed_version)"
   printf 'Weboberfläche: http://%s:3000\n' "${address}"
   if [[ ${INSTALL_MODE} != "update" ]]; then
     printf 'Erster Login: admin\n'

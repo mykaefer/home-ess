@@ -6,6 +6,7 @@ const { PAGES, ROLES, ROLE_LABELS, THEMES, THEME_LABELS, currentAccess } = requi
 const { modulesPanel } = require('./modules');
 const { remoteAccessPanel } = require('./remote-access');
 const { INTERVAL_LABELS } = require('../update/settings');
+const { BRANCH_LABELS, DEFAULT_BRANCH } = require('../update/branches');
 const i18n = require('../i18n');
 
 // Reihenfolge und Beschriftung der Einstellungs-Tabs.
@@ -129,6 +130,7 @@ function renderSettings({
     maintenanceStart: '03:00',
     maintenanceEnd: '04:00',
     checkInterval: 'daily',
+    branch: DEFAULT_BRANCH,
   },
   updateStatus = null,
   updateMessage = '',
@@ -155,13 +157,23 @@ function renderSettings({
     internal: { time: '--:--:--', date: '--.--.----' },
     mqtt: { available: false, fresh: false, display: '' }, offsetSeconds: 0,
   };
-  const update = updateStatus || { currentVersion: '—', availableVersion: null, checkedAt: null, nextCheckAt: null, checkError: null, supported: false };
+  const update = updateStatus || {
+    currentVersion: '—', availableVersion: null, checkedAt: null, nextCheckAt: null,
+    checkError: null, supported: false, branch: DEFAULT_BRANCH, installedBranch: DEFAULT_BRANCH,
+  };
   const dbConfig = database || { enabled: 0, protocol: 'http', host: '', port: 8086, database: 'homeess', username: '', password: '', verifyTls: 1, sourceLabel: '', updatedAt: 0 };
   const dbStatus = databaseStatus || { ok: false, checkedAt: 0, message: '' };
   const automaticChecked = updateConfig.automaticEnabled ? ' checked' : '';
   const intervalOptions = Object.entries(INTERVAL_LABELS)
     .map(([value, label]) => `<option value="${value}"${updateConfig.checkInterval === value ? ' selected' : ''}>${escapeHtml(label)}</option>`)
     .join('');
+  // Zweig, aus dem geprüft und installiert wird. Der eingestellte Wert kommt aus
+  // der Datenbank; angezeigt wird zusätzlich der tatsächlich installierte Zweig.
+  const selectedBranch = updateConfig.branch || DEFAULT_BRANCH;
+  const branchOptions = Object.entries(BRANCH_LABELS)
+    .map(([value, label]) => `<option value="${value}"${selectedBranch === value ? ' selected' : ''}>${escapeHtml(label)}</option>`)
+    .join('');
+  const installedBranchLabel = BRANCH_LABELS[update.installedBranch || DEFAULT_BRANCH] || String(update.installedBranch || '');
 
   const tabBar = SETTINGS_TABS
     .map((tab) => {
@@ -397,11 +409,12 @@ ${tabBar}
           <form action="/settings/update" method="POST" class="settings-card settings-form update-settings-card">
             <div class="settings-card-head">
               <h2>homeESS-Updates</h2>
-              <p class="settings-card-hint">Prüft stabile Releases aus dem offiziellen GitHub-Repository. Die Prüfung läuft eigenständig; die automatische Installation ist davon unabhängig, standardmäßig ausgeschaltet und erfolgt ausschließlich im festgelegten Wartungsfenster.</p>
+              <p class="settings-card-hint">Prüft den gewählten Zweig des offiziellen GitHub-Repositorys. Die Prüfung läuft eigenständig; die automatische Installation ist davon unabhängig, standardmäßig ausgeschaltet und erfolgt ausschließlich im festgelegten Wartungsfenster.</p>
             </div>
             ${statusText(updateMessage, 'success')}
             <div class="update-settings-versions" aria-live="polite">
               <div><span>Installierte Version</span><strong id="settingsUpdateCurrent">${escapeHtml(update.currentVersion)}</strong></div>
+              <div><span>Installierter Zweig</span><strong id="settingsUpdateBranch">${escapeHtml(installedBranchLabel)}</strong></div>
               <div><span>Online verfügbar</span><strong id="settingsUpdateAvailable">${escapeHtml(update.availableVersion || 'Kein neueres Release')}</strong></div>
               <div><span>Letzte Prüfung</span><strong id="settingsUpdateChecked">${escapeHtml(update.checkedAt ? new Date(update.checkedAt).toLocaleString(locale) : 'Noch nicht geprüft')}</strong></div>
               <div><span>Nächste Prüfung</span><strong id="settingsUpdateNext">${escapeHtml(update.nextCheckAt ? new Date(update.nextCheckAt).toLocaleString(locale) : 'Wird geplant …')}</strong></div>
@@ -409,10 +422,15 @@ ${tabBar}
             <p class="settings-card-hint settings-update-result" id="settingsUpdateResult">${escapeHtml(update.checkError || '')}</p>
             <div class="field-grid update-check-fields">
               <div class="field">
+                <label for="updateBranch">Zweig</label>
+                <select id="updateBranch" name="branch">${branchOptions}</select>
+              </div>
+              <div class="field">
                 <label for="updateCheckInterval">Automatisch auf Updates prüfen</label>
                 <select id="updateCheckInterval" name="checkInterval">${intervalOptions}</select>
               </div>
             </div>
+            <p class="settings-card-hint">Maßgeblich ist die Versionsdatei des gewählten Zweigs; beide Zweige führen eigene Versionsnummern. Der Entwicklungszweig kann unfertige Stände enthalten und eignet sich nur zum Mitentwickeln und Testen. Nach dem Umstellen wird sofort neu geprüft; der nächste Update wechselt die Installation auf diesen Zweig.</p>
             <p class="settings-card-hint">Dieser Abstand gilt unabhängig von der automatischen Installation. Sobald eine neuere Version vorliegt, erscheint der Hinweis in der Kopfzeile. Nach einer fehlgeschlagenen Prüfung wird der nächste Versuch vorgezogen.</p>
             <label class="checkbox-field" for="automaticUpdatesEnabled">
               <input type="checkbox" id="automaticUpdatesEnabled" name="automaticEnabled" value="1"${automaticChecked} onchange="toggleUpdateMaintenanceFields()">
@@ -542,11 +560,20 @@ ${remote.body}
       var result = document.getElementById('settingsUpdateResult');
       var updateNow = document.getElementById('settingsUpdateNow');
       if (current) current.textContent = status.currentVersion || '—';
+      var branchNode = document.getElementById('settingsUpdateBranch');
+      var branchLabels = ${JSON.stringify(BRANCH_LABELS)};
+      if (branchNode && status.installedBranch) branchNode.textContent = branchLabels[status.installedBranch] || status.installedBranch;
       if (available) available.textContent = status.availableVersion || 'Kein neueres Release';
       if (checked) checked.textContent = status.checkedAt ? new Date(status.checkedAt).toLocaleString(document.documentElement.lang || 'de-DE') : 'Noch nicht geprüft';
       var next = document.getElementById('settingsUpdateNext');
       if (next) next.textContent = status.nextCheckAt ? new Date(status.nextCheckAt).toLocaleString(document.documentElement.lang || 'de-DE') : 'Wird geplant …';
-      if (result) result.textContent = status.checkError || (status.availableVersion ? 'Eine neue Version ist verfügbar.' : 'homeESS ist aktuell.');
+      if (result) {
+        // Beim Zweigwechsel ist auch eine gleiche oder kleinere Nummer ein Ziel.
+        result.textContent = status.checkError
+          || (status.availableVersion
+            ? (status.branchSwitch ? 'Der eingestellte Zweig weicht ab. Der nächste Update wechselt den Zweig.' : 'Eine neue Version ist verfügbar.')
+            : 'homeESS ist aktuell.');
+      }
       if (updateNow) {
         updateNow.disabled = !(status.supported && status.availableVersion);
         updateNow.setAttribute('data-version', status.availableVersion || '');
@@ -557,7 +584,7 @@ ${remote.body}
       var button = document.getElementById('settingsUpdateCheck');
       var result = document.getElementById('settingsUpdateResult');
       if (button) button.disabled = true;
-      if (result) result.textContent = 'GitHub-Release wird geprüft …';
+      if (result) result.textContent = 'Der Zweig wird geprüft …';
       var api = window.homeESSUpdate;
       if (!api || typeof api.checkNow !== 'function') return;
       api.checkNow().catch(function (error) {

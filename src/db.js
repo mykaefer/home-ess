@@ -61,7 +61,8 @@ function openDatabase() {
         automatic_enabled INTEGER NOT NULL DEFAULT 0,
         maintenance_start TEXT NOT NULL DEFAULT '03:00',
         maintenance_end TEXT NOT NULL DEFAULT '04:00',
-        check_interval TEXT NOT NULL DEFAULT 'daily'
+        check_interval TEXT NOT NULL DEFAULT 'daily',
+        branch TEXT NOT NULL DEFAULT 'main'
       )`
     );
     db.run(
@@ -1080,6 +1081,7 @@ function openDatabase() {
     seedHeizungBilling(db);
     migrateHeizungCentral(db);
     migrateHeizungDeviceActions(db);
+    migrateUpdateConfig(db);
   });
 
   return db;
@@ -1708,6 +1710,18 @@ function seedBatterieConfig(db) {
         `INSERT INTO batterie_config (id, soc_topic, power_topic, voltage_topic, temperatur_topic)
          VALUES (1, '', '', '', '')`
       );
+    }
+  });
+}
+
+// Der Zweig, aus dem aktualisiert wird, kam nach den ersten Installationen
+// dazu. Bestandsinstallationen bleiben auf dem stabilen Zweig.
+function migrateUpdateConfig(db) {
+  db.all('PRAGMA table_info(update_config)', (err, rows) => {
+    if (err || !Array.isArray(rows) || rows.length === 0) return;
+    const existing = new Set(rows.map((row) => row.name));
+    if (!existing.has('branch')) {
+      db.run("ALTER TABLE update_config ADD COLUMN branch TEXT NOT NULL DEFAULT 'main'");
     }
   });
 }

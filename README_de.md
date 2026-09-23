@@ -53,6 +53,23 @@ Danach `http://<server-ip>:3000` öffnen und mit dem initialen Zugang
 `admin` / `admin` anmelden. Dieses Passwort unmittelbar nach der ersten
 Anmeldung ändern.
 
+### Entwicklungsstand installieren
+
+Wer den kommenden Stand mitentwickeln oder testen möchte, installiert statt des
+veröffentlichten Zweigs `main` den Entwicklungszweig `development`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mykaefer/home-ess/development/install-dev.sh | sudo bash
+```
+
+Beide Zweige führen in ihrer `VERSION.json` eine eigene Versionsnummer; genau
+diese Datei fragt die Updateprüfung ab. Die Installation bleibt anschließend auf
+ihrem Zweig — auch ein erneuter Aufruf des regulären Installers wechselt ihn
+nicht. Umgestellt wird in der Weboberfläche unter *Einstellungen → Allgemein →
+homeESS-Updates → Zweig*; der nächste Update wechselt die Installation dann auf
+den gewählten Zweig. Der Entwicklungszweig kann unfertige Stände enthalten und
+gehört nicht auf eine Anlage, auf die man sich verlassen muss.
+
 ### Bestehende Installation aktualisieren
 
 Denselben Befehl erneut ausführen. Anwendungscode und installierte offizielle
