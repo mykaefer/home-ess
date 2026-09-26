@@ -165,6 +165,26 @@ Ereignistyp, Priorität, Empfängeranzahl und Grund. `src/notifications/log.js`
 lässt ausschließlich diese Metadatenfelder durch: Nachrichtentext, Push-Token und
 personenbezogene Inhalte erscheinen nie im Log.
 
+## States API (`/api/v1`)
+
+Lokale, versionierte Zugriffsschicht für externe Clients; Schnittstellen-
+beschreibung in [STATES-API.md](STATES-API.md). Sie ist bewusst kein zweites
+State-System:
+
+| Datei | Aufgabe |
+|---|---|
+| `src/states-api/config.js` | Einstellungen aus `states_api_config` (Schalter, scrypt-Hash über `auth/password.js`, Credential-Version, Ausschlusslisten) mit Speicherabbild für die Requests. |
+| `src/states-api/catalog.js` | Kurzlebiger Index über `states/repository.buildStatesTree()`; Verzeichnispfade in der Form des States-Katalogs (`System / …`, `Custom / …`, `Adapter: <Instanz> / …`), States über ihr kanonisches Topic. Wendet Ausschlüsse rekursiv an und prüft Schreibwerte gegen das Bedienelement aus `states/controls.js`. |
+| `src/states-api/tokens.js` | Bearer-Tokens (32 Byte Zufall) nur als SHA-256-Hash im Speicher, 12 h gültig, an die Credential-Version gebunden. |
+| `src/states-api/rate-limit.js` | Begrenzung fehlgeschlagener Anmeldungen je Socket-Adresse und global. |
+| `src/routes/states-api.js` | Endpunkte unter `/api/v1` (eigene Bearer-Prüfung, JSON-Fehlerformat) und die JSON-Endpunkte des States-Katalogs unter `/settings/states-api/…`. |
+| `src/views/states-api.js` | Reiter *Einstellungen → States API*. |
+
+`/api/v1` steht in den `openPaths` der globalen Autorisierung: Cookie-Sessions
+gelten dort nicht, jeder Endpunkt außer `GET /api/v1` verlangt ein Token.
+Geschrieben wird ausschließlich über `mqttClient.publish()` mit dem Topic aus
+dem State-Baum – derselbe Weg wie `POST /states/value`.
+
 ## Internationalisierung und Sprachdateien
 
 homeESS besitzt genau **eine systemweite Sprachwahl**. Die Registry unter

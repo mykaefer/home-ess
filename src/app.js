@@ -42,6 +42,8 @@ const conditionsRoutes = require('./routes/conditions');
 const notificationRoutes = require('./routes/notifications');
 const remoteAccessRoutes = require('./routes/remote-access');
 const updateRoutes = require('./routes/update');
+const statesApiRoutes = require('./routes/states-api');
+const statesApiConfig = require('./states-api/config');
 const logStore = require('./logging/log-store');
 const pairingState = require('./remote-access/pairing-state');
 const identityStore = require('./remote-access/identity-store');
@@ -121,7 +123,9 @@ function createApp() {
     // seinem Manifest ausdrücklich als öffentlich erklärt hat. Ohne diese
     // Ausnahme käme das USB-Flashtool nicht an die Firmware, denn es kann
     // keine Sitzung führen.
-    openPaths: ['/', '/login', '/logout', '/energiefluss/export', '/adapter-public', '/update/health'],
+    // /api/v1 ist die States API (STATES-API.md): Sie kennt keine Cookie-
+    // Sessions, sondern prüft ihr eigenes Bearer-Token selbst.
+    openPaths: ['/', '/login', '/logout', '/energiefluss/export', '/adapter-public', '/update/health', '/api/v1'],
     sharedPaths: ['/live', '/me', '/states/catalog'],
   }));
 
@@ -151,6 +155,16 @@ function createApp() {
   app.use(notificationRoutes(db));
   app.use(remoteAccessRoutes());
   app.use(updateRoutes());
+  app.use(statesApiRoutes(db));
+  // JSON-Fehlerantworten für /api/v1 (fehlerhaftes JSON, Ausnahmen) statt der
+  // HTML-Fehlerseite von Express.
+  app.use(statesApiRoutes.errorHandler);
+
+  // States API: gespeicherte Einstellungen laden. Bis dahin (und bei einem
+  // Fehler) bleibt sie ausgeschaltet.
+  statesApiConfig.init(db).catch((err) => {
+    console.error('[states-api] Einstellungen nicht ladbar:', err && err.message);
+  });
 
   // Fernzugriff: dauerhafte Instanzidentität und Origin-WebSocket vorbereiten.
   // Der Relay-Client ist ein optionaler Subdienst — Fehler dürfen den normalen

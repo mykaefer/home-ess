@@ -8771,3 +8771,124 @@ body.dash-editing .widget-card--weather .weather-head { padding-right: 76px; }
     color: #6b7280;
     line-height: 1.45;
 }
+/* Einstellungen → States API: lazy geladener States-Katalog mit Freigaben.
+   Gleiche Listenoptik wie der Baum der States-Seite (.value-cat/.value-row);
+   nur geöffnete Verzeichnisse stehen im DOM. */
+.states-api-facts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    margin: 12px 0;
+}
+.states-api-facts code {
+    font-size: 12px;
+    word-break: break-all;
+}
+.states-api-tree {
+    max-height: 560px;
+    overflow-y: auto;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: var(--color-surface);
+    margin: 12px 0;
+}
+.states-api-tree > .muted,
+.states-api-empty {
+    margin: 0;
+    padding: 6px 12px 6px calc(34px + var(--tree-depth, 0) * 16px);
+    font-size: 12px;
+}
+.states-api-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 28px;
+    padding: 0 12px 0 calc(8px + var(--tree-depth, 0) * 16px);
+    border-top: 1px solid var(--color-line-soft);
+    font-size: 12px;
+    line-height: 1.4;
+}
+.states-api-tree > .states-api-node:first-child > .states-api-row {
+    border-top: none;
+}
+.states-api-node--folder > .states-api-row {
+    background: var(--color-surface-muted);
+    font-weight: 700;
+}
+.states-api-node--folder > .states-api-row:hover {
+    background: var(--color-surface-sunken);
+}
+.states-api-caret {
+    flex: 0 0 20px;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: var(--color-ink-muted);
+    font-size: 11px;
+    cursor: pointer;
+    transition: transform 0.15s ease;
+}
+.states-api-caret--leaf {
+    cursor: default;
+}
+.states-api-node.is-open > .states-api-row .states-api-caret {
+    transform: rotate(90deg);
+}
+.states-api-check {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    flex: 1 1 auto;
+    margin: 0;
+    cursor: pointer;
+}
+.states-api-check input[type="checkbox"] {
+    width: auto;
+    margin: 0;
+}
+.states-api-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.states-api-topic {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--color-ink-muted);
+    font-size: 11px;
+}
+.states-api-value {
+    flex: 0 0 auto;
+    max-width: 30%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--color-ink-mid);
+}
+.states-api-badge {
+    flex: 0 0 auto;
+    padding: 0 7px;
+    border-radius: 999px;
+    background: var(--color-warn-tint);
+    color: var(--color-warn-ink);
+    font-size: 11px;
+    font-weight: 600;
+}
+.states-api-node.is-excluded > .states-api-row .states-api-name,
+.states-api-node.is-excluded > .states-api-row .states-api-topic,
+.states-api-node.is-excluded > .states-api-row .states-api-value {
+    color: var(--color-ink-muted);
+    text-decoration: line-through;
+}
+.states-api-more {
+    margin: 8px 12px;
+}
+@media (max-width: 640px) {
+    .states-api-topic,
+    .states-api-value { display: none; }
+    .states-api-facts { grid-template-columns: minmax(0, 1fr); }
+}

@@ -397,6 +397,23 @@ function openDatabase() {
       )`
     );
     db.run("INSERT OR IGNORE INTO system_database (id) VALUES (1)");
+    // States API (siehe src/states-api/ und STATES-API.md): lokale, versionierte
+    // Zugriffsschicht auf den State-Baum. Standardmäßig ausgeschaltet. Das
+    // Passwort liegt nur als scrypt-Hash vor; credential_version wird bei jeder
+    // Passwortänderung erhöht und macht ausgegebene Tokens ungültig. Gespeichert
+    // werden ausschließlich Ausschlüsse (alles Übrige ist freigegeben).
+    db.run(
+      `CREATE TABLE IF NOT EXISTS states_api_config (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        enabled INTEGER NOT NULL DEFAULT 0,
+        password_hash TEXT NOT NULL DEFAULT '',
+        credential_version INTEGER NOT NULL DEFAULT 0,
+        excluded_folders TEXT NOT NULL DEFAULT '[]',
+        excluded_states TEXT NOT NULL DEFAULT '[]',
+        updated_at INTEGER NOT NULL DEFAULT 0
+      )`
+    );
+    db.run("INSERT OR IGNORE INTO states_api_config (id) VALUES (1)");
     db.run(
       `CREATE TABLE IF NOT EXISTS operating_state (
         id INTEGER PRIMARY KEY CHECK (id = 1),

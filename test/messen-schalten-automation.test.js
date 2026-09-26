@@ -214,6 +214,32 @@ test('commandManual ignoriert „Immer an"-Geräte (Toggle ist dort ausgeblendet
   await new Promise((resolve) => db.close(resolve));
 });
 
+test('Das Schreibziel geraet.<id>.schalten schaltet über commandManual', async () => {
+  const db = await freshDb();
+  await dbRun(db, "INSERT INTO mess_schalt_actors (id, name, switch_topic, priority, always_on) VALUES (23, 'Lampe', 'lampe.0.state', 4, 0)");
+  await withPublishCapture(async (published) => {
+    levelHandler.applyLevel(5);
+    automation.handleSwitchWrite(db, 'geraet.23.schalten', 'true');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.deepEqual(published.at(-1), ['lampe.0.state', '1']);
+    automation.handleSwitchWrite(db, 'geraet.23.schalten', false);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.deepEqual(published.at(-1), ['lampe.0.state', '0']);
+    // Unbekannte Werte und fremde ids bleiben folgenlos.
+    const count = published.length;
+    automation.handleSwitchWrite(db, 'geraet.23.schalten', 'vielleicht');
+    automation.handleSwitchWrite(db, 'geraet.23.status', 'true');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(published.length, count);
+    // Einschalten bleibt an die Freigabe durch das Betriebslevel gebunden.
+    levelHandler.applyLevel(1);
+    automation.handleSwitchWrite(db, 'geraet.23.schalten', 'on');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.deepEqual(published.filter((entry) => entry[0] === 'lampe.0.state').at(-1), ['lampe.0.state', '0']);
+  });
+  await new Promise((resolve) => db.close(resolve));
+});
+
 test('Gruppenpriorität wird für die „Immer an"-Freigabe verwendet', async () => {
   const db = await freshDb();
   await dbRun(db, "INSERT INTO mess_schalt_groups (id, title, priority) VALUES (3, 'Wichtig', 2)");

@@ -17,15 +17,24 @@ const heimkinoRuntime = require('../heimkino/runtime');
 const heizungRuntime = require('../heizung/runtime');
 const systemDatabase = require('../database');
 const { normalizeDatabaseInput } = require('../database/config');
+const statesApiConfig = require('../states-api/config');
+const statesApiTokens = require('../states-api/tokens');
 
 // Query-Parameter (?tab=) auf einen gültigen Tab abbilden. Der alte
 // /remote-access-Link leitet mit ?tab=remote-access hierher.
 function tabFromQuery(value) {
-  const map = { allgemein: 'allgemein', benutzer: 'benutzer', module: 'module', fernzugriff: 'fernzugriff', 'remote-access': 'fernzugriff' };
+  const map = { allgemein: 'allgemein', benutzer: 'benutzer', module: 'module', 'states-api': 'states-api', fernzugriff: 'fernzugriff', 'remote-access': 'fernzugriff' };
   return map[String(value || '')] || 'allgemein';
 }
 
-// Einstellungs-Routen: Tab-Seite (Allgemein/Benutzer/Module/Fernzugriff),
+// Basis-URL der States API, wie der Browser homeESS gerade erreicht (nur zur
+// Anzeige; die Adresse hängt vom Netz des Clients ab).
+function statesApiBaseUrl(req) {
+  const host = String(req.get('host') || '').slice(0, 255);
+  return host ? `${req.protocol}://${host}/api/v1` : '/api/v1';
+}
+
+// Einstellungs-Routen: Tab-Seite (Allgemein/Benutzer/Module/States API/Fernzugriff),
 // Benutzerverwaltung, Modul-Umschaltung, MQTT speichern/testen.
 function settingsRoutes(db) {
   const router = express.Router();
@@ -34,6 +43,7 @@ function settingsRoutes(db) {
   // Zusätzliche Zustände (Dialog offen, Fehler, Erfolgsmeldung, aktiver Tab)
   // werden durchgereicht.
   async function sendSettings(res, extra = {}) {
+    const req = res.req;
     const [cfg, users, updateConfig, databaseConfig] = await Promise.all([
       new Promise((resolve) => loadMqttConfig(db, resolve)),
       listUsers(db),
@@ -55,6 +65,12 @@ function settingsRoutes(db) {
       database: databaseConfig,
       databaseStatus: systemDatabase.getStatus(),
       ...extra,
+      statesApi: {
+        config: statesApiConfig.get(),
+        baseUrl: statesApiBaseUrl(req),
+        canManage: !!(req.access && req.access.isAdmin),
+        ...(extra.statesApi || {}),
+      },
     }));
   }
 
@@ -263,6 +279,62 @@ function settingsRoutes(db) {
     const candidate = normalizeDatabaseInput({ ...req.body, enabled: true });
     const result = await systemDatabase.testConnection(db, candidate);
     res.json(result);
+  });
+
+  // --- States API ----------------------------------------------------------
+  // Nur Administratoren: das API-Passwort gewährt Lese- und Schreibzugriff auf
+  // alle freigegebenen States.
+  const requireStatesApiAdmin = (req, res, next) => {
+    if (!req.access || !req.access.isAdmin) {
+      return res.status(403).send('Nur Administratoren dürfen die States API verwalten.');
+    }
+    return next();
+  };
+
+  router.post('/settings/states-api/enabled', requireAuth, requireStatesApiAdmin, async (req, res, next) => {
+    const wanted = req.body.enabled === '1' || req.body.enabled === 'on';
+    const before = statesApiConfig.get().enabled;
+    try {
+      const saved = await statesApiConfig.saveEnabled(db, wanted);
+      if (before !== saved.enabled) {
+        // Ausgeschaltet verlieren ausgegebene Tokens ihre Gültigkeit.
+        if (!saved.enabled) statesApiTokens.revokeAll();
+        console.log(`[states-api] States API ${saved.enabled ? 'aktiviert' : 'deaktiviert'}.`);
+      }
+      return sendSettings(res, {
+        activeTab: 'states-api',
+        statesApi: { message: saved.enabled ? 'Die States API ist aktiviert.' : 'Die States API ist deaktiviert.' },
+      });
+    } catch (error) {
+      if (error.validation) {
+        return sendSettings(res, { activeTab: 'states-api', statesApi: { error: error.message } }).catch(next);
+      }
+      console.error('[states-api] Schalter nicht speicherbar:', error && error.message);
+      return sendSettings(res, { activeTab: 'states-api', statesApi: { error: 'Die Einstellung konnte nicht gespeichert werden.' } }).catch(next);
+    }
+  });
+
+  router.post('/settings/states-api/password', requireAuth, requireStatesApiAdmin, async (req, res, next) => {
+    const hadPassword = statesApiConfig.get().hasPassword;
+    try {
+      await statesApiConfig.savePassword(db, req.body.password, req.body.passwordRepeat);
+      // Tokens des alten Passworts sofort verwerfen (zusätzlich zur
+      // Credential-Version, die sie ohnehin ungültig macht).
+      statesApiTokens.revokeAll();
+      console.log(hadPassword
+        ? '[states-api] API-Passwort geändert; bestehende Zugriffstokens verworfen.'
+        : '[states-api] API-Passwort festgelegt.');
+      return sendSettings(res, {
+        activeTab: 'states-api',
+        statesApi: { passwordMessage: hadPassword ? 'Das API-Passwort wurde geändert. Bestehende Zugriffstokens sind ungültig.' : 'Das API-Passwort wurde festgelegt.' },
+      });
+    } catch (error) {
+      if (error.validation) {
+        return sendSettings(res, { activeTab: 'states-api', statesApi: { passwordError: error.message } }).catch(next);
+      }
+      console.error('[states-api] Passwort nicht speicherbar:', error && error.message);
+      return sendSettings(res, { activeTab: 'states-api', statesApi: { passwordError: 'Das Passwort konnte nicht gespeichert werden.' } }).catch(next);
+    }
   });
 
   // --- homeESS-Updates -----------------------------------------------------

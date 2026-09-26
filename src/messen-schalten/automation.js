@@ -20,6 +20,7 @@ const {
 const { listActors, effectivePriority, cacheKey } = require('./actors');
 const { listGroups } = require('./groups');
 const { parseBool } = require('./aggregation');
+const systemRouter = require('../states/system-router');
 
 function consumerId(actor) {
   return `geraet.${actor.id}`;
@@ -303,7 +304,27 @@ function isRelevantEvent(event) {
   });
 }
 
+// Schreibziel system://homeess/geraet.<id>.schalten (States-Seite, Aktions-
+// folgen, States API): läuft über commandManual() und damit über dieselben
+// Regeln wie der Schalter auf der Seite „Messen + Schalten“ („immer an“,
+// Freigabe durch das Betriebslevel). Unbekannte Werte bleiben folgenlos.
+const WRITER_PREFIX = 'geraet.';
+const SWITCH_ON_WORDS = ['1', 'true', 'on', 'ein', 'an'];
+const SWITCH_OFF_WORDS = ['0', 'false', 'off', 'aus'];
+
+function handleSwitchWrite(db, id, value) {
+  const match = /^geraet\.(\d+)\.schalten$/.exec(String(id || ''));
+  if (!match) return;
+  const raw = value === true ? 'true' : value === false ? 'false' : String(value == null ? '' : value).trim().toLowerCase();
+  let on = null;
+  if (SWITCH_ON_WORDS.includes(raw)) on = true;
+  else if (SWITCH_OFF_WORDS.includes(raw)) on = false;
+  if (on == null) return;
+  commandManual(db, Number(match[1]), on).catch(() => {});
+}
+
 function init(db) {
+  systemRouter.registerWriter(WRITER_PREFIX, (id, value) => handleSwitchWrite(db, id, value));
   if (_timer) return;
   _timer = setInterval(() => runNow(db).catch(() => {}), 30000);
   if (!_unsubscribe) {
@@ -326,5 +347,5 @@ function getActorAutomationState(actorId) {
 }
 
 module.exports = {
-  init, runNow, tick, commandManual, consumerId, isRelevantEvent, resetForTests, getActorAutomationState,
+  init, runNow, tick, commandManual, handleSwitchWrite, consumerId, isRelevantEvent, resetForTests, getActorAutomationState,
 };

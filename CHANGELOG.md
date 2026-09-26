@@ -7,6 +7,49 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 
 Noch keine Änderungen für die nächste Versionsnummer.
 
+## [1.7.3] — 2026-09-26
+
+### Neu
+
+- **States API (v1).** Neue lokale, versionierte Schnittstelle unter `/api/v1`,
+  über die externe Clients (z. B. eine Desktop-Widgetleiste) den homeESS-State-
+  Baum durchsuchen, Werte lesen und beschreibbare States setzen können.
+  Vollständige Beschreibung für Client-Entwickler: [STATES-API.md](STATES-API.md).
+  - Neuer Reiter *Einstellungen → States API* (zwischen *Module* und
+    *Fernzugriff*): Schalter *States API aktivieren* (Standard: aus), API-
+    Passwort (nur als scrypt-Hash gespeichert, nicht wieder anzeigbar) und ein
+    ebenenweise nachgeladener *States-Katalog*, in dem einzelne States oder
+    ganze Verzeichnisse vom API-Zugriff ausgeschlossen werden. Ein
+    ausgeschlossenes Verzeichnis sperrt alles darunter; seine Einträge sind bis
+    zur erneuten Freigabe nicht einzeln konfigurierbar.
+  - Anmeldung mit dem API-Passwort an `POST /api/v1/auth`, danach
+    `Authorization: Bearer <token>`. Tokens sind 12 Stunden gültig, werden nur
+    als Hash im Speicher gehalten und verlieren bei Passwortänderung,
+    Deaktivieren, Abmelden oder Neustart ihre Gültigkeit. Fehlgeschlagene
+    Anmeldungen sind begrenzt (5 je Adresse in 15 Minuten, dann 15 Minuten
+    Sperre).
+  - Endpunkte: `GET /api/v1/folders` (Verzeichnisinhalt), `GET /api/v1/states`
+    (Katalog mit Suche und Seiten), `GET`/`PUT /api/v1/states/{topic}`.
+    Ausschlüsse werden serverseitig bei jedem Zugriff geprüft; ausgeschlossene
+    Einträge erscheinen weder in Listen noch in Suchergebnissen oder Zählern
+    und antworten wie nicht vorhandene.
+  - Die API führt keine eigenen Werte: Gelesen wird aus dem zentralen State-
+    Baum, geschrieben über denselben Weg wie auf der Seite *States*. Gespeichert
+    werden nur Schalter, Passwort-Hash und Ausschlussliste (neue Tabelle
+    `states_api_config`).
+
+### Geändert
+
+- **Geräte aus *Messen + Schalten* sind als State schaltbar.**
+  `system://homeess/geraet.<id>.schalten` ist jetzt ein beschreibbarer
+  Schalter (Anzeige *Ein*/*Aus* statt *Ja*/*Nein*) und lässt sich damit auf der
+  Seite *States*, in Aktionsfolgen und über die States API bedienen – genau wie
+  Schaltgruppen. Geschrieben wird über dieselbe Logik wie der Schalter auf der
+  Seite *Messen + Schalten*: Geräte mit *Immer an* bleiben ausgenommen, und
+  Einschalten setzt weiterhin die Freigabe durch das Betriebslevel voraus.
+  `geraet.<id>.status` bleibt eine reine Rückmeldung, zeigt aber ebenfalls
+  *Ein*/*Aus*.
+
 ## [1.7.2] — 2026-09-23
 
 ### Neu

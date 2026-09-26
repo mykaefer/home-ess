@@ -138,6 +138,23 @@ function boolEntry(id, label, value) {
   };
 }
 
+// Schaltzustand eines Geräts: Ein/Aus statt Ja/Nein. Mit `writable` wird der
+// Wert zum Schreibziel (Schreibweg: messen-schalten/automation.js) und erhält
+// dasselbe Bedienelement wie eine Schaltgruppe.
+function switchEntry(id, label, value, writable = false) {
+  const entry = {
+    id,
+    label,
+    value: value === true,
+    display: value === true ? 'Ein' : 'Aus',
+  };
+  if (writable) {
+    entry.writable = true;
+    entry.control = { type: 'switch', on: 'true', off: 'false' };
+  }
+  return entry;
+}
+
 function temperaturEntry(id, label, rawValue) {
   const n = rawValue == null ? null : parseFloat(String(rawValue).replace(',', '.'));
   const rounded = Number.isFinite(n) ? Math.round(n * 10) / 10 : null;
@@ -667,9 +684,12 @@ async function buildCalculatedInternalValues(db, cache) {
     for (const actor of messSchaltActors) {
       const v = valueByActorId.get(actor.id) || {};
       if (actor.switchTopic) {
-        entries.push(boolEntry(`geraet.${actor.id}.schalten`, `${actor.name} – Schalten`, v.switchOn === true));
+        // Schaltbar wie auf der Seite „Messen + Schalten“ – außer bei Geräten
+        // mit „immer an“, die dort ebenfalls nicht geschaltet werden können.
+        entries.push(switchEntry(`geraet.${actor.id}.schalten`, `${actor.name} – Schalten`, v.switchOn === true, actor.alwaysOn !== true));
       }
-      entries.push(boolEntry(`geraet.${actor.id}.status`, `${actor.name} – Status`, v.statusOn === true));
+      // Rückmeldung des Geräts: nur lesbar.
+      entries.push(switchEntry(`geraet.${actor.id}.status`, `${actor.name} – Status`, v.statusOn === true));
       if (actor.powerTopic || actor.counterTopic) {
         entries.push(powerEntry(`geraet.${actor.id}.leistung`, `${actor.name} – Leistung`, v.powerW));
       }

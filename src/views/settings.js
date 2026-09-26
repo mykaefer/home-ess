@@ -5,6 +5,7 @@ const { escapeHtml, statusText } = require('./components');
 const { PAGES, ROLES, ROLE_LABELS, THEMES, THEME_LABELS, currentAccess } = require('../auth/access');
 const { modulesPanel } = require('./modules');
 const { remoteAccessPanel } = require('./remote-access');
+const { statesApiPanel, statesApiScript } = require('./states-api');
 const { INTERVAL_LABELS } = require('../update/settings');
 const { BRANCH_LABELS, DEFAULT_BRANCH } = require('../update/branches');
 const i18n = require('../i18n');
@@ -14,6 +15,7 @@ const SETTINGS_TABS = [
   { key: 'allgemein', label: 'Allgemeine Einstellungen' },
   { key: 'benutzer', label: 'Benutzerverwaltung' },
   { key: 'module', label: 'Module' },
+  { key: 'states-api', label: 'States API' },
   { key: 'fernzugriff', label: 'Fernzugriff' },
 ];
 const SETTINGS_TAB_KEYS = new Set(SETTINGS_TABS.map((tab) => tab.key));
@@ -142,6 +144,7 @@ function renderSettings({
   currentLanguage = { code: 'de' },
   languageMessage = '',
   languageError = '',
+  statesApi = null,
   activeTab = 'allgemein',
   themeError = '',
   themeMessage = '',
@@ -469,6 +472,10 @@ ${userPanel}
 ${modulesPanel({ registry, enabledKeys, message: moduleMessage })}
         </div>
 
+        <div ${panelAttr('states-api')}>
+${statesApiPanel(statesApi || {})}
+        </div>
+
         <div ${panelAttr('fernzugriff')}>
 ${remote.body}
         </div>
@@ -777,7 +784,8 @@ ${remote.body}
 
     // Fernzugriff-Controller (Tab „Fernzugriff"): eigenständige IIFEs, die auf den
     // DOM-Elementen der Fernzugriff-Sektion arbeiten und ihren Status pollen.
-${remote.script}`;
+${remote.script}
+${statesApiScript}`;
 
   return renderLayout({ title: 'Einstellungen', activePath: '/settings', body, script });
 }
