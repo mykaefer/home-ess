@@ -5,6 +5,10 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 
 ## [Unreleased]
 
+Noch keine Änderungen für die nächste Versionsnummer.
+
+## [1.7.4] — 2026-09-26
+
 ### Behoben
 
 - **Dynamischer Batterie-Mindest-SOC ohne Wallbox-Einfluss.** Eine eigene
