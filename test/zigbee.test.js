@@ -2589,3 +2589,209 @@ test('Die Karte liefert Hinweis und Bedienkachel verborgen aus', () => {
   assert.match(html, /id="zbMapEmpty" hidden/);
   assert.match(html, /id="zbHoverCard" hidden/);
 });
+
+// ZBMINIR2: echte Converter-/Clusterdefinition, lediglich der Funktransport ist simuliert.
+let zbminiSequence = 0;
+function fakeZbmini(modelID = 'ZBMINIR2') {
+  const { Zcl } = require('../adapter/zigbee/node_modules/zigbee-herdsman');
+  const calls = [];
+  const device = {
+    ieeeAddr: `0x00124b${(++zbminiSequence).toString(16).padStart(10, '0')}`,
+    modelID, manufacturerName: 'SONOFF', type: 'Router', interviewCompleted: true,
+    customClusters: {}, relay: 0,
+    addCustomCluster(name, cluster) { this.customClusters[name] = cluster; },
+    getEndpoint(id) { return this.endpoints.find((endpoint) => endpoint.ID === id); },
+    async save() {},
+  };
+  const endpoint = {
+    ID: 1, deviceIeeeAddress: device.ieeeAddr,
+    supportsInputCluster: () => true, supportsOutputCluster: () => true,
+    getDevice: () => device,
+    getClusterAttributeValue: () => undefined,
+    saveClusterAttributeKeyValue() {},
+    async bind(cluster) { calls.push({ method: 'bind', cluster }); },
+    async configureReporting(cluster, items) { calls.push({ method: 'reporting', cluster, items }); },
+    async read(clusterName, attributes, options = {}) {
+      const cluster = Zcl.Utils.getCluster(clusterName, options.manufacturerCode, device.customClusters);
+      calls.push({ method: 'read', cluster: cluster.ID, attributes: attributes.map((key) => Zcl.Utils.getClusterAttribute(cluster, key, options.manufacturerCode).ID), options });
+      if (cluster.ID === 6) {
+        if (device.readError) throw new Error('Relaisabfrage fehlgeschlagen');
+        return { onOff: device.relay };
+      }
+      return {};
+    },
+    async write(clusterName, attributes, options = {}) {
+      const cluster = Zcl.Utils.getCluster(clusterName, options.manufacturerCode, device.customClusters);
+      for (const [key, value] of Object.entries(attributes)) {
+        const attribute = Zcl.Utils.getClusterAttribute(cluster, key, options.manufacturerCode);
+        calls.push({ method: 'write', cluster: cluster.ID, attribute: attribute.ID, type: attribute.type, value, options });
+      }
+    },
+    async command(cluster, command) {
+      calls.push({ method: 'command', cluster, command });
+      // Der Test kann bewusst vom erwarteten Schaltzustand abweichen lassen.
+    },
+  };
+  device.endpoints = [endpoint];
+  return { device, endpoint, calls };
+}
+
+function zbminiMessage(device, type, data = {}, cluster = 'genOnOff') {
+  return {
+    device, endpoint: device.getEndpoint(1), cluster, type, data,
+    meta: { zclTransactionSequenceNumber: ++zbminiSequence, manufacturerCode: 0x1286 },
+  };
+}
+
+test('ZBMINIR2 und MINI-ZBD registrieren den echten eWeLink-Cluster vor Read/Write', async () => {
+  for (const modelID of ['ZBMINIR2', 'MINI-ZBD']) {
+    const { device, calls } = fakeZbmini(modelID);
+    const definition = await converters.resolveDefinition(device);
+    assert.equal(definition.generated, undefined);
+    const feature = exposesLib.flattenExposes(exposesLib.exposeList(definition, device, {}))
+      .find((item) => item.property === 'external_trigger_mode');
+    for (const [value, wire] of [['edge', 0], ['pulse', 1], ['following(off)', 2], ['following(on)', 130]]) {
+      await converters.convertSend({ definition, device, feature, value });
+      const write = calls.at(-1);
+      assert.equal(write.cluster, 0xfc11);
+      assert.equal(write.attribute, 0x0016);
+      assert.equal(write.type, 0x20); // UINT8, kein geratenes Enum/Hersteller-Flag
+      assert.equal(write.value, wire);
+      assert.equal(write.options.manufacturerCode, undefined);
+    }
+    await converters.convertGet({ definition, device, feature });
+    assert.equal(calls.at(-1).cluster, 0xfc11);
+    assert.deepEqual(calls.at(-1).attributes, [0x0016]);
+    const report = await converters.convertReceived({ definition, device,
+      message: zbminiMessage(device, 'attributeReport', { 22: 1 }, 0xfc11) });
+    assert.equal(report.external_trigger_mode, 'pulse');
+    // Weitere Geräteeinstellungen benutzen dieselbe registrierte Definition.
+    for (const property of ['network_indicator', 'turbo_mode', 'detach_relay_mode']) {
+      const setting = exposesLib.flattenExposes(exposesLib.exposeList(definition, device, {}))
+        .find((item) => item.property === property);
+      await converters.convertSend({ definition, device, feature: setting, value: true });
+      assert.equal(calls.at(-1).cluster, 0xfc11);
+    }
+  }
+});
+
+test('ZBMINIR2 verarbeitet numerische und benannte Reports sowie wiederholte Schaltaktionen', async () => {
+  const { device } = fakeZbmini();
+  const definition = await converters.resolveDefinition(device);
+  for (const [cluster, data, expected] of [['genOnOff', { onOff: 1 }, 'ON'], [6, { 0: 0 }, 'OFF']]) {
+    for (const type of ['attributeReport', 'readResponse']) {
+      const payload = await converters.convertReceived({ definition, device, message: zbminiMessage(device, type, data, cluster) });
+      assert.equal(payload.state, expected);
+      assert.equal(payload.action, undefined, 'ein Zustandsreport ist kein erfundener Tastendruck');
+    }
+  }
+  for (const action of ['toggle', 'toggle', 'on', 'off']) {
+    const message = zbminiMessage(device, `command${action[0].toUpperCase()}${action.slice(1)}`);
+    const payload = await converters.convertReceived({ definition, device, message, state: { state: 'OFF' } });
+    assert.equal(payload.action, action);
+    assert.equal(payload.state, undefined, 'Commands dürfen den Relaiszustand nicht erraten');
+  }
+});
+
+test('ZBMINIR2-Ergänzung verändert weder andere Aktoren noch die geteilte Bibliotheksdefinition', async () => {
+  const zbmini = require('../adapter/zigbee/lib/zbminir2');
+  const definition = { vendor: 'SONOFF', model: 'ZBMINI', fromZigbee: [], exposes: [] };
+  const other = { modelID: 'ZBMINI', addCustomCluster() { throw new Error('darf nicht aufgerufen werden'); } };
+  assert.equal(await zbmini.prepareDefinition(other, definition), definition);
+  const { device } = fakeZbmini();
+  const original = await converters.zhc.findByDevice(device, false);
+  const before = original.exposes.find((feature) => feature.property === 'action').values.slice();
+  const prepared = await zbmini.prepareDefinition(device, original);
+  assert.deepEqual(original.exposes.find((feature) => feature.property === 'action').values, before);
+  assert.deepEqual(prepared.exposes.find((feature) => feature.property === 'action').values, ['toggle', 'on', 'off']);
+});
+
+test('ZBMINIR2-Laufzeit bindet, meldet Aktionen und liest den tatsächlichen Relaiszustand zurück', async () => {
+  const { EventEmitter } = require('events');
+  const directory = tempDir();
+  const host = fakeHost(directory);
+  const { device, calls } = fakeZbmini();
+  let controller;
+  class Controller extends EventEmitter {
+    constructor() { super(); controller = this; }
+    async start() { return 'resumed'; }
+    async stop() {}
+    async getNetworkParameters() { return { panID: 0x1a62, extendedPanID: '0x00124b002c3a7f69', channel: 11, nwkUpdateID: 0 }; }
+    * getDevicesIterator() {
+      yield { type: 'Coordinator', getEndpoint: () => ({ ID: 1 }) };
+      yield device;
+    }
+    getPermitJoin() { return false; }
+  }
+  const adapter = createAdapter(host, {
+    herdsman: { Controller, setLogger: () => {} }, converters: { setLogger: () => {} },
+    getDriver: fakeDriver(REACHABLE_PROBE),
+  });
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 30));
+  try {
+    await adapter.start({ coordinatorType: 'zstack', transportType: 'tcp', tcpHost: '192.0.2.1', tcpPort: 6638, networkMode: 'adopt' });
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    assert.ok(calls.some((call) => call.method === 'bind' && call.cluster === 'genOnOff'));
+    assert.ok(calls.some((call) => call.method === 'bind' && call.cluster === 'customClusterEwelink'));
+    assert.ok(calls.some((call) => call.method === 'reporting' && call.cluster === 'genOnOff'));
+    const address = `${device.ieeeAddr.slice(2)}/state`;
+    const states = () => host.events.values.filter((value) => value.address === address);
+    assert.equal(states().at(-1).value, false);
+    device.relay = 1;
+    controller.emit('message', zbminiMessage(device, 'commandToggle'));
+    await settle();
+    assert.equal(states().at(-1).value, true);
+    const count = host.events.values.length;
+    // Zweites Toggle, aber Relais unverändert (z.B. abgekoppelter Eingang).
+    controller.emit('message', zbminiMessage(device, 'commandToggle'));
+    await settle();
+    assert.equal(states().at(-1).value, true);
+    assert.ok(host.events.values.slice(count).some((value) => value.address.endsWith('/action') && value.value === 'toggle'));
+    device.readError = true;
+    const stateCount = states().length;
+    controller.emit('message', zbminiMessage(device, 'commandToggle'));
+    await settle();
+    assert.equal(states().length, stateCount, 'fehlgeschlagener Read verändert den letzten bestätigten State nicht');
+    device.readError = false;
+    device.relay = 0;
+    await adapter._internals().runtime().write(address, true);
+    assert.equal(states().at(-1).value, false, 'Readback hat Vorrang vor dem Schreibwunsch');
+    const readsBeforeReport = calls.filter((call) => call.method === 'read').length;
+    controller.emit('message', zbminiMessage(device, 'attributeReport', { onOff: 1 }));
+    await settle();
+    assert.equal(states().at(-1).value, true);
+    assert.equal(calls.filter((call) => call.method === 'read').length, readsBeforeReport,
+      'ein bestätigter Report löst keine Read-Schleife aus');
+
+    const endpoint = device.getEndpoint(1);
+    const originalRead = endpoint.read;
+    let releaseRead;
+    let pendingReads = 0;
+    endpoint.read = async (...args) => {
+      pendingReads += 1;
+      if (pendingReads === 1) return new Promise((resolve) => { releaseRead = resolve; });
+      return originalRead(...args);
+    };
+    controller.emit('message', zbminiMessage(device, 'commandToggle'));
+    await settle();
+    controller.emit('message', zbminiMessage(device, 'commandToggle'));
+    await settle();
+    assert.equal(pendingReads, 1, 'gleichzeitige Aktionen öffnen keine parallelen Reads');
+    device.relay = 1;
+    releaseRead({ onOff: 0 });
+    await settle();
+    assert.equal(pendingReads, 2, 'nach späteren Aktionen wird abschließend erneut gelesen');
+    assert.equal(states().at(-1).value, true);
+    endpoint.read = originalRead;
+
+    const bindsBeforeAnnounce = calls.filter((call) => call.method === 'bind').length;
+    controller.emit('deviceAnnounce', { device });
+    await settle();
+    assert.ok(calls.filter((call) => call.method === 'bind').length > bindsBeforeAnnounce);
+    assert.ok(host.events.logs.some(([level, text]) => level === 'debug'
+      && text.includes('commandToggle') && text.includes('0x0006') && text.includes('manufacturerCode')));
+  } finally {
+    await adapter.stop();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});

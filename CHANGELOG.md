@@ -7,6 +7,18 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 
 Noch keine Änderungen für die nächste Versionsnummer.
 
+## [1.7.5] — 2026-09-26
+
+### Behoben
+
+- **SONOFF ZBMINIR2 im Zigbee-Adapter (1.3.5).** Hersteller-Cluster wird vor
+  Gerätezugriffen registriert; Binding und Reporting werden beim Start, nach
+  dem Interview und bei erneuter Geräteanmeldung eingerichtet. Einstellungen
+  wie `external_trigger_mode` nutzen dadurch die vorhandene Clusterdefinition
+  für `0xFC11` / `0x0016`. Lokale Schaltaktionen und HomeESS-Schaltbefehle
+  fragen den tatsächlichen Relaiszustand ab, statt ihn aus `toggle` abzuleiten.
+  Debug-Logs dokumentieren ZCL-Cluster, Command, Attribute und Manufacturer-Code.
+
 ## [1.7.4] — 2026-09-26
 
 ### Behoben
