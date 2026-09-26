@@ -639,7 +639,7 @@ function buildWallboxPlanningSlots({
   return slots;
 }
 
-function simulateDays({ forecast, model, config, batteryConfig, batteryData }) {
+function simulateDays({ forecast, model, config, batteryConfig, batteryData, includeWallbox = true }) {
   const minSoc = clamp(num(batteryData.minSoc) ?? num(batteryConfig.minSoc) ?? 20, 0, 100);
   const soc = clamp(num(batteryData.soc) ?? minSoc, 0, 100);
   const capacity = batteryCapacityKwh(batteryConfig);
@@ -701,7 +701,11 @@ function simulateDays({ forecast, model, config, batteryConfig, batteryData }) {
     const dayTarget = model.dailyTargetsByWeekday && model.dailyTargetsByWeekday[weekday] != null
       ? model.dailyTargetsByWeekday[weekday]
       : model.dailyTarget;
-    const wallboxForecast = wallboxForecastForDay(model.wallboxModel, pvDay.dateKey, dayIndex);
+    // Die Mindest-SoC-Berechnung betrachtet ausschließlich den Hausakku.
+    // Auch Pflichtladungen des Autos gehören nicht in diese Verbrauchskurve.
+    // Mit eigener Simulation bleiben ebenso SoC-abhängige Poollasten frei von
+    // Rückwirkungen einer zuvor eingeplanten Fahrzeugladung.
+    const wallboxForecast = wallboxForecastForDay(includeWallbox ? model.wallboxModel : null, pvDay.dateKey, dayIndex);
     const pvHourly = Array.from({ length: 24 }, (_, hour) => {
       if (dayIndex === 0 && hour < currentHour) return 0;
       const raw = forecastPvForHour(forecast, pvDay.dateKey, hour);
@@ -872,8 +876,11 @@ async function computePrognosis(db, cache, { allowFetch = false } = {}) {
     dischargeEfficiency: config.dischargeEfficiency / 100,
   });
   const simulation = simulateDays({ forecast, model, config, batteryConfig, batteryData });
+  const dynamicMinSocSimulation = batteryConfig.dynamicMinSoc
+    ? simulateDays({ forecast, model, config, batteryConfig, batteryData, includeWallbox: false })
+    : null;
   return {
-    config, forecast, model, battery: batteryData, simulation,
+    config, forecast, model, battery: batteryData, simulation, dynamicMinSocSimulation,
     operating: operatingState.getState(),
     externalAutarkDays: cache.get(operatingState.AUTARK_DAYS_STATE_ID)?.value ?? null,
     externalAutarkDaysPreviousYear:

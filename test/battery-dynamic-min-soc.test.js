@@ -146,7 +146,7 @@ test('am selben Tag wird nicht nachkorrigiert', async () => {
   pv[12] = 4;
   const prognosis = {
     battery: { soc: '90', power: '-500' },
-    simulation: {
+    dynamicMinSocSimulation: {
       available: true, capacityKwh: 10,
       days: [day({ pv, load: FLAT_LOAD, from: 18, pvPeakHour: 12 }), { chargePotentialKwh: 5, dateKey: '2026-09-22' }],
     },
@@ -172,7 +172,7 @@ test('ladender Akku verzögert die Anpassung trotz erfüllter Prognosebedingung'
   pv[12] = 4;
   const prognosis = {
     battery: { soc: '99', power: '800' },
-    simulation: {
+    dynamicMinSocSimulation: {
       available: true, capacityKwh: 10,
       days: [day({ pv, load: FLAT_LOAD, from: 18, pvPeakHour: 12 }), { chargePotentialKwh: 5, dateKey: '2026-09-22' }],
     },
@@ -220,4 +220,105 @@ test('simulateDays liefert Ladepotenzial, PV-Stundenprofil und PV-Höhepunkt', (
   assert.ok(Math.abs(today.chargePotentialKwh - 9.4) < 0.001, `chargePotentialKwh=${today.chargePotentialKwh}`);
   // Das Potenzial ist ungedeckelt und damit größer als der freie Platz im Akku.
   assert.ok(today.chargePotentialKwh > simulation.usableCapacity - simulation.initialStored);
+});
+
+// 20 kWh PV, 4 kWh gleichzeitiger Hausverbrauch und 97 % Ladewirkungsgrad:
+// 15,52 kWh können in den 28,672-kWh-Hausakku. Fahrzeugbedarf darf diesen
+// Wert weder bei Pflichtladung noch bei Überschussladung verändern.
+function wallboxScenario(wallboxKwhPerHour, currentHour = 18) {
+  const keys = ['2026-09-25', '2026-09-26'];
+  const forecast = {
+    todayRemainingKwh: currentHour === 18 ? 0 : 7.5,
+    days: keys.map((dateKey) => ({ dateKey, label: dateKey, totalKwh: 20 })),
+    hours: keys.flatMap((dateKey) => Array.from({ length: 8 }, (_, index) => ({
+      dateKey, hour: 10 + index, kwh: 2.5,
+    }))),
+  };
+  const hourly = Array.from({ length: 24 }, (_, hour) => hour >= 10 && hour < 18 ? wallboxKwhPerHour : 0);
+  const model = {
+    local: { date: { year: 2026, month: 9, day: 25 }, time: { hours: currentHour, minutes: 0 } },
+    profile: Array(24).fill(1 / 24), dailyTarget: 12,
+    profilesByWeekday: {}, dailyTargetsByWeekday: {},
+    remainingByHour: Array(24).fill(0.5), weekdayProfileDays: {},
+    functionModels: null, poolModel: null,
+    wallboxModel: {
+      planned: true,
+      boxes: [{
+        id: 1, name: 'Auto', profilesByWeekday: {}, samplesByWeekday: {},
+        plannedHourlyByDate: Object.fromEntries(keys.map((key) => [key, hourly])),
+      }],
+    },
+  };
+  return {
+    forecast, model, config: {},
+    batteryConfig: {
+      capacityAh: 560, batteryType: 'lifepo4', cellCount: 16,
+      chargeEfficiency: 97, dischargeEfficiency: 97, minSoc: 92,
+    },
+    batteryData: { soc: '100', minSoc: '92', power: '0' },
+  };
+}
+
+test('20 kWh PV ergeben unabhängig von der Wallbox 15,52 kWh Ladepotenzial und 46 % Mindest-SoC', async () => {
+  const db = await freshDb();
+  try {
+    for (const wallboxLoad of [0, 1.7, 6]) {
+      const inputs = wallboxScenario(wallboxLoad);
+      const simulation = simulateDays(inputs);
+      const dynamicMinSocSimulation = simulateDays({ ...inputs, includeWallbox: false });
+      const tomorrow = dynamicMinSocSimulation.days[1];
+      assert.ok(Math.abs(tomorrow.chargePotentialKwh - 15.52) < 1e-9);
+      assert.equal(tomorrow.wallboxKwh, 0);
+      assert.ok(Math.abs(simulation.days[1].wallboxKwh - wallboxLoad * 8) < 1e-9);
+      if (wallboxLoad === 1.7) {
+        // Bisherige Vermischung reproduziert genau den zu hohen Zielwert.
+        assert.equal(dynamicMinSoc.computeTargetMinSoc({
+          chargePotentialKwh: simulation.days[1].chargePotentialKwh,
+          capacityKwh: simulation.capacityKwh, currentSoc: 100,
+        }).minSoc, 92);
+      }
+      const result = await dynamicMinSoc.evaluate(db, {
+        prognosis: { battery: inputs.batteryData, simulation, dynamicMinSocSimulation },
+        config: { dynamicMinSoc: true },
+        local: { dateKey: '2026-09-25', hours: 18, minutes: 0 },
+      });
+      assert.equal(result.minSoc, 46);
+    }
+  } finally {
+    await new Promise((resolve) => db.close(resolve));
+  }
+});
+
+test('Autoladung kann den Auslösezeitpunkt nicht vor das Ende der PV-Ladeaussicht ziehen', async () => {
+  const db = await freshDb();
+  try {
+    const inputs = wallboxScenario(6, 15);
+    const simulation = simulateDays(inputs);
+    const dynamicMinSocSimulation = simulateDays({ ...inputs, includeWallbox: false });
+    assert.equal(dynamicMinSoc.evaluatePeakPassed(simulation.days[0], 15).passed, true);
+    const result = await dynamicMinSoc.evaluate(db, {
+      prognosis: { battery: inputs.batteryData, simulation, dynamicMinSocSimulation },
+      config: { dynamicMinSoc: true },
+      local: { dateKey: '2026-09-25', hours: 15, minutes: 0 },
+    });
+    assert.equal(result.skipped, true);
+    assert.equal(result.reason, 'ueberschuss-erwartet');
+  } finally {
+    await new Promise((resolve) => db.close(resolve));
+  }
+});
+
+test('ohne separate Hausakku-Prognose wird keine Wallbox-belastete Ersatzberechnung verwendet', async () => {
+  const db = await freshDb();
+  try {
+    const inputs = wallboxScenario(6);
+    const result = await dynamicMinSoc.evaluate(db, {
+      prognosis: { battery: inputs.batteryData, simulation: simulateDays(inputs) },
+      config: { dynamicMinSoc: true },
+      local: { dateKey: '2026-09-25', hours: 18, minutes: 0 },
+    });
+    assert.equal(result.reason, 'prognose-fehlt');
+  } finally {
+    await new Promise((resolve) => db.close(resolve));
+  }
 });

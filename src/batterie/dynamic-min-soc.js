@@ -6,6 +6,9 @@
 // Einmal je Kalendertag wird der Mindest-Ladezustand so gesetzt, dass der Akku
 // am Folgetag laut Prognose planmäßig wieder 100 % erreicht. Je weniger morgen
 // nachgeladen werden kann, desto höher muss die Reserve heute Nacht bleiben.
+// Dafür zählt die PV-Kurve gegen den Hausverbrauch einschließlich Funktionen
+// und Pool, aber vollständig OHNE Wallbox. Fahrzeugladungen werden separat
+// geplant und dürfen weder Ladepotenzial noch Auslösezeitpunkt bestimmen.
 //
 // Auslösezeitpunkt ist der prognostizierte **Tageshöchststand des Akkus**, also
 // der Übergang in die dauerhafte Entladung. Dieser ist erreicht, wenn
@@ -137,7 +140,7 @@ async function evaluate(db, { prognosis, config, local }) {
     return { skipped: true, alreadyDone: true, dayKey, reason: 'bereits-entschieden' };
   }
 
-  const simulation = prognosis && prognosis.simulation;
+  const simulation = prognosis && prognosis.dynamicMinSocSimulation;
   const days = simulation && Array.isArray(simulation.days) ? simulation.days : [];
   if (!simulation || !simulation.available || days.length < 2) {
     return { skipped: true, dayKey, reason: 'prognose-fehlt' };

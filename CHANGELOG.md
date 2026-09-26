@@ -5,7 +5,14 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 
 ## [Unreleased]
 
-Noch keine Änderungen für die nächste Versionsnummer.
+### Behoben
+
+- **Dynamischer Batterie-Mindest-SOC ohne Wallbox-Einfluss.** Eine eigene
+  Hausakku-Simulation vergleicht die PV-Prognose mit dem Hausverbrauch
+  einschließlich Pool und Funktionen, vollständig ohne Fahrzeugladung.
+  Wallbox-Lasten können weder das morgige Ladepotenzial reduzieren noch den
+  täglichen Auslösezeitpunkt vorziehen. Die Berechnung plant eine Vollladung
+  anhand des prognostizierten Überschusses und des Ladewirkungsgrads.
 
 ## [1.7.3] — 2026-09-26
 
