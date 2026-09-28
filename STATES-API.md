@@ -174,6 +174,10 @@ Token als Query-Parameter oder Cookie werden nicht akzeptiert.
 Empfohlenes Client-Verhalten: Bei `401` mit `token_expired` oder
 `token_invalid` einmal neu anmelden und den Request wiederholen.
 
+Dasselbe Token berechtigt auch zum **Audio Bus** (WebSocket
+`/api/v1/audio/ws`, Token im `Authorization`-Header des Upgrade-Requests).
+Protokoll und Grenzen: [AUDIO-BUS.md](AUDIO-BUS.md).
+
 ### Abmelden
 
 ```http
@@ -873,3 +877,20 @@ Programme, Skripte und Server-Anwendungen sind davon nicht betroffen.
   API-Version, z. B. `/api/v2/…`.
 - `GET /api/v1` liefert die Version (`"version": "v1"`), damit ein Client prüfen
   kann, ob homeESS die erwartete Schnittstelle anbietet.
+
+### Raum- und Funktionszuordnung von Mess-/Schaltgeräten
+
+Geräte-States enthalten zusätzlich `metadata` mit `deviceId`, `deviceName`,
+`roomId`, `roomName`, `functionKey` und `functionLabel`. Fehlende Raum- oder
+Funktionszuordnungen sind `null`. Die effektive Funktion verwendet die eigene
+Gerätezuordnung, andernfalls die Funktion der Gerätegruppe (z. B. `licht` oder
+`warmwasser`). Zugeordnete Geräte erscheinen unter `System / Räume / <Raum>`;
+ihre `system://homeess/geraet.<id>.*`-Topics bleiben dabei unverändert.
+Für „Licht in der Küche ausschalten“ müssen Clients Raum, `functionKey: "licht"`
+und einen beschreibbaren booleanischen Schalt-State auswählen. Der Raum allein
+ist keine Funktionsauswahl; unbekannte Funktionen sind nicht als Licht zu werten.
+
+Räume ohne eingerichtete Soll-Temperatur dienen ausschließlich der
+Gerätezuordnung. Sie besitzen keine `raeume.*`- oder `klima.*`-Regelungs-States;
+die States ihrer zugeordneten Mess-/Schaltgeräte samt Metadaten bleiben vorhanden.
+Erst ein gesetzter Sollwert aktiviert die Temperaturregelung und ihre States.

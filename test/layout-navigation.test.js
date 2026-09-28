@@ -114,3 +114,24 @@ test('Die Übersichtstabelle der Energieseite bricht mobil um statt zu scrollen'
   assert.ok(scrollWidth >= 0 && scrollWidth < reset, 'Die Rücknahme muss hinter der Regel des 720px-Layers stehen');
   assert.match(css.slice(reset), /\.energie-overview--flat \.energy-overview-row \{[^}]*grid-template-columns:\s*repeat\(2,/s);
 });
+
+test('Sprachausgabe steht aktiviert genau einmal unter Nachrichten im Desktop- und Mobilmenü', async () => {
+  const sqlite3 = require('sqlite3');
+  const modules = require('../src/modules');
+  const db = new sqlite3.Database(':memory:');
+  await new Promise((resolve, reject) => db.run('CREATE TABLE modules (key TEXT PRIMARY KEY, enabled INTEGER)', (e) => e ? reject(e) : resolve()));
+  try {
+    await modules.setEnabled(db, 'speech', true);
+    const html = renderLayout({ title: 'Sprachausgabe', activePath: '/speech', body: '' });
+    const desktop = html.slice(html.indexOf('<div class="sidebar-nav">'), html.indexOf('<div class="sidebar-footer">'));
+    assert.equal((desktop.match(/href="\/speech"/g) || []).length, 1);
+    assert.match(desktop, /<div class="nav-group expanded">\s*<a href="\/notifications" class="active">Nachrichten<\/a>\s*<div class="nav-subnav">\s*<a href="\/speech" class="active">Sprachausgabe<\/a>/);
+    assert.match(html, /class="mobile-nav-link mobile-nav-link--sub active" href="\/speech"/);
+    await modules.setEnabled(db, 'speech', false);
+    const disabled = renderLayout({ title: 'Nachrichten', activePath: '/notifications', body: '' });
+    assert.doesNotMatch(disabled, /href="\/speech"/);
+  } finally {
+    await modules.setEnabled(db, 'speech', false);
+    await new Promise((resolve) => db.close(resolve));
+  }
+});

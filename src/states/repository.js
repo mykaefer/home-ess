@@ -60,6 +60,7 @@ function systemCategories(values) {
       sourceType: 'system',
       // Module melden zu beschreibbaren Werten mit, wie sie bedient werden.
       control: entry.control,
+      metadata: entry.metadata,
       value: entry.value,
       display: entry.display,
     });

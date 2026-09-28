@@ -254,6 +254,7 @@ function serializeState(entry) {
     writable: state.writable === true,
     source: entry.sourceType,
   };
+  if (state.metadata) result.metadata = { ...state.metadata };
   if (state.unit) result.unit = String(state.unit);
   const properties = stateProperties.get(entry.topic);
   if (properties && Number.isInteger(properties.decimals)) result.decimals = properties.decimals;

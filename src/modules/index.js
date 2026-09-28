@@ -5,6 +5,7 @@
 // aktualisiert, damit renderLayout() ohne DB-Abfrage auf den Status zugreifen kann.
 
 const REGISTRY = [
+  { key: 'speech', label: 'Sprachausgabe', path: '/speech', description: 'Lokale CPU-Sprachausgabe von Nachrichten an Audio-Endpunkte und Räume.' },
   {
     key: 'pool',
     label: 'Poolsteuerung',

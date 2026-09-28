@@ -73,11 +73,11 @@ function fire(rule, now) {
   // Ab hier läuft alles neben der State-Verarbeitung: der Nachrichtendienst
   // liefert ein strukturiertes Ergebnis und wirft beim Versand nicht; das
   // .catch() sichert den Rest (etwa eine ungültig gewordene Regel) ab.
-  service.push({ title: rule.title, body: rule.body, type: rule.eventType, severity: rule.severity })
+  service.push({ title: rule.title, body: rule.body, type: rule.eventType, severity: rule.severity, delivery: rule.delivery, audioTarget: rule.audioTarget })
     .then((result) => {
-      if (result.accepted) return;
+      if (result.accepted && !result.partial) return;
       log('notification_push_failed', {
-        ruleId: rule.id, eventType: rule.eventType, severity: rule.severity, reason: result.reason,
+        ruleId: rule.id, eventType: rule.eventType, severity: rule.severity, reason: result.partial ? 'partial_delivery' : result.reason,
       });
     })
     .catch((error) => {

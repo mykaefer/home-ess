@@ -92,6 +92,7 @@ function renderActorRow(actor) {
                 <span class="widget-drag" title="Zum Verschieben ziehen" aria-hidden="true">⠿</span>
                 <span class="${statusDotClass(actor.statusOn)}${staleClass(actor.statusStale)}${actor.offline ? ' is-offline' : ''}" id="ms-status-${actor.id}" title="${actor.offline ? escapeHtml(offlineTitle) : `${i18n.t('measure.tooltip_status', {}, 'Status ·')} ${escapeHtml(actor.statusFreshness)}`}"></span>
                 <span class="ms-row-name"><span class="ms-offline-badge" id="ms-offline-${actor.id}"${actor.offline ? ` title="${escapeHtml(offlineTitle)}"` : ' hidden'}>offline</span>${escapeHtml(actor.name)}</span>
+                <span class="ms-row-room" title="Raumzuordnung">${escapeHtml(actor.roomName || 'Kein Raum')}</span>
                 <span class="ms-prio${muted ? ' ms-prio--muted' : ''}" id="ms-prio-${actor.id}" title="Betriebsart bzw. aktive Priorität, auf die dieses Gerät beim Betriebslevel reagiert">${escapeHtml(metaLabel(actor))}</span>
                 <span class="ms-row-power${staleClass(actor.powerStale)}" id="ms-power-${actor.id}" title="${i18n.t('measure.tooltip_power', {}, 'Leistung ·')} ${escapeHtml(actor.powerFreshness)}">${escapeHtml(actor.powerDisplay)}${actor.powerStale ? ' ⚠' : ''}</span>
                 ${counter}
@@ -172,7 +173,7 @@ function renderUngrouped(ungrouped) {
           </div>`;
 }
 
-function renderActorDialog({ groupsForSelect, gridControlEnabled }) {
+function renderActorDialog({ groupsForSelect, roomsForSelect, gridControlEnabled }) {
   const disabledAttr = gridControlEnabled ? '' : ' disabled';
   const hiddenMirrors = gridControlEnabled ? '' : `
                 <input type="hidden" name="loadShedEnabled" id="msLoadShedHiddenEnabled" value="">
@@ -196,7 +197,19 @@ function renderActorDialog({ groupsForSelect, gridControlEnabled }) {
                     <option value="">Keine Gruppe</option>
                     ${groupsForSelect.map((g) => `<option value="${g.id}">${g.depth ? '  '.repeat(g.depth) + '↳ ' : ''}${escapeHtml(g.title)}</option>`).join('')}
                   </select></label>
-                <label class="field-block" for="msFunction"><span>Funktion <span class="pool-optional">(für die Prognose-Statistik)</span></span>
+                <label class="field-block" for="msRoom"><span>Raum (optional)</span>
+                  <select id="msRoom" name="roomId">
+                    <option value="">Kein Raum</option>
+                    ${roomsForSelect.map((room) => `<option value="${room.id}">${escapeHtml(room.name)}</option>`).join('')}
+                  </select></label>
+                <div class="field-block">
+                  <label for="msNewRoomName">Raum hinzufügen</label>
+                  <input id="msNewRoomName" maxlength="100" data-no-state-picker onkeydown="if (event.key === 'Enter') { event.preventDefault(); addActorRoom(); }">
+                  <button type="button" id="msAddRoom" class="secondary-button" onclick="addActorRoom()">Raum hinzufügen</button>
+                  <span class="field-hint">Nur der Name ist erforderlich. Temperaturregelung kann später eingerichtet werden.</span>
+                  <p id="msNewRoomError" class="error-text" role="alert" hidden></p>
+                </div>
+                <label class="field-block" for="msFunction"><span>Funktion <span class="pool-optional">(Gerätefunktion und Prognose-Statistik)</span></span>
                   <select id="msFunction" name="functionKey">${functionOptions('', 'Wie Gruppe (bzw. keine)')}</select></label>
               </div>
             </div>
@@ -327,6 +340,7 @@ function renderMessenSchalten({
   ungrouped = [],
   groups = [],
   groupsForSelect = [],
+  roomsForSelect = [],
   actorConfigs = [],
   formMessage = '',
   formError = '',
@@ -356,7 +370,7 @@ ${groups.map(renderGroup).join('\n')}
 ${renderUngrouped(ungrouped)}
         </div>
 
-        ${renderActorDialog({ groupsForSelect, gridControlEnabled })}
+        ${renderActorDialog({ groupsForSelect, roomsForSelect, gridControlEnabled })}
         ${renderGroupDialog()}
         ${renderDeleteActorDialog()}
         ${renderDeleteGroupDialog()}`;
@@ -374,9 +388,41 @@ ${renderUngrouped(ungrouped)}
     var draggedGroup = null, groupDropParent, groupMoving = false;
 
     // --- Dialoge ------------------------------------------------------------
+    async function addActorRoom() {
+      var button = document.getElementById('msAddRoom');
+      if (button.disabled) return;
+      var field = document.getElementById('msNewRoomName');
+      var error = document.getElementById('msNewRoomError');
+      error.hidden = true;
+      button.disabled = true;
+      var saveButton = document.querySelector('#actorForm button[type="submit"]');
+      saveButton.disabled = true;
+      try {
+        var response = await fetch('/messen-schalten/rooms', {
+          method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({ name: field.value })
+        });
+        var result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Raum konnte nicht angelegt werden.');
+        var select = document.getElementById('msRoom');
+        var option = document.createElement('option');
+        option.value = String(result.room.id);
+        option.textContent = result.room.name;
+        select.appendChild(option);
+        select.value = option.value;
+        field.value = '';
+      } catch (failure) {
+        error.textContent = failure.message || 'Raum konnte nicht angelegt werden.';
+        error.hidden = false;
+      } finally { button.disabled = false; saveButton.disabled = false; }
+    }
+
     function setActorFormValues(v) {
       v = v || {};
       document.getElementById('msName').value = v.name || '';
+      document.getElementById('msNewRoomName').value = '';
+      document.getElementById('msNewRoomError').hidden = true;
+      document.getElementById('msRoom').value = v.roomId == null ? '' : String(v.roomId);
       document.getElementById('msGroup').value = v.groupId == null ? '' : String(v.groupId);
       document.getElementById('msSwitch').value = v.switchTopic || '';
       document.getElementById('msRemote').value = v.remoteTopic || '';

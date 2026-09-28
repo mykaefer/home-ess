@@ -80,6 +80,7 @@ function normalizeRow(row = {}) {
   return {
     id: row.id,
     name: row.name || '',
+    roomId: row.room_id == null ? null : row.room_id,
     groupId: row.group_id == null ? null : row.group_id,
     position: row.position == null ? 0 : row.position,
     switchTopic: row.switch_topic || '',
@@ -107,7 +108,7 @@ function normalizeRow(row = {}) {
   };
 }
 
-const COLUMNS = `id, name, group_id, position, switch_topic, remote_topic, status_topic, power_topic,
+const COLUMNS = `id, name, room_id, group_id, position, switch_topic, remote_topic, status_topic, power_topic,
   power_unit, counter_topic, counter_unit, rated_power, rated_power_unit, priority, use_group_priority,
   always_on, function_key, load_shed_enabled, load_shed_phase, switch_group_id`;
 
@@ -127,6 +128,7 @@ async function getActor(db, id) {
 function normalizeInput(input = {}) {
   return {
     name: String(input.name || '').trim(),
+    roomId: input.roomId == null || input.roomId === '' ? null : Number(input.roomId),
     groupId: parseGroupId(input.groupId),
     switchTopic: normalizeMqttTopic(input.switchTopic || ''),
     remoteTopic: normalizeMqttTopic(input.remoteTopic || ''),
@@ -178,6 +180,16 @@ function throwIfInvalid(input) {
   }
 }
 
+async function validateRoom(db, roomId) {
+  if (roomId == null) return;
+  if (!Number.isSafeInteger(roomId) || roomId <= 0 ||
+      !(await dbGet(db, 'SELECT id FROM heizung_rooms WHERE id = ?', [roomId]))) {
+    const error = new Error('Bitte einen vorhandenen Raum auswählen.');
+    error.validation = true;
+    throw error;
+  }
+}
+
 async function nextPosition(db) {
   const row = await dbGet(db, 'SELECT COALESCE(MAX(position), -1) + 1 AS pos FROM mess_schalt_actors');
   return row ? row.pos : 0;
@@ -186,16 +198,17 @@ async function nextPosition(db) {
 async function createActor(db, rawInput) {
   const input = normalizeInput(rawInput);
   throwIfInvalid(input);
+  await validateRoom(db, input.roomId);
   const position = await nextPosition(db);
   const result = await dbRun(
     db,
     `INSERT INTO mess_schalt_actors
-      (name, group_id, position, switch_topic, remote_topic, status_topic, power_topic, power_unit,
+      (name, room_id, group_id, position, switch_topic, remote_topic, status_topic, power_topic, power_unit,
        counter_topic, counter_unit, rated_power, rated_power_unit, priority, use_group_priority,
        always_on, function_key, load_shed_enabled, load_shed_phase, desired_on)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
     [
-      input.name, input.groupId, position, input.switchTopic, input.remoteTopic, input.statusTopic,
+      input.name, input.roomId, input.groupId, position, input.switchTopic, input.remoteTopic, input.statusTopic,
       input.powerTopic, input.powerUnit, input.counterTopic, input.counterUnit,
       input.ratedPower, input.ratedPowerUnit,
       input.priority, input.useGroupPriority ? 1 : 0, input.alwaysOn ? 1 : 0,
@@ -216,17 +229,18 @@ async function createActor(db, rawInput) {
 async function updateActor(db, id, rawInput) {
   const input = normalizeInput(rawInput);
   throwIfInvalid(input);
+  await validateRoom(db, input.roomId);
   const previous = await getActor(db, id);
   await dbRun(
     db,
     `UPDATE mess_schalt_actors SET
-       name = ?, group_id = ?, switch_topic = ?, remote_topic = ?, status_topic = ?, power_topic = ?,
+       name = ?, room_id = ?, group_id = ?, switch_topic = ?, remote_topic = ?, status_topic = ?, power_topic = ?,
        power_unit = ?, counter_topic = ?, counter_unit = ?, rated_power = ?, rated_power_unit = ?,
        priority = ?, use_group_priority = ?, always_on = ?, function_key = ?, load_shed_enabled = ?,
        load_shed_phase = ?
      WHERE id = ?`,
     [
-      input.name, input.groupId, input.switchTopic, input.remoteTopic, input.statusTopic, input.powerTopic,
+      input.name, input.roomId, input.groupId, input.switchTopic, input.remoteTopic, input.statusTopic, input.powerTopic,
       input.powerUnit, input.counterTopic, input.counterUnit, input.ratedPower, input.ratedPowerUnit,
       input.priority, input.useGroupPriority ? 1 : 0, input.alwaysOn ? 1 : 0, input.functionKey,
       input.loadShedEnabled ? 1 : 0, input.loadShedPhase, id,

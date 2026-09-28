@@ -1031,14 +1031,38 @@ async function reload() {
     return;
   }
   const desired = new Map();
-  roomList = await rooms.listRooms(database);
+  roomList = (await rooms.listRooms(database)).filter(rooms.isTemperatureConfigured);
+  // Beim Entfernen der Temperaturkonfiguration laufende Folgen abbrechen und
+  // aktive Geräte noch mit der bisherigen Aus-Folge abschalten.
+  const activeRoomIds = new Set(roomList.map((room) => room.id));
+  for (const room of previousRooms) {
+    if (activeRoomIds.has(room.id)) continue;
+    const roomLoops = loops.filter((entry) => entry.roomId === room.id);
+    const busyDevices = new Set(roomLoops.filter((loop) => runner.isLoopBusy(loop.id))
+      .map((loop) => loop.phase.startsWith('heat') ? 'heat' : 'cool'));
+    for (const loop of roomLoops) runner.cancelLoop(loop.id);
+    for (const device of ['heat', 'cool']) {
+      const key = deviceKey(room.id, device);
+      // Eine schon gestartete Aus-Folge kann noch vor ihrem Schaltbefehl
+      // pausieren. Auch sie muss nach dem Abbruch vollständig zu Ende laufen.
+      const needsOff = commandedDevices.get(key) === true || runner.isBusy(key) || busyDevices.has(device);
+      await runner.run(key, []);
+      if (needsOff) {
+        commandedDevices.set(key, false);
+        await runPhase(room, actionsRepo.phaseFor(device, false));
+      }
+    }
+    if (commandedFans.get(room.fanTopic)?.on) commandFan(room, false);
+  }
   const [sensors, contacts] = await Promise.all([rooms.listAllSensors(database), rooms.listAllContacts(database)]);
   for (const sensor of sensors) {
+    if (!activeRoomIds.has(sensor.roomId)) continue;
     if (!sensorsByRoom.has(sensor.roomId)) sensorsByRoom.set(sensor.roomId, []);
     sensorsByRoom.get(sensor.roomId).push(sensor);
     desired.set(rooms.sensorCacheKey(sensor.id), sensor.topic);
   }
   for (const contact of contacts) {
+    if (!activeRoomIds.has(contact.roomId)) continue;
     if (!contactsByRoom.has(contact.roomId)) contactsByRoom.set(contact.roomId, []);
     contactsByRoom.get(contact.roomId).push(contact);
     desired.set(rooms.contactCacheKey(contact.id), contact.topic);
@@ -1122,6 +1146,7 @@ function handleRoomWrite(id, value) {
   if (!update) return;
   update
     .then(async () => {
+      if (!rooms.isTemperatureConfigured(room)) await reload();
       await tick().catch(() => {});
     })
     .catch(() => {});

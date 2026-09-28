@@ -51,6 +51,14 @@ function relayState() {
 // Rückmeldung der Testfunktion. Sie richtet sich allein nach dem Ergebnis des
 // Nachrichtendienstes; homeESS kennt die Empfänger nicht selbst.
 function testMessage(result) {
+  if (result.channels) {
+    const reasons = { speech_disabled: 'Modul deaktiviert', no_audio_endpoints: 'keine aktiven Audio-Endpunkte',
+      tts_unavailable: 'Piper oder das Sprachmodell ist nicht installiert', speech_queue_full: 'Warteschlange voll',
+      audio_output_failed: 'Audio-Ausgabe fehlgeschlagen', speech_failed: 'Sprachausgabe fehlgeschlagen' };
+    return Object.entries(result.channels).map(([key, value]) => `${key === 'speech' ? 'Audio' : 'Relay'}: ${value.accepted
+      ? `${value.recipients} Empfänger${value.partial ? ' (teilweise fehlgeschlagen)' : ''}`
+      : reasons[value.reason] || 'Versand fehlgeschlagen'}`).join(' · ');
+  }
   if (result.accepted && result.recipients > 0) {
     return result.recipients === 1
       ? 'Nachricht an 1 Gerät gesendet.'
@@ -72,6 +80,9 @@ function notificationRoutes(db) {
     const rules = rawRules.map((rule) => enrich(rule, states));
     res.status(options.status || 200).send(renderNotifications({
       rules,
+      speechEnabled: require('../modules').isEnabled('speech'),
+      audioEndpoints: await require('../speech/repository').list(db),
+      audioRooms: await require('../heizung/rooms').listRooms(db),
       relayState: relayState(),
       message: options.message || '',
       error: options.error || '',
@@ -192,7 +203,7 @@ function notificationRoutes(db) {
       const rule = await repository.getRule(db, req.params.id);
       if (!rule) return res.status(404).json({ error: 'Nachricht nicht gefunden.' });
       const result = await service.push({
-        title: rule.title, body: rule.body, type: rule.eventType, severity: rule.severity,
+        title: rule.title, body: rule.body, type: rule.eventType, severity: rule.severity, delivery: rule.delivery, audioTarget: rule.audioTarget,
       });
       res.json({ ...result, message: testMessage(result) });
     } catch (error) {

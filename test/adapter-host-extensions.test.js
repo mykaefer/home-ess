@@ -197,6 +197,47 @@ test('Host liefert Adaptern den vollständigen State-Katalog samt Schreibrechten
   const systemState = reply.result.find((state) => String(state.topic).startsWith('system://homeess/'));
   assert.ok(systemState, 'Systemwerte gehören zum Katalog');
   assert.equal(systemState.writable, false);
+  host._handleMessage(entry, { type: 'host-call', requestId: 'denied-1', method: 'states.get',
+    topic: adapterState.topic });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(sent.find((message) => message.requestId === 'denied-1').error, 'state_not_permitted');
+  entry.manifest = { ...entry.manifest, states: { read: true, write: false } };
+  host._handleMessage(entry, { type: 'host-call', requestId: 'query-1', method: 'states.query', term: 'SoC', limit: 10 });
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  assert.ok(sent.find((message) => message.requestId === 'query-1').result
+    .some((state) => state.topic === adapterState.topic));
+  host._handleMessage(entry, { type: 'host-call', requestId: 'denied-2', method: 'states.set',
+    topic: adapterState.topic, value: 42 });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(sent.find((message) => message.requestId === 'denied-2').error, 'state_not_permitted');
+  const room = await require('../src/heizung/rooms').createRoom(db, { name: 'Testküche', targetTemp: 21 });
+  const actor = await require('../src/messen-schalten/actors').createActor(db, {
+    name: 'Testboiler', switchTopic: 'test/boiler', roomId: room.id, functionKey: 'warmwasser',
+  });
+  require('../src/states/system-values').invalidateInternalValues();
+  require('../src/states/repository').invalidateStates();
+  const actorTopic = `system://homeess/geraet.${actor.id}.schalten`;
+  const emptyRoom = await require('../src/heizung/rooms').createRoom(db, { name: 'Ohne Geräte' });
+  host._handleMessage(entry, { type: 'host-call', requestId: 'rooms-read', method: 'rooms.list' });
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  const actualRooms = sent.find((message) => message.requestId === 'rooms-read').result;
+  assert.ok(actualRooms.some((item) => item.roomId === String(emptyRoom.id) && item.displayName === 'Ohne Geräte' && !item.temperatureConfigured));
+  const savedManifest = entry.manifest;
+  entry.manifest = { ...entry.manifest, states: { read: false } };
+  host._handleMessage(entry, { type: 'host-call', requestId: 'rooms-denied', method: 'rooms.list' });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(sent.find((message) => message.requestId === 'rooms-denied').error, 'state_not_permitted');
+  entry.manifest = savedManifest;
+
+  for (const method of ['states.list', 'states.query', 'states.get']) {
+    host._handleMessage(entry, { type: 'host-call', requestId: method, method, term: 'Testküche', topic: actorTopic });
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const result = sent.find((message) => message.requestId === method).result;
+    const state = Array.isArray(result) ? result.find((item) => item.topic === actorTopic) : result;
+    assert.equal(state.metadata.functionKey, 'warmwasser');
+    assert.equal(state.metadata.roomName, 'Testküche');
+  }
+
   await host.stopInstance(id);
 });
 

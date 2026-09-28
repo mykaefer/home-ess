@@ -131,6 +131,8 @@ Pflicht je Adapter. Bestimmt Anzeigename, Prefix und Einstellungs-Schema.
 | `multiInstance` | nein   | `false` = nur eine Instanz sinnvoll (rein informativ). Default `true`. |
 | `main`          | nein   | Einstiegsdatei. Default `index.js`. |
 | `settings`      | nein   | Schema der Instanz-Einstellungen (siehe unten). Leer = leere Einstellungsseite. |
+| `audioBus`      | nein   | `true` = Zugriff auf den Audio Bus über `host.audio` (siehe unten). Default `false`. |
+| `states`        | nein   | `{ "read": true, "write": true }` erlaubt die gezielte interne State-IPC über `host.states`. Default beides `false`. |
 
 \* technisch optional (Default = Ordnername), aber ungültige Werte führen dazu,
 dass der Adapter verworfen wird.
@@ -389,6 +391,50 @@ auch fehlen (externe Datenbank).
 
 Der **InfluxDB-Adapter** ist die Referenz für dieses Muster.
 
+### Optional: `states` (gezielter interner State-Zugriff)
+
+Mit `"states": { "read": true, "write": true }` erhält ein Adapter
+`host.states.get(topic)`, `query(term, limit)`, `set(topic, value)` und
+`subscribe(topic, listener)`. Die IPC bleibt intern; es wird keine HTTP-Schleife
+über die States API benötigt. `get`/`query` liefern den aktuellen kanonischen
+State samt Namen, Kategorie, Einheit, Wert und Schreibbarkeit. `set` prüft
+erneut im Host, ob der State existiert und schreibbar ist und ob der Wert zum
+Steuerelement passt. `read` und `write` können getrennt vergeben werden;
+`write` setzt zusätzlich `read` voraus. Ältere Adaptermethoden bleiben aus
+Kompatibilitätsgründen bestehen.
+
+### Optional: `audioBus` (Zugriff auf den Audio Bus)
+
+Adapter, die Audio-Sessions verarbeiten oder Audio an Clients zurücksenden
+(z. B. Sprachassistenten), erklären das im Manifest:
+
+```json
+{ "id": "audio-example", "prefix": "audio_example", "audioBus": true }
+```
+
+Nur dann liefert `host.audio` Ereignisse und nimmt Aufrufe an; ohne die
+Erklärung antwortet jeder Aufruf mit dem Fehlercode `audio_not_permitted`.
+Der Kindprozess eines solchen Adapters läuft mit IPC-Serialisierung
+„advanced“, damit Audio-Chunks als `Buffer` (binär) übertragen werden.
+Adapter ohne `audioBus` bleiben unverändert.
+
+| Methode | Zweck |
+|---------|-------|
+| `host.audio.onSessionStarted(handler)` | `handler(session)` bei jeder neuen Session; liefert eine Abmeldefunktion. |
+| `host.audio.onInput(handler)` | `handler(session, chunk, info)` je Input-Frame aller Sessions; `chunk` ist ein `Buffer`, `info = { seq, receivedAt, droppedBefore }`. Darf ein Promise liefern. |
+| `host.audio.onSessionEnded(handler)` | `handler(session, reason)` nach Session-Ende. |
+| `await host.audio.startOutput(sessionId, { codec, sampleRate, channels })` | Output-Stream zum Client der Session beginnen. |
+| `await host.audio.sendAudio(sessionId, chunk)` | Audio-Chunk an den Client der Session senden. |
+| `await host.audio.endOutput(sessionId)` | Output-Stream beenden. |
+| `await host.audio.getSession(sessionId)` / `await host.audio.listSessions()` | Session-Metadaten (`deviceId`, `room`, `source`, Format, authentifizierte `client`-Identität …). |
+
+Ereignisse werden strikt nacheinander zugestellt; der Host wartet auf den
+Callback, bevor er das nächste Ereignis schickt. Kommt der Adapter nicht
+nach, verwirft der Audio Bus Input-Chunks für ihn (siehe `droppedBefore`),
+statt unbegrenzt zu puffern. Beim Stoppen der Instanz werden Abos gelöst und
+eigene Output-Streams beendet. Protokoll, Formate, Grenzen und Fehlercodes:
+[AUDIO-BUS.md](AUDIO-BUS.md).
+
 ## Capability-gesteuerte Hardwaredialoge
 
 Adapter mit eigener `managementPage` dürfen Geräte unterstützen, deren
@@ -526,6 +572,7 @@ Das an die Factory übergebene `host`-Objekt:
 | `host.setSecret(key, value)` | Schreibt ein Secret mit 0600/0700-Rechten außerhalb der normalen Adaptereinstellungen. |
 | `host.deleteSecret(key)` | Entfernt ein Secret der eigenen Instanz. |
 | `host.getConfig()` | Liefert die aktuellen **Instanz-Einstellungen** (Objekt). |
+| `host.audio.*` | **Audio Bus** (nur mit `"audioBus": true` im Manifest), siehe [Optional: `audioBus`](#optional-audiobus-zugriff-auf-den-audio-bus). |
 | `host.language` | Aktiver systemweiter Sprachcode als String (Read-only). |
 | `host.getLanguage()` | Liefert `{code, name, locale, direction, fallback}` der systemweiten Sprachwahl. |
 | `host.t(key, defaultText)` | Übersetzt einen adaptereigenen Schlüssel; `defaultText` bleibt bei einsprachigen/noch unvollständigen Adaptern erhalten. |

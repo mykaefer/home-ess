@@ -185,6 +185,42 @@ gelten dort nicht, jeder Endpunkt außer `GET /api/v1` verlangt ein Token.
 Geschrieben wird ausschließlich über `mqttClient.publish()` mit dem Topic aus
 dem State-Baum – derselbe Weg wie `POST /states/value`.
 
+## Audio Bus (`/api/v1/audio/ws`)
+
+Zentrale, bidirektionale Audio-Infrastruktur im Core; Protokoll und
+Plugin-API in [AUDIO-BUS.md](AUDIO-BUS.md). Reiner Transport und Routing –
+keine Transcodierung, keine Aufzeichnung, kein Audio im State-System.
+
+| Datei | Aufgabe |
+|---|---|
+| `src/audio-bus/bus.js` | Sessions (serverseitige UUID, an genau einen Transport gebunden), Input-Verteilung über je eine begrenzte Queue pro Plugin-Client, Output-Streams mit genau einem Besitzer, Idle-/Session-Timeouts, Status ohne Sessioninhalte. |
+| `src/audio-bus/formats.js` | Codec-Beschreibung und Formatprüfung (derzeit `pcm_s16le`). |
+| `src/audio-bus/protocol.js` | Validierung der JSON-Control-Messages. |
+| `src/audio-bus/ws-server.js` | WebSocket-Upgrade-Handler am vorhandenen HTTP-Server (`server.on('upgrade')`), Anmeldung, Heartbeat, Protokoll- und Ratengrenzen. |
+| `src/audio-bus/adapter-bridge.js` | IPC-Brücke zu Adaptern mit `"audioBus": true` (`host.audio.*`), Zustellung mit Bestätigung. |
+| `src/audio-bus/index.js` | Singleton, `attach(server)`, `status()`, State `audio.active_sessions`, `shutdown()`. |
+| `src/states-api/auth.js` | Gemeinsame Bearer-Prüfung für `/api/v1` und den Audio-WebSocket. |
+
+**Anmeldung.** Es gibt kein eigenes Auth-System: Der Upgrade-Request muss das
+Bearer-Token der States API tragen; geprüft wird über `states-api/auth.js`
+(dieselbe Funktion wie `requireToken`). Ohne gültiges Token wird der Upgrade
+mit 401/403 beendet, bevor eine WebSocket-Verbindung entsteht. Offene
+Verbindungen prüfen ihr Token alle 5 s erneut (Ablauf, Logout,
+Passwortänderung, API aus → Session-Ende `auth_lost`, Close 4401). Das Token
+bleibt nur im Speicher der Verbindung; Sessions tragen eine nicht umkehrbare
+Token-Kennung.
+
+**Isolation.** Eine Verbindung führt höchstens eine Session; Binärframes gehen
+immer an diese. Input nimmt der Bus nur vom besitzenden Transport an,
+`audio.end` wirkt nur auf die eigene Session. Plugins erhalten Ereignisse
+asynchron (`setImmediate`) aus ihrer eigenen Queue, sodass weder langsame
+Plugins noch Callback-Fehler den Empfang oder andere Plugins beeinflussen.
+
+**Lebenszyklus.** `server.js` hängt den Endpunkt nach `app.listen()` an und
+ruft beim Shutdown `audioBus.shutdown()` (Sessions `server_shutdown`,
+Close 1001). Der Fernzugriff-Tunnel überträgt keine Upgrades; der Audio Bus
+ist lokal bzw. über einen eigenen Reverse-Proxy erreichbar.
+
 ## Internationalisierung und Sprachdateien
 
 homeESS besitzt genau **eine systemweite Sprachwahl**. Die Registry unter
@@ -420,3 +456,11 @@ nicht nötig.
 Noch nicht Teil des homeESS-Servers sind Ende-zu-Ende-Verschlüsselung oberhalb
 des verschlüsselten Transports sowie Billing-/Lizenzlogik; die Lizenzprüfung
 liegt im Add-on/Relay-Kontext.
+
+## Lokale Sprachausgabe
+
+Das optionale Core-Modul `src/speech/` beobachtet Audiobus-Sessions, speichert
+Endpunktnamen und Raumzuordnungen in `speech_endpoints` und erzeugt Sprache mit
+einem lokalen Piper-Prozess (Thorsten High, ONNX ausschließlich auf der CPU). `notifications/service` orchestriert unabhängig
+Relay- und Audio-Versand; bestehende Regeln verwenden weiterhin nur Relay.
+Betrieb, Voraussetzungen und Grenzen: [SPEECH.md](SPEECH.md).

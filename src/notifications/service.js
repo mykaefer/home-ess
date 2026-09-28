@@ -80,7 +80,7 @@ function reasonForError(error) {
 // gültig ist: der Rückgabewert sagt strukturiert, ob und an wie viele Geräte
 // zugestellt wurde. Ungültige Eingaben werfen einen Validierungsfehler — sie
 // sind ein Programmier- bzw. Konfigurationsfehler und kein Zustellproblem.
-async function push(input, options = {}) {
+async function pushRelay(input, options = {}) {
   const message = normalize(input);
   const connection = options.connectionService || connectionService;
 
@@ -107,9 +107,38 @@ async function push(input, options = {}) {
   }
 }
 
+// Versandart und Audiobus-Ziel bleiben lokal; der Relay erhält nur die bisherigen Felder.
+function normalizeDelivery(input = {}) {
+  const delivery = input.delivery == null ? 'relay' : String(input.delivery);
+  const audioTarget = input.audioTarget == null ? 'all' : String(input.audioTarget);
+  if (!['relay', 'speech', 'both'].includes(delivery)) throw validation('Ungültige Versandart.');
+  if (audioTarget !== 'all' && !/^endpoint:[a-zA-Z0-9][a-zA-Z0-9._:@-]{0,127}$/.test(audioTarget) && !/^room:[1-9][0-9]{0,9}$/.test(audioTarget)) {
+    throw validation('Ungültiges Audio-Ziel.');
+  }
+  return { delivery, audioTarget };
+}
+async function push(input, options = {}) {
+  const message = normalize(input);
+  const { delivery, audioTarget } = normalizeDelivery(input);
+  if (delivery === 'relay') return pushRelay(message, options);
+  const speech = options.speechRuntime || require('../speech/runtime');
+  const [relayResult, speechResult] = await Promise.all([
+    delivery === 'both' ? pushRelay(message, options) : Promise.resolve(null),
+    Promise.resolve().then(() => speech.speak(`${message.title}. ${message.body}`, audioTarget))
+      .catch(() => failed('speech_failed')),
+  ]);
+  const channels = { ...(relayResult ? { relay: relayResult } : {}), speech: speechResult };
+  const results = Object.values(channels);
+  const accepted = results.some((r) => r.accepted);
+  const partial = accepted && results.some((r) => !r.accepted || r.partial);
+  return { accepted, recipients: results.reduce((sum, r) => sum + r.recipients, 0), partial, channels,
+    ...(!accepted ? { reason: speechResult.reason } : {}) };
+}
+
 module.exports = {
   push,
   normalize,
+  normalizeDelivery,
   SEVERITIES,
   EVENT_TYPE_PATTERN,
   MAX_TITLE,

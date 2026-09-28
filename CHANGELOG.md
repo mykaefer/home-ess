@@ -5,7 +5,64 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 
 ## [Unreleased]
 
-Noch keine Änderungen für die nächste Versionsnummer.
+### Neu
+
+- Optionales Modul Sprachausgabe: persistente Audiobus-Endpunkte mit lesbaren
+  Namen und Zuordnung zu bestehenden Räumen. Nachrichten wahlweise über Relay,
+  lokale CPU-TTS (Piper mit Thorsten High) oder beide Wege; Audio an Endpunkt, Raum oder alle
+  aktiven Endpunkte. Begrenzte Warteschlange und getrennte Versandergebnisse.
+
+### Geändert
+
+- Nachrichten und Sprachausgabe mit responsiven Karten, klar gegliederten
+  Formularen und für Touch geeigneten Aktionen neu gestaltet. Nachrichten
+  benötigen auf Mobilgeräten keine horizontal scrollende Tabelle mehr.
+
+- Pegel, Audiovorlauf, Nachlauf und Paketdauer sind unter Nachrichten →
+  Sprachausgabe dauerhaft einstellbar und gelten ab der nächsten Ansage.
+  Standard-Vorlauf und -Nachlauf auf jeweils 1000 ms erhöht.
+
+- Sprachausgabe steht als Unterpunkt von Nachrichten im Desktop- und Mobilmenü.
+  Piper erhält rund 3 dB Pegelreserve; die Audio-Ausgabe nutzt einen begrenzten
+  Vorlauf und absolute Sample-Zeiten gegen kumulierte Timer-Verzögerungen.
+
+- Die Installer für Main und Development installieren Piper und das deutsche
+  Sprachmodell Thorsten High automatisch mit. Die neuronale Stimme ersetzt die
+  bisherige eSpeak-Sprachausgabe; die Versionsnummer bleibt 1.7.7.
+
+## [1.7.7] — 2026-09-28
+
+- Lokale Sprachausgabe einschließlich automatischer Installation von Piper
+  und Thorsten High über die Main- und Development-Installer.
+
+## [1.7.6] — 2026-09-28
+
+### Neu
+
+- Räume können direkt im Geräte-Dialog von „Messen + Schalten“ nur mit einem
+  Namen angelegt werden. Die Soll-Temperatur ist optional: Ohne sie dienen Räume
+  ausschließlich der Gerätezuordnung, stehen am Ende der Raumliste und fehlen
+  in Temperaturverteilung, Regelung und Heizungs-/Klima-States. Bestehende
+  konfigurierte Räume bleiben aktiv. Beim Entfernen des Sollwerts werden
+  laufende Raumgeräte abgeschaltet und die zugehörigen Regelungs-States entfernt.
+
+- Alle Geräte unter „Messen + Schalten“ können optional einem vorhandenen Raum
+  zugeordnet werden (Raumspalte und Geräte-Dialog). Ihre States erscheinen unter
+  „System / Räume / <Raum>“ mit stabilen Topics und Metadaten zu Gerät, Raum und
+  effektiver Funktionsgruppe, einschließlich Gruppenvererbung. Die States API
+  liefert diese Angaben mit, um etwa Licht von Warmwasser zu unterscheiden.
+
+- **Audio Bus.** Zentrale, bidirektionale Audio-Infrastruktur im Core.
+  Externe Clients streamen Audio über den WebSocket `/api/v1/audio/ws`
+  (Binärframes, JSON-Control-Messages) und empfangen Audio zurück. Die
+  Anmeldung erfolgt mit dem Bearer-Token der States API, laufend
+  nachgeprüft. Plugins abonnieren Sessions und Input und senden Output –
+  intern über `createClient()`, als Adapter über `host.audio.*` mit
+  `"audioBus": true` im Manifest. Je Plugin gibt es eine begrenzte Queue,
+  dazu Session-, Frame- und Output-Grenzen, Idle- und Session-Timeouts,
+  den State `system://homeess/audio.active_sessions` und eine Statuskarte
+  unter *Einstellungen → States API*. Beschreibung:
+  [AUDIO-BUS.md](AUDIO-BUS.md).
 
 ## [1.7.5] — 2026-09-26
 

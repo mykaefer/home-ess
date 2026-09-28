@@ -156,14 +156,19 @@ function navItemVisible(item, access) {
 // Geräteverwaltungen stehen als eigene Hauptpunkte direkt hinter „Adapter“;
 // andere Adapter erhalten unabhängig von ihren Unterseiten keinen Eintrag.
 function getMainNavItems() {
-  const items = NAV_CORE.filter((item) => item.section === 'main').map((item) => (
-    item.path === '/energie' ? { ...item, children: energieChildren() } : item
-  ));
+  const items = NAV_CORE.filter((item) => item.section === 'main').map((item) => {
+    if (item.path === '/energie') return { ...item, children: energieChildren() };
+    if (item.path === '/notifications') return {
+      ...item, children: isEnabled('speech') ? [{ path: '/speech', label: 'Sprachausgabe' }] : [],
+    };
+    return item;
+  });
   const adapterIndex = items.findIndex((item) => item.path === '/adapter');
   items.splice(adapterIndex + 1, 0, ...getHdpNavItems());
   // Grid-Control steuert Netzbezug und Einspeisung und gehört damit unter
-  // Energie – es erscheint dort statt im allgemeinen Modulblock.
-  const moduleItems = getEnabledNavItems().filter((item) => item.path !== '/grid-control');
+  // Energie; Sprachausgabe gehört unter Nachrichten. Beide erscheinen deshalb
+  // nicht zusätzlich im allgemeinen Modulblock.
+  const moduleItems = getEnabledNavItems().filter((item) => !['/grid-control', '/speech'].includes(item.path));
   return [...items, ...moduleItems, ...NAV_MAIN_TRAILING];
 }
 

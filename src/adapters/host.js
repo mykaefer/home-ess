@@ -16,6 +16,7 @@ const bus = require('../state-bus');
 const identityStore = require('../remote-access/identity-store');
 const secretStore = require('./secrets');
 const dataStore = require('./data-store');
+const audioBridge = require('../audio-bus/adapter-bridge');
 const crypto = require('crypto');
 const i18n = require('../i18n');
 const pkg = require('../../package.json');
@@ -28,7 +29,12 @@ const MANAGEMENT_TIMEOUT_MS = 180000;
 
 let db = null;
 // Kindprozesse spawnen – überschreibbar für Tests (Fake-Child ohne echten fork).
-let forkImpl = (modulePath) => childProcess.fork(modulePath, [], { stdio: ['ignore', 'inherit', 'inherit', 'ipc'] });
+// `options.serialization` = 'advanced' nur für Adapter mit Audio-Bus-Zugriff:
+// Audio-Chunks laufen dann als Buffer statt als JSON über IPC.
+let forkImpl = (modulePath, options = {}) => childProcess.fork(modulePath, [], {
+  stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
+  ...(options.serialization ? { serialization: options.serialization } : {}),
+});
 function _setForkImpl(fn) {
   forkImpl = fn;
 }
@@ -77,6 +83,13 @@ async function handleHostCall(entry, msg) {
       await instancesRepo.updateSettingKey(db, entry.instance.id, String(msg.key), msg.value);
       entry.instance.settings = { ...(entry.instance.settings || {}), [String(msg.key)]: msg.value };
       reply.result = true;
+    } else if (msg.method === 'rooms.list') {
+      if (!entry.manifest.states?.read) throw new Error('state_not_permitted');
+      if (!db) throw new Error('states_unavailable');
+      reply.result = (await require('../heizung/rooms').listRooms(db)).map((room) => ({
+        roomId: String(room.id), displayName: room.name,
+        temperatureConfigured: require('../heizung/rooms').isTemperatureConfigured(room),
+      }));
     } else if (msg.method === 'states.list') {
       if (!db) throw new Error('States sind noch nicht verfügbar.');
       const { listAllStates } = require('../states/repository');
@@ -94,7 +107,53 @@ async function handleHostCall(entry, msg) {
         value: item.value === undefined ? null : item.value,
         writable: !!item.writable,
         sourceType: item.sourceType || 'adapter',
+        ...(item.metadata ? { metadata: { ...item.metadata } } : {}),
       }));
+    } else if (msg.method === 'states.query' || msg.method === 'states.get' || msg.method === 'states.set') {
+      const permissions = entry.manifest.states || {};
+      if (!permissions.read || (msg.method === 'states.set' && !permissions.write)) {
+        throw new Error('state_not_permitted');
+      }
+      if (!db) throw new Error('states_unavailable');
+      const { listAllStates, findState } = require('../states/repository');
+      const { topicForId } = require('../states/system-topics');
+      const canonical = (item) => (/^[a-z][a-z0-9_-]*:\/\//i.test(String(item.id))
+        ? String(item.id) : topicForId(item.id));
+      const view = (item) => item && ({
+        topic: canonical(item), name: String(item.label == null ? item.id : item.label),
+        category: String(item.category || ''), unit: String(item.unit || ''),
+        value: item.value === undefined ? null : item.value,
+        writable: item.writable === true, sourceType: item.sourceType || 'adapter',
+        control: item.control || null,
+        ...(item.metadata ? { metadata: { ...item.metadata } } : {}),
+      });
+      if (msg.method === 'states.query') {
+        const term = String(msg.term || '').trim().toLocaleLowerCase('de').slice(0, 120);
+        const limit = Math.max(1, Math.min(100, Number(msg.limit) || 30));
+        const offset = Math.max(0, Math.min(10000, Math.floor(Number(msg.offset) || 0)));
+        const list = await listAllStates(db, require('../mqtt/client').getCache());
+        reply.result = list.filter((item) => !term || [item.id, item.label, item.category]
+          .some((field) => String(field || '').toLocaleLowerCase('de').includes(term))).slice(offset, offset + limit).map(view);
+      } else {
+        const topic = String(msg.topic || '').trim();
+        const item = (await listAllStates(db, require('../mqtt/client').getCache()))
+          .find((candidate) => canonical(candidate) === topic);
+        if (!item) throw new Error('state_not_found');
+        if (msg.method === 'states.get') reply.result = view(item);
+        else {
+          const state = await findState(db, topic);
+          if (!state || state.writable !== true || item.writable !== true) throw new Error('state_not_writable');
+          const control = require('../states/controls').controlFor(state);
+          const value = msg.value;
+          if (control.type === 'switch' && String(value) !== control.on && String(value) !== control.off) throw new Error('invalid_value');
+          if (control.type === 'select' && !control.options.some((option) => option.value === String(value))) throw new Error('invalid_value');
+          if (control.type === 'number' && (typeof value !== 'number' || !Number.isFinite(value)
+            || (control.min != null && value < control.min) || (control.max != null && value > control.max))) throw new Error('invalid_value');
+          if (control.type === 'text' && (typeof value !== 'string' || value.length > 1000)) throw new Error('invalid_value');
+          if (!require('../mqtt/client').publish(topic, value)) throw new Error('state_write_failed');
+          reply.result = { success: true, stateId: topic, value };
+        }
+      }
     } else if (msg.method === 'states.options') {
       if (!db) throw new Error('States sind noch nicht verfügbar.');
       reply.result = await require('../states/properties').listOptionsForInstance(db, entry.instance.id);
@@ -247,6 +306,7 @@ function loadPersistedAddressAliases() {
 function handleMessage(entry, msg) {
   if (!msg || typeof msg !== 'object') return;
   const name = entry.instance.name;
+  if (audioBridge.handleMessage(entry, msg)) return;
   switch (msg.type) {
     case 'ready':
       console.log(`[adapter ${entry.manifest.prefix}://${name}] bereit`);
@@ -322,7 +382,8 @@ function handleMessage(entry, msg) {
 
 function spawnChild(entry) {
   const { instance, manifest } = entry;
-  const child = forkImpl(RUNTIME_PATH);
+  const audioBus = manifest.audioBus === true;
+  const child = forkImpl(RUNTIME_PATH, audioBus ? { serialization: 'advanced' } : {});
   entry.child = child;
   router.setInstanceScheme(instance.name, manifest.prefix);
   idByName.set(instance.name, instance.id);
@@ -330,6 +391,7 @@ function spawnChild(entry) {
   child.on('message', (msg) => handleMessage(entry, msg));
   child.on('exit', (code) => {
     removeSubscriptions(entry);
+    audioBridge.release(entry);
     entry.child = null;
     entry.status.connected = false;
     if (entry.stopping) {
@@ -357,6 +419,8 @@ function spawnChild(entry) {
     config: instance.settings || {},
     language: i18n.current(),
     translations: i18n.adapterTranslations(manifest.dir),
+    audioBus,
+    states: manifest.states || { read: false, write: false },
   });
 }
 
@@ -367,7 +431,7 @@ function startInstance(instance) {
     return;
   }
   const entry = { instance, manifest, child: null, restarts: 0, stopping: false,
-    restartTimer: null, subscriptions: new Map(), status: { connected: false, detail: '' } };
+    restartTimer: null, subscriptions: new Map(), status: { connected: false, detail: '' }, audio: null };
   running.set(instance.id, entry);
   spawnChild(entry);
 }
@@ -377,6 +441,7 @@ function cleanup(instanceId) {
   if (!entry) return;
   if (entry.restartTimer) clearTimeout(entry.restartTimer);
   removeSubscriptions(entry);
+  audioBridge.release(entry);
   router.removeInstanceScheme(entry.instance.name);
   idByName.delete(entry.instance.name);
   running.delete(instanceId);

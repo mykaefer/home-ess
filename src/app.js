@@ -44,6 +44,7 @@ const remoteAccessRoutes = require('./routes/remote-access');
 const updateRoutes = require('./routes/update');
 const statesApiRoutes = require('./routes/states-api');
 const statesApiConfig = require('./states-api/config');
+const audioBus = require('./audio-bus');
 const logStore = require('./logging/log-store');
 const pairingState = require('./remote-access/pairing-state');
 const identityStore = require('./remote-access/identity-store');
@@ -153,6 +154,7 @@ function createApp() {
   app.use(databaseRoutes(db));
   app.use(conditionsRoutes(db));
   app.use(notificationRoutes(db));
+  app.use(require('./routes/speech')(db));
   app.use(remoteAccessRoutes());
   app.use(updateRoutes());
   app.use(statesApiRoutes(db));
@@ -165,6 +167,10 @@ function createApp() {
   statesApiConfig.init(db).catch((err) => {
     console.error('[states-api] Einstellungen nicht ladbar:', err && err.message);
   });
+
+  // Audio Bus: Anzahl aktiver Sessions als System-State melden. Audio selbst
+  // läuft nie über States; der WebSocket hängt server.js an.
+  audioBus.registerStates();
 
   // Fernzugriff: dauerhafte Instanzidentität und Origin-WebSocket vorbereiten.
   // Der Relay-Client ist ein optionaler Subdienst — Fehler dürfen den normalen
@@ -192,6 +198,7 @@ function createApp() {
   // Optionale Module und globalen Betriebszustand laden – muss abgeschlossen sein bevor
   // loadAllStateDefinitions läuft, da isEnabled() sonst noch falsch zurückgibt.
   const modulesReady = initModules(db)
+    .then(() => require('./speech/runtime').init(db))
     .catch(() => {})
   // Adapter-Host vor loadAllStateDefinitions hochfahren: Registry/Schemes und der
   // Router-Host müssen stehen, bevor State-Definitionen (ggf. mit prefix://-Topics)

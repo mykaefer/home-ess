@@ -1,4 +1,5 @@
 'use strict';
+const i18n = require('../i18n');
 
 // Seite „Nachrichten": Übersicht und Pflege der Nachrichtenregeln.
 //
@@ -44,46 +45,41 @@ function stateCell(rule) {
                   <span class="muted" id="notification-value-${rule.id}">${escapeHtml(rule.stateDisplay)}</span>`;
 }
 
-function ruleRow(rule) {
+function ruleCard(rule) {
   const toggleLabel = rule.enabled ? 'Deaktivieren' : 'Aktivieren';
-  return `                <tr data-rule-id="${rule.id}">
-                  <td>${escapeHtml(rule.name)}</td>
-                  <td class="notification-state-cell">${stateCell(rule)}</td>
-                  <td>${triggerText(rule)}</td>
-                  <td class="notification-message-cell">
-                    <span>${escapeHtml(rule.title)}</span>
-                    <span class="muted">${escapeHtml(rule.body)}</span>
-                    <span class="notification-state-id">${escapeHtml(rule.eventType)}</span>
-                  </td>
-                  <td>${severityBadge(rule.severity)}</td>
-                  <td><span class="adapter-badge adapter-badge--${rule.enabled ? 'on' : 'off'}">${rule.enabled ? 'Aktiv' : 'Inaktiv'}</span></td>
-                  <td><span class="muted" id="notification-last-${rule.id}"${rule.lastTriggeredAt ? ` data-notification-time="${rule.lastTriggeredAt}"` : ''}>${rule.lastTriggeredAt ? '' : 'Noch nicht ausgelöst'}</span></td>
-                  <td class="notification-actions">
-                    <button type="button" class="secondary-button" onclick="openNotificationDialog('edit', ${rule.id})">Bearbeiten</button>
-                    <button type="button" class="secondary-button" onclick="testNotificationRule(${rule.id})">Testen</button>
-                    <form method="POST" action="/notifications/rules/${rule.id}/toggle" class="notification-inline-form">
-                      <input type="hidden" name="enabled" value="${rule.enabled ? '0' : '1'}">
-                      <button type="submit" class="secondary-button">${toggleLabel}</button>
-                    </form>
-                    <button type="button" class="icon-button" aria-label="Nachricht löschen" title="Nachricht löschen" onclick="openNotificationDelete(${rule.id})">🗑</button>
-                  </td>
-                </tr>`;
-}
-
-function ruleTable(rules) {
-  return `          <div class="notification-table-wrap">
-            <table class="states-edit-table notification-table">
-              <thead>
-                <tr>
-                  <th>Name</th><th>State</th><th>Trigger</th><th>Nachricht</th>
-                  <th>Priorität</th><th>Aktiv</th><th>Letzter Trigger</th><th>Aktionen</th>
-                </tr>
-              </thead>
-              <tbody>
-${rules.map(ruleRow).join('\n')}
-              </tbody>
-            </table>
-          </div>`;
+  const delivery = rule.delivery === 'both' ? 'Text und Sprachausgabe' : rule.delivery === 'speech' ? 'Sprachausgabe' : 'Text über Relay';
+  return `<article class="notification-rule panel-card" data-rule-id="${rule.id}">
+    <header class="comms-card-head">
+      <h3>${escapeHtml(rule.name)}</h3>
+      <div class="comms-badges">${severityBadge(rule.severity)}<span class="adapter-badge adapter-badge--${rule.enabled ? 'on' : 'off'}">${rule.enabled ? 'Aktiv' : 'Inaktiv'}</span></div>
+    </header>
+    <div class="notification-rule-content">
+      <section class="notification-condition">
+        <h4>Auslöser</h4>
+        <div class="notification-state-cell">${stateCell(rule)}</div>
+        <div class="notification-trigger">${triggerText(rule)}</div>
+      </section>
+      <section class="notification-preview">
+        <h4>Nachricht</h4>
+        <strong>${escapeHtml(rule.title)}</strong>
+        <p>${escapeHtml(rule.body)}</p>
+        <span class="adapter-badge">${delivery}</span>
+      </section>
+    </div>
+    <div class="notification-rule-meta">
+      <span><span>Letzter Trigger</span><span class="muted" id="notification-last-${rule.id}"${rule.lastTriggeredAt ? ` data-notification-time="${rule.lastTriggeredAt}"` : ''}>${rule.lastTriggeredAt ? '' : 'Noch nicht ausgelöst'}</span></span>
+      <span><span>Ereignistyp</span><span class="notification-state-id">${escapeHtml(rule.eventType)}</span></span>
+    </div>
+    <footer class="notification-actions">
+      <button type="button" class="secondary-button" onclick="openNotificationDialog('edit', ${rule.id})">Bearbeiten</button>
+      <button type="button" class="secondary-button" onclick="testNotificationRule(${rule.id})">Testen</button>
+      <form method="POST" action="/notifications/rules/${rule.id}/toggle" class="notification-inline-form">
+        <input type="hidden" name="enabled" value="${rule.enabled ? '0' : '1'}">
+        <button type="submit" class="secondary-button">${toggleLabel}</button>
+      </form>
+      <button type="button" class="secondary-button notification-delete" onclick="openNotificationDelete(${rule.id})">Nachricht löschen</button>
+    </footer>
+  </article>`;
 }
 
 function triggerOptions(selected) {
@@ -92,7 +88,7 @@ function triggerOptions(selected) {
     .join('\n                    ');
 }
 
-function ruleDialog({ values, dialogMode, editingRuleId }) {
+function ruleDialog({ values, dialogMode, editingRuleId, speechEnabled, audioEndpoints, audioRooms }) {
   const current = values || {};
   const action = dialogMode === 'edit' && editingRuleId != null
     ? `/notifications/rules/${editingRuleId}`
@@ -100,7 +96,7 @@ function ruleDialog({ values, dialogMode, editingRuleId }) {
   const enabled = current.enabled === undefined ? true : current.enabled;
   const cooldown = current.cooldownSeconds == null || current.cooldownSeconds === ''
     ? DEFAULT_COOLDOWN_SECONDS : current.cooldownSeconds;
-  return `        <dialog id="notificationDialog" class="value-dialog">
+  return `        <dialog id="notificationDialog" class="value-dialog notification-dialog">
           <form id="notificationForm" action="${escapeHtml(action)}" method="POST" class="dialog-form">
             <div class="dialog-hero">
               <div>
@@ -108,7 +104,8 @@ function ruleDialog({ values, dialogMode, editingRuleId }) {
                 <p class="muted">Eine Nachricht wird gesendet, sobald der gewählte State die Bedingung erfüllt.</p>
               </div>
             </div>
-            <div class="dialog-grid">
+            <h4 class="notification-form-heading">Auslöser</h4>
+            <div class="dialog-grid dialog-grid--two">
               <label class="field-block" for="notificationName">
                 <span>Name</span>
                 <input type="text" id="notificationName" name="name" value="${escapeHtml(current.name || '')}" required>
@@ -136,6 +133,7 @@ function ruleDialog({ values, dialogMode, editingRuleId }) {
                 <small class="muted form-hint" id="notificationTriggerHint">Wert, auf den der State wechseln muss.</small>
               </label>
             </div>
+            <h4 class="notification-form-heading">Nachricht</h4>
             <div class="dialog-grid">
               <label class="field-block" for="notificationTitle">
                 <span>Titel</span>
@@ -165,6 +163,24 @@ function ruleDialog({ values, dialogMode, editingRuleId }) {
                 <small class="muted form-hint">0 bedeutet kein Cooldown.</small>
               </label>
             </div>
+            <h4 class="notification-form-heading">Versandart</h4>
+            <div class="dialog-grid dialog-grid--two">
+              <label class="field-block">Versandart
+                <select id="notificationDelivery" name="delivery">
+                  <option value="relay">Text über Relay</option>
+                  <option value="speech"${speechEnabled ? '' : ' disabled'}>Sprachausgabe</option>
+                  <option value="both"${speechEnabled ? '' : ' disabled'}>Text und Sprachausgabe</option>
+                </select>
+              </label>
+              <label class="field-block">Audio-Ziel
+                <select id="notificationAudioTarget" name="audioTarget">
+                  <option value="all">Alle Audio-Endpunkte</option>
+                  ${audioRooms.map((room) => `<option value="room:${room.id}">${escapeHtml(i18n.t('speech.room_option', { name: room.name }))}</option>`).join('')}
+                  ${audioEndpoints.map((endpoint) => `<option value="endpoint:${escapeHtml(endpoint.device_id)}">${escapeHtml(i18n.t('speech.endpoint_option', { name: endpoint.name || endpoint.device_id }))}</option>`).join('')}
+                </select>
+                <small class="muted">${speechEnabled ? 'Ausgabe an die aktiven Sessions des gewählten Ziels.' : 'Sprachausgabe ist deaktiviert. Gespeicherte Audio-Ziele bleiben erhalten.'}</small>
+              </label>
+            </div>
             <label class="field-block notification-check" for="notificationEnabled">
               <span>Aktiv</span>
               <input type="hidden" name="enabled" value="0">
@@ -179,7 +195,7 @@ function ruleDialog({ values, dialogMode, editingRuleId }) {
 }
 
 function deleteDialog() {
-  return `        <dialog id="notificationDeleteDialog" class="value-dialog">
+  return `        <dialog id="notificationDeleteDialog" class="value-dialog notification-dialog">
           <form id="notificationDeleteForm" method="POST" class="dialog-form">
             <h3>Nachricht löschen</h3>
             <p class="muted">Soll die Nachricht <strong id="notificationDeleteName"></strong> wirklich gelöscht werden?</p>
@@ -194,6 +210,8 @@ function deleteDialog() {
 function serialize(rule) {
   return {
     id: rule.id,
+    delivery: rule.delivery,
+    audioTarget: rule.audioTarget,
     name: rule.name,
     enabled: rule.enabled,
     stateId: rule.stateId,
@@ -213,6 +231,9 @@ function serialize(rule) {
 
 function renderNotifications({
   rules = [],
+  speechEnabled = false,
+  audioEndpoints = [],
+  audioRooms = [],
   relayState = 'disconnected',
   message = '',
   error = '',
@@ -224,31 +245,26 @@ function renderNotifications({
     ? '<span class="adapter-badge adapter-badge--on">Relay verbunden</span>'
     : '<span class="adapter-badge adapter-badge--off">Relay derzeit nicht verfügbar</span>';
 
-  const body = `        <h1>Nachrichten</h1>
-
-        <div class="panel-card">
-          <div class="panel-head">
-            <div>
-              <h2>Nachrichtenregeln</h2>
-              <p class="muted">Push-Benachrichtigungen an gekoppelte Geräte, ausgelöst von den States dieser Anlage.</p>
-              ${relayHint}
-            </div>
-            <button type="button" class="settings-form button-inline" onclick="openNotificationDialog('add')">+ Nachricht erstellen</button>
-          </div>
-          ${statusText(error)}
-          ${statusText(message, 'success')}
-          <p class="error-text" id="notificationTestError" hidden></p>
-          <p class="success-text" id="notificationTestMessage" hidden></p>
-          ${rules.length ? ruleTable(rules) : '<div class="info-card"><p class="muted">Noch keine Nachricht angelegt.</p></div>'}
-        </div>
-
-${ruleDialog({ values: dialogValues, dialogMode, editingRuleId })}
+  const body = `<div class="comms-page notifications-page">
+    <header class="comms-page-head">
+      <div><h1>Nachrichten</h1><p class="muted">Nachrichten über Relay und lokale Sprachausgabe, ausgelöst von den States dieser Anlage.</p></div>
+      <div class="comms-page-actions">${speechEnabled ? '<a class="secondary-button" href="/speech">Sprachausgabe</a>' : ''}<button type="button" class="comms-primary" onclick="openNotificationDialog('add')">+ Nachricht erstellen</button></div>
+    </header>
+    <div class="comms-summary">${relayHint}<span>${escapeHtml(i18n.t('notifications.rule_count', { count: rules.length }))}</span><span>${escapeHtml(i18n.t('notifications.active_count', { count: rules.filter((rule) => rule.enabled).length }))}</span></div>
+    ${statusText(error)}${statusText(message, 'success')}
+    <p class="error-text" id="notificationTestError" role="alert" hidden></p>
+    <p class="success-text" id="notificationTestMessage" role="status" hidden></p>
+    <section aria-labelledby="notificationRulesHeading"><h2 id="notificationRulesHeading" class="comms-section-title">Nachrichtenregeln</h2>
+      ${rules.length ? `<div class="notification-rule-list">${rules.map(ruleCard).join('')}</div>` : '<div class="panel-card comms-empty"><h3>Noch keine Nachricht angelegt.</h3><p class="muted">Eine Nachricht wird gesendet, sobald der gewählte State die Bedingung erfüllt.</p><button type="button" class="comms-primary" onclick="openNotificationDialog(&quot;add&quot;)">+ Nachricht erstellen</button></div>'}
+    </section>
+  </div>
+${ruleDialog({ values: dialogValues, dialogMode, editingRuleId, speechEnabled, audioEndpoints, audioRooms })}
 ${deleteDialog()}`;
 
-  const script = `    var notificationRules = ${JSON.stringify(rules.map(serialize))};
+  const script = `    var notificationRules = ${JSON.stringify(rules.map(serialize)).replace(/</g, '\\u003c')};
     var notificationInitialMode = ${JSON.stringify(dialogMode)};
     var notificationInitialRuleId = ${editingRuleId == null ? 'null' : Number(editingRuleId)};
-    var notificationInitialValues = ${JSON.stringify(dialogValues || {})};
+    var notificationInitialValues = ${JSON.stringify(dialogValues || {}).replace(/</g, '\\u003c')};
     var notificationNumericTriggers = ${JSON.stringify([...NUMERIC_TRIGGERS])};
     var notificationValueTriggers = ${JSON.stringify([...TRIGGER_NEEDS_VALUE])};
 
@@ -332,6 +348,18 @@ ${deleteDialog()}`;
     }
 
     function notificationSetValues(values) {
+      var delivery = document.getElementById('notificationDelivery');
+      for (var option of delivery.options) option.disabled = !${JSON.stringify(speechEnabled)} && option.value !== 'relay' && option.value !== values.delivery;
+      delivery.value = values.delivery || 'relay';
+      var target = document.getElementById('notificationAudioTarget');
+      var wanted = values.audioTarget || 'all';
+      if (!Array.from(target.options).some(function (option) { return option.value === wanted; })) {
+        var missing = document.createElement('option');
+        missing.value = wanted;
+        missing.textContent = 'Nicht mehr vorhanden: ' + wanted;
+        target.appendChild(missing);
+      }
+      target.value = wanted;
       document.getElementById('notificationName').value = values.name || '';
       document.getElementById('notificationStateId').value = values.stateId || '';
       document.getElementById('notificationTriggerType').value = values.triggerType || 'changed';
@@ -401,7 +429,7 @@ ${deleteDialog()}`;
       })
         .then(function (response) { return response.json().then(function (data) { return { ok: response.ok, data: data }; }); })
         .then(function (result) {
-          notificationShowResult(result.data.message || result.data.error || '', !result.ok || !result.data.accepted);
+          notificationShowResult(result.data.message || result.data.error || '', !result.ok || !result.data.accepted || result.data.partial);
         })
         .catch(function () { notificationShowResult('Relay derzeit nicht verfügbar.', true); });
     }

@@ -7,6 +7,7 @@ const { createApp } = require('./src/app');
 const pairingState = require('./src/remote-access/pairing-state');
 const connectionService = require('./src/remote-access/connection-service');
 const updateService = require('./src/update/service');
+const audioBus = require('./src/audio-bus');
 
 const { app, db } = createApp();
 
@@ -22,6 +23,10 @@ const server = app.listen(config.PORT, () => {
     .finally(() => updateService.start());
 });
 
+// Audio Bus: WebSocket-Endpunkt /api/v1/audio/ws auf demselben HTTP-Server.
+// Anmeldung wie bei der States API (Bearer-Token).
+audioBus.attach(server);
+
 // Kontrollierter Shutdown: flüchtigen Pairing-Zustand (Token/QR) aus dem
 // Speicher entfernen, Cleanup-Timer beenden und den Server schließen.
 let shuttingDown = false;
@@ -33,6 +38,9 @@ function shutdown(signal) {
   // Origin-WebSocket kontrolliert schließen (Reconnect stoppen, Timer löschen).
   connectionService.shutdown();
   updateService.shutdown();
+  // Audio-Sessions beenden (Plugins werden informiert), Clients trennen.
+  require('./src/speech/runtime').stop();
+  audioBus.shutdown();
   server.close(() => process.exit(0));
   // Notausstieg, falls Verbindungen nicht rechtzeitig schließen.
   setTimeout(() => process.exit(0), 5000).unref();

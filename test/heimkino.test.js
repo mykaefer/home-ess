@@ -298,6 +298,7 @@ test('Ein unbekannter Prüfwert gilt als nicht erfüllt', () => {
 test('Der Kinomodus steht als Schaltziel für Dashboard-Widgets bereit', async () => {
   const db = await freshDb();
   await run(db, `CREATE TABLE mess_schalt_actors (
+    room_id INTEGER,
     id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL DEFAULT '', group_id INTEGER,
     position INTEGER NOT NULL DEFAULT 0, switch_topic TEXT NOT NULL DEFAULT '', remote_topic TEXT NOT NULL DEFAULT '',
     status_topic TEXT NOT NULL DEFAULT '', power_topic TEXT NOT NULL DEFAULT '', power_unit TEXT NOT NULL DEFAULT 'W',

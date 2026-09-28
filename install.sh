@@ -19,6 +19,9 @@ readonly LEGACY_DATA_DIR="${INSTALL_DIR}/data"
 readonly ADAPTER_SELECTION_FILE="${DATA_DIR}/adapter-selection.json"
 readonly MIN_NODE_MAJOR=20
 readonly MIN_NODE_MINOR=17
+readonly PIPER_DIR="/opt/home-ess-tts"
+readonly PIPER_VERSION="1.8.0"
+readonly PIPER_VOICE_URL="https://huggingface.co/rhasspy/piper-voices/resolve/375a0fe641dea077c2a47b4e9a056d6da521eed3/de/de_DE/thorsten/high"
 INSTALL_MODE="install"
 RESTORE_ALL_ADAPTERS=0
 ADAPTER_BACKUP_DIR=""
@@ -144,7 +147,35 @@ install_base_packages() {
     git \
     gnupg \
     build-essential \
-    python3
+    python3 \
+    python3-venv
+}
+
+install_piper_file() (
+  # Download zunächst separat prüfen; ein Abbruch erhält die bestehende Datei.
+  local filename="$1" checksum="$2" target temporary
+  target="${PIPER_DIR}/voices/${filename}"
+  if [[ -f ${target} ]] && printf '%s  %s\n' "${checksum}" "${target}" | sha256sum --check --status; then
+    return 0
+  fi
+  temporary="$(mktemp "${PIPER_DIR}/voices/.download.XXXXXXXX")"
+  trap 'rm -f -- "${temporary}"' EXIT
+  curl -fLsS --retry 3 --connect-timeout 20 --max-time 600 "${PIPER_VOICE_URL}/${filename}" -o "${temporary}"
+  printf '%s  %s\n' "${checksum}" "${temporary}" | sha256sum --check --status \
+    || fail "Prüfsumme der Piper-Datei ${filename} stimmt nicht."
+  chmod 0644 "${temporary}"
+  mv -f -- "${temporary}" "${target}"
+)
+
+install_piper() {
+  info "Installiere lokale Piper-Sprachausgabe mit Thorsten High"
+  # Eigene Python-Umgebung außerhalb des Checkouts, für den Dienst nur lesbar.
+  install -d -m 0755 "${PIPER_DIR}" "${PIPER_DIR}/voices"
+  python3 -m venv "${PIPER_DIR}/venv"
+  "${PIPER_DIR}/venv/bin/python3" -m pip install --disable-pip-version-check "piper-tts==${PIPER_VERSION}"
+  install_piper_file de_DE-thorsten-high.onnx 9df1c43c61149ef9b39e618e2b861fbe41e1fcea9390b2dac62e8761573ea4f1
+  install_piper_file de_DE-thorsten-high.onnx.json 6de734444e4c3f9e33b7ebe2746dbc19b71e85f613e79c65acf623200b99a76a
+  install_piper_file MODEL_CARD 35cd458c7691a668ec59c63eec3ccad5c7ce7ed36c9f946766616b266a038d57
 }
 
 node_is_compatible() {
@@ -453,6 +484,7 @@ main() {
   check_platform
   check_installation_target
   install_base_packages
+  install_piper
   install_nodejs
   create_service_account
   remove_legacy_homeess_service

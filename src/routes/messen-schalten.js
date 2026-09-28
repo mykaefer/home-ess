@@ -5,6 +5,7 @@
 // angeordnet und liefern Live-Werte für Kacheln, /data und den Wertekatalog.
 
 const express = require('express');
+const { listRooms, createRoom } = require('../heizung/rooms');
 const { requireAuth } = require('../auth/session');
 const mqttClient = require('../mqtt/client');
 const { loadAllStateDefinitions } = require('../mqtt/state-definitions');
@@ -96,6 +97,7 @@ function toViewActor(actor, value, groupsById) {
     id: actor.id,
     name: actor.name,
     groupId: actor.groupId,
+    roomId: actor.roomId,
     hasSwitch: !!actor.switchTopic,
     // Zähler-Zelle auch für die virtuelle Zählung zeigen: sie führt einen internen
     // Zähler (fortlaufend, auch 0) ohne eigenes Zähler-Topic.
@@ -202,6 +204,9 @@ function buildGroupTree(groups) {
 
 async function renderPage(db, res, options = {}) {
   const { actors, viewActors, viewGroups } = await buildLiveData(db);
+  const rooms = await listRooms(db);
+  const roomsById = new Map(rooms.map((room) => [room.id, room]));
+  for (const actor of viewActors) actor.roomName = roomsById.get(actor.roomId)?.name || '';
   const actorsByGroup = new Map();
   const ungrouped = [];
   const groupById = new Map(viewGroups.map((g) => [g.id, g]));
@@ -218,8 +223,9 @@ async function renderPage(db, res, options = {}) {
     ungrouped,
     groups: buildGroupTree(withActors),
     groupsForSelect: flattenGroupsForSelect(viewGroups),
+    roomsForSelect: rooms,
     actorConfigs: actors.map((a) => ({
-      id: a.id, name: a.name, groupId: a.groupId,
+      id: a.id, name: a.name, groupId: a.groupId, roomId: a.roomId,
       switchTopic: a.switchTopic, remoteTopic: a.remoteTopic, statusTopic: a.statusTopic,
       powerTopic: a.powerTopic, powerUnit: a.powerUnit,
       counterTopic: a.counterTopic, counterUnit: a.counterUnit,
@@ -353,6 +359,18 @@ function messenSchaltenRoutes(db) {
       const { viewActors, viewGroups } = await buildLiveData(db);
       res.json({ actors: viewActors, groups: viewGroups });
     } catch (err) { next(err); }
+  });
+
+  // Allgemeine Räume anlegen, auch bei deaktiviertem Heizungsmodul.
+  router.post('/messen-schalten/rooms', async (req, res, next) => {
+    if (!req.session) return res.status(401).json({ error: 'Nicht angemeldet.' });
+    try {
+      const room = await createRoom(db, { name: req.body && req.body.name });
+      return res.status(201).json({ room: { id: room.id, name: room.name } });
+    } catch (error) {
+      if (error.validation) return res.status(400).json({ error: error.message });
+      next(error);
+    }
   });
 
   // --- Geräte (Aktoren) ---------------------------------------------------

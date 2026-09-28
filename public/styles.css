@@ -4888,7 +4888,7 @@ a.secondary-button {
    Leistung · Zähler · Toggle · Aktionen. */
 .ms-row {
     display: grid;
-    grid-template-columns: 24px 12px minmax(140px, 1.4fr) minmax(0, 1fr) 90px 110px 48px 60px;
+    grid-template-columns: 24px 12px minmax(140px, 1.4fr) minmax(90px, 1fr) minmax(0, 1fr) 90px 110px 48px 60px;
     align-items: center;
     gap: 10px;
     padding: 2px 12px 2px 6px;
@@ -4918,6 +4918,8 @@ a.secondary-button {
 .ms-row .widget-drag {
     justify-self: center;
 }
+
+.ms-row-room { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-ink-mid); }
 
 .ms-row-name {
     font-weight: 600;
@@ -5046,7 +5048,7 @@ a.secondary-button {
    Zählerleistung minus Untergruppen). Folgt dem Geräte-Zeilenraster. */
 .ms-sonstige {
     display: grid;
-    grid-template-columns: 24px 12px minmax(140px, 1.4fr) minmax(0, 1fr) 90px 110px 48px 60px;
+    grid-template-columns: 24px 12px minmax(140px, 1.4fr) minmax(90px, 1fr) minmax(0, 1fr) 90px 110px 48px 60px;
     align-items: center;
     gap: 10px;
     padding: 2px 12px 2px 6px;
@@ -5057,7 +5059,7 @@ a.secondary-button {
     color: var(--color-ink-muted);
 }
 .ms-sonstige .ms-row-name { font-weight: 600; color: var(--color-ink-mid); font-style: italic; }
-.ms-sonstige .ms-row-power { grid-column: 5 / 6; }
+.ms-sonstige .ms-row-power { grid-column: 6 / 7; }
 
 /* Mehrschichtige Verbrauchsgruppen: Untergruppen stehen eingerückt im Body. */
 .ms-subgroups {
@@ -6353,14 +6355,15 @@ body,
     .forecast-card { min-width: 0; }
 
     /* ── Messen + Schalten ────────────────────────────────────────────── */
-    /* Gerätezeile wird zweizeilig: oben Name + Leistung + Schalter, unten
-       Betriebsart + Zählerstand + Aktionen. Statuspunkt läuft über beide
+    /* Gerätezeile: oben Name + Leistung + Schalter, darunter
+       Betriebsart + Zählerstand + Aktionen, zuletzt der Raum. Statuspunkt läuft über alle
        Zeilen; der Drag-Griff entfällt (Maus-only). */
     .ms-row {
         grid-template-columns: 12px minmax(0, 1fr) auto auto;
         grid-template-areas:
             'dot name power toggle'
-            'dot meta count actions';
+            'dot meta count actions'
+            'dot room room room';
         gap: 2px 10px;
         padding: 8px 12px 8px 10px;
     }
@@ -6381,6 +6384,8 @@ body,
         display: block;
         font-size: 12px;
     }
+
+    .ms-row-room { grid-area: room; font-size: 12px; }
 
     .ms-row-power { grid-area: power; }
 
@@ -6404,7 +6409,7 @@ body,
         row-gap: 4px;
     }
 
-    /* „Sonstige Verbraucher"-Fußzeile folgt sonst dem festen 8-Spalten-Raster und
+    /* „Sonstige Verbraucher"-Fußzeile folgt sonst dem festen 9-Spalten-Raster und
        läuft am Handy über die Breite hinaus – auf Handy zu einer flexiblen Zeile
        auflösen (Name links, Leistung rechts). */
     .ms-sonstige {
@@ -8682,20 +8687,7 @@ body.dash-editing .widget-card--weather .weather-head { padding-right: 76px; }
     }
 }
 
-/* ── Nachrichten ────────────────────────────────────────────────────────────
-   Übersicht der Nachrichtenregeln. Die Tabelle nutzt die Grundform der
-   States-Tabelle und ergänzt nur das Nötige: eine mehrzeilige State- und
-   Nachrichtenspalte sowie eine Aktionsspalte. Auf schmalen Geräten scrollt
-   allein die Tabelle waagerecht, die Seite selbst nicht. */
-.notification-table-wrap {
-    overflow-x: auto;
-    margin-top: 8px;
-}
-
-.notification-table td {
-    vertical-align: middle;
-}
-
+/* Gemeinsame Angaben und Aktionen der Nachrichtenregeln. */
 .notification-state-cell,
 .notification-message-cell {
     min-width: 180px;
@@ -8891,4 +8883,99 @@ body.dash-editing .widget-card--weather .weather-head { padding-right: 76px; }
     .states-api-topic,
     .states-api-value { display: none; }
     .states-api-facts { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Nachrichten und Sprachausgabe: gemeinsame, responsive Verwaltungsansichten. */
+.comms-page { max-width: 1440px; margin-inline: auto; }
+.comms-page-head, .comms-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.comms-page-head { margin-bottom: 20px; }
+.comms-page-head h1 { margin: 0 0 8px; }
+.comms-page-head p { max-width: 64ch; margin: 0; line-height: 1.6; }
+.comms-page-actions, .comms-badges { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.comms-page-actions { flex-shrink: 0; }
+.comms-page .secondary-button, .comms-primary { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 10px 16px; box-sizing: border-box; font: inherit; font-size: 14px; text-decoration: none; border-radius: 9px; cursor: pointer; }
+.comms-primary { background: var(--color-action); color: var(--color-on-action, #fff); border: 1px solid var(--color-action); font-weight: 600; }
+.comms-primary:hover { filter: brightness(.94); }
+.comms-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px; padding: 14px 18px; margin-bottom: 28px; border: 1px solid var(--color-border); border-radius: 12px; background: var(--color-surface); font-size: 13px; color: var(--color-text-soft); }
+.comms-section-title, .comms-section-head h2 { margin: 0 0 8px; font-size: 18px; }
+.comms-section-title { margin-bottom: 16px; }
+.comms-section-head { margin-bottom: 16px; }
+.comms-section-head p { margin: 0; font-size: 14px; line-height: 1.5; }
+.comms-card-head h3 { min-width: 0; margin: 0; font-size: 17px; line-height: 1.4; overflow-wrap: anywhere; }
+.comms-card-head .adapter-badge { flex-shrink: 0; }
+.comms-badges { justify-content: flex-end; }
+.comms-empty { padding: 32px; text-align: center; }
+.comms-empty h3 { margin-top: 0; }
+.comms-empty p { line-height: 1.6; max-width: 55ch; margin: 12px auto 20px; }
+.notification-rule-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+.notification-rule.panel-card { display: flex; flex-direction: column; margin: 0; padding: 22px; min-width: 0; border-radius: 14px; }
+.notification-rule-content { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 20px; margin: 22px 0; flex: 1; }
+.notification-rule h4 { font-size: 12px; color: var(--color-text-soft); margin: 0 0 10px; font-weight: 600; }
+.notification-rule .notification-state-cell { min-width: 0; font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
+.notification-rule .notification-state-cell span { margin-bottom: 5px; }
+.notification-trigger { margin-top: 12px; font-size: 13px; }
+.notification-preview { background: var(--color-surface-subtle); border: 1px solid var(--color-border); border-radius: 10px; padding: 14px; overflow-wrap: anywhere; min-width: 0; }
+.notification-preview strong { font-size: 15px; }
+.notification-preview p { margin: 8px 0 14px; font-size: 14px; line-height: 1.6; white-space: pre-wrap; }
+.notification-rule-meta { display: flex; flex-wrap: wrap; gap: 12px 24px; margin-bottom: 18px; font-size: 12px; }
+.notification-rule-meta > span { display: grid; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.notification-rule .notification-actions { padding-top: 16px; border-top: 1px solid var(--color-border); gap: 8px; }
+.notification-rule .notification-actions .secondary-button { min-height: 44px; padding: 8px 12px; font-size: 13px; border-radius: 8px; }
+.notification-rule .notification-delete { margin-left: auto; }
+.notification-dialog { max-height: calc(100dvh - 32px); overflow-y: auto; }
+.notification-dialog .dialog-form { gap: 18px; }
+.notification-dialog .field-block { min-width: 0; }
+.notification-dialog :is(input:not([type="checkbox"]), select, textarea) { width: 100%; min-width: 0; box-sizing: border-box; min-height: 44px; font: inherit; font-size: 16px; }
+.notification-dialog textarea { padding: 12px; resize: vertical; border: 1px solid var(--color-line-strong); border-radius: 8px; background: var(--color-surface); color: var(--color-text); }
+.notification-dialog .notification-form-heading { padding-top: 16px; border-top: 1px solid var(--color-border); }
+.notification-dialog .button-row { position: sticky; bottom: -22px; margin: 0 -22px -22px; padding: 16px 22px; background: var(--color-surface); border-top: 1px solid var(--color-border); z-index: 1; }
+.notification-dialog .button-row button { min-height: 44px; }
+.speech-layout { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(340px, 1fr); gap: 28px; align-items: start; }
+.speech-endpoint-list { display: grid; gap: 16px; }
+.speech-page .panel-card { margin: 0; padding: 22px; border-radius: 14px; min-width: 0; }
+.speech-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px 16px; }
+.speech-page .field-block { min-width: 0; }
+.speech-page .field-block input, .speech-page .field-block select { min-height: 44px; min-width: 0; font-size: 16px; }
+.speech-page .form-hint { color: var(--color-text-soft); font-size: 12px; line-height: 1.5; }
+.comms-details { border-top: 1px solid var(--color-border); padding-top: 14px; font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.comms-details summary { cursor: pointer; font-weight: 600; padding-block: 6px; }
+.comms-details dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 14px; }
+.comms-details dt { color: var(--color-text-soft); }
+.comms-details dd { margin: 0; }
+.comms-details p { margin: 12px 0 0; }
+.comms-form-actions { display: flex; justify-content: flex-end; }
+.comms-form-actions button { min-height: 44px; min-width: 120px; }
+.comms-section-note { font-size: 13px; line-height: 1.6; margin: 16px 0; }
+.speech-info { margin-top: 18px; }
+@media (max-width: 1200px) {
+    .notification-rule-list { grid-template-columns: minmax(0, 1fr); }
+    .speech-layout { grid-template-columns: minmax(0, 1fr); }
+    .comms-page-head { flex-wrap: wrap; }
+}
+@media (max-width: 600px) {
+    .comms-page-head { gap: 18px; }
+    .comms-page-actions { width: 100%; flex-shrink: 1; }
+    .comms-page-actions > * { flex: 1 1 auto; }
+    .comms-summary { margin-bottom: 22px; gap: 10px 16px; padding: 12px 14px; }
+    .comms-card-head { flex-wrap: wrap; gap: 10px; }
+    .comms-badges { justify-content: flex-start; }
+    .notification-rule.panel-card, .speech-page .panel-card { padding: 16px; }
+    .notification-rule-content { grid-template-columns: minmax(0, 1fr); gap: 16px; margin: 18px 0; }
+    .notification-rule .notification-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .notification-actions > *, .notification-inline-form button { width: 100%; min-width: 0; }
+    .notification-rule .notification-delete { margin: 0; }
+    .notification-dialog .dialog-grid { grid-template-columns: minmax(0, 1fr); }
+    .notification-dialog .dialog-form { padding: 16px; }
+    .notification-dialog .button-row { bottom: -16px; margin: 0 -16px -16px; padding: 14px 16px; }
+    .notification-dialog .button-row button { flex: 1; }
+    .speech-fields { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+    .comms-form-actions button { width: 100%; }
+}
+/* Flex-Inhalte dürfen auch mit langen Geräte- und State-Namen schrumpfen. */
+.main-content:has(.comms-page) { min-width: 0; }
+.comms-page-head > div { min-width: 0; }
+.comms-page { overflow-wrap: anywhere; }
+.access-read .comms-primary, .access-operate .comms-primary { display: none; }
+@media (max-width: 600px) {
+    .notification-dialog .button-row { padding-bottom: calc(14px + env(safe-area-inset-bottom)); }
 }

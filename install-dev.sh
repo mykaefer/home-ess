@@ -10,7 +10,8 @@ set -Eeuo pipefail
 #
 # Bewusst keine zweite Installationslogik: dieses Skript lädt den regulären
 # Installer desselben Zweigs und ruft ihn mit `--branch development` auf. Alles
-# Weitere (Dienstkonto, systemd-Units, Adapterauswahl, Self-Updater) bleibt damit
+# Weitere (Systempakete sowie Piper mit deutscher Stimme, Dienstkonto,
+# systemd-Units, Adapterauswahl, Self-Updater) bleibt damit
 # an genau einer Stelle gepflegt.
 
 readonly BRANCH="development"

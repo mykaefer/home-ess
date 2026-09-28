@@ -16,6 +16,7 @@ function dbRun(db, sql, params = []) {
 async function freshDb() {
   const db = new sqlite3.Database(':memory:');
   await dbRun(db, `CREATE TABLE mess_schalt_actors (
+    room_id INTEGER,
     id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL DEFAULT '', group_id INTEGER,
     position INTEGER NOT NULL DEFAULT 0, switch_topic TEXT NOT NULL DEFAULT '',
     remote_topic TEXT NOT NULL DEFAULT '',

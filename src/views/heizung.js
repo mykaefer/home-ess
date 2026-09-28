@@ -11,7 +11,7 @@ const { renderLayout } = require('./layout');
 // Textknoten wäre sonst nicht übersetzbar.
 const i18n = require('../i18n');
 const { escapeHtml, statusText } = require('./components');
-const { MIN_TEMP, MAX_TEMP, MIN_HYSTERESIS, MAX_HYSTERESIS, MAX_OFFSET } = require('../heizung/rooms');
+const { isTemperatureConfigured, MIN_TEMP, MAX_TEMP, MIN_HYSTERESIS, MAX_HYSTERESIS, MAX_OFFSET } = require('../heizung/rooms');
 const { chartCard, chartScript } = require('./heizung-chart');
 
 function temp(value) {
@@ -21,6 +21,7 @@ function temp(value) {
 // Zustandsmarken eines Raums. Ohne hinterlegte Geräte bleibt es bei der reinen
 // Temperaturerfassung — dann steht hier nur „Nur Messung".
 function badges(room) {
+  if (!isTemperatureConfigured(room)) return '<span class="adapter-badge adapter-badge--off">Ohne Temperaturregelung</span>';
   const state = room.state || {};
   const list = [];
   if (state.contactOpen) list.push('<span class="adapter-badge adapter-badge--warn">Fenster/Tür offen</span>');
@@ -63,7 +64,7 @@ function climateModeClass(mode) {
 }
 
 function climateSwitch(room) {
-  if (!room.hasCoolDevice) return '';
+  if (!isTemperatureConfigured(room) || !room.hasCoolDevice) return '';
   const current = Number(room.climateMode);
   const buttons = CLIMATE_MODES.map(([value, label]) =>
     `<button type="button" class="pump-mode-btn${value === current ? climateModeClass(value) : ''}" data-hz-klima-mode="${value}"
@@ -85,7 +86,7 @@ function roomRow(room) {
                 <span class="hz-col-temp" data-hz-temp="${room.id}">${temp(state.temperature)}</span>
                 <span class="hz-col-target">
                   <form action="/heizung/raum/${room.id}/soll" method="POST" class="hz-inline-form">
-                    <input type="number" name="targetTemp" value="${Number(room.targetTemp)}" min="${MIN_TEMP}" max="${MAX_TEMP}" step="0.5" data-no-state-picker>
+                    <input type="number" name="targetTemp" value="${room.targetTemp == null ? '' : Number(room.targetTemp)}" min="${MIN_TEMP}" max="${MAX_TEMP}" step="0.5" data-no-state-picker>
                     <button type="submit" class="module-toggle-btn">Setzen</button>
                   </form>
                 </span>
@@ -158,10 +159,11 @@ ${billingSection(billing)}
 function roomDialog() {
   return `<dialog id="heizungRoomDialog" class="value-dialog"><form id="heizungRoomForm" method="POST" action="/heizung/rooms" class="dialog-form">
     <div class="dialog-hero"><div><h3>Raum hinzufügen</h3><p class="muted">Der Name benennt die States des Raums (<code>System / Räume / &lt;Name&gt;</code>). Temperaturquellen, Geräte, Kontakte und die Zentralheizungs-Freigabe werden anschließend auf der Seite des Raums eingerichtet.</p></div></div>
+    <p class="muted">Ohne Soll-Temperatur dient der Raum nur der Gerätezuordnung. Heizung und Klima bleiben inaktiv.</p>
     <p id="heizungRoomError" class="error-text" hidden></p>
     <div class="dialog-section"><div class="dialog-grid dialog-grid--two">
       <label class="field-block"><span>Name</span><input id="heizungRoomName" name="name" required maxlength="100" data-no-state-picker></label>
-      <label class="field-block"><span>Soll-Temperatur (°C)</span><input id="heizungRoomTarget" name="targetTemp" type="number" value="21" min="${MIN_TEMP}" max="${MAX_TEMP}" step="0.5" required data-no-state-picker></label>
+      <label class="field-block"><span>Soll-Temperatur (°C)</span><input id="heizungRoomTarget" name="targetTemp" type="number" value="" min="${MIN_TEMP}" max="${MAX_TEMP}" step="0.5" data-no-state-picker></label>
       <label class="field-block"><span>Offset Heizen (°C nach unten)</span><span class="field-hint">Heizen ein bei Soll minus Offset</span><input id="heizungRoomHeatOffset" name="heatOffset" type="number" value="0" min="0" max="${MAX_OFFSET}" step="0.5" data-no-state-picker></label>
       <label class="field-block"><span>Offset Kühlen (°C nach oben)</span><span class="field-hint">Kühlen ein bei Soll plus Offset</span><input id="heizungRoomCoolOffset" name="coolOffset" type="number" value="5" min="0" max="${MAX_OFFSET}" step="0.5" data-no-state-picker></label>
       <label class="field-block"><span>Mindesttemperatur zum Kühlen (°C)</span><span class="field-hint">Darunter wird nie gekühlt — leer = keine Untergrenze</span><input id="heizungRoomCoolMin" name="coolMinTemp" type="number" min="${MIN_TEMP}" max="${MAX_TEMP}" step="0.5" placeholder="ohne Untergrenze" data-no-state-picker></label>

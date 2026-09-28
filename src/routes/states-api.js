@@ -18,6 +18,7 @@ const apiConfig = require('../states-api/config');
 const tokens = require('../states-api/tokens');
 const rateLimit = require('../states-api/rate-limit');
 const catalog = require('../states-api/catalog');
+const apiAuth = require('../states-api/auth');
 
 const API_BASE = '/api/v1';
 const MAX_TOPIC_LENGTH = 1000;
@@ -36,6 +37,7 @@ const ERROR_STATUS = {
   folder_not_found: 404,
   not_found: 404,
   method_not_allowed: 405,
+  upgrade_required: 426,
   state_not_writable: 403,
   invalid_value: 422,
   invalid_request: 400,
@@ -57,6 +59,7 @@ const ERROR_MESSAGES = {
   folder_not_found: 'Dieses Verzeichnis existiert nicht.',
   not_found: 'Diesen Endpunkt gibt es nicht.',
   method_not_allowed: 'Diese Methode ist für den Endpunkt nicht erlaubt.',
+  upgrade_required: 'Dieser Endpunkt ist ein WebSocket (Audio Bus). Verbindung per WebSocket-Upgrade aufbauen.',
   state_not_writable: 'Dieser State ist nicht beschreibbar.',
   invalid_value: 'Der Wert ist ungültig.',
   invalid_request: 'Die Anfrage ist ungültig.',
@@ -91,9 +94,7 @@ function clientAddress(req) {
 }
 
 function bearerToken(req) {
-  const header = String(req.get('Authorization') || '');
-  const match = /^Bearer\s+(\S+)\s*$/i.exec(header);
-  return match ? match[1] : null;
+  return apiAuth.bearerFromHeader(req.get('Authorization'));
 }
 
 // Middleware: API eingeschaltet?
@@ -103,13 +104,10 @@ function requireEnabled(_req, res, next) {
 }
 
 // Middleware: gültiges Bearer-Token?
+// Dieselbe Prüfung nutzt der Audio-Bus-WebSocket (states-api/auth.js).
 function requireToken(req, res, next) {
-  const header = req.get('Authorization');
-  const token = bearerToken(req);
-  if (!header || !token) return sendError(res, 'unauthorized');
-  const result = tokens.verify(token, apiConfig.get().credentialVersion);
-  if (result.status === 'expired') return sendError(res, 'token_expired');
-  if (result.status !== 'valid') return sendError(res, 'token_invalid');
+  const result = apiAuth.verifyAuthorization(req.get('Authorization'));
+  if (!result.ok) return sendError(res, result.code);
   return next();
 }
 
@@ -298,6 +296,13 @@ function statesApiRoutes(db) {
     }
   });
   onlyMethods(router, `${API_BASE}/states/*topic`, ['GET', 'PUT']);
+
+  // Audio Bus: Der WebSocket-Upgrade wird vor Express im HTTP-Server
+  // behandelt (audio-bus/ws-server.js). Gewöhnliche HTTP-Aufrufe landen hier.
+  router.all(`${API_BASE}/audio/ws`, (_req, res) => {
+    res.set('Upgrade', 'websocket');
+    return sendError(res, 'upgrade_required');
+  });
 
   // Alles Weitere unter /api/v1 gibt es nicht.
   router.all(`${API_BASE}/*rest`, (_req, res) => sendError(res, 'not_found'));

@@ -19,6 +19,7 @@ const systemDatabase = require('../database');
 const { normalizeDatabaseInput } = require('../database/config');
 const statesApiConfig = require('../states-api/config');
 const statesApiTokens = require('../states-api/tokens');
+const audioBus = require('../audio-bus');
 
 // Query-Parameter (?tab=) auf einen gültigen Tab abbilden. Der alte
 // /remote-access-Link leitet mit ?tab=remote-access hierher.
@@ -69,6 +70,7 @@ function settingsRoutes(db) {
         config: statesApiConfig.get(),
         baseUrl: statesApiBaseUrl(req),
         canManage: !!(req.access && req.access.isAdmin),
+        audioBus: audioBus.status(),
         ...(extra.statesApi || {}),
       },
     }));
@@ -116,6 +118,7 @@ function settingsRoutes(db) {
       .setEnabled(db, key, enable)
       // Das Heimkino stellt eigene States bereit und prüft Schleifen zyklisch;
       // beides richtet sich erst nach dem erneuten Laden nach dem Modulstatus.
+      .then(() => (key === 'speech' ? require('../speech/runtime').reload() : null))
       .then(() => (key === 'heimkino' ? heimkinoRuntime.reload().catch(() => {}) : null))
       .then(() => (key === 'heizung' ? heizungRuntime.reload().catch(() => {}) : null))
       .then(() => sendSettings(res, {

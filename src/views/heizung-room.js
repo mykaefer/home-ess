@@ -15,7 +15,7 @@ const { renderActionSequences } = require('./action-sequences');
 const { PHASES } = require('../heizung/actions');
 const {
   MIN_TEMP, MAX_TEMP, MAX_OFFSET, MIN_HYSTERESIS, MAX_HYSTERESIS, MAX_CONTACT_DELAY_SECONDS,
-  MIN_PRIORITY, MAX_PRIORITY, addressFor,
+  MIN_PRIORITY, MAX_PRIORITY, addressFor, isTemperatureConfigured,
 } = require('../heizung/rooms');
 const climate = require('../heizung/climate');
 
@@ -45,6 +45,7 @@ function num(value) {
 
 // Zustandszeile: was die Regelung gerade tut und warum.
 function stateLine(room, state) {
+  if (!isTemperatureConfigured(room)) return '<p class="muted">Ohne Soll-Temperatur dient der Raum nur der Gerätezuordnung. Heizung und Klima bleiben inaktiv.</p>';
   const marks = [];
   if (state.heating) marks.push('<span class="condition-enabled is-enabled">Heizen</span>');
   if (state.cooling) marks.push('<span class="condition-enabled is-enabled">Kühlen</span>');
@@ -108,7 +109,7 @@ function settingsForm(room, central, hasCoolDevice) {
             <div class="dialog-section-head"><h4>Regelung</h4></div>
             <div class="dialog-grid dialog-grid--two">
               <label class="field-block"><span>Name</span><span class="field-hint">Steht in den State-Topics des Raums — ein Umbenennen ändert sie</span><input name="name" value="${escapeHtml(room.name)}" required maxlength="100" data-no-state-picker></label>
-              <label class="field-block"><span>Soll-Temperatur (°C)</span><input name="targetTemp" type="number" value="${num(room.targetTemp)}" min="${MIN_TEMP}" max="${MAX_TEMP}" step="0.5" required data-no-state-picker></label>
+              <label class="field-block"><span>Soll-Temperatur (°C)</span><input name="targetTemp" type="number" value="${num(room.targetTemp)}" min="${MIN_TEMP}" max="${MAX_TEMP}" step="0.5" data-no-state-picker></label>
               <label class="field-block"><span>Offset Heizen (°C nach unten)</span><span class="field-hint">Heizen ein bei Soll minus Offset — 0 heißt: genau bei der Soll-Temperatur</span><input name="heatOffset" type="number" value="${num(room.heatOffset)}" min="0" max="${MAX_OFFSET}" step="0.5" data-no-state-picker></label>
               <label class="field-block"><span>Offset Kühlen (°C nach oben)</span><span class="field-hint">Kühlen ein bei Soll plus Offset</span><input name="coolOffset" type="number" value="${num(room.coolOffset)}" min="0" max="${MAX_OFFSET}" step="0.5" data-no-state-picker></label>
               <label class="field-block"><span>Mindesttemperatur zum Kühlen (°C)</span><span class="field-hint">Darunter wird nie gekühlt — eine Nachtabsenkung am Thermostat weckt die Klimaanlage damit nicht. Leer = keine Untergrenze. Liegt Soll plus Offset höher, gilt dieser Wert.</span><input name="coolMinTemp" type="number" value="${num(room.coolMinTemp)}" min="${MIN_TEMP}" max="${MAX_TEMP}" step="0.5" placeholder="ohne Untergrenze" data-no-state-picker></label>
@@ -173,6 +174,7 @@ function sensorDialog(roomId) {
 }
 
 function statesBlock(room, stateTopics) {
+  if (!stateTopics.length) return '';
   const rows = stateTopics.map((entry) => `              <div class="adapter-row hz-item-row">
                 <span class="adapter-col-name"><strong>${escapeHtml(entry.label)}</strong></span>
                 <span class="adapter-col-addr muted" title="${escapeHtml(entry.topic)}"><code>${escapeHtml(entry.topic)}</code></span>

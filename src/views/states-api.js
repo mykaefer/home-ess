@@ -20,6 +20,7 @@ function statesApiPanel({
   error = '',
   passwordMessage = '',
   passwordError = '',
+  audioBus = null,
 } = {}) {
   const disabled = canManage ? '' : ' disabled';
   const hours = Math.round(TOKEN_TTL_MS / 3600000);
@@ -75,6 +76,7 @@ function statesApiPanel({
             </div>
           </form>
 
+${audioBusCard(audioBus, config, baseUrl)}
           <section class="settings-card">
             <div class="settings-card-head">
               <h2>States-Katalog</h2>
@@ -90,6 +92,32 @@ function statesApiPanel({
             </div>
           </section>
           </div>`;
+}
+
+// Statuskarte des Audio Bus. Zeigt nur Kennzahlen — keine Geräte, Räume oder
+// Session-IDs.
+function audioBusCard(status, config, baseUrl) {
+  if (!status) return '';
+  const usable = status.active && status.listening && config.enabled;
+  const statusClass = usable ? 'module-status--on' : 'module-status--off';
+  const statusLabel = usable ? 'Aktiv' : 'Inaktiv';
+  const wsUrl = String(baseUrl || '/api/v1').replace(/^http(s?):/, 'ws$1:') + '/audio/ws';
+  const fact = (label, value) => `<div><span>${escapeHtml(label)}</span><strong>${escapeHtml(String(value))}</strong></div>`;
+  return `          <section class="settings-card">
+            <div class="settings-card-head">
+              <h2>Audio Bus <span class="module-status ${statusClass}">${statusLabel}</span></h2>
+              <p class="settings-card-hint">Bidirektionale Audio-Verbindung für Clients wie Sprachsatelliten oder Desktop-Widgets. Clients melden sich mit demselben Zugriffstoken wie bei der States API an; ohne aktivierte States API ist der Audio Bus nicht erreichbar. Audio wird nur weitergeleitet, nicht gespeichert.</p>
+            </div>
+            <div class="update-settings-versions states-api-facts">
+              <div><span>WebSocket</span><strong><code>${escapeHtml(wsUrl)}</code></strong></div>
+              ${fact('Aktive Sessions', `${status.sessions} / ${status.limits ? status.limits.maxSessions : '—'}`)}
+              ${fact('Verbindungen', status.connections)}
+              ${fact('Input-Abonnenten', status.inputSubscribers)}
+              ${fact('Output-Streams', status.outputStreams)}
+              ${fact('Verworfene Chunks', status.counters ? status.counters.droppedChunks : 0)}
+            </div>
+          </section>
+`;
 }
 
 const statesApiScript = `
