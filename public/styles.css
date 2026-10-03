@@ -8979,3 +8979,17 @@ body.dash-editing .widget-card--weather .weather-head { padding-right: 76px; }
 @media (max-width: 600px) {
     .notification-dialog .button-row { padding-bottom: calc(14px + env(safe-area-inset-bottom)); }
 }
+
+/* Rollläden: Raumblöcke und kompakte Aktorzeilen wie in den Modulübersichten. */
+.shutter-row {
+  grid-template-columns: minmax(140px, 1fr) minmax(130px, .8fr) minmax(180px, 1.4fr) auto;
+}
+.shutter-note { display: block; margin-top: 3px; font-size: .9em; }
+@media (max-width: 760px) {
+  .shutter-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .shutter-row.adapter-row--head { display: none; }
+  .shutter-row .adapter-row-actions { justify-content: flex-end; flex-wrap: wrap; }
+}
+.shutter-shade-range { gap: 10px; }
+.shutter-shade-range input[type="range"] { min-width: 0; cursor: pointer; }
+.shutter-shade-range input[type="range"]:disabled { cursor: default; }

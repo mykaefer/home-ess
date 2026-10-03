@@ -76,7 +76,7 @@ function statesApiPanel({
             </div>
           </form>
 
-${audioBusCard(audioBus, config, baseUrl)}
+${audioBusCard(audioBus, config, baseUrl, canManage)}
           <section class="settings-card">
             <div class="settings-card-head">
               <h2>States-Katalog</h2>
@@ -96,7 +96,7 @@ ${audioBusCard(audioBus, config, baseUrl)}
 
 // Statuskarte des Audio Bus. Zeigt nur Kennzahlen — keine Geräte, Räume oder
 // Session-IDs.
-function audioBusCard(status, config, baseUrl) {
+function audioBusCard(status, config, baseUrl, canManage) {
   if (!status) return '';
   const usable = status.active && status.listening && config.enabled;
   const statusClass = usable ? 'module-status--on' : 'module-status--off';
@@ -111,11 +111,16 @@ function audioBusCard(status, config, baseUrl) {
             <div class="update-settings-versions states-api-facts">
               <div><span>WebSocket</span><strong><code>${escapeHtml(wsUrl)}</code></strong></div>
               ${fact('Aktive Sessions', `${status.sessions} / ${status.limits ? status.limits.maxSessions : '—'}`)}
-              ${fact('Verbindungen', status.connections)}
+              ${fact('Verbindungen', `${status.connections} / ${status.maxConnections || 32}`)}
               ${fact('Input-Abonnenten', status.inputSubscribers)}
               ${fact('Output-Streams', status.outputStreams)}
               ${fact('Verworfene Chunks', status.counters ? status.counters.droppedChunks : 0)}
             </div>
+            ${canManage ? `<form method="POST" action="/settings/audio-bus" class="settings-form">
+              <label class="field-block"><span>Maximale Audio-Sessions</span><input required type="number" name="maxSessions" min="1" max="256" step="1" value="${escapeHtml(String(status.limits ? status.limits.maxSessions : 16))}"></label>
+              <p class="muted">1–256 gleichzeitige Sessions, Standard 16. Das Verbindungslimit beträgt automatisch mindestens 32 oder das Doppelte der Session-Anzahl. Änderungen gelten sofort; beim Senken bleiben bestehende Sessions erhalten.</p>
+              <div class="button-row"><button type="submit">Speichern</button></div>
+            </form>` : ''}
           </section>
 `;
 }

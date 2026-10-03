@@ -45,8 +45,7 @@ function createRuntime({ bus = require('../audio-bus'), enabled = () => require(
     if (!client || !enabled() || epoch !== generation) return failure('speech_disabled');
     const output = client;
     const abort = new AbortController();
-    // Eine gemeinsame Abbruchquelle für bis zu 16 Audiobus-Endpunkte.
-    setMaxListeners(32, abort.signal);
+    // Die Zahl der Abbruch-Listener richtet sich nach den Ausgabezielen.
     controller = abort;
     try {
       const endpoints = await list();
@@ -57,6 +56,7 @@ function createRuntime({ bus = require('../audio-bus'), enabled = () => require(
         if (target === 'all' || target === `endpoint:${s.deviceId}` || wanted.has(s.deviceId)) selected.set(s.deviceId, s.sessionId);
       }
       if (!selected.size) return failure('no_audio_endpoints');
+      setMaxListeners(Math.max(32, selected.size * 2 + 4), abort.signal);
       // Eine Einstellungskopie je Ansage: Speichern beeinflusst erst die nächste.
       const settings = await config.get(db);
       const audio = await synthesize(text, { signal: abort.signal, volumePercent: settings.volumePercent });

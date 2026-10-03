@@ -18,13 +18,20 @@
 const { createAudioBus } = require('./bus');
 const { createAudioWsServer, AUDIO_WS_PATH } = require('./ws-server');
 
+const config = require('./config');
 const bus = createAudioBus();
+function applyMaxSessions(value) {
+  bus.setMaxSessions(value);
+  if (wsServer) wsServer.setMaxConnections(config.connectionLimit(value));
+}
+async function init(db) { applyMaxSessions(await config.load(db)); }
+async function saveSettings(db, value) { applyMaxSessions(await config.save(db, value)); }
 let wsServer = null;
 let statesRegistered = false;
 
 function attach(server) {
   if (!wsServer) {
-    wsServer = createAudioWsServer({ bus });
+    wsServer = createAudioWsServer({ bus, options: { maxConnections: config.connectionLimit(bus.limits.maxSessions) } });
     wsServer.attach(server);
   }
   return wsServer;
@@ -41,6 +48,7 @@ function status() {
     ...current,
     endpoint: AUDIO_WS_PATH,
     listening: !!wsServer,
+    maxConnections: config.connectionLimit(current.limits.maxSessions),
     connections: wsServer ? wsServer.status().connections : 0,
   };
 }
@@ -78,4 +86,4 @@ function shutdown() {
   bus.shutdown('server_shutdown');
 }
 
-module.exports = { bus, attach, createClient, status, registerStates, shutdown, AUDIO_WS_PATH };
+module.exports = { init, saveSettings, bus, attach, createClient, status, registerStates, shutdown, AUDIO_WS_PATH };

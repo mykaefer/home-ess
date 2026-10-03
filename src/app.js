@@ -148,6 +148,7 @@ function createApp() {
   app.use(wallboxRoutes(db));
   app.use(messenSchaltenRoutes(db));
   app.use(heimkinoRoutes(db));
+  app.use(require('./routes/rollladen')(db));
   app.use(heizungRoutes(db));
   app.use(adapterRoutes(db));
   app.use(statesRoutes(db));
@@ -164,7 +165,7 @@ function createApp() {
 
   // States API: gespeicherte Einstellungen laden. Bis dahin (und bei einem
   // Fehler) bleibt sie ausgeschaltet.
-  statesApiConfig.init(db).catch((err) => {
+  audioBus.init(db).then(() => statesApiConfig.init(db)).catch((err) => {
     console.error('[states-api] Einstellungen nicht ladbar:', err && err.message);
   });
 
@@ -258,6 +259,7 @@ function createApp() {
       // Init lädt Räume und Aktionsfolgen und meldet die Kinomodus-States.
       heimkinoRuntime.init(db).catch(() => {});
       heizungRuntime.init(db).catch(() => {});
+      require('./rollladen/runtime').init(db).catch(err => console.error('[rollladen] Init:', err.message));
       systemStatesRuntime.init(db);
       operatingLevelHandler.init();
       gridControlAutomation.init(db);
@@ -268,6 +270,7 @@ function createApp() {
     .catch(() => {
       heimkinoRuntime.init(db).catch(() => {});
       heizungRuntime.init(db).catch(() => {});
+      require('./rollladen/runtime').init(db).catch(err => console.error('[rollladen] Init:', err.message));
       systemStatesRuntime.init(db);
       operatingLevelHandler.init();
       gridControlAutomation.init(db);

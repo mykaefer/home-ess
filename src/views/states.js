@@ -4,6 +4,7 @@ const { renderLayout } = require('./layout');
 const { escapeHtml } = require('./components');
 const { isOn } = require('../states/controls');
 const { currentAccess } = require('../auth/access');
+const i18n = require('../i18n');
 
 // Zentrale States-Seite: berechnete Systemwerte und von Adaptern gemeldete
 // States in einem gemeinsamen Baum mit aktuellem Wert.
@@ -61,6 +62,24 @@ ${blocks}
         if (!Object.prototype.hasOwnProperty.call(values, topic)) continue;
         count += 1;
         if (!known[topic]) return true;
+      }
+      return count !== nodes.length;
+    }
+    // Auch eine geänderte Bedienart (z. B. nach dem Nachladen einer
+    // CCU-Parameterbeschreibung) muss ohne Seitenneuladen sichtbar werden.
+    function statesControlsChanged(controls) {
+      if (!controls) return false;
+      var nodes = document.querySelectorAll('[data-state-control]');
+      var known = {};
+      for (var i = 0; i < nodes.length; i++) {
+        var topic = nodes[i].getAttribute('data-state-control');
+        known[topic] = nodes[i].getAttribute('data-control-spec');
+      }
+      var count = 0;
+      for (var topic in controls) {
+        if (!Object.prototype.hasOwnProperty.call(controls, topic)) continue;
+        count += 1;
+        if (known[topic] !== JSON.stringify(controls[topic])) return true;
       }
       return count !== nodes.length;
     }
@@ -144,7 +163,7 @@ ${blocks}
         } else if (type === 'select') {
           var select = box.querySelector('select');
           if (select && document.activeElement !== select) select.value = String(value);
-        } else {
+        } else if (type !== 'action') {
           var input = box.querySelector('input');
           if (input && document.activeElement !== input && box.getAttribute('data-dirty') !== '1') {
             input.value = String(value);
@@ -174,7 +193,7 @@ ${blocks}
         .then(function (r) { return r.ok ? r.json() : null; })
         .then(function (data) {
           if (!data || !data.values) return;
-          if (statesStructureChanged(data.values)) statesReloadTree(data.values, data.raw);
+          if (statesStructureChanged(data.values) || statesControlsChanged(data.controls)) statesReloadTree(data.values, data.raw);
           else {
             statesApplyValues(data.values);
             statesApplyControls(data.raw);
@@ -400,7 +419,12 @@ function renderControl(st) {
   if (!control) return '';
   const topic = escapeHtml(st.topic);
   const label = escapeHtml(st.name);
-  const head = `<span class="value-row-control" data-state-control="${topic}" data-control-type="${escapeHtml(control.type)}">`;
+  const head = `<span class="value-row-control" data-state-control="${topic}" data-control-type="${escapeHtml(control.type)}" data-control-spec="${escapeHtml(JSON.stringify(control))}">`;
+  if (control.type === 'action') {
+    const actionLabel = escapeHtml(i18n.localizeText(control.label));
+    return `${head}<button type="button" class="state-op-btn" data-action-value="${escapeHtml(control.value)}"
+                    aria-label="${label}: ${actionLabel}" onclick="statesWrite(this, this.getAttribute('data-action-value'))">${actionLabel}</button></span>`;
+  }
   if (control.type === 'switch') {
     const on = isOn(st.value);
     return `${head}<button type="button" class="state-op-btn${on ? ' is-active' : ''}" data-state-on

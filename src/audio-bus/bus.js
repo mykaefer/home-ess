@@ -92,7 +92,7 @@ function formatFromParams(params = {}) {
 }
 
 function createAudioBus(options = {}) {
-  const limits = Object.freeze({ ...DEFAULT_LIMITS, ...(options.limits || {}) });
+  let limits = Object.freeze({ ...DEFAULT_LIMITS, ...(options.limits || {}) });
   const log = options.logger || defaultLogger;
   const now = options.now || Date.now;
 
@@ -622,7 +622,12 @@ function createAudioBus(options = {}) {
   }
 
   return {
-    limits,
+    get limits() { return limits; },
+    setMaxSessions(value) {
+      const maxSessions = require('./config').normalize(value);
+      limits = Object.freeze({ ...limits, maxSessions });
+      notifyChange();
+    },
     openSession,
     pushInput,
     endSession,

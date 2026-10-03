@@ -142,7 +142,8 @@ function renderBatterie({
               <small>Setzt den Mindest-Ladezustand einmal täglich automatisch in 1-%-Schritten – genau dann, wenn
               der Akku laut Prognose seinen Tageshöchststand überschritten hat und dauerhaft entlädt. Der Wert wird
               so gewählt, dass der Akku am Folgetag planmäßig wieder 100 % erreicht; er bleibt dabei immer bei
-              mindestens 10 % und höchstens 1 % unter dem aktuellen Ladezustand. Am selben Tag wird nicht
+              mindestens 10 %, höchstens 95 % und mindestens einen Prozentpunkt unter dem aktuellen Ladezustand.
+              Die absolute Obergrenze von 95 % verhindert die Deaktivierung der DC-PV-Anlagen. Am selben Tag wird nicht
               nachkorrigiert.</small>
               <p class="muted"><span>Letzte automatische Anpassung</span> <strong id="dynamicMinSocStatus">${escapeHtml(dynamicStatusText(dynamicStatus, config))}</strong></p>
             </div>

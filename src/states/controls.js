@@ -5,13 +5,14 @@
 // Auf der States-Seite lässt sich jeder beschreibbare State direkt bedienen.
 // Welches Element dafür passt, sagt entweder die Quelle selbst (Module und
 // Custom States kennen ihren Datentyp und liefern `control` mit) oder es wird
-// aus dem zuletzt gesehenen Wert abgeleitet — Adapter melden zu ihren States
-// nur, ob sie beschreibbar sind, nicht wie.
+// aus dem zuletzt gesehenen Wert abgeleitet, falls die Quelle keine Bedienart
+// meldet.
 //
 //   switch – Ein/Aus mit zwei Schaltflächen
 //   select – feste Auswahl (z. B. Aus/An/Automatik)
 //   number – Zahlenfeld mit „Setzen"
 //   text   – Textfeld mit „Setzen"
+//   action – einzelner Impulsbutton ohne Werteingabe
 //
 // Beim Schalten zählt die Darstellung des Ziel-States: ein Boolean-State darf
 // nicht mit einer numerischen 1/0 beschrieben werden und umgekehrt (derselbe
@@ -22,7 +23,7 @@ const TRUE_WORDS = ['1', 'true', 'on', 'ein', 'an', 'ja', 'yes'];
 const FALSE_WORDS = ['0', 'false', 'off', 'aus', 'nein', 'no'];
 const BOOLEAN_WORDS = [...TRUE_WORDS, ...FALSE_WORDS];
 
-const TYPES = ['switch', 'select', 'number', 'text'];
+const TYPES = ['switch', 'select', 'number', 'text', 'action'];
 
 function text(value) {
   return String(value == null ? '' : value).trim();
@@ -100,6 +101,13 @@ function normalizeControl(control, value) {
     if (control.max != null) result.max = Number(control.max);
     result.step = control.step == null ? 'any' : String(control.step);
     return result;
+  }
+  if (type === 'action') {
+    return {
+      type: 'action',
+      value: control.value == null ? 'true' : String(control.value),
+      label: control.label == null ? 'Auslösen' : String(control.label),
+    };
   }
   return { type: 'text' };
 }

@@ -5,6 +5,7 @@
 // aktualisiert, damit renderLayout() ohne DB-Abfrage auf den Status zugreifen kann.
 
 const REGISTRY = [
+  { key: 'rollladen', label: 'Rollladensteuerung', path: '/rollladen', description: 'Raumweise Rollläden mit vorausschauendem Sonnenschutz, Nachtschluss, Fensterkontakten und Heimkino-Anbindung.' },
   { key: 'speech', label: 'Sprachausgabe', path: '/speech', description: 'Lokale CPU-Sprachausgabe von Nachrichten an Audio-Endpunkte und Räume.' },
   {
     key: 'pool',

@@ -82,7 +82,7 @@ function rejectUpgrade(socket, status, code, headers = {}) {
 
 function createAudioWsServer({ bus, path = AUDIO_WS_PATH, auth = apiAuth, options = {}, logger = defaultLogger } = {}) {
   if (!bus) throw new TypeError('createAudioWsServer benötigt einen Audio Bus.');
-  const opts = Object.freeze({ ...DEFAULT_OPTIONS, ...options });
+  let opts = Object.freeze({ ...DEFAULT_OPTIONS, ...options });
   const log = logger;
   const wss = new WebSocketServer({ noServer: true, maxPayload: opts.maxPayloadBytes, perMessageDeflate: false });
   const connections = new Set();
@@ -373,7 +373,10 @@ function createAudioWsServer({ bus, path = AUDIO_WS_PATH, auth = apiAuth, option
     return { endpoint: path, connections: connections.size, maxConnections: opts.maxConnections };
   }
 
-  return { path, handleUpgrade, attach, shutdown, status };
+  return { path, handleUpgrade, attach, shutdown, status, setMaxConnections(value) {
+    if (!Number.isInteger(value) || value < 1 || value > 512) throw new RangeError('invalid_connection_limit');
+    opts = Object.freeze({ ...opts, maxConnections: value });
+  } };
 }
 
 module.exports = { createAudioWsServer, AUDIO_WS_PATH, PROTOCOL_VERSION, DEFAULT_OPTIONS };

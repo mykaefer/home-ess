@@ -7,6 +7,8 @@ const rooms = require('../heimkino/rooms');
 const actionsRepo = require('../heimkino/actions');
 const runtime = require('../heimkino/runtime');
 const renderHeimkino = require('../views/heimkino');
+const shutterRepo = require('../rollladen/repository');
+const sharedRooms = require('../heizung/rooms');
 const renderHeimkinoRoom = require('../views/heimkino-room');
 
 function countActions(list) {
@@ -26,17 +28,19 @@ function heimkinoRoutes(db) {
 
   async function overview(res, options = {}) {
     const list = await rooms.listRooms(db);
+    const assignments = await shutterRepo.all(db, 'SELECT * FROM rollladen_cinema');
     const withCounts = [];
     for (const room of list) {
       const tree = await actionsRepo.actionTree(db, room.id);
       withCounts.push({
         ...room,
+        assignedRoomId: assignments.find(a => a.cinema_id === room.id)?.room_id || null,
         stateTopic: rooms.stateTopic(room.id),
         onCount: countActions(tree.on),
         offCount: countActions(tree.off),
       });
     }
-    res.status(options.status || 200).send(renderHeimkino({ rooms: withCounts, ...options }));
+    res.status(options.status || 200).send(renderHeimkino({ rooms: withCounts, sharedRooms: await sharedRooms.listRooms(db), ...options }));
   }
 
   async function roomPage(res, roomId, options = {}) {
@@ -79,11 +83,19 @@ function heimkinoRoutes(db) {
   };
 
   router.post('/heimkino/rooms', requireAuth, requireHeimkinoEnabled, roomMutation(
-    (req) => rooms.createRoom(db, req.body), 'Raum angelegt.',
+    async (req) => {
+      if (req.body.assignedRoomId) await shutterRepo.requireRoom(db, req.body.assignedRoomId);
+      const room = await rooms.createRoom(db, req.body);
+      await shutterRepo.setCinemaRoom(db, room.id, req.body.assignedRoomId);
+    }, 'Raum angelegt.',
     (req) => ({ mode: 'add', values: req.body })
   ));
   router.post('/heimkino/rooms/:id', requireAuth, requireHeimkinoEnabled, roomMutation(
-    (req) => rooms.updateRoom(db, req.params.id, req.body), 'Raum gespeichert.',
+    async (req) => {
+      if (req.body.assignedRoomId) await shutterRepo.requireRoom(db, req.body.assignedRoomId);
+      await rooms.updateRoom(db, req.params.id, req.body);
+      await shutterRepo.setCinemaRoom(db, req.params.id, req.body.assignedRoomId);
+    }, 'Raum gespeichert.',
     (req) => ({ mode: 'edit', roomId: Number(req.params.id), values: req.body })
   ));
   router.post('/heimkino/rooms/:id/delete', requireAuth, requireHeimkinoEnabled, roomMutation(

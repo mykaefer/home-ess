@@ -773,6 +773,26 @@ test('15. Clients und Plugins können fremde Sessions nicht übernehmen', async 
 
 // ── Grenzen, Timeouts, Shutdown ──────────────────────────────────────────
 
+test('Verbindungslimit lässt sich ohne Trennung bestehender Clients ändern', async () => {
+  const token = await login();
+  const clients = [];
+  const previous = wsServer.status().maxConnections;
+  try {
+    wsServer.setMaxConnections(1);
+    clients.push(await connect(token));
+    await assert.rejects(connect(token), (error) => error.status === 503 && error.body.error === 'too_many_connections');
+    wsServer.setMaxConnections(2);
+    clients.push(await connect(token));
+    wsServer.setMaxConnections(1);
+    assert.equal(wsServer.status().connections, 2);
+    assert.ok(clients.every((client) => client.ws.readyState === WebSocket.OPEN));
+    await assert.rejects(connect(token), (error) => error.status === 503);
+  } finally {
+    wsServer.setMaxConnections(previous);
+    await Promise.all(clients.map(closeClient));
+  }
+});
+
 test('Maximale Sessionanzahl wird durchgesetzt', () => {
   const localBus = createAudioBus({ logger: silentLogger, limits: { maxSessions: 2 } });
   const params = { deviceId: 'd', source: 's', codec: 'pcm_s16le', sampleRate: 16000, channels: 1 };
@@ -780,6 +800,26 @@ test('Maximale Sessionanzahl wird durchgesetzt', () => {
   assert.ok(localBus.openSession(fakeTransport(), params).ok);
   assert.equal(localBus.openSession(fakeTransport(), params).code, 'too_many_sessions');
   localBus.shutdown();
+});
+
+test('Sessionlimit wächst sofort und Senken erhält laufende Sessions', () => {
+  const localBus = createAudioBus({ logger: silentLogger, limits: { maxSessions: 1 } });
+  const params = { deviceId: 'd', source: 's', codec: 'pcm_s16le', sampleRate: 16000, channels: 1 };
+  try {
+    const first = localBus.openSession(fakeTransport(), params).session;
+    assert.equal(localBus.openSession(fakeTransport(), params).code, 'too_many_sessions');
+    localBus.setMaxSessions(64);
+    assert.ok(localBus.openSession(fakeTransport(), params).ok);
+    localBus.setMaxSessions(1);
+    assert.equal(localBus.status().sessions, 2);
+    assert.equal(localBus.openSession(fakeTransport(), params).code, 'too_many_sessions');
+    localBus.endSession(first.sessionId, 'client_end');
+    assert.equal(localBus.openSession(fakeTransport(), params).code, 'too_many_sessions');
+    localBus.endSession(localBus.listSessions()[0].sessionId, 'client_end');
+    assert.ok(localBus.openSession(fakeTransport(), params).ok);
+    assert.throws(() => localBus.setMaxSessions(0), { validation: true });
+    assert.equal(localBus.limits.maxSessions, 1);
+  } finally { localBus.shutdown(); }
 });
 
 test('Idle- und Session-Timeout beenden Sessions und informieren Client und Plugins', async () => {

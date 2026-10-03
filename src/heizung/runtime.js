@@ -685,6 +685,10 @@ async function evaluateRoom(room, outdoor, sweep, now) {
   }
   state.climateMode = room.climateMode;
   state.climateOverride = override;
+  if (cooling && !override && require('../rollladen/runtime').coolingHold(room.id)) {
+    cooling = false;
+    note = 'Sonnenschutz wirkt vor automatischer Kühlung (höchstens 15 Minuten).';
+  }
   state.hasCoolDevice = coolDevice;
 
   state.heatDemand = heatDemand;
@@ -916,6 +920,7 @@ async function evaluateCentral(config, demandCount, sweep, now) {
 
 async function tick(now = Date.now()) {
   if (!database || !isEnabled('heizung')) return;
+  await require('../rollladen/runtime').tick(now).catch(() => {});
   // Nach jedem (Wieder-)Verbindungsaufbau zählt der erneut eingespielte
   // retained Thermostat-Wert wieder als Ausgangsbasis, nicht als Verstellung.
   const epoch = mqttClient.getConnectEpoch();

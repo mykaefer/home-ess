@@ -119,6 +119,7 @@ function settingsRoutes(db) {
       // Das Heimkino stellt eigene States bereit und prüft Schleifen zyklisch;
       // beides richtet sich erst nach dem erneuten Laden nach dem Modulstatus.
       .then(() => (key === 'speech' ? require('../speech/runtime').reload() : null))
+      .then(() => (key === 'rollladen' ? require('../rollladen/runtime').reload() : null))
       .then(() => (key === 'heimkino' ? heimkinoRuntime.reload().catch(() => {}) : null))
       .then(() => (key === 'heizung' ? heizungRuntime.reload().catch(() => {}) : null))
       .then(() => sendSettings(res, {
@@ -293,6 +294,17 @@ function settingsRoutes(db) {
     }
     return next();
   };
+
+  router.post('/settings/audio-bus', requireAuth, requireStatesApiAdmin, async (req, res, next) => {
+    try {
+      await audioBus.saveSettings(db, req.body.maxSessions);
+      return await sendSettings(res, { activeTab: 'states-api', statesApi: { message: 'Audiobus-Einstellungen gespeichert. Bestehende Verbindungen bleiben erhalten.' } });
+    } catch (error) {
+      if (!error.validation) return next(error);
+      res.status(400);
+      return sendSettings(res, { activeTab: 'states-api', statesApi: { error: error.message } }).catch(next);
+    }
+  });
 
   router.post('/settings/states-api/enabled', requireAuth, requireStatesApiAdmin, async (req, res, next) => {
     const wanted = req.body.enabled === '1' || req.body.enabled === 'on';

@@ -5,7 +5,36 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 
 ## [Unreleased]
 
+## [1.7.8] — 2026-10-01
+
+### Behoben
+
+- Der dynamische Mindest-SoC ist absolut auf 95 % begrenzt, damit DC-PV-Anlagen
+  nicht durch einen höheren Mindest-Ladezustand deaktiviert werden.
+
+- Homematic-RPC rechnet CCU-Positionswerte mit Einheit `100%` und Rohbereich
+  0–1,01 beim Lesen in Prozent und beim Schreiben zurück um. Der Adapter nutzt
+  die CCU-Datentypen für Positionsfelder und `STOP`-Impulse; die Rollladensteuerung
+  liest bei HmIP-Kanal 4 die Istposition von Kanal 3.
+
+- Die aktuelle Helligkeit zeigte bei bereits sichtbarer früher Dämmerung noch
+  0 %. Helligkeitsanzeige und nächtliche Rollladenschwelle beginnen nun bei
+  −18° Sonnenhöhe; die Horizontgrenze bleibt bei 0°.
+
+- Rollladensteuerung wertet nur noch die zugeordneten Positions- und
+  Fensterkontakt-Ereignisse unmittelbar aus. Fremde State-Fluten lösen keine
+  vollständigen Datenbank- und Sonnenberechnungen mehr aus; ohne angelegte
+  Rollläden bleibt die Hintergrundauswertung inaktiv.
+
 ### Neu
+
+- Optionales Modul Rollladensteuerung: gemeinsame Räume, auswählbare Aktor- und
+  Fensterkontakt-States, Fensterrichtung, raumweise Dämmerungsschwelle sowie
+  vorausschauender Sonnenschutz vor automatischer Kühlung. Persistente manuelle
+  Raumübersteuerung, mindestens eine Stunde Sonnenschutz-Haltezeit und Schutz
+  vor wiederholten Fahrbefehlen ohne bestätigte Rückmeldung.
+- Heimkinos können bestehenden Räumen zugeordnet werden; Kino verdunkelt deren
+  Rollläden und stellt beim Beenden die aktuell vorgesehene Position wieder her.
 
 - Optionales Modul Sprachausgabe: persistente Audiobus-Endpunkte mit lesbaren
   Namen und Zuordnung zu bestehenden Räumen. Nachrichten wahlweise über Relay,
@@ -13,6 +42,30 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
   aktiven Endpunkte. Begrenzte Warteschlange und getrennte Versandergebnisse.
 
 ### Geändert
+
+- Aktuelle homeESS-Helligkeit oben in der Rollladenübersicht anzeigen und über
+  die bestehende Statusabfrage automatisch aktualisieren.
+
+- Rollladenübersicht aktualisiert Positionen, Steuerungsgrund, Fehler und
+  Raummodus automatisch alle fünf Sekunden, ohne neue Steuerläufe auszulösen.
+  Der Sonnenschutz wird über einen Regler von Offen bis Geschlossen eingestellt,
+  unabhängig von invertierten Prozentwerten des Aktors.
+
+- Rollladenaktoren benötigen wahlweise Hoch/Runter oder einen Prozent-State.
+  Bei kombinierter Einrichtung werden Endlagen per Hoch/Runter und Zwischenlagen
+  per Prozent angefahren. Einstellbare Sonnenschutzposition für Prozent-Aktoren;
+  Richtungsaktoren ohne Positionsrückmeldung verwenden gemerkte Endlagen und
+  Fahrzeiten, ohne zyklische Wiederholbefehle.
+
+- Rollladenübersicht im bestehenden Raumblock-/Zeilenstil, ausschließlich mit
+  belegten Räumen. Anlegen und Bearbeiten über Dialoge; Raumauswahl per Dropdown
+  oder neue Raumbezeichnung direkt im Rollladendialog. Dämmerung separat im Dialog.
+- Aktives Heimkino hat nun Vorrang vor Fensteröffnung; nach Kinoende greift
+  wieder die Fensterregel bzw. die gespeicherte manuelle oder geplante Position.
+
+- Audiobus-Sessionlimit in den Einstellungen dauerhaft auf 1–256 einstellbar.
+  Verbindungslimit wächst automatisch mit; Anpassungen gelten ohne Neustart
+  und ohne bestehende Sessions zu trennen.
 
 - Nachrichten und Sprachausgabe mit responsiven Karten, klar gegliederten
   Formularen und für Touch geeigneten Aktionen neu gestaltet. Nachrichten
@@ -28,7 +81,7 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 
 - Die Installer für Main und Development installieren Piper und das deutsche
   Sprachmodell Thorsten High automatisch mit. Die neuronale Stimme ersetzt die
-  bisherige eSpeak-Sprachausgabe; die Versionsnummer bleibt 1.7.7.
+  bisherige eSpeak-Sprachausgabe.
 
 ## [1.7.7] — 2026-09-28
 

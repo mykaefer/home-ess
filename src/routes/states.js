@@ -247,17 +247,19 @@ function statesRoutes(db) {
       // Rohwerte der beschreibbaren States: die Bedienelemente auf der Seite
       // zeigen damit den tatsächlichen Zustand, nicht die formatierte Anzeige.
       const raw = {};
+      const controls = {};
       for (const inst of tree) {
         // Virtuelle Blöcke (z. B. Schaltgruppen) liefern eine eigene Darstellung
         // („Ein"/„Aus"); Adapter-States werden weiterhin generisch formatiert.
         forEachState(inst.categories, (st) => {
           values[st.topic] = st.display != null ? st.display : displayValue(st.value, st.unit);
           if (st.writable) raw[st.topic] = st.value == null ? '' : String(st.value);
+          if (req.access && req.access.canOperate && st.control) controls[st.topic] = st.control;
         });
       }
-      res.json({ values, raw });
+      res.json({ values, raw, controls });
     } catch (_) {
-      res.status(500).json({ values: {}, raw: {} });
+      res.status(500).json({ values: {}, raw: {}, controls: {} });
     }
   });
 

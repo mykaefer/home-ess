@@ -19,6 +19,82 @@ test('HM-RPC XML-Codec verarbeitet verschachtelte CCU-Gerätelisten', () => {
   assert.deepEqual(xmlrpc.parseResponse(xml), input);
 });
 
+test('HM-RPC bedient Rollladen über virtuellen Empfänger und liest Transmitter-Position', async (t) => {
+  const calls = [];
+  let callbackUrl = '';
+  let level = 0.16;
+  const ccu = http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => {
+      const request = xmlrpc.parseCall(Buffer.concat(chunks).toString('utf8'));
+      calls.push(request);
+      let result = '';
+      if (request.method === 'listDevices') result = [
+        { ADDRESS: 'BLIND', TYPE: 'BLIND', NAME: 'Rollladen' },
+        { ADDRESS: 'BLIND:3', TYPE: 'SHUTTER_TRANSMITTER', PARENT: 'BLIND', NAME: 'Istposition', PARAMSETS: ['VALUES'] },
+        { ADDRESS: 'BLIND:4', TYPE: 'SHUTTER_VIRTUAL_RECEIVER', PARENT: 'BLIND', NAME: 'Steuerung', PARAMSETS: ['VALUES'] },
+      ];
+      if (request.method === 'getParamsetDescription') result = request.params[0] === 'BLIND:3'
+        ? { LEVEL: { TYPE: 'FLOAT', OPERATIONS: 5, UNIT: '100%', MIN: 0, MAX: 1.01 } }
+        : {
+          LEVEL: { TYPE: 'FLOAT', OPERATIONS: 7, UNIT: '100%', MIN: 0, MAX: 1.01 },
+          STOP: { TYPE: 'ACTION', OPERATIONS: 2, MIN: false, MAX: true },
+          ACTUAL_PERCENT: { TYPE: 'FLOAT', OPERATIONS: 5, UNIT: '%', MIN: 0, MAX: 100 },
+          DUTY_CYCLE: { TYPE: 'INTEGER', OPERATIONS: 5, UNIT: '100%', MIN: 0, MAX: 100 },
+        };
+      if (request.method === 'getParamset') result = request.params[0] === 'BLIND:3'
+        ? { LEVEL: level }
+        : { LEVEL: level, STOP: false, ACTUAL_PERCENT: 42, DUTY_CYCLE: 10 };
+      if (request.method === 'setValue') level = request.params[2];
+      if (request.method === 'init' && request.params[0]) callbackUrl = request.params[0];
+      res.writeHead(200, { 'Content-Type': 'text/xml' });
+      res.end(xmlrpc.methodResponse(result));
+    });
+  });
+  const port = await listen(ccu);
+  t.after(() => new Promise((resolve) => ccu.close(resolve)));
+  const values = new Map();
+  let catalog = [];
+  const adapter = createAdapter({
+    name: 'blinds', setStates(list) { catalog = list; }, setStorage() {},
+    publishState(address, value) { values.set(address, value); },
+    publishStates(entries) { entries.forEach(({ address, value }) => values.set(address, value)); },
+    setConnected() {}, log() {}, error() {},
+  });
+  await adapter.start({ host: '127.0.0.1', port, callbackHost: '127.0.0.1', reconnectInterval: 3600 });
+  t.after(() => adapter.stop());
+
+  const state = 'BLIND%3A4/LEVEL';
+  const actual = 'BLIND%3A3/LEVEL';
+  assert.equal(catalog.find(entry => entry.address === actual).writable, false);
+  assert.equal(catalog.find(entry => entry.address === state).unit, '%');
+  assert.deepEqual(catalog.find(entry => entry.address === state).control,
+    { type: 'number', step: 'any', min: 0, max: 100 });
+  assert.deepEqual(catalog.find(entry => entry.address === 'BLIND%3A4/STOP').control,
+    { type: 'action', value: 'true', label: 'Stoppen' });
+  assert.equal(values.get(actual), 16, 'CCU-Wert 0.16 erscheint als 16 %');
+  assert.equal(values.get(state), 16);
+  assert.equal(values.get('BLIND%3A4/ACTUAL_PERCENT'), 42);
+  assert.equal(values.get('BLIND%3A4/DUTY_CYCLE'), 10);
+
+  await adapter.write(state, 50);
+  assert.equal(calls.filter(call => call.method === 'setValue').at(-1).params[2], 0.5);
+  await adapter.write(state, 50);
+  assert.equal(calls.filter(call => call.method === 'setValue').length, 1, 'gleicher Prozentwert wird nicht erneut gesendet');
+
+  const target = new URL(callbackUrl);
+  await xmlrpc.call({ host: target.hostname, port: Number(target.port) }, 'event', ['blinds', 'BLIND:3', 'LEVEL', 0.73]);
+  assert.equal(values.get(actual), 73, 'CCU-Event verwendet dieselbe Prozentskala');
+  await adapter.write(actual, 20);
+  assert.equal(calls.filter(call => call.method === 'setValue').length, 1, 'Istposition bleibt schreibgeschützt');
+  await adapter.write('BLIND%3A4/STOP', true);
+  assert.deepEqual(calls.filter(call => call.method === 'setValue').at(-1).params, ['BLIND:4', 'STOP', true]);
+  await adapter.write('BLIND%3A4/STOP', true);
+  assert.equal(calls.filter(call => call.method === 'setValue' && call.params[1] === 'STOP').length, 2,
+    'jeder STOP-Klick ist ein eigener Impuls');
+});
+
 test('HM-RPC hält Werte per Event aktuell, liest lokal und sperrt Schreiben bei Duty Cycle', async (t) => {
   const calls = [];
   let callbackUrl = '';
@@ -234,7 +310,7 @@ test('HM-RPC stellt Geräteliste und Katalog nach Neustart aus der Persistenz he
         { ADDRESS: 'ABC', TYPE: 'SWITCH', NAME: 'Lampe' },
         { ADDRESS: 'ABC:1', TYPE: 'SWITCH_TRANSMITTER', PARENT: 'ABC', NAME: 'Kanal 1', PARAMSETS: ['VALUES'] },
       ];
-      if (request.method === 'getParamsetDescription') result = { STATE: { TYPE: 'BOOL', OPERATIONS: 7 }, LEVEL: { TYPE: 'FLOAT', OPERATIONS: 5, UNIT: '%' } };
+      if (request.method === 'getParamsetDescription') result = { STATE: { TYPE: 'BOOL', OPERATIONS: 7 }, LEVEL: { TYPE: 'FLOAT', OPERATIONS: 7, UNIT: '%' } };
       if (request.method === 'getParamset') result = { STATE: false, LEVEL: 42 };
       res.writeHead(200, { 'Content-Type': 'text/xml' });
       res.end(xmlrpc.methodResponse(result));
@@ -265,7 +341,8 @@ test('HM-RPC stellt Geräteliste und Katalog nach Neustart aus der Persistenz he
     setStates(list) { catalog2 = list; }, setStorage(key, value) { storage2[key] = value; },
     publishState() {}, publishStates() {}, setConnected() {}, log() {}, error() {},
   });
-  await second.start({ host: '127.0.0.1', port: deadPort, callbackHost: '127.0.0.1', devices: storage.devices });
+  await second.start({ host: '127.0.0.1', port: deadPort, callbackHost: '127.0.0.1',
+    devices: storage.devices, rpcMetadata: storage.rpcMetadata });
   t.after(() => second.stop());
 
   // Der Katalog ist aus der Persistenz vollständig – obwohl keine CCU-Synchronisierung lief.
@@ -275,6 +352,8 @@ test('HM-RPC stellt Geräteliste und Katalog nach Neustart aus der Persistenz he
   assert.ok(restored.category.startsWith('Flurlampe /'), `Klarname bleibt erhalten: ${restored.category}`);
   const level = catalog2.find((entry) => entry.address === 'ABC%3A1/LEVEL');
   assert.ok(level && level.unit === '%', 'Einheit bleibt über den Neustart erhalten');
+  assert.deepEqual(level.control, { type: 'number', step: 'any' },
+    'numerisches Bedienelement bleibt auch ohne CCU-Abgleich erhalten');
 });
 
 test('HM-RPC trägt fehlende Einheiten nach, sobald die Beschreibung vorliegt', async (t) => {

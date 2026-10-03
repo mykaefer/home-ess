@@ -206,6 +206,10 @@ test('Host startet Instanz als (Fake-)Kindprozess und verarbeitet IPC', async ()
   // Kind meldet States -> persistiert in adapter_states.
   child.emit('message', { type: 'states', list: [
     { address: 'messwerte/temperatur', name: 'Temperatur', category: 'Messwerte', unit: '°C' },
+    { address: 'steuerung/level', name: 'Position', category: 'Steuerung', writable: true,
+      control: { type: 'number', min: 0, max: 100, step: 'any' }, value: 1 },
+    { address: 'steuerung/stop', name: 'Stopp', category: 'Steuerung', writable: true,
+      control: { type: 'action', value: 'true', label: 'Stoppen' } },
   ] });
   // Kind meldet Wert -> landet im Bus unter kanonischem Topic.
   child.emit('message', { type: 'value', address: 'messwerte/temperatur', value: 19 });
@@ -220,12 +224,62 @@ test('Host startet Instanz als (Fake-)Kindprozess und verarbeitet IPC', async ()
   assert.ok(inst);
   assert.equal(inst.categories[0].name, 'Messwerte');
   assert.equal(inst.categories[0].states[0].value, 19);
+  const controlRows = inst.categories.find((category) => category.name === 'Steuerung').states;
+  assert.deepEqual(controlRows.find((state) => state.name === 'Position').control,
+    { type: 'number', min: 0, max: 100, step: 'any' }, 'Zahlenmetadaten bleiben im Katalog erhalten');
+  assert.deepEqual(controlRows.find((state) => state.name === 'Stopp').control,
+    { type: 'action', value: 'true', label: 'Stoppen' }, 'Aktionsmetadaten bleiben im Katalog erhalten');
+  const { buildStatesTree: buildFullStatesTree } = require('../src/states/repository');
+  const renderStates = require('../src/views/states');
+  const { fullAccess, runWithAccess } = require('../src/auth/access');
+  const fullTree = await buildFullStatesTree(db);
+  const html = runWithAccess(fullAccess(), () => renderStates.renderStatesTree(fullTree));
+  const level = html.match(/<span class="value-row-control"[^>]*data-state-control="demo:\/\/simhost\/steuerung\/level"[^>]*>[\s\S]*?<\/span>/);
+  const stop = html.match(/<span class="value-row-control"[^>]*data-state-control="demo:\/\/simhost\/steuerung\/stop"[^>]*>[\s\S]*?<\/span>/);
+  assert.ok(level && level[0].includes('type="number"') && !level[0].includes('data-state-on'),
+    'Position 1 bleibt ein Zahlenfeld statt Ein/Aus');
+  assert.ok(stop && stop[0].includes('>Stoppen</button>') && !stop[0].includes('<input'),
+    'STOP ist ein einzelner Impulsbutton ohne Werteingabe');
 
   await host.stopInstance(id);
   assert.equal(host.isRunning(id), false);
   const stopMsg = child.sent.find((m) => m.type === 'stop');
   assert.ok(stopMsg, 'stop gesendet');
   db.close();
+});
+
+test('Host wartet bei Bestandsdatenbank auf die Adapter-State-Migration', async () => {
+  const sqlite3 = require('sqlite3');
+  const dbPath = process.env.HOME_ESS_DB;
+  fs.rmSync(dbPath, { force: true });
+  const legacy = new sqlite3.Database(dbPath);
+  await new Promise((resolve, reject) => legacy.run(
+    `CREATE TABLE adapter_states (
+      instance_id INTEGER NOT NULL, address TEXT NOT NULL, name TEXT NOT NULL DEFAULT '',
+      category TEXT NOT NULL DEFAULT '', unit TEXT NOT NULL DEFAULT '',
+      writable INTEGER NOT NULL DEFAULT 0, last_value TEXT, updated_at INTEGER,
+      PRIMARY KEY (instance_id, address))`,
+    (error) => error ? reject(error) : resolve()
+  ));
+  await new Promise((resolve, reject) => legacy.close((error) => error ? reject(error) : resolve()));
+
+  const db = openDatabase();
+  // Absichtlich sofort initialisieren: ein Adapter darf die neue Spalte auch
+  // auf einer alten Datenbank nicht vor Abschluss der Migration beschreiben.
+  await host.initAdapters(db);
+  const id = await instancesRepo.createInstance(db, 'demo', 'migration');
+  host._handleMessage({ instance: { id, name: 'migration' } }, { type: 'states', list: [
+    { address: 'level', name: 'Position', writable: true,
+      control: { type: 'number', min: 0, max: 100 } },
+  ] });
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  const row = await new Promise((resolve, reject) => db.get(
+    'SELECT control_json FROM adapter_states WHERE instance_id = ? AND address = ?', [id, 'level'],
+    (error, result) => error ? reject(error) : resolve(result)
+  ));
+  assert.ok(row, 'Katalogeintrag wurde nach der Migration geschrieben');
+  assert.deepEqual(JSON.parse(row.control_json), { type: 'number', min: 0, max: 100 });
+  await new Promise((resolve) => db.close(resolve));
 });
 
 test('Adapter-Neustart liest das Manifest neu und forkt die Instanzen neu', async () => {

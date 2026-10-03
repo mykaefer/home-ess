@@ -566,6 +566,7 @@ test('Ohne Administratorrecht bleiben Katalog und Freigaben gesperrt', async () 
       body: JSON.stringify({ kind: 'folder', path: 'Custom', excluded: true }),
     });
     assert.equal(change.status, 403);
+    assert.equal((await fetch(`${url}/settings/audio-bus`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'maxSessions=64' })).status, 403);
     const password = await fetch(`${url}/settings/states-api/password`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -643,4 +644,26 @@ test('Ein Topic in zwei Verzeichnissen gilt als ausgeschlossen, sobald eines dav
   assert.equal(view.findState('demo://x/a'), null);
   assert.deepEqual(view.allStates().map((entry) => entry.topic), []);
   assert.equal(view.findFolder('System / Eins'), null);
+});
+
+test('Audiobus-Limit wird gespeichert, sofort angewandt und beim Laden wiederhergestellt', async () => {
+  const audio = require('../src/audio-bus');
+  const config = require('../src/audio-bus/config');
+  try {
+    const saved = await form('/settings/audio-bus', { maxSessions: '64' });
+    assert.equal(saved.status, 200);
+    assert.equal(audio.status().limits.maxSessions, 64);
+    assert.equal(audio.status().maxConnections, 128);
+    assert.equal(await config.load(db), 64);
+    audio.bus.setMaxSessions(16);
+    await audio.init(db);
+    assert.equal(audio.status().limits.maxSessions, 64);
+    for (const value of ['0', '257', '1.5', '', 'abc']) {
+      assert.equal((await form('/settings/audio-bus', { maxSessions: value })).status, 400);
+      assert.equal(audio.status().limits.maxSessions, 64);
+      assert.equal(await config.load(db), 64);
+    }
+    const page = await (await fetch(`${baseUrl}/settings?tab=states-api`)).text();
+    assert.match(page, /name="maxSessions"[^>]*value="64"/);
+  } finally { await audio.saveSettings(db, 16); }
 });

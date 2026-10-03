@@ -251,8 +251,8 @@ function persistStates(instanceId, list) {
     db.run('DELETE FROM adapter_states WHERE instance_id = ?', [instanceId]);
     const stmt = db.prepare(
       `INSERT OR REPLACE INTO adapter_states
-        (instance_id, address, name, category, unit, writable, last_value, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        (instance_id, address, name, category, unit, writable, control_json, last_value, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     );
     const now = Date.now();
     for (const s of list) {
@@ -264,6 +264,8 @@ function persistStates(instanceId, list) {
         s.category ? String(s.category) : '',
         s.unit ? String(s.unit) : '',
         s.writable ? 1 : 0,
+        s.control && typeof s.control === 'object' && !Array.isArray(s.control)
+          ? JSON.stringify(s.control) : null,
         serializeStateValue(s.value),
         now,
       ]);
@@ -584,6 +586,11 @@ async function reloadAllForLanguage() {
 
 // Aktivierte Instanzen aus der DB starten und Router an diesen Host binden.
 async function initAdapters(database) {
+  // Der Katalog darf auf Bestandsdatenbanken erst nach der Spaltenmigration
+  // neu geschrieben werden. openDatabase() stellt den Abschluss bereit.
+  if (database.adapterStatesReady && !(await database.adapterStatesReady)) {
+    throw new Error('Adapter-State-Metadaten konnten nicht migriert werden.');
+  }
   db = database;
   router.setHost({
     write: (name, address, value) => write(name, address, value),

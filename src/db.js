@@ -724,6 +724,7 @@ function openDatabase() {
         category TEXT NOT NULL DEFAULT '',
         unit TEXT NOT NULL DEFAULT '',
         writable INTEGER NOT NULL DEFAULT 0,
+        control_json TEXT,
         last_value TEXT,
         updated_at INTEGER,
         PRIMARY KEY (instance_id, address),
@@ -736,6 +737,7 @@ function openDatabase() {
     db.run(
       'CREATE INDEX IF NOT EXISTS idx_adapter_states_instance_category ON adapter_states (instance_id, category)'
     );
+    db.adapterStatesReady = migrateAdapterStateControls(db);
     // Frei anlegbare, typisierte Zustände. Ordner und Werte liegen bewusst in
     // der zentralen Datenbank: custom:// ist eine homeESS-eigene State-Quelle
     // und kein zweiter Adapter mit eigener Persistenz.
@@ -891,6 +893,10 @@ function openDatabase() {
     db.run(
       'CREATE INDEX IF NOT EXISTS idx_notification_rules_state ON notification_rules (state_id, enabled)'
     );
+    db.run(`CREATE TABLE IF NOT EXISTS audio_bus_config (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      max_sessions INTEGER NOT NULL DEFAULT 16 CHECK (max_sessions BETWEEN 1 AND 256)
+    )`);
     db.run(`CREATE TABLE IF NOT EXISTS speech_config (
       id INTEGER PRIMARY KEY CHECK (id = 1),
       volume_percent INTEGER NOT NULL DEFAULT 70 CHECK (volume_percent BETWEEN 10 AND 100),
@@ -1110,6 +1116,23 @@ function openDatabase() {
     migrateConditionItemParent(db);
     db.run(`CREATE TRIGGER IF NOT EXISTS speech_room_deleted AFTER DELETE ON heizung_rooms
       BEGIN UPDATE speech_endpoints SET room_id = NULL WHERE room_id = OLD.id; END`);
+    // Rollläden nutzen dieselben Räume wie Heizung, Geräte und Sprachausgabe.
+    db.run(`CREATE TABLE IF NOT EXISTS rollladen (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
+      room_id INTEGER NOT NULL REFERENCES heizung_rooms(id) ON DELETE CASCADE,
+      config TEXT NOT NULL DEFAULT '{}')`);
+    db.run(`CREATE TABLE IF NOT EXISTS rollladen_rooms (
+      room_id INTEGER PRIMARY KEY REFERENCES heizung_rooms(id) ON DELETE CASCADE,
+      brightness REAL NOT NULL DEFAULT 50, memory TEXT NOT NULL DEFAULT '{}')`);
+    db.run(`CREATE TABLE IF NOT EXISTS rollladen_cinema (
+      cinema_id INTEGER PRIMARY KEY REFERENCES heimkino_rooms(id) ON DELETE CASCADE,
+      room_id INTEGER NOT NULL REFERENCES heizung_rooms(id) ON DELETE CASCADE)`);
+    db.run(`CREATE TRIGGER IF NOT EXISTS rollladen_room_deleted AFTER DELETE ON heizung_rooms
+      BEGIN DELETE FROM rollladen WHERE room_id=OLD.id;
+      DELETE FROM rollladen_rooms WHERE room_id=OLD.id;
+      DELETE FROM rollladen_cinema WHERE room_id=OLD.id; END`);
+    db.run(`CREATE TRIGGER IF NOT EXISTS rollladen_cinema_deleted AFTER DELETE ON heimkino_rooms
+      BEGIN DELETE FROM rollladen_cinema WHERE cinema_id=OLD.id; END`);
     migrateHeimkinoRooms(db);
     db.all('PRAGMA table_info(notification_rules)', (error, rows) => {
       if (error) return;
@@ -1125,6 +1148,16 @@ function openDatabase() {
   });
 
   return db;
+}
+
+// Ältere Datenbanken kennen nur „schreibbar“. Die von einem Adapter gemeldete
+// Bedienart bleibt mit dieser Spalte auch nach dessen Stopp erhalten.
+function migrateAdapterStateControls(db) {
+  return new Promise((resolve) => db.all('PRAGMA table_info(adapter_states)', (err, rows) => {
+    if (err || !Array.isArray(rows) || rows.length === 0) return resolve(false);
+    if (rows.some((row) => row.name === 'control_json')) return resolve(true);
+    db.run('ALTER TABLE adapter_states ADD COLUMN control_json TEXT', (alterError) => resolve(!alterError));
+  }));
 }
 
 // Nachträglich ergänzte Raumspalten und die Umstellung der Geräte auf

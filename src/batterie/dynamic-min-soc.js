@@ -23,7 +23,8 @@
 // Tagesschlüssel jede weitere Anpassung an diesem Tag – auch über einen
 // Neustart hinweg. Der Mindest-SoC pendelt dadurch nicht hin und her.
 //
-// Grenzen: nie unter 10 %, nie über den aktuellen SoC minus 1 % (ein höherer
+// Grenzen: nie unter 10 %, absolut nie über 95 % (sonst werden DC-PV-Anlagen
+// deaktiviert), nie über den aktuellen SoC minus 1 % (ein höherer
 // Wert würde den Akku sofort als leer markieren). Gesetzt wird in **ganzen
 // Prozent** — das 5-%-Raster gilt nur für den Schieberegler. Der Zielwert wird
 // aufgerundet, damit die 100 % am Folgetag nicht systematisch knapp verfehlt
@@ -39,6 +40,7 @@ const metrics = require('../runtime-metrics');
 
 // Harte Grenzen der Anpassung (%).
 const FLOOR_SOC = 10;
+const CEILING_SOC = 95;
 const SOC_HEADROOM = 1;
 // Ab dieser Stundenenergie (kWh) gilt ein Überschuss als echte Ladeaussicht und
 // nicht als Rundungsrest der Prognose.
@@ -121,7 +123,7 @@ function computeTargetMinSoc({ chargePotentialKwh, capacityKwh, currentSoc }) {
   }
   const chargeablePercent = Math.max(0, (num(chargePotentialKwh) || 0) / capacityKwh * 100);
   const desired = Math.ceil(Math.min(100, Math.max(0, 100 - chargeablePercent)));
-  const upper = Math.floor(currentSoc - SOC_HEADROOM);
+  const upper = Math.min(CEILING_SOC, Math.floor(currentSoc - SOC_HEADROOM));
   if (upper < FLOOR_SOC) {
     // Unterhalb von 11 % SoC liegen Unter- und Obergrenze über Kreuz; dann
     // bleibt der Mindest-SoC unverändert.

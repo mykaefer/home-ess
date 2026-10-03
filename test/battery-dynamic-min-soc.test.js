@@ -109,6 +109,28 @@ test('Zielwert überschreitet den aktuellen SoC minus 1 % nicht', () => {
   assert.ok(result.minSoc <= 62 - dynamicMinSoc.SOC_HEADROOM);
 });
 
+test('absolute Obergrenze von 95 % schützt DC-PV auch ohne Ladepotenzial', () => {
+  for (const currentSoc of [96, 96.8, 99, 100]) {
+    for (const chargePotentialKwh of [0, 0.01, 0.49, 0.5]) {
+      const result = dynamicMinSoc.computeTargetMinSoc({
+        chargePotentialKwh, capacityKwh: 10, currentSoc,
+      });
+      assert.equal(result.minSoc, 95);
+    }
+  }
+});
+
+test('unterhalb der absoluten Obergrenze gelten SoC-Abstand und Ladepotenzial weiter', () => {
+  for (const [currentSoc, chargePotentialKwh, expected] of [
+    [95, 0, 94], [95.9, 0, 94], [96, 0.6, 94], [100, 0.6, 94],
+  ]) {
+    const result = dynamicMinSoc.computeTargetMinSoc({
+      chargePotentialKwh, capacityKwh: 10, currentSoc,
+    });
+    assert.equal(result.minSoc, expected);
+  }
+});
+
 test('gebrochener SoC wird für die Obergrenze abgerundet', () => {
   const result = dynamicMinSoc.computeTargetMinSoc({
     chargePotentialKwh: 0, capacityKwh: 10, currentSoc: 62.8,

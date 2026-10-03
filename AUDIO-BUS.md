@@ -176,10 +176,15 @@ ohne das Protokoll zu ändern (`src/audio-bus/formats.js`).
 
 ## 4. Grenzen und Timeouts
 
+Unter **Einstellungen → States API → Audio Bus** können Administratoren die
+maximale Session-Anzahl dauerhaft speichern. Änderungen gelten ohne Neustart.
+Eine Absenkung trennt bestehende Sessions und Verbindungen nicht; neue werden
+erst zugelassen, wenn die jeweilige Anzahl unter dem neuen Limit liegt.
+
 | Grenze | Wert |
 |--------|------|
-| Gleichzeitige Sessions (gesamt) | 16 |
-| Gleichzeitige Audio-Verbindungen | 32 |
+| Gleichzeitige Sessions (gesamt) | 1–256 einstellbar, Standard 16 |
+| Gleichzeitige Audio-Verbindungen | Automatisch max(32, 2 × Session-Limit) |
 | Input-Frame | ≤ 32 KiB (größere werden mit `frame_too_large` verworfen) |
 | WebSocket-Nachricht (hart) | ≤ 256 KiB, sonst Close 1009 |
 | Control-Message | ≤ 4 KiB, ≤ 60 je 10 s |
