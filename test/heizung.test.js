@@ -454,13 +454,14 @@ test('Zentralheizung läuft bei Wärmeanforderung und protokolliert die Laufzeit
     assert.equal(runtime.centralSnapshot().burnerOn, true);
     assert.match(runtime.centralSnapshot().note, /Brenner läuft noch/);
 
-    // Der Vorlauf sinkt über mehrere Messwerte: der Brenner gilt als aus …
-    feed(central.flowCacheKey('flow'), 45.5);
-    await runtime.tick(start + 150000);
-    feed(central.flowCacheKey('flow'), 45);
-    await runtime.tick(start + 180000);
-    assert.equal(runtime.centralSnapshot().burnerOn, true);
-    feed(central.flowCacheKey('flow'), 44.5);
+    // Kleine Abfälle unter 0,3 K zählen ohne Wärmebedarf zusammen.
+    for (let step = 1; step <= 5; step += 1) {
+      feed(central.flowCacheKey('flow'), 46 - step * 0.2);
+      await runtime.tick(start + 120000 + step * 15000);
+      assert.equal(runtime.centralSnapshot().burnerOn, true);
+      assert.equal(runtime.centralSnapshot().boilerOn, true);
+    }
+    feed(central.flowCacheKey('flow'), 44.9);
     await runtime.tick(start + 210000);
     assert.equal(runtime.centralSnapshot().burnerOn, false);
 
@@ -1161,6 +1162,104 @@ test('Die Kostenzeit folgt der Rückmeldung des Brenners, sonst dem Vorlauf', as
   assert.equal(runtime.detectFiring(estimate, 51.5), true);
   assert.equal(runtime.detectFiring(estimate, 51), true);
   assert.equal(runtime.detectFiring(estimate, 50.5), false);
+});
+
+
+test('Ohne Wärmebedarf beendet ein kumulierter Vorlaufabfall über 1 °C die Brennphase', () => {
+  // Großes Rauschband, um den zusätzlichen Abschaltpfad isoliert zu prüfen.
+  const config = { flowDropDelta: 2 };
+  function firing() {
+    runtime.stop();
+    for (const flow of [35, 39, 43, 45]) runtime.detectFiring(config, flow);
+    assert.equal(runtime.detectFiring(config, 45), true);
+  }
+  try {
+    firing();
+    // Kleine Schritte zählen zusammen; ein Plateau erhält die Abkühlstrecke.
+    assert.equal(runtime.detectFiring(config, 45, false), true);
+    for (const flow of [44.8, 44.6, 44.6, 44.4, 44.2, 44]) {
+      assert.equal(runtime.detectFiring(config, flow, false), true);
+    }
+    assert.equal(runtime.detectFiring(config, 43.9, false), false);
+
+    firing();
+    // Bei bestehender Anforderung greift die neue Erkennung nicht.
+    for (const flow of [45, 44.8, 44.6, 44.4, 44.2, 44, 43.8]) {
+      assert.equal(runtime.detectFiring(config, flow, true), true);
+    }
+
+    firing();
+    for (const flow of [45, 44.8, 44.6, 44.4, 44.2, 44.3, 44.1, 43.9, 43.7, 43.5]) {
+      assert.equal(runtime.detectFiring(config, flow, false), true);
+    }
+    // Der Anstieg auf 44,3 °C hat die Strecke zurückgesetzt.
+    assert.equal(runtime.detectFiring(config, 43.2, false), false);
+
+    firing();
+    for (const flow of [45, 44.8, 44.6, 44.4]) runtime.detectFiring(config, flow, false);
+    runtime.detectFiring(config, 44.4, true);
+    for (const flow of [44.2, 44, 43.8, 43.6, 43.4]) {
+      assert.equal(runtime.detectFiring(config, flow, false), true);
+    }
+    assert.equal(runtime.detectFiring(config, 43.3, false), false);
+
+    firing();
+    const feedback = { ...config, burnerFeedbackTopic: 'custom://Flamme' };
+    feed(central.flowCacheKey('feedback'), 1);
+    assert.equal(runtime.detectFiring(feedback, 43, false), true);
+  } finally {
+    runtime.stop();
+  }
+});
+
+
+test('Langsame Vorlaufzyklen trennen Brennerlaufzeiten trotz dauernder Wärmeanforderung', async () => {
+  const db = await freshDb();
+  await central.saveCentralConfig(db, {
+    enabled: '1', mode: 'relais', switchTopic: 'custom://Brenner', outdoorTopic: 'custom://Aussen',
+    flowTopic: 'custom://Vorlauf', returnTopic: 'custom://Ruecklauf', flowDropDelta: '0.3',
+  });
+  const room = await rooms.createRoom(db, { ...baseRoom, centralAllowed: '1', centralTemp: '5' });
+  const sensor = await rooms.addSensor(db, room.id, { topic: 'hdp://sensor/1' });
+  const capture = captureWrites();
+  try {
+    await runtime.init(db);
+    const start = Date.now();
+    feed(rooms.sensorCacheKey(sensor), 17);
+    feed(central.flowCacheKey('outdoor'), 2);
+    feed(central.flowCacheKey('return'), 30);
+    let step = 0;
+    async function sample(flow, expected) {
+      feed(central.flowCacheKey('flow'), flow);
+      await runtime.tick(start + step * 30000);
+      step += 1;
+      assert.equal(runtime.centralSnapshot().demandCount, 1);
+      assert.equal(runtime.centralSnapshot().boilerOn, true);
+      assert.equal(runtime.centralSnapshot().burnerOn, expected, `Vorlauf ${flow}`);
+      // Wiederholte Auswertung desselben Cachewerts darf keinen Trend erfinden.
+      await runtime.tick(start + (step - 1) * 30000 + 5000);
+      assert.equal(runtime.centralSnapshot().burnerOn, expected);
+    }
+    await sample(40, false);
+    for (const flow of [40.2, 40.4, 40.6, 40.8, 41]) await sample(flow, false);
+    await sample(41.2, true);
+    // Plateau und leichtes Rauschen erhalten die Brennphase.
+    for (const flow of [41.2, 41.3, 41.1, 41.2]) await sample(flow, true);
+    for (const flow of [41, 40.8, 40.6, 40.8, 40.6, 40.4, 40.2]) await sample(flow, true);
+    await sample(40, false);
+    for (const flow of [40.2, 40.4, 40.6, 40.8, 41]) await sample(flow, false);
+    await sample(41.2, true);
+    const runs = await central.listRuns(db, 5);
+    assert.equal(runs.length, 2);
+    const first = runs.find(run => run.started_at === start + 6 * 30000);
+    assert.ok(first);
+    assert.equal(first.duration_ms, (18 - 6) * 30000);
+    assert.equal(capture.writes.filter(write => write.topic === 'custom://Brenner').length, 1);
+  } finally {
+    runtime.stop();
+    capture.restore();
+    await close(db);
+  }
 });
 
 

@@ -151,8 +151,9 @@ let pump = { on: false, since: null, stopAt: null };
 // Brennererkennung. Maßgeblich für das Laufzeitprotokoll und damit für die
 // Heizkosten: der Kessel kann eingeschaltet sein, ohne zu feuern (Taktung,
 // Modulation, erreichte Kesseltemperatur). `last` ist der zuletzt gesehene
-// Vorlaufwert, die Zähler sammeln aufeinanderfolgende Anstiege bzw. Rückgänge.
-let burner = { on: false, source: 'switch', last: null, rising: 0, falling: 0, runId: null };
+// Vorlaufwert; trendFrom sammelt kleine Änderungen bis zum Rauschband,
+// die Zähler sammeln aufeinanderfolgende Anstiege bzw. Rückgänge.
+let burner = { on: false, source: 'switch', last: null, trendFrom: null, rising: 0, falling: 0, coolingFrom: null, runId: null };
 let thermostatEpoch = null;
 let thermostatGraceFrom = Date.now();
 
@@ -788,17 +789,29 @@ async function setBoiler(config, on, now) {
 //   * Die anschließende Halte-Phase (der Vorlauf bleibt stehen, weil der
 //     Brenner die Temperatur hält) zählt weiter als Brennerlauf.
 //   * Erst mehrere Messwerte hintereinander nach unten beenden die Brennphase.
+//   * Ohne Wärmebedarf genügt außerdem ein durchgehender Abfall um mehr als
+//     1 °C, auch wenn die einzelnen Schritte unter dem Rauschband liegen.
 // Ohne Rückmeldung und ohne Vorlauf bleibt nur der Schaltzustand des Kessels.
-function detectFiring(config, flow) {
+function detectFiring(config, flow, wanted = true) {
   if (config.burnerFeedbackTopic) {
     const value = cacheValue(central.flowCacheKey('feedback'));
     if (value !== undefined && value !== null && value !== '') {
+      burner.coolingFrom = null;
+      burner.last = null;
+      burner.trendFrom = null;
+      burner.rising = 0;
+      burner.falling = 0;
       burner.source = 'feedback';
       burner.on = truthy(value);
       return burner.on;
     }
   }
   if (flow == null) {
+    burner.coolingFrom = null;
+    burner.last = null;
+    burner.trendFrom = null;
+    burner.rising = 0;
+    burner.falling = 0;
     burner.source = 'switch';
     burner.on = boiler.on;
     return burner.on;
@@ -807,19 +820,41 @@ function detectFiring(config, flow) {
   const delta = Math.max(0.01, Number(config.flowDropDelta) || 0.1);
   if (burner.last == null) {
     burner.last = flow;
+    burner.trendFrom = flow;
     return burner.on;
   }
-  if (flow >= burner.last + delta) {
+  // Gegen den letzten gewerteten Wert vergleichen: langsame Anstiege und
+  // Abfälle zählen auch bei Wärmebedarf. Unveränderte Cachewerte zählen nicht.
+  if (flow >= burner.trendFrom + delta) {
+    burner.trendFrom = flow;
     burner.rising += 1;
     burner.falling = 0;
-  } else if (flow <= burner.last - delta) {
+  } else if (flow <= burner.trendFrom - delta) {
+    burner.trendFrom = flow;
     burner.falling += 1;
     burner.rising = 0;
   }
   // Ein Wert innerhalb des Rauschbandes hält den Stand: er beendet weder eine
-  // Anstiegsreihe noch die Halte-Phase.
+  // Anstiegsreihe noch die Halte-Phase. Seine Änderung bleibt bis zur nächsten
+  // Überschreitung des Rauschbandes im Vergleich zu trendFrom erhalten.
+  // Ohne Wärmeanforderung zählt auch ein langsamer, kumulierter Abfall:
+  // kleine Schritte unterhalb von delta dürfen das Abschalten nicht blockieren.
+  // Jeder erneute Anstieg beginnt die Abkühlstrecke von vorn; gleichbleibende
+  // Werte halten sie. Bei Wärmebedarf (inkl. Schornsteinfeger) wird sie verworfen.
+  if (wanted) {
+    burner.coolingFrom = null;
+  } else if (burner.coolingFrom == null) {
+    burner.coolingFrom = Math.max(burner.last, flow);
+  } else if (flow > burner.last) {
+    burner.coolingFrom = flow;
+  }
+  const cooledWithoutDemand = !wanted && burner.coolingFrom - flow > 1;
   burner.last = flow;
-  if (burner.rising >= FIRING_SAMPLES) {
+  if (cooledWithoutDemand) {
+    burner.on = false;
+    burner.rising = 0;
+    burner.falling = 0;
+  } else if (burner.rising >= FIRING_SAMPLES) {
     burner.on = true;
     burner.rising = 0;
   } else if (burner.falling >= FIRING_SAMPLES) {
@@ -831,9 +866,9 @@ function detectFiring(config, flow) {
 
 // Laufzeitprotokoll führen — es zählt allein die Zeit, in der der Brenner
 // tatsächlich feuert. Ein ausgeschalteter Kessel kann nicht feuern.
-async function trackFiring(config, flow, now) {
+async function trackFiring(config, flow, now, wanted = true) {
   const was = burner.on;
-  const on = detectFiring(config, flow) && boiler.on;
+  const on = detectFiring(config, flow, wanted) && boiler.on;
   burner.on = on;
   if (on && !was) {
     burner.runId = await central.startBurnerRun(database, now, central.FIRING_SOURCES[burner.source] || '')
@@ -914,7 +949,7 @@ async function evaluateCentral(config, demandCount, sweep, now) {
     boiler.note = '';
   }
 
-  await trackFiring(config, flow, now);
+  await trackFiring(config, flow, now, wanted);
   return { flow, back };
 }
 
@@ -1222,7 +1257,7 @@ async function init(db) {
   await central.closeOpenRuns(db).catch(() => {});
   boiler = { on: false, offRequestedAt: null, note: '', commandOn: null, commandAt: null };
   pump = { on: false, since: null, stopAt: null };
-  burner = { on: false, source: 'switch', last: null, rising: 0, falling: 0, runId: null };
+  burner = { on: false, source: 'switch', last: null, trendFrom: null, rising: 0, falling: 0, coolingFrom: null, runId: null };
   await reload();
   if (!tickTimer) {
     tickTimer = setInterval(() => tick().catch(() => {}), TICK_MS);
@@ -1249,7 +1284,7 @@ function stop() {
   runner.reset();
   boiler = { on: false, offRequestedAt: null, note: '', commandOn: null, commandAt: null };
   pump = { on: false, since: null, stopAt: null };
-  burner = { on: false, source: 'switch', last: null, rising: 0, falling: 0, runId: null };
+  burner = { on: false, source: 'switch', last: null, trendFrom: null, rising: 0, falling: 0, coolingFrom: null, runId: null };
   thermostatEpoch = null;
   database = null;
 }

@@ -5,6 +5,26 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 
 ## [Unreleased]
 
+## [1.7.9] — 2026-10-09
+
+### Geändert
+
+- Agentenanweisungen legen fest: Versionsnummern werden nur auf ausdrückliche
+  Betreiberanweisung erhöht; zeitgleich wird der gesamte Unreleased-Block
+  als neuer Versionsabschnitt mit Datum übernommen.
+
+### Behoben
+
+- Brennererkennung zählt kleine Vorlaufänderungen bis zum eingestellten
+  Rauschband zusammen, auch bei bestehender Wärmeanforderung. Langsame
+  Heizzyklen werden dadurch als getrennte Brennerlaufzeiten erkannt statt
+  dauerhaft als „Brenner an“ erfasst; Plateaus und kleine Schwankungen
+  erhalten den bisherigen Zustand.
+- Brennererkennung erkennt ohne zentrale Wärmeanforderung und außerhalb des
+  Schornsteinfeger-Modus auch einen fortgesetzten Vorlaufabfall um mehr als 1 °C
+  als „Brenner aus“. Kleine Abkühlschritte unter der bisherigen Einzelschwelle
+  werden zusammengezählt; erneute Anstiege setzen die Abkühlstrecke zurück.
+
 ## [1.7.8] — 2026-10-01
 
 ### Behoben
