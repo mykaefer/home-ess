@@ -119,3 +119,32 @@ test('Optionale Installer-Guards behandeln „nichts zu tun“ als Erfolg', () =
 test.after(() => {
   fs.rmSync(TMP, { recursive: true, force: true });
 });
+
+test('Piper-Modelldownload prüft SHA-256, nutzt den Cache und erhält bei Fehlern den Bestand', () => {
+  const crypto = require('node:crypto');
+  const directory = path.join(TMP, 'piper');
+  fs.mkdirSync(path.join(directory, 'voices'), { recursive: true });
+  const source = path.join(TMP, 'piper-download');
+  fs.writeFileSync(source, 'geprüftes Modell');
+  const expected = crypto.createHash('sha256').update(fs.readFileSync(source)).digest('hex');
+  const installer = path.join(TMP, 'piper-install-test.sh');
+  fs.writeFileSync(installer, fs.readFileSync(path.join(ROOT, 'install.sh'), 'utf8')
+    .replace('readonly PIPER_DIR="/opt/home-ess-tts"', 'readonly PIPER_DIR="$TEST_PIPER_DIR"'));
+  const env = { ...process.env, TEST_PIPER_DIR: directory, TEST_DOWNLOAD: source, EXPECTED_SHA: expected };
+  const download = `source "$1"
+    curl() { cp -- "$TEST_DOWNLOAD" "\${@: -1}"; }
+    install_piper_file voice.onnx "$EXPECTED_SHA"`;
+  execFileSync('bash', ['-c', download, 'bash', installer], { env });
+  const target = path.join(directory, 'voices', 'voice.onnx');
+  assert.equal(fs.readFileSync(target, 'utf8'), 'geprüftes Modell');
+  // Eine korrekte vorhandene Datei darf auch ohne Netzwerk wiederverwendet werden.
+  execFileSync('bash', ['-c', `source "$1"; curl() { return 77; }; install_piper_file voice.onnx "$EXPECTED_SHA"`, 'bash', installer], { env });
+  fs.writeFileSync(source, 'defekter Download');
+  const rejected = spawnSync('bash', ['-c', download, 'bash', installer], {
+    env: { ...env, EXPECTED_SHA: 'a'.repeat(64) }, encoding: 'utf8',
+  });
+  assert.notEqual(rejected.status, 0);
+  assert.match(rejected.stderr, /Prüfsumme/);
+  assert.equal(fs.readFileSync(target, 'utf8'), 'geprüftes Modell');
+  assert.deepEqual(fs.readdirSync(path.join(directory, 'voices')), ['voice.onnx']);
+});

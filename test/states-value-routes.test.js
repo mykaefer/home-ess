@@ -73,6 +73,12 @@ test('Der Datentyp bestimmt das Bedienelement', () => {
   assert.deepEqual(controls.controlFor({ writable: true, value: true }), { type: 'switch', on: 'true', off: 'false' });
   assert.deepEqual(controls.controlFor({ writable: true, value: '1' }), { type: 'switch', on: '1', off: '0' });
   assert.deepEqual(controls.controlFor({ writable: true, value: '21,5' }), { type: 'number', step: 'any' });
+  assert.deepEqual(controls.controlFor({ writable: true, value: 1,
+    control: { type: 'number', min: 0, max: 100, step: 'any' } }),
+  { type: 'number', min: 0, max: 100, step: 'any' });
+  assert.deepEqual(controls.controlFor({ writable: true, value: null,
+    control: { type: 'action', value: 'true', label: 'Stoppen' } }),
+  { type: 'action', value: 'true', label: 'Stoppen' });
   assert.deepEqual(controls.controlFor({ writable: true, value: 'Guten Morgen' }), { type: 'text' });
   // Ein nur lesbarer State bekommt kein Bedienelement.
   assert.equal(controls.controlFor({ writable: false, value: 1 }), null);
@@ -120,6 +126,7 @@ test('Live-Werte liefern zusätzlich die Rohwerte der beschreibbaren States', as
   // Die Anzeige ist formatiert, das Bedienelement braucht den echten Wert.
   assert.equal(data.raw['custom://Schalter'], 'true');
   assert.equal(data.raw['custom://Sollwert'], '21.5');
+  assert.equal(data.controls['custom://Sollwert'].type, 'number');
 });
 
 test('Unbekannte States und Nur-Lese-Werte werden abgewiesen', async () => {

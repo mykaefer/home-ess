@@ -320,7 +320,7 @@ function renderPhotovoltaik({
     refreshForecast();
     setInterval(refreshForecast, 15 * 60 * 1000);`;
 
-  return renderLayout({ title: 'Photovoltaik', activePath: '/photovoltaik', body, script });
+  return renderLayout({ periodicRefresh: true, title: 'Photovoltaik', activePath: '/photovoltaik', body, script });
 }
 
 // Sonnen-Bewertung je Anlage: true = direkte Sonne (☀️), false = diffus/bewölkt (☁️),

@@ -5,6 +5,23 @@ wird unabhängig von homeESS versioniert; die Version steht in
 [adapter.json](adapter.json). Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [1.3.5] — 2026-09-26
+
+### Behoben
+
+- **SONOFF ZBMINIR2 / MINI-ZBD:** Der Start-Hook der bestehenden Gerätebibliothek
+  registriert den Hersteller-Cluster `0xFC11`, bevor Einstellungen gelesen oder
+  geschrieben werden (`external_trigger_mode`: Attribut `0x0016`, UINT8).
+  Die Geräte-Konfiguration richtet Binding und On/Off-Reporting ein; sie läuft
+  auch für bereits bekannte Geräte und erneut bei einer Geräteanmeldung.
+- Lokale `on`-/`off`-/`toggle`-Aktionen werden als `action` veröffentlicht und
+  lösen eine Abfrage von `genOnOff.onOff` aus. Auch HomeESS-Schaltbefehle
+  bestätigen den zurückgelesenen Relaiszustand. Ein fehlgeschlagener Read
+  verändert den letzten bestätigten Zustand nicht. Andere Modelle behalten
+  ihre bisherigen Empfangs- und Schreibpfade.
+- Debug-Logs für den ZBMINIR2 enthalten Endpunkt, Cluster-ID, Command, Attribute,
+  Manufacturer-Code und Transaktionsnummer sowie Konfigurations-/Read-Fehler.
+
 ## [1.3.4] — 2026-08-22
 
 ### Geändert

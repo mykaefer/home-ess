@@ -18,7 +18,7 @@ const timeHandler = require('../time-handler');
 
 const SAMPLE_RETENTION_MS = 2 * 24 * 60 * 60 * 1000; // 2 Tage (für Vortag)
 const TEN_MINUTES_MS = 10 * 60 * 1000;
-const CIVIL_TWILIGHT_ELEVATION_DEG = -6;
+const ASTRONOMICAL_TWILIGHT_ELEVATION_DEG = -18;
 const SUN_INTENSITY_WEIGHT = 0.6;
 
 function pad(value) {
@@ -104,15 +104,15 @@ async function computeInstantSunIntensity(db, cache) {
   return sample == null ? null : sample.intensity;
 }
 
-// Astronomisches Helligkeitstrapez: Während der bürgerlichen Dämmerung steigt
-// die Helligkeit linear von 0 auf 100 %. Ab dem Horizont bleibt sie bis zum
-// Sonnenuntergang auf dem 100-%-Plateau.
+// Astronomisches Helligkeitstrapez: Schon die frühe astronomische Dämmerung
+// kann den Himmel sichtbar aufhellen. Von -18° bis zum Horizont steigt der
+// Wert linear auf 100 %, danach bleibt er bis zum Sonnenuntergang dort.
 function astronomicalBrightnessPercent(solarElevationDeg) {
   if (!Number.isFinite(solarElevationDeg)) return null;
-  if (solarElevationDeg <= CIVIL_TWILIGHT_ELEVATION_DEG) return 0;
+  if (solarElevationDeg <= ASTRONOMICAL_TWILIGHT_ELEVATION_DEG) return 0;
   if (solarElevationDeg >= 0) return 100;
-  return ((solarElevationDeg - CIVIL_TWILIGHT_ELEVATION_DEG) /
-    -CIVIL_TWILIGHT_ELEVATION_DEG) * 100;
+  return ((solarElevationDeg - ASTRONOMICAL_TWILIGHT_ELEVATION_DEG) /
+    -ASTRONOMICAL_TWILIGHT_ELEVATION_DEG) * 100;
 }
 
 // Die gemessene Sonnenintensität beeinflusst 60 % des Trapezes. Die übrigen

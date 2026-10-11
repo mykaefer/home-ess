@@ -41,8 +41,10 @@ eigenständige Desktop- und Mobilansichten.
   Wirkungsgrade, Kapazität und konfigurierbaren Mindest-Ladezustand.
 - Dynamischer Mindest-SoC: setzt den Mindest-Ladezustand einmal täglich am
   prognostizierten Akku-Höchststand in 1-%-Schritten so, dass der Akku am
-  Folgetag planmäßig wieder 100 % erreicht (nie unter 10 %, nie über den
-  aktuellen SoC minus 1 %).
+  Folgetag planmäßig wieder 100 % erreicht (mindestens 10 %, höchstens 95 %, nie
+  über dem aktuellen SoC minus 1 %). Wetterabhängige PV-Variabilität wird aus
+  ursprünglichen Vortagsprognosen und gemessenen Erträgen automatisch gelernt.
+  Möglicher zusätzlicher Ladeertrag verändert die normale Versorgungsprognose nicht.
 - Bidirektionale Synchronisierung ausgewählter Einstellungen und Liveanzeigen
   für Batterie, Leistungen, Temperatur, Zeit und Betriebszustand im Kopfbereich.
 

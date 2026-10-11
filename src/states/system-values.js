@@ -31,7 +31,7 @@ const wallboxAutomation = require('../wallbox/automation');
 const { listActors } = require('../messen-schalten/actors');
 const { listGroups: listMessSchaltGroups } = require('../messen-schalten/groups');
 const { readActorValues, readGroupPowerTree, readGroupEnergyTree } = require('../messen-schalten/aggregation');
-const { readFunctionValues } = require('../messen-schalten/functions');
+const { effectiveFunction, functionLabel, readFunctionValues } = require('../messen-schalten/functions');
 const { isEnabled } = require('../modules');
 const { getState: getGridControlState } = require('../grid-control/automation');
 const operatingState = require('../operating-state');
@@ -136,6 +136,23 @@ function boolEntry(id, label, value) {
     value: value === true,
     display: value === true ? 'Ja' : 'Nein',
   };
+}
+
+// Schaltzustand eines Geräts: Ein/Aus statt Ja/Nein. Mit `writable` wird der
+// Wert zum Schreibziel (Schreibweg: messen-schalten/automation.js) und erhält
+// dasselbe Bedienelement wie eine Schaltgruppe.
+function switchEntry(id, label, value, writable = false) {
+  const entry = {
+    id,
+    label,
+    value: value === true,
+    display: value === true ? 'Ein' : 'Aus',
+  };
+  if (writable) {
+    entry.writable = true;
+    entry.control = { type: 'switch', on: 'true', off: 'false' };
+  }
+  return entry;
 }
 
 function temperaturEntry(id, label, rawValue) {
@@ -664,17 +681,38 @@ async function buildCalculatedInternalValues(db, cache) {
     const messSchaltGroups = await listMessSchaltGroups(db);
     const actorValues = await readActorValues(db, cache, messSchaltActors);
     const valueByActorId = new Map(actorValues.map((v) => [v.id, v]));
+    const rooms = messSchaltActors.some((actor) => actor.roomId != null)
+      ? await require('../heizung/rooms').listRooms(db) : [];
+    const roomsById = new Map(rooms.map((room) => [room.id, room]));
+    const groupsById = new Map(messSchaltGroups.map((group) => [group.id, group]));
     for (const actor of messSchaltActors) {
       const v = valueByActorId.get(actor.id) || {};
+      const start = entries.length;
       if (actor.switchTopic) {
-        entries.push(boolEntry(`geraet.${actor.id}.schalten`, `${actor.name} – Schalten`, v.switchOn === true));
+        // Schaltbar wie auf der Seite „Messen + Schalten“ – außer bei Geräten
+        // mit „immer an“, die dort ebenfalls nicht geschaltet werden können.
+        entries.push(switchEntry(`geraet.${actor.id}.schalten`, `${actor.name} – Schalten`, v.switchOn === true, actor.alwaysOn !== true));
       }
-      entries.push(boolEntry(`geraet.${actor.id}.status`, `${actor.name} – Status`, v.statusOn === true));
+      // Rückmeldung des Geräts: nur lesbar.
+      entries.push(switchEntry(`geraet.${actor.id}.status`, `${actor.name} – Status`, v.statusOn === true));
       if (actor.powerTopic || actor.counterTopic) {
         entries.push(powerEntry(`geraet.${actor.id}.leistung`, `${actor.name} – Leistung`, v.powerW));
       }
       if (actor.counterTopic) {
         entries.push(energyEntry(`geraet.${actor.id}.zaehler`, `${actor.name} – Zähler`, v.counterKwh));
+      }
+      const room = roomsById.get(actor.roomId);
+      const functionKey = effectiveFunction(actor, groupsById);
+      for (const entry of entries.slice(start)) {
+        if (room) entry.category = `Räume/${room.name}`;
+        entry.metadata = {
+          deviceId: actor.id,
+          deviceName: actor.name,
+          roomId: room ? room.id : null,
+          roomName: room ? room.name : null,
+          functionKey: functionKey || null,
+          functionLabel: functionLabel(functionKey) || null,
+        };
       }
     }
     const groupTree = readGroupPowerTree(messSchaltGroups, actorValues);

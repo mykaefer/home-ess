@@ -6,10 +6,30 @@ Bedrohungsbetrachtung findet sich in [THREAT_MODEL.md](THREAT_MODEL.md).
 
 ## Authentifizierung der Weboberfläche
 
-Der Zugriff auf das Dashboard und alle Fachfunktionen erfordert eine Anmeldung
+Der reguläre Zugriff auf das Dashboard und die Fachfunktionen erfordert eine Anmeldung
 (Passwort, gehasht gespeichert). Sessions sind DB-gestützte Cookie-Sessions
 (`httpOnly`, `SameSite=Lax`). Der Fernzugriff-Tab in den Einstellungen und die
 zugehörige API sind ausschließlich für angemeldete Administratoren erreichbar.
+
+## Öffentliche Seitenfreigaben
+
+Angemeldete Benutzer mit Schreibberechtigung können einzelne sichtbare Seiten
+(außer Einstellungen) über einen zufälligen Freigabelink ohne Login zugänglich
+machen. Jeder mit diesem Link erhält den gewählten Lese- oder Schreibzugriff.
+Schreibzugriff erlaubt die Änderungen und Bedienhandlungen der betreffenden
+Seite; Administratorrechte und Freigabeverwaltung werden dadurch nicht vergeben.
+Helle und dunkle Freigabe-URLs unterscheiden sich ausschließlich in der
+Darstellung; Rechte und Widerruf gelten gemeinsam für beide. Unterseiten
+benötigen eigene Freigaben. Die vorhandenen Energiefluss-Exporte
+bleiben ebenfalls ohne Anmeldung erreichbar.
+
+Freigaben werden in SQLite gespeichert. Jeder öffentliche Request prüft die
+aktuelle Freigabe und ihren Seitenumfang. Lesezugriff blockiert alle schreibenden
+HTTP-Methoden, auch bei einer gleichzeitig vorhandenen Administrator-Session.
+Ein Widerruf löscht den Link; erneutes Freigeben erzeugt einen neuen Link.
+Die öffentliche Ansicht enthält weder Menü noch Titelleiste. Sie liefert keine
+systemweiten MQTT-Ereignisse aus und setzt `Cache-Control: no-store`,
+`Referrer-Policy: no-referrer` und `X-Robots-Tag: noindex, nofollow`.
 
 ## Fernzugriff / Pairing
 

@@ -67,6 +67,9 @@ const PAGES = [
   { key: 'pool', label: 'Poolsteuerung', prefix: '/pool' },
   { key: 'grid-control', label: 'Grid-Control', prefix: '/grid-control' },
   { key: 'wallbox', label: 'Wallbox', prefix: '/wallbox' },
+  { key: 'speech', label: 'Sprachausgabe', prefix: '/speech' },
+  { key: 'rollladen', label: 'Rollladensteuerung', prefix: '/rollladen' },
+  { key: 'heizung', label: 'Heizung & Klima', prefix: '/heizung' },
   { key: 'heimkino', label: 'Heimkino', prefix: '/heimkino' },
   { key: 'settings', label: 'Einstellungen', prefix: '/settings', prefixes: ['/settings', '/module', '/remote-access', '/api/remote-access'] },
 ];

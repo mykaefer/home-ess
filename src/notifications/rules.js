@@ -9,9 +9,8 @@
 // State-Liste.
 //
 // Eine Regel speichert NIE instanceId, deviceId, Push-Token oder Firebase-Daten:
-// sie kann damit auch keine fremde Instanz und keinen bestimmten Empfänger
-// adressieren. Die Empfänger bestimmt allein der Relay über seine aktiven
-// Kopplungen.
+// Relay-Empfänger bestimmt allein der Relay über seine aktiven Kopplungen.
+// audio_target adressiert ausschließlich lokale Audiobus-Endpunkte/Räume.
 
 const service = require('./service');
 const { TRIGGER_TYPES, TRIGGER_NEEDS_VALUE, NUMERIC_TRIGGERS, isNumericValue } = require('./triggers');
@@ -23,7 +22,7 @@ const MAX_COOLDOWN_SECONDS = 86400;
 const DEFAULT_COOLDOWN_SECONDS = 5;
 
 const COLUMNS = `id, name, enabled, state_id, trigger_type, trigger_value, title, body,
-  event_type, severity, cooldown_seconds, position, created_at, updated_at, last_triggered_at`;
+  event_type, severity, cooldown_seconds, position, created_at, updated_at, last_triggered_at, delivery, audio_target`;
 
 function dbAll(db, sql, params = []) {
   return new Promise((resolve, reject) => db.all(sql, params, (error, rows) => (error ? reject(error) : resolve(rows || []))));
@@ -46,6 +45,8 @@ function validation(message) {
 function normalizeRow(row = {}) {
   return {
     id: row.id,
+    delivery: row.delivery || 'relay',
+    audioTarget: row.audio_target || 'all',
     name: row.name || '',
     enabled: row.enabled === 1 || row.enabled === true,
     stateId: row.state_id || '',
@@ -124,6 +125,7 @@ function normalizeInput(input = {}, context = {}) {
 
   return {
     name,
+    ...service.normalizeDelivery(input),
     enabled: checkboxValue(input.enabled, true),
     stateId,
     triggerType,
@@ -174,10 +176,10 @@ async function createRule(db, input, context = {}) {
       db,
       `INSERT INTO notification_rules
          (name, enabled, state_id, trigger_type, trigger_value, title, body, event_type,
-          severity, cooldown_seconds, position, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          severity, cooldown_seconds, position, created_at, updated_at, delivery, audio_target)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [rule.name, rule.enabled ? 1 : 0, rule.stateId, rule.triggerType, rule.triggerValue,
-        rule.title, rule.body, rule.eventType, rule.severity, rule.cooldownSeconds, position, now, now]
+        rule.title, rule.body, rule.eventType, rule.severity, rule.cooldownSeconds, position, now, now, rule.delivery, rule.audioTarget]
     );
   } catch (error) {
     throw uniqueNameError(error);
@@ -194,10 +196,10 @@ async function updateRule(db, id, input, context = {}) {
       db,
       `UPDATE notification_rules
           SET name = ?, enabled = ?, state_id = ?, trigger_type = ?, trigger_value = ?,
-              title = ?, body = ?, event_type = ?, severity = ?, cooldown_seconds = ?, updated_at = ?
+              title = ?, body = ?, event_type = ?, severity = ?, cooldown_seconds = ?, updated_at = ?, delivery = ?, audio_target = ?
         WHERE id = ?`,
       [rule.name, rule.enabled ? 1 : 0, rule.stateId, rule.triggerType, rule.triggerValue,
-        rule.title, rule.body, rule.eventType, rule.severity, rule.cooldownSeconds, Date.now(), Number(id)]
+        rule.title, rule.body, rule.eventType, rule.severity, rule.cooldownSeconds, Date.now(), rule.delivery, rule.audioTarget, Number(id)]
     );
   } catch (error) {
     throw uniqueNameError(error);

@@ -9,8 +9,11 @@ Kernpunkte:
   Frontend (`src/views/`, `public/styles.css`). Keine parallelen Strukturen.
 - **Pflichtprüfung:** `npm test` (node --test). Es gibt keine typecheck-/build-/
   lint-/format-Skripte; keine erfinden, keine Prüfungen abschalten.
-- **Versionierung:** Patch-Stelle hochzählen (kein Semver-Raten). Änderungen unter
-  `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md).
+- **Versionierung:** Änderungen bleiben unter `## [Unreleased]` in
+  [CHANGELOG.md](CHANGELOG.md); die Versionsnummer bleibt dabei unverändert.
+  **Nur auf ausdrückliche Anweisung des Betreibers** die Patch-Stelle hochzählen
+  (kein Semver-Raten) und zeitgleich den Unreleased-Block als neuen
+  Versionsabschnitt mit Datum übernehmen.
 - **Commit/Push macht der Betreiber selbst.** Kein ungefragter produktiver
   Neustart, keine Änderung der realen Environment-Datei.
 - **Fernzugriff/Pairing:** Datenfluss `Browser → homeESS → essrelay`; Token bleibt

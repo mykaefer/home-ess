@@ -384,7 +384,7 @@ ${kpiSection}
     }
   `;
 
-  return renderLayout({ title: 'Poolsteuerung', activePath: '/pool', body, script });
+  return renderLayout({ periodicRefresh: true, title: 'Poolsteuerung', activePath: '/pool', body, script });
 }
 
 module.exports = renderPool;

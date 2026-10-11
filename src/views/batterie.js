@@ -139,11 +139,7 @@ function renderBatterie({
             <p class="muted" id="minSocStatus" role="status" aria-live="polite"></p>
             <div class="dynamic-min-soc">
               <label class="checkbox-field"><input type="checkbox" id="dynamicMinSoc" name="dynamicMinSoc"${config.dynamicMinSoc ? ' checked' : ''}> Dynamischer Mindest-SoC</label>
-              <small>Setzt den Mindest-Ladezustand einmal täglich automatisch in 1-%-Schritten – genau dann, wenn
-              der Akku laut Prognose seinen Tageshöchststand überschritten hat und dauerhaft entlädt. Der Wert wird
-              so gewählt, dass der Akku am Folgetag planmäßig wieder 100 % erreicht; er bleibt dabei immer bei
-              mindestens 10 % und höchstens 1 % unter dem aktuellen Ladezustand. Am selben Tag wird nicht
-              nachkorrigiert.</small>
+              <small>Setzt den Mindest-Ladezustand einmal täglich in 1-%-Schritten, wenn der Akku laut Prognose seinen Tageshöchststand überschritten hat und dauerhaft entlädt. Die Spanne bis 100 % folgt dem Ladepotenzial des Folgetags. Zusätzlich lernt homeESS aus ursprünglichen Vortagsprognosen und gemessenen PV-Erträgen, welcher Mehrertrag bei vergleichbarem Wetter möglich ist. Klare, wechselhafte und diffus bewölkte Stunden werden getrennt bewertet. Solange verwertbare Lerndaten fehlen, bleibt die normale Prognose maßgeblich. Möglicher Mehrertrag ist keine gesicherte Versorgung und gibt kein höheres Betriebslevel frei. Die Grenzen bleiben bei mindestens 10 %, höchstens 95 % und mindestens einem Prozentpunkt unter dem aktuellen Ladezustand. Am selben Tag wird nicht nachkorrigiert.</small>
               <p class="muted"><span>Letzte automatische Anpassung</span> <strong id="dynamicMinSocStatus">${escapeHtml(dynamicStatusText(dynamicStatus, config))}</strong></p>
             </div>
           </div>
@@ -338,7 +334,7 @@ function renderBatterie({
     setInterval(refreshData, 30000);
   `;
 
-  return renderLayout({ title: 'Batterie', activePath: '/batterie', body, script });
+  return renderLayout({ periodicRefresh: true, title: 'Batterie', activePath: '/batterie', body, script });
 }
 
 // `label` trägt die übersetzbare Beschriftung, `text` den Rest. Beides getrennt,

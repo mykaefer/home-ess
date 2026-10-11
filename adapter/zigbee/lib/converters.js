@@ -9,6 +9,7 @@
 // gepflegt werden — in der Converter-Bibliothek.
 
 const zhc = require('zigbee-herdsman-converters');
+const zbminir2 = require('./zbminir2');
 
 function fail(message, code = 'ZIGBEE_CONVERTER') {
   return Object.assign(new Error(message), { code });
@@ -20,15 +21,17 @@ function fail(message, code = 'ZIGBEE_CONVERTER') {
  * Adapter nie beeinträchtigen.
  */
 async function resolveDefinition(device) {
+  let definition;
   try {
-    return await zhc.findByDevice(device, true);
+    definition = await zhc.findByDevice(device, true);
   } catch (_) {
     try {
-      return await zhc.findByDevice(device, false);
+      definition = await zhc.findByDevice(device, false);
     } catch (_ignored) {
       return undefined;
     }
   }
+  return zbminir2.prepareDefinition(device, definition);
 }
 
 /**
@@ -50,6 +53,7 @@ function matchingReceiveConverters(definition, message) {
  * nicht.
  */
 async function convertReceived({ definition, message, device, state, options, publish, onError, onExposesChanged }) {
+  if (zbminir2.matches(device, definition)) message = zbminir2.normalizeMessage(message);
   const payload = {};
   const converters = matchingReceiveConverters(definition, message);
   if (!converters.length) return payload;

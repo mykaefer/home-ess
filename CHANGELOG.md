@@ -5,7 +5,256 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 
 ## [Unreleased]
 
-Noch keine Änderungen für die nächste Versionsnummer.
+## [1.8.0] — 2026-10-11
+
+### Hinzugefügt
+
+- Seitenfreigaben (außer Einstellungen): Symbol am Seitentitel und Dialog für
+  nicht freigegeben (grau), Lesezugriff (blau) und Schreibzugriff (rot), inklusive
+  Freigabe-URL und Kopierfunktion. Zufällige Links öffnen ausschließlich die
+  freigegebene Seite ohne Anmeldung, Menü oder Titelleiste. Lesezugriff sperrt
+  Änderungen serverseitig; Unterseiten haben eigene Freigaben. Ein Widerruf
+  macht den alten Link ungültig, auch nach erneuter Freigabe.
+
+### Geändert
+
+- Alle Seiten ohne eigene periodische Inhaltsaktualisierung erhalten eine
+  gedrosselte Änderungsprüfung: Ereignisse werden wie beim Dashboard gebündelt,
+  vollständige Seiten höchstens einmal pro Minute geprüft und nur bei Änderungen
+  neu geladen. Hintergrund-Tabs, offene Dialoge, Drag-and-drop und ungespeicherte
+  Formulare verhindern das Neuladen. Bereits vorhandene Live-Abfragen bleiben
+  erhalten; die Ergänzung gilt auch für öffentliche Freigaben und Adapterseiten.
+
+- Der Freigabedialog zeigt für jede Seite getrennte URLs für das helle und
+  dunkle Theme, jeweils mit Kopierbutton. Beide Links verwenden dieselben
+  Zugriffsrechte und behalten ihr Theme bei Bedienhandlungen und Weiterleitungen.
+
+- Seitentitel verwenden einheitliche Schriftgrößen, Zeilenhöhen und obere
+  Abstände auf Desktop und Smartphone. Freigabesymbole verschieben die Titel
+  nicht mehr; auch Einstellungen, öffentliche Seiten und Adapterverwaltungen
+  folgen derselben Ausrichtung.
+
+- Dynamischer Mindest-SoC berücksichtigt automatisch gelernte PV-Variabilität:
+  Ursprüngliche Vortagsprognosen werden je Wetterklasse mit gemessenen
+  Stunden verglichen. Möglicher Mehrertrag wird anhand der Klarhimmel-Referenz,
+  des gleichzeitigen Hausverbrauchs und der Ladeverluste als zusätzliches
+  Ladepotenzial bewertet. Es gibt keine manuelle Wolkenlücken-Dauer und keinen
+  pauschalen SoC-Abzug. Bis ausreichend Messungen aus mehreren Tagen vorliegen,
+  bleibt die normale Prognose maßgeblich; die Prognoseseite zeigt die Lernphase
+  bzw. das gelernte Zusatzpotenzial. Abgeregelte, unvollständige und veraltete
+  Messungen werden nicht gelernt. Versorgungssicherheit und Betriebslevel
+  verwenden weiterhin die normale Prognose.
+
+### Behoben
+
+- Releasecheck: transitive Abhängigkeiten `ip-address`, `proxy-addr`, `qs`,
+  `tar` und `undici` in der Lockdatei auf korrigierte Versionen innerhalb der
+  bestehenden Versionsbereiche aktualisiert. Die anschließende npm-Prüfung
+  meldet keine bekannten Schwachstellen.
+
+- Betriebslevel 5 setzt neben Überschuss und vollem Akku eine gesicherte
+  Versorgung voraus. Im Netzparallelbetrieb haben rote und gelbe Prognosen
+  Vorrang; im Autarkbetrieb muss zunächst die Mehrtagesreserve ausreichend
+  sein. Ein voller Akku bei hohem Mindest-SoC und wenig erwartetem PV-Ertrag
+  gibt deshalb nicht allein wegen kurzzeitigem Überschuss alle Verbraucher frei.
+
+## [1.7.9] — 2026-10-09
+
+### Geändert
+
+- Agentenanweisungen legen fest: Versionsnummern werden nur auf ausdrückliche
+  Betreiberanweisung erhöht; zeitgleich wird der gesamte Unreleased-Block
+  als neuer Versionsabschnitt mit Datum übernommen.
+
+### Behoben
+
+- Brennererkennung zählt kleine Vorlaufänderungen bis zum eingestellten
+  Rauschband zusammen, auch bei bestehender Wärmeanforderung. Langsame
+  Heizzyklen werden dadurch als getrennte Brennerlaufzeiten erkannt statt
+  dauerhaft als „Brenner an“ erfasst; Plateaus und kleine Schwankungen
+  erhalten den bisherigen Zustand.
+- Brennererkennung erkennt ohne zentrale Wärmeanforderung und außerhalb des
+  Schornsteinfeger-Modus auch einen fortgesetzten Vorlaufabfall um mehr als 1 °C
+  als „Brenner aus“. Kleine Abkühlschritte unter der bisherigen Einzelschwelle
+  werden zusammengezählt; erneute Anstiege setzen die Abkühlstrecke zurück.
+
+## [1.7.8] — 2026-10-01
+
+### Behoben
+
+- Der dynamische Mindest-SoC ist absolut auf 95 % begrenzt, damit DC-PV-Anlagen
+  nicht durch einen höheren Mindest-Ladezustand deaktiviert werden.
+
+- Homematic-RPC rechnet CCU-Positionswerte mit Einheit `100%` und Rohbereich
+  0–1,01 beim Lesen in Prozent und beim Schreiben zurück um. Der Adapter nutzt
+  die CCU-Datentypen für Positionsfelder und `STOP`-Impulse; die Rollladensteuerung
+  liest bei HmIP-Kanal 4 die Istposition von Kanal 3.
+
+- Die aktuelle Helligkeit zeigte bei bereits sichtbarer früher Dämmerung noch
+  0 %. Helligkeitsanzeige und nächtliche Rollladenschwelle beginnen nun bei
+  −18° Sonnenhöhe; die Horizontgrenze bleibt bei 0°.
+
+- Rollladensteuerung wertet nur noch die zugeordneten Positions- und
+  Fensterkontakt-Ereignisse unmittelbar aus. Fremde State-Fluten lösen keine
+  vollständigen Datenbank- und Sonnenberechnungen mehr aus; ohne angelegte
+  Rollläden bleibt die Hintergrundauswertung inaktiv.
+
+### Neu
+
+- Optionales Modul Rollladensteuerung: gemeinsame Räume, auswählbare Aktor- und
+  Fensterkontakt-States, Fensterrichtung, raumweise Dämmerungsschwelle sowie
+  vorausschauender Sonnenschutz vor automatischer Kühlung. Persistente manuelle
+  Raumübersteuerung, mindestens eine Stunde Sonnenschutz-Haltezeit und Schutz
+  vor wiederholten Fahrbefehlen ohne bestätigte Rückmeldung.
+- Heimkinos können bestehenden Räumen zugeordnet werden; Kino verdunkelt deren
+  Rollläden und stellt beim Beenden die aktuell vorgesehene Position wieder her.
+
+- Optionales Modul Sprachausgabe: persistente Audiobus-Endpunkte mit lesbaren
+  Namen und Zuordnung zu bestehenden Räumen. Nachrichten wahlweise über Relay,
+  lokale CPU-TTS (Piper mit Thorsten High) oder beide Wege; Audio an Endpunkt, Raum oder alle
+  aktiven Endpunkte. Begrenzte Warteschlange und getrennte Versandergebnisse.
+
+### Geändert
+
+- Aktuelle homeESS-Helligkeit oben in der Rollladenübersicht anzeigen und über
+  die bestehende Statusabfrage automatisch aktualisieren.
+
+- Rollladenübersicht aktualisiert Positionen, Steuerungsgrund, Fehler und
+  Raummodus automatisch alle fünf Sekunden, ohne neue Steuerläufe auszulösen.
+  Der Sonnenschutz wird über einen Regler von Offen bis Geschlossen eingestellt,
+  unabhängig von invertierten Prozentwerten des Aktors.
+
+- Rollladenaktoren benötigen wahlweise Hoch/Runter oder einen Prozent-State.
+  Bei kombinierter Einrichtung werden Endlagen per Hoch/Runter und Zwischenlagen
+  per Prozent angefahren. Einstellbare Sonnenschutzposition für Prozent-Aktoren;
+  Richtungsaktoren ohne Positionsrückmeldung verwenden gemerkte Endlagen und
+  Fahrzeiten, ohne zyklische Wiederholbefehle.
+
+- Rollladenübersicht im bestehenden Raumblock-/Zeilenstil, ausschließlich mit
+  belegten Räumen. Anlegen und Bearbeiten über Dialoge; Raumauswahl per Dropdown
+  oder neue Raumbezeichnung direkt im Rollladendialog. Dämmerung separat im Dialog.
+- Aktives Heimkino hat nun Vorrang vor Fensteröffnung; nach Kinoende greift
+  wieder die Fensterregel bzw. die gespeicherte manuelle oder geplante Position.
+
+- Audiobus-Sessionlimit in den Einstellungen dauerhaft auf 1–256 einstellbar.
+  Verbindungslimit wächst automatisch mit; Anpassungen gelten ohne Neustart
+  und ohne bestehende Sessions zu trennen.
+
+- Nachrichten und Sprachausgabe mit responsiven Karten, klar gegliederten
+  Formularen und für Touch geeigneten Aktionen neu gestaltet. Nachrichten
+  benötigen auf Mobilgeräten keine horizontal scrollende Tabelle mehr.
+
+- Pegel, Audiovorlauf, Nachlauf und Paketdauer sind unter Nachrichten →
+  Sprachausgabe dauerhaft einstellbar und gelten ab der nächsten Ansage.
+  Standard-Vorlauf und -Nachlauf auf jeweils 1000 ms erhöht.
+
+- Sprachausgabe steht als Unterpunkt von Nachrichten im Desktop- und Mobilmenü.
+  Piper erhält rund 3 dB Pegelreserve; die Audio-Ausgabe nutzt einen begrenzten
+  Vorlauf und absolute Sample-Zeiten gegen kumulierte Timer-Verzögerungen.
+
+- Die Installer für Main und Development installieren Piper und das deutsche
+  Sprachmodell Thorsten High automatisch mit. Die neuronale Stimme ersetzt die
+  bisherige eSpeak-Sprachausgabe.
+
+## [1.7.7] — 2026-09-28
+
+- Lokale Sprachausgabe einschließlich automatischer Installation von Piper
+  und Thorsten High über die Main- und Development-Installer.
+
+## [1.7.6] — 2026-09-28
+
+### Neu
+
+- Räume können direkt im Geräte-Dialog von „Messen + Schalten“ nur mit einem
+  Namen angelegt werden. Die Soll-Temperatur ist optional: Ohne sie dienen Räume
+  ausschließlich der Gerätezuordnung, stehen am Ende der Raumliste und fehlen
+  in Temperaturverteilung, Regelung und Heizungs-/Klima-States. Bestehende
+  konfigurierte Räume bleiben aktiv. Beim Entfernen des Sollwerts werden
+  laufende Raumgeräte abgeschaltet und die zugehörigen Regelungs-States entfernt.
+
+- Alle Geräte unter „Messen + Schalten“ können optional einem vorhandenen Raum
+  zugeordnet werden (Raumspalte und Geräte-Dialog). Ihre States erscheinen unter
+  „System / Räume / <Raum>“ mit stabilen Topics und Metadaten zu Gerät, Raum und
+  effektiver Funktionsgruppe, einschließlich Gruppenvererbung. Die States API
+  liefert diese Angaben mit, um etwa Licht von Warmwasser zu unterscheiden.
+
+- **Audio Bus.** Zentrale, bidirektionale Audio-Infrastruktur im Core.
+  Externe Clients streamen Audio über den WebSocket `/api/v1/audio/ws`
+  (Binärframes, JSON-Control-Messages) und empfangen Audio zurück. Die
+  Anmeldung erfolgt mit dem Bearer-Token der States API, laufend
+  nachgeprüft. Plugins abonnieren Sessions und Input und senden Output –
+  intern über `createClient()`, als Adapter über `host.audio.*` mit
+  `"audioBus": true` im Manifest. Je Plugin gibt es eine begrenzte Queue,
+  dazu Session-, Frame- und Output-Grenzen, Idle- und Session-Timeouts,
+  den State `system://homeess/audio.active_sessions` und eine Statuskarte
+  unter *Einstellungen → States API*. Beschreibung:
+  [AUDIO-BUS.md](AUDIO-BUS.md).
+
+## [1.7.5] — 2026-09-26
+
+### Behoben
+
+- **SONOFF ZBMINIR2 im Zigbee-Adapter (1.3.5).** Hersteller-Cluster wird vor
+  Gerätezugriffen registriert; Binding und Reporting werden beim Start, nach
+  dem Interview und bei erneuter Geräteanmeldung eingerichtet. Einstellungen
+  wie `external_trigger_mode` nutzen dadurch die vorhandene Clusterdefinition
+  für `0xFC11` / `0x0016`. Lokale Schaltaktionen und HomeESS-Schaltbefehle
+  fragen den tatsächlichen Relaiszustand ab, statt ihn aus `toggle` abzuleiten.
+  Debug-Logs dokumentieren ZCL-Cluster, Command, Attribute und Manufacturer-Code.
+
+## [1.7.4] — 2026-09-26
+
+### Behoben
+
+- **Dynamischer Batterie-Mindest-SOC ohne Wallbox-Einfluss.** Eine eigene
+  Hausakku-Simulation vergleicht die PV-Prognose mit dem Hausverbrauch
+  einschließlich Pool und Funktionen, vollständig ohne Fahrzeugladung.
+  Wallbox-Lasten können weder das morgige Ladepotenzial reduzieren noch den
+  täglichen Auslösezeitpunkt vorziehen. Die Berechnung plant eine Vollladung
+  anhand des prognostizierten Überschusses und des Ladewirkungsgrads.
+
+## [1.7.3] — 2026-09-26
+
+### Neu
+
+- **States API (v1).** Neue lokale, versionierte Schnittstelle unter `/api/v1`,
+  über die externe Clients (z. B. eine Desktop-Widgetleiste) den homeESS-State-
+  Baum durchsuchen, Werte lesen und beschreibbare States setzen können.
+  Vollständige Beschreibung für Client-Entwickler: [STATES-API.md](STATES-API.md).
+  - Neuer Reiter *Einstellungen → States API* (zwischen *Module* und
+    *Fernzugriff*): Schalter *States API aktivieren* (Standard: aus), API-
+    Passwort (nur als scrypt-Hash gespeichert, nicht wieder anzeigbar) und ein
+    ebenenweise nachgeladener *States-Katalog*, in dem einzelne States oder
+    ganze Verzeichnisse vom API-Zugriff ausgeschlossen werden. Ein
+    ausgeschlossenes Verzeichnis sperrt alles darunter; seine Einträge sind bis
+    zur erneuten Freigabe nicht einzeln konfigurierbar.
+  - Anmeldung mit dem API-Passwort an `POST /api/v1/auth`, danach
+    `Authorization: Bearer <token>`. Tokens sind 12 Stunden gültig, werden nur
+    als Hash im Speicher gehalten und verlieren bei Passwortänderung,
+    Deaktivieren, Abmelden oder Neustart ihre Gültigkeit. Fehlgeschlagene
+    Anmeldungen sind begrenzt (5 je Adresse in 15 Minuten, dann 15 Minuten
+    Sperre).
+  - Endpunkte: `GET /api/v1/folders` (Verzeichnisinhalt), `GET /api/v1/states`
+    (Katalog mit Suche und Seiten), `GET`/`PUT /api/v1/states/{topic}`.
+    Ausschlüsse werden serverseitig bei jedem Zugriff geprüft; ausgeschlossene
+    Einträge erscheinen weder in Listen noch in Suchergebnissen oder Zählern
+    und antworten wie nicht vorhandene.
+  - Die API führt keine eigenen Werte: Gelesen wird aus dem zentralen State-
+    Baum, geschrieben über denselben Weg wie auf der Seite *States*. Gespeichert
+    werden nur Schalter, Passwort-Hash und Ausschlussliste (neue Tabelle
+    `states_api_config`).
+
+### Geändert
+
+- **Geräte aus *Messen + Schalten* sind als State schaltbar.**
+  `system://homeess/geraet.<id>.schalten` ist jetzt ein beschreibbarer
+  Schalter (Anzeige *Ein*/*Aus* statt *Ja*/*Nein*) und lässt sich damit auf der
+  Seite *States*, in Aktionsfolgen und über die States API bedienen – genau wie
+  Schaltgruppen. Geschrieben wird über dieselbe Logik wie der Schalter auf der
+  Seite *Messen + Schalten*: Geräte mit *Immer an* bleiben ausgenommen, und
+  Einschalten setzt weiterhin die Freigabe durch das Betriebslevel voraus.
+  `geraet.<id>.status` bleibt eine reine Rückmeldung, zeigt aber ebenfalls
+  *Ein*/*Aus*.
 
 ## [1.7.2] — 2026-09-23
 

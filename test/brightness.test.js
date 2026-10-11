@@ -11,9 +11,10 @@ const {
 const { ENVIRONMENT_STATE_IDS } = require('../src/mqtt/config');
 
 test('Helligkeit bildet Dämmerung, Tagesplateau und Nacht als Trapez ab', () => {
-  assert.equal(astronomicalBrightnessPercent(-7), 0);
-  assert.equal(astronomicalBrightnessPercent(-6), 0);
-  assert.equal(astronomicalBrightnessPercent(-3), 50);
+  assert.equal(astronomicalBrightnessPercent(-19), 0);
+  assert.equal(astronomicalBrightnessPercent(-18), 0);
+  assert.ok(Math.abs(astronomicalBrightnessPercent(-12) - 100 / 3) < 1e-10);
+  assert.equal(astronomicalBrightnessPercent(-9), 50);
   assert.equal(astronomicalBrightnessPercent(0), 100);
   assert.equal(astronomicalBrightnessPercent(45), 100);
 });
@@ -24,6 +25,7 @@ test('Sonnenintensität beeinflusst 60 %, diffuses Tageslicht bleibt zu 40 % erh
   assert.equal(combineBrightnessPercent(100, 0), 40);
   assert.equal(combineBrightnessPercent(50, 0), 20);
   assert.equal(combineBrightnessPercent(50, null), 50);
+  assert.ok(combineBrightnessPercent(astronomicalBrightnessPercent(-12), 0) > 0);
 });
 
 test('Helligkeit bleibt nachts auch ohne Leistungswert bei 0 %', () => {

@@ -31,7 +31,7 @@ function compareVersions(left, right) {
 // voneinander eine eigene Nummer führen können.
 //
 // Inhalt ist ein JSON-Objekt mit dem Feld `version`:
-//   { "version": "1.7.2" }
+//   { "version": "1.7.3" }
 const VERSION_FILE = 'VERSION.json';
 
 function parseVersionFile(text) {

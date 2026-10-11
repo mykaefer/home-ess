@@ -12,6 +12,7 @@ const { recordCalibration } = require('./photovoltaik/calibration');
 const { buildStromverbrauchSnapshot } = require('./stromverbrauch/aggregation');
 const { recordSample } = require('./photovoltaik/sun-intensity');
 const { refreshWeather } = require('./photovoltaik/forecast');
+const pvUncertainty = require('./photovoltaik/uncertainty');
 const { loadAllStateDefinitions } = require('./mqtt/state-definitions');
 const outputEngine = require('./output/engine');
 const systemStatesRuntime = require('./states/system-runtime');
@@ -42,6 +43,9 @@ const conditionsRoutes = require('./routes/conditions');
 const notificationRoutes = require('./routes/notifications');
 const remoteAccessRoutes = require('./routes/remote-access');
 const updateRoutes = require('./routes/update');
+const statesApiRoutes = require('./routes/states-api');
+const statesApiConfig = require('./states-api/config');
+const audioBus = require('./audio-bus');
 const logStore = require('./logging/log-store');
 const pairingState = require('./remote-access/pairing-state');
 const identityStore = require('./remote-access/identity-store');
@@ -110,6 +114,7 @@ function createApp() {
     next();
   });
   app.use(sessionMiddleware(db));
+  app.use(require('./page-sharing/middleware').sharingMiddleware(db));
 
   // Globale Autorisierung nach dem Rechtemodell (read/operate/write + sichtbare
   // Seiten). openPaths sind ohne Anmeldung erreichbar (Login/Logout und die
@@ -121,12 +126,15 @@ function createApp() {
     // seinem Manifest ausdrücklich als öffentlich erklärt hat. Ohne diese
     // Ausnahme käme das USB-Flashtool nicht an die Firmware, denn es kann
     // keine Sitzung führen.
-    openPaths: ['/', '/login', '/logout', '/energiefluss/export', '/adapter-public', '/update/health'],
+    // /api/v1 ist die States API (STATES-API.md): Sie kennt keine Cookie-
+    // Sessions, sondern prüft ihr eigenes Bearer-Token selbst.
+    openPaths: ['/', '/login', '/logout', '/energiefluss/export', '/adapter-public', '/update/health', '/api/v1'],
     sharedPaths: ['/live', '/me', '/states/catalog'],
   }));
 
   // Routen-Module. Jede Funktionsgruppe liegt in eigener Datei.
   app.use(authRoutes(db));
+  app.use(require('./routes/page-sharing')(db));
   app.use(dashboardRoutes(db));
   app.use(energieRoutes(db));
   app.use(stromverbrauchRoutes(db));
@@ -143,14 +151,30 @@ function createApp() {
   app.use(wallboxRoutes(db));
   app.use(messenSchaltenRoutes(db));
   app.use(heimkinoRoutes(db));
+  app.use(require('./routes/rollladen')(db));
   app.use(heizungRoutes(db));
   app.use(adapterRoutes(db));
   app.use(statesRoutes(db));
   app.use(databaseRoutes(db));
   app.use(conditionsRoutes(db));
   app.use(notificationRoutes(db));
+  app.use(require('./routes/speech')(db));
   app.use(remoteAccessRoutes());
   app.use(updateRoutes());
+  app.use(statesApiRoutes(db));
+  // JSON-Fehlerantworten für /api/v1 (fehlerhaftes JSON, Ausnahmen) statt der
+  // HTML-Fehlerseite von Express.
+  app.use(statesApiRoutes.errorHandler);
+
+  // States API: gespeicherte Einstellungen laden. Bis dahin (und bei einem
+  // Fehler) bleibt sie ausgeschaltet.
+  audioBus.init(db).then(() => statesApiConfig.init(db)).catch((err) => {
+    console.error('[states-api] Einstellungen nicht ladbar:', err && err.message);
+  });
+
+  // Audio Bus: Anzahl aktiver Sessions als System-State melden. Audio selbst
+  // läuft nie über States; der WebSocket hängt server.js an.
+  audioBus.registerStates();
 
   // Fernzugriff: dauerhafte Instanzidentität und Origin-WebSocket vorbereiten.
   // Der Relay-Client ist ein optionaler Subdienst — Fehler dürfen den normalen
@@ -178,6 +202,7 @@ function createApp() {
   // Optionale Module und globalen Betriebszustand laden – muss abgeschlossen sein bevor
   // loadAllStateDefinitions läuft, da isEnabled() sonst noch falsch zurückgibt.
   const modulesReady = initModules(db)
+    .then(() => require('./speech/runtime').init(db))
     .catch(() => {})
   // Adapter-Host vor loadAllStateDefinitions hochfahren: Registry/Schemes und der
   // Router-Host müssen stehen, bevor State-Definitionen (ggf. mit prefix://-Topics)
@@ -237,6 +262,7 @@ function createApp() {
       // Init lädt Räume und Aktionsfolgen und meldet die Kinomodus-States.
       heimkinoRuntime.init(db).catch(() => {});
       heizungRuntime.init(db).catch(() => {});
+      require('./rollladen/runtime').init(db).catch(err => console.error('[rollladen] Init:', err.message));
       systemStatesRuntime.init(db);
       operatingLevelHandler.init();
       gridControlAutomation.init(db);
@@ -247,6 +273,7 @@ function createApp() {
     .catch(() => {
       heimkinoRuntime.init(db).catch(() => {});
       heizungRuntime.init(db).catch(() => {});
+      require('./rollladen/runtime').init(db).catch(err => console.error('[rollladen] Init:', err.message));
       systemStatesRuntime.init(db);
       operatingLevelHandler.init();
       gridControlAutomation.init(db);
@@ -368,8 +395,9 @@ function createApp() {
 
   // Wetterprognose (Open-Meteo) für die PV-Prognose vorhalten: beim Start einmal
   // füllen und alle 30 Minuten aktualisieren. Fehler still — die Seite bleibt nutzbar.
-  jobs.runExclusive('weather', () => refreshWeather(db)).catch(() => {});
-  jobs.schedule('weather', 30 * 60 * 1000, () => refreshWeather(db));
+  const updatePvWeather = () => refreshWeather(db).then(() => pvUncertainty.captureForecast(db, mqttClient.getCache()));
+  jobs.runExclusive('weather', updatePvWeather).catch(() => {});
+  jobs.schedule('weather', 30 * 60 * 1000, updatePvWeather);
 
   // Allgemeine Wetterprognose (Seite „Wetterprognose" und States der Gruppe
   // „Wetter"). Eigener Abruf mit eigenen Variablen, gleicher Takt.
@@ -380,7 +408,10 @@ function createApp() {
   // Kalibrierfaktor je Anlage sanft nachziehen (Gates inkl. Wetter/SoC im Modul).
   jobs.schedule('pvCalibration', 60000, () =>
     listPvPlants(db)
-      .then((plants) => recordCalibration(db, mqttClient.getCache(), plants))
+      .then(async (plants) => {
+        await recordCalibration(db, mqttClient.getCache(), plants);
+        await pvUncertainty.recordObservation(db, mqttClient.getCache(), plants);
+      })
   );
 
   return { app, db };

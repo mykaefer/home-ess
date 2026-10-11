@@ -5,6 +5,15 @@ wird unabhängig von homeESS versioniert; die Version steht in
 [adapter.json](adapter.json). Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/).
 
+## [Unreleased]
+
+### Behoben
+
+- Prozent-States mit CCU-Einheit `100%` und Bruchteilbereich bis 1,01 werden beim
+  Lesen und Schreiben korrekt zwischen Rohwert und Prozentanzeige umgerechnet.
+  CCU-Metadaten kennzeichnen numerische Felder und `ACTION`-Impulse für die
+  passende Bedienung in homeESS.
+
 ## [1.1.8] — 2026-09-11
 
 ### Behoben

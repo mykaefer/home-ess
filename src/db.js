@@ -25,6 +25,7 @@ function openDatabase() {
   }
 
   db.serialize(() => {
+    db.run(require('./page-sharing/store').SCHEMA);
     db.run(
       `CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -110,6 +111,8 @@ function openDatabase() {
         sun_cutoff_evening REAL NOT NULL DEFAULT 10
       )`
     );
+    // Vortagsprognosen und gemessene Stunden für die lernende PV-Variabilität.
+    db.exec(require('./photovoltaik/uncertainty').SCHEMA);
     // Selbstkalibrierung: je Anlage und 15-Minuten-Bucket des Tages (0..95) ein
     // langsam nachgeführter Kalibrierfaktor (Default 1.0). Das abgeschlossene
     // 15-min-Fenster wird gegen die Open-Meteo-Strahlung desselben Fensters
@@ -397,6 +400,23 @@ function openDatabase() {
       )`
     );
     db.run("INSERT OR IGNORE INTO system_database (id) VALUES (1)");
+    // States API (siehe src/states-api/ und STATES-API.md): lokale, versionierte
+    // Zugriffsschicht auf den State-Baum. Standardmäßig ausgeschaltet. Das
+    // Passwort liegt nur als scrypt-Hash vor; credential_version wird bei jeder
+    // Passwortänderung erhöht und macht ausgegebene Tokens ungültig. Gespeichert
+    // werden ausschließlich Ausschlüsse (alles Übrige ist freigegeben).
+    db.run(
+      `CREATE TABLE IF NOT EXISTS states_api_config (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        enabled INTEGER NOT NULL DEFAULT 0,
+        password_hash TEXT NOT NULL DEFAULT '',
+        credential_version INTEGER NOT NULL DEFAULT 0,
+        excluded_folders TEXT NOT NULL DEFAULT '[]',
+        excluded_states TEXT NOT NULL DEFAULT '[]',
+        updated_at INTEGER NOT NULL DEFAULT 0
+      )`
+    );
+    db.run("INSERT OR IGNORE INTO states_api_config (id) VALUES (1)");
     db.run(
       `CREATE TABLE IF NOT EXISTS operating_state (
         id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -574,6 +594,7 @@ function openDatabase() {
     // ⇒ Gerät erhält die Priorität seiner Gruppe.
     db.run(
       `CREATE TABLE IF NOT EXISTS mess_schalt_actors (
+        room_id INTEGER REFERENCES heizung_rooms(id) ON DELETE SET NULL,
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL DEFAULT '',
         group_id INTEGER,
@@ -706,6 +727,7 @@ function openDatabase() {
         category TEXT NOT NULL DEFAULT '',
         unit TEXT NOT NULL DEFAULT '',
         writable INTEGER NOT NULL DEFAULT 0,
+        control_json TEXT,
         last_value TEXT,
         updated_at INTEGER,
         PRIMARY KEY (instance_id, address),
@@ -718,6 +740,7 @@ function openDatabase() {
     db.run(
       'CREATE INDEX IF NOT EXISTS idx_adapter_states_instance_category ON adapter_states (instance_id, category)'
     );
+    db.adapterStatesReady = migrateAdapterStateControls(db);
     // Frei anlegbare, typisierte Zustände. Ordner und Werte liegen bewusst in
     // der zentralen Datenbank: custom:// ist eine homeESS-eigene State-Quelle
     // und kein zweiter Adapter mit eigener Persistenz.
@@ -847,8 +870,8 @@ function openDatabase() {
     // Output verwenden) – es gibt keine zweite State-Verwaltung.
     // Bewusst NICHT gespeichert: instanceId, deviceId, Push-Token oder
     // Firebase-Daten. Eine Regel kann damit weder eine fremde Instanz noch einen
-    // bestimmten Empfänger adressieren; die Empfänger bestimmt allein der Relay
-    // über seine aktiven Kopplungen.
+    // bestimmten Relay-Empfänger adressieren; diese bestimmt allein der Relay
+    // über seine aktiven Kopplungen. audio_target wird nur lokal ausgewertet.
     db.run(
       `CREATE TABLE IF NOT EXISTS notification_rules (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -865,12 +888,29 @@ function openDatabase() {
         position INTEGER NOT NULL DEFAULT 0,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
+        delivery TEXT NOT NULL DEFAULT 'relay',
+        audio_target TEXT NOT NULL DEFAULT 'all',
         last_triggered_at INTEGER
       )`
     );
     db.run(
       'CREATE INDEX IF NOT EXISTS idx_notification_rules_state ON notification_rules (state_id, enabled)'
     );
+    db.run(`CREATE TABLE IF NOT EXISTS audio_bus_config (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      max_sessions INTEGER NOT NULL DEFAULT 16 CHECK (max_sessions BETWEEN 1 AND 256)
+    )`);
+    db.run(`CREATE TABLE IF NOT EXISTS speech_config (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      volume_percent INTEGER NOT NULL DEFAULT 70 CHECK (volume_percent BETWEEN 10 AND 100),
+      lead_ms INTEGER NOT NULL DEFAULT 1000 CHECK (lead_ms BETWEEN 100 AND 5000),
+      tail_ms INTEGER NOT NULL DEFAULT 1000 CHECK (tail_ms BETWEEN 0 AND 5000),
+      chunk_ms INTEGER NOT NULL DEFAULT 50 CHECK (chunk_ms IN (10, 20, 50, 100))
+    )`);
+    db.run(`CREATE TABLE IF NOT EXISTS speech_endpoints (
+      device_id TEXT PRIMARY KEY, source TEXT NOT NULL, name TEXT NOT NULL DEFAULT '',
+      room_id INTEGER REFERENCES heizung_rooms(id) ON DELETE SET NULL, last_seen INTEGER NOT NULL
+    )`);
     // Heimkino (optionales Modul): frei benannte Räume mit je einem
     // beschreibbaren Kinomodus. Zu jedem Raum gehören zwei Aktionsfolgen
     // (`phase` an/aus), die bei einer Zustandsänderung nacheinander abgearbeitet
@@ -915,6 +955,7 @@ function openDatabase() {
         name TEXT NOT NULL COLLATE NOCASE UNIQUE,
         position INTEGER NOT NULL DEFAULT 0,
         target_temp REAL NOT NULL DEFAULT 21,
+        temperature_configured INTEGER NOT NULL DEFAULT 1,
         heat_offset REAL NOT NULL DEFAULT 0,
         cool_offset REAL NOT NULL DEFAULT 5,
         cool_min_temp REAL,
@@ -1076,7 +1117,32 @@ function openDatabase() {
     migrateConditionFolders(db);
     migrateConditionElseKind(db);
     migrateConditionItemParent(db);
+    db.run(`CREATE TRIGGER IF NOT EXISTS speech_room_deleted AFTER DELETE ON heizung_rooms
+      BEGIN UPDATE speech_endpoints SET room_id = NULL WHERE room_id = OLD.id; END`);
+    // Rollläden nutzen dieselben Räume wie Heizung, Geräte und Sprachausgabe.
+    db.run(`CREATE TABLE IF NOT EXISTS rollladen (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
+      room_id INTEGER NOT NULL REFERENCES heizung_rooms(id) ON DELETE CASCADE,
+      config TEXT NOT NULL DEFAULT '{}')`);
+    db.run(`CREATE TABLE IF NOT EXISTS rollladen_rooms (
+      room_id INTEGER PRIMARY KEY REFERENCES heizung_rooms(id) ON DELETE CASCADE,
+      brightness REAL NOT NULL DEFAULT 50, memory TEXT NOT NULL DEFAULT '{}')`);
+    db.run(`CREATE TABLE IF NOT EXISTS rollladen_cinema (
+      cinema_id INTEGER PRIMARY KEY REFERENCES heimkino_rooms(id) ON DELETE CASCADE,
+      room_id INTEGER NOT NULL REFERENCES heizung_rooms(id) ON DELETE CASCADE)`);
+    db.run(`CREATE TRIGGER IF NOT EXISTS rollladen_room_deleted AFTER DELETE ON heizung_rooms
+      BEGIN DELETE FROM rollladen WHERE room_id=OLD.id;
+      DELETE FROM rollladen_rooms WHERE room_id=OLD.id;
+      DELETE FROM rollladen_cinema WHERE room_id=OLD.id; END`);
+    db.run(`CREATE TRIGGER IF NOT EXISTS rollladen_cinema_deleted AFTER DELETE ON heimkino_rooms
+      BEGIN DELETE FROM rollladen_cinema WHERE cinema_id=OLD.id; END`);
     migrateHeimkinoRooms(db);
+    db.all('PRAGMA table_info(notification_rules)', (error, rows) => {
+      if (error) return;
+      const names = new Set(rows.map((row) => row.name));
+      if (!names.has('delivery')) db.run("ALTER TABLE notification_rules ADD COLUMN delivery TEXT NOT NULL DEFAULT 'relay'");
+      if (!names.has('audio_target')) db.run("ALTER TABLE notification_rules ADD COLUMN audio_target TEXT NOT NULL DEFAULT 'all'");
+    });
     seedHeizungCentral(db);
     seedHeizungBilling(db);
     migrateHeizungCentral(db);
@@ -1085,6 +1151,16 @@ function openDatabase() {
   });
 
   return db;
+}
+
+// Ältere Datenbanken kennen nur „schreibbar“. Die von einem Adapter gemeldete
+// Bedienart bleibt mit dieser Spalte auch nach dessen Stopp erhalten.
+function migrateAdapterStateControls(db) {
+  return new Promise((resolve) => db.all('PRAGMA table_info(adapter_states)', (err, rows) => {
+    if (err || !Array.isArray(rows) || rows.length === 0) return resolve(false);
+    if (rows.some((row) => row.name === 'control_json')) return resolve(true);
+    db.run('ALTER TABLE adapter_states ADD COLUMN control_json TEXT', (alterError) => resolve(!alterError));
+  }));
 }
 
 // Nachträglich ergänzte Raumspalten und die Umstellung der Geräte auf
@@ -1097,6 +1173,11 @@ function migrateHeizungDeviceActions(db) {
   db.all('PRAGMA table_info(heizung_rooms)', (err, rows) => {
     if (err || !Array.isArray(rows) || rows.length === 0) return;
     const existing = new Set(rows.map((r) => r.name));
+    // Alte Räume behalten ihre eingerichtete Temperaturregelung. Das Flag
+    // erlaubt einen fehlenden Sollwert ohne Umbau der bestehenden NOT-NULL-Spalte.
+    if (!existing.has('temperature_configured')) {
+      db.run('ALTER TABLE heizung_rooms ADD COLUMN temperature_configured INTEGER NOT NULL DEFAULT 1');
+    }
     // Mindesttemperatur zum Kühlen und die Prioritäten nach Betriebslevel kamen
     // nach den ersten Räumen dazu.
     if (!existing.has('cool_min_temp')) db.run('ALTER TABLE heizung_rooms ADD COLUMN cool_min_temp REAL');
@@ -1872,6 +1953,9 @@ function migrateMessSchaltActors(db) {
   db.all('PRAGMA table_info(mess_schalt_actors)', (err, rows) => {
     if (err || !Array.isArray(rows) || rows.length === 0) return;
     const existing = new Set(rows.map((r) => r.name));
+    if (!existing.has('room_id')) {
+      db.run('ALTER TABLE mess_schalt_actors ADD COLUMN room_id INTEGER REFERENCES heizung_rooms(id) ON DELETE SET NULL');
+    }
     if (!existing.has('desired_on')) {
       db.run('ALTER TABLE mess_schalt_actors ADD COLUMN desired_on INTEGER NOT NULL DEFAULT 0');
     }

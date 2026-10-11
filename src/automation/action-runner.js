@@ -140,8 +140,11 @@ function createActionRunner(namespace) {
   async function runLoopOnce(loop) {
     if (busyLoops.has(loop.id)) return { status: 'busy' };
     busyLoops.add(loop.id);
+    const key = `loop:${loop.id}`;
+    const token = (runTokens.get(key) || 0) + 1;
+    runTokens.set(key, token);
     try {
-      await runLoop(loop, null, null);
+      await runLoop(loop, key, token);
       return { status: 'done' };
     } catch (error) {
       if (error instanceof Cancelled) return { status: 'cancelled' };
@@ -168,6 +171,11 @@ function createActionRunner(namespace) {
     return conditionEngine.compare(current.value, check.operator, expected.value);
   }
 
+  function cancelLoop(loopId) {
+    const key = `loop:${loopId}`;
+    runTokens.set(key, (runTokens.get(key) || 0) + 1);
+  }
+
   function isBusy(key) {
     return busyKeys.has(key);
   }
@@ -182,7 +190,7 @@ function createActionRunner(namespace) {
 
   return {
     cacheKey, referencedSlots, writeValue, checkFulfilled,
-    run, runLoopOnce, isBusy, isLoopBusy, reset, Cancelled,
+    run, runLoopOnce, cancelLoop, isBusy, isLoopBusy, reset, Cancelled,
   };
 }
 

@@ -89,6 +89,7 @@ const PAGES = [
   ['wetter.js', { weather: null }],
   ['login.js', {}],
   ['batterie.js', { config: { socTopic: 'a' }, data: { soc: 55, power: 500, voltage: 52, temperatur: 20 } }],
+  ['rollladen.js', {}],
   ['pool.js', { config: {}, values: {} }],
   ['wallbox.js', { boxes: [], forecast: null }],
   ['grid-control.js', { config: {}, state: { inverterLoads: [100, 200, 300] },

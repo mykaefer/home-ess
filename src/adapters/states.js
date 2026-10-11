@@ -45,6 +45,16 @@ function categoryParts(value) {
   return parts.length ? parts : ['Allgemein'];
 }
 
+function parseControl(value) {
+  if (!value) return null;
+  try {
+    const control = JSON.parse(value);
+    return control && typeof control === 'object' && !Array.isArray(control) ? control : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 function categoryList(root) {
   return Array.from(root.values()).sort(compareNodes).map((node) => {
     const children = categoryList(node._children);
@@ -99,6 +109,7 @@ async function buildStatesTree(db) {
         topic,
         unit: row.unit || '',
         writable: !!row.writable,
+        control: parseControl(row.control_json),
         value: value == null ? null : value,
         display: displayValue(value, row.unit, topic),
       });

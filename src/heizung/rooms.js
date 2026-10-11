@@ -2,7 +2,8 @@
 
 // Heizung & Klima: Räume, ihre Temperaturquellen und ihre Fenster-/Türkontakte.
 //
-// Jeder Raum hat eine eigene Soll-Temperatur und eigene Schaltschwellen. Die
+// Räume können allein zur Gerätezuordnung dienen. Erst ein gesetzter Sollwert
+// aktiviert ihre Temperaturregelung mit den eigenen Schaltschwellen. Die
 // Ist-Temperatur entsteht aus allen zugeordneten Temperaturquellen (HDP-Sensor,
 // Thermostat-Ist, beliebiger State); bei mehreren Quellen zählt ihr
 // Durchschnitt. Die Geräte zum Heizen und Kühlen hängen an Aktionsfolgen
@@ -132,7 +133,7 @@ function normalizeRoom(row = {}) {
     name: row.name || '',
     position: Number(row.position || 0),
     // Soll-Temperatur des Raums.
-    targetTemp: Number(row.target_temp),
+    targetTemp: Number(row.temperature_configured) === 0 ? null : Number(row.target_temp),
     // Heizen schaltet ein bei Soll minus Offset, Kühlen bei Soll plus Offset.
     heatOffset: Number(row.heat_offset),
     coolOffset: Number(row.cool_offset),
@@ -200,7 +201,7 @@ function normalizeContact(row = {}) {
   };
 }
 
-const ROOM_COLUMNS = `id, name, position, target_temp, heat_offset, cool_offset, cool_min_temp, hysteresis,
+const ROOM_COLUMNS = `id, name, position, temperature_configured, target_temp, heat_offset, cool_offset, cool_min_temp, hysteresis,
   thermostat_topic, boost_active, boost_topic, heat_priority, cool_priority, heat_central_fallback,
   central_allowed, central_temp, fan_topic, contact_delay_seconds,
   climate_mode, climate_mode_since, climate_reset_time, last_error`;
@@ -226,9 +227,15 @@ function byName(left, right) {
   return left.name.localeCompare(right.name, 'de', { numeric: true, sensitivity: 'base' }) || left.id - right.id;
 }
 
+// Ein fehlender Sollwert bedeutet: allgemeiner Raum ohne Temperaturregelung.
+function isTemperatureConfigured(room) {
+  return room != null && room.targetTemp != null && Number.isFinite(Number(room.targetTemp));
+}
+
 async function listRooms(db) {
   const rows = await dbAll(db, `SELECT ${ROOM_COLUMNS} FROM heizung_rooms`);
-  return rows.map(normalizeRoom).sort(byName);
+  return rows.map(normalizeRoom).sort((a, b) =>
+    Number(isTemperatureConfigured(b)) - Number(isTemperatureConfigured(a)) || byName(a, b));
 }
 
 async function getRoom(db, id) {
@@ -243,7 +250,8 @@ async function getRoom(db, id) {
 function cleanRoomInput(input = {}) {
   const centralAllowed = checkboxValue(input.centralAllowed);
   const centralTempRaw = text(input.centralTemp);
-  const targetTemp = requireNumber(input.targetTemp, 'die Soll-Temperatur', MIN_TEMP, MAX_TEMP);
+  const targetTemp = text(input.targetTemp) === '' ? null
+    : requireNumber(input.targetTemp, 'die Soll-Temperatur', MIN_TEMP, MAX_TEMP);
   const values = {
     name: cleanName(input.name),
     targetTemp,
@@ -291,11 +299,11 @@ async function createRoom(db, input = {}) {
   const next = await dbGet(db, 'SELECT COALESCE(MAX(position), -1) + 1 AS position FROM heizung_rooms');
   try {
     const result = await dbRun(db, `INSERT INTO heizung_rooms
-      (name, position, target_temp, heat_offset, cool_offset, cool_min_temp, hysteresis, thermostat_topic,
+      (name, position, temperature_configured, target_temp, heat_offset, cool_offset, cool_min_temp, hysteresis, thermostat_topic,
        boost_topic, heat_priority, cool_priority, heat_central_fallback,
        central_allowed, central_temp, fan_topic, contact_delay_seconds, climate_reset_time)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
-      values.name, next.position, values.targetTemp, values.heatOffset, values.coolOffset,
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+      values.name, next.position, values.targetTemp == null ? 0 : 1, values.targetTemp ?? 21, values.heatOffset, values.coolOffset,
       values.coolMinTemp, values.hysteresis,
       values.thermostatTopic, values.boostTopic, values.heatPriority, values.coolPriority, values.heatCentralFallback ? 1 : 0,
       values.centralAllowed ? 1 : 0, values.centralTemp, values.fanTopic, values.contactDelaySeconds,
@@ -314,15 +322,19 @@ async function updateRoom(db, id, input = {}) {
   const values = cleanRoomInput(input);
   await ensureFreeAddress(db, values.name, roomId);
   try {
-    await dbRun(db, `UPDATE heizung_rooms SET name = ?, target_temp = ?, heat_offset = ?, cool_offset = ?,
+    await dbRun(db, `UPDATE heizung_rooms SET name = ?, temperature_configured = ?, target_temp = ?, heat_offset = ?, cool_offset = ?,
       cool_min_temp = ?, hysteresis = ?, thermostat_topic = ?, boost_topic = ?, heat_priority = ?, cool_priority = ?,
       heat_central_fallback = ?, central_allowed = ?, central_temp = ?, fan_topic = ?,
-      contact_delay_seconds = ?, climate_reset_time = ? WHERE id = ?`, [
-      values.name, values.targetTemp, values.heatOffset, values.coolOffset,
+      contact_delay_seconds = ?, climate_reset_time = ?,
+      boost_active = CASE WHEN ? = 0 THEN 0 ELSE boost_active END,
+      climate_mode = CASE WHEN ? = 0 THEN 2 ELSE climate_mode END,
+      climate_mode_since = CASE WHEN ? = 0 THEN NULL ELSE climate_mode_since END WHERE id = ?`, [
+      values.name, values.targetTemp == null ? 0 : 1, values.targetTemp ?? 21, values.heatOffset, values.coolOffset,
       values.coolMinTemp, values.hysteresis,
       values.thermostatTopic, values.boostTopic, values.heatPriority, values.coolPriority, values.heatCentralFallback ? 1 : 0,
       values.centralAllowed ? 1 : 0, values.centralTemp, values.fanTopic, values.contactDelaySeconds,
-      values.climateResetTime, roomId,
+      values.climateResetTime, values.targetTemp == null ? 0 : 1, values.targetTemp == null ? 0 : 1,
+      values.targetTemp == null ? 0 : 1, roomId,
     ]);
   } catch (error) {
     if (error && error.code === 'SQLITE_CONSTRAINT') throw validation('Einen Raum mit diesem Namen gibt es bereits.');
@@ -356,15 +368,28 @@ async function setRoomOrder(db, ids) {
 // Schnellverstellung in der Oberfläche). Die übrigen Einstellungen des Raums
 // bleiben unangetastet.
 async function setTargetTemp(db, id, value) {
+  if (text(value) === '') {
+    const room = await getRoom(db, id);
+    if (!room) throw validation('Raum nicht gefunden.');
+    await updateRoom(db, id, { ...room, targetTemp: null });
+    return null;
+  }
   const target = requireNumber(value, 'die Soll-Temperatur', MIN_TEMP, MAX_TEMP);
-  const result = await dbRun(db, 'UPDATE heizung_rooms SET target_temp = ? WHERE id = ?', [target, Number(id)]);
+  const result = await dbRun(db, 'UPDATE heizung_rooms SET target_temp = ?, temperature_configured = 1 WHERE id = ?', [target, Number(id)]);
   if (!result.changes) throw validation('Raum nicht gefunden.');
   return target;
 }
 
 // Boost allein setzen (State-Schreibzugriff und Kopplung mit dem optionalen
 // Boost-Topic). Der Zustand wird gespeichert und überlebt damit Neustarts.
+async function requireTemperatureConfigured(db, id) {
+  const room = await getRoom(db, id);
+  if (!room) throw validation('Raum nicht gefunden.');
+  if (!isTemperatureConfigured(room)) throw validation('Bitte zuerst die Soll-Temperatur des Raums einrichten.');
+}
+
 async function setBoost(db, id, value) {
+  await requireTemperatureConfigured(db, id);
   const active = checkboxValue(value);
   const result = await dbRun(db, 'UPDATE heizung_rooms SET boost_active = ? WHERE id = ?', [active ? 1 : 0, Number(id)]);
   if (!result.changes) throw validation('Raum nicht gefunden.');
@@ -374,6 +399,7 @@ async function setBoost(db, id, value) {
 // Betriebsart der Klimaanlage setzen (State-Schreibzugriff, Rückfall auf
 // Automatik). Ein unbrauchbarer Wert bleibt folgenlos.
 async function setClimateMode(db, id, value, now = Date.now()) {
+  await requireTemperatureConfigured(db, id);
   const mode = climate.normalizeMode(value);
   if (mode == null) throw validation('Bitte 0 (Aus), 1 (An) oder 2 (Automatik) angeben.');
   // Der Zeitpunkt der Handschaltung ist der Bezugspunkt der Rückkehr-Uhrzeit;
@@ -395,6 +421,7 @@ async function deleteRoom(db, id) {
   const roomId = Number(id);
   await dbRun(db, 'BEGIN IMMEDIATE');
   try {
+    await dbRun(db, 'UPDATE mess_schalt_actors SET room_id = NULL WHERE room_id = ?', [roomId]);
     await dbRun(db, 'DELETE FROM heizung_room_sensors WHERE room_id = ?', [roomId]);
     await dbRun(db, 'DELETE FROM heizung_room_contacts WHERE room_id = ?', [roomId]);
     await dbRun(db, 'DELETE FROM heizung_actions WHERE room_id = ?', [roomId]);
@@ -561,6 +588,7 @@ function formatTemp(value) {
 // Systemwert-Einträge eines Raums. Sie erscheinen dadurch auf der States-Seite
 // unter „System / Räume / <Raum>", im State-Picker und im Wertekatalog.
 function roomEntries(room, state = {}) {
+  if (!isTemperatureConfigured(room)) return [];
   const values = {
     temperatur: state.temperature == null ? null : state.temperature,
     soll: state.targetTemp == null ? room.targetTemp : state.targetTemp,
@@ -591,7 +619,7 @@ module.exports = {
   ID_PREFIX, CATEGORY, ROOM_STATES,
   MIN_TEMP, MAX_TEMP, MAX_OFFSET, MIN_HYSTERESIS, MAX_HYSTERESIS, MAX_CONTACT_DELAY_SECONDS,
   MIN_PRIORITY, MAX_PRIORITY,
-  listRooms, getRoom, createRoom, updateRoom, deleteRoom, setTargetTemp, setBoost, setRoomOrder, setClimateMode, markError,
+  isTemperatureConfigured, listRooms, getRoom, createRoom, updateRoom, deleteRoom, setTargetTemp, setBoost, setRoomOrder, setClimateMode, markError,
   listSensors, listAllSensors, addSensor, updateSensor, deleteSensor,
   listContacts, listAllContacts, addContact, updateContact, deleteContact,
   stateId, stateTopic, addressFor, ensureFreeAddress,

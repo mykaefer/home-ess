@@ -29,6 +29,7 @@ const availabilityLib = require('./availability');
 const topologyLib = require('./topology');
 const loggingLib = require('./logging');
 const instanceLock = require('./instance-lock');
+const zbminir2 = require('./zbminir2');
 
 const RECONNECT_MIN_MS = 5000;
 const RECONNECT_MAX_MS = 120000;
@@ -116,6 +117,8 @@ function createRuntime(host, dependencies = {}) {
   // sie in seiner Adressverwaltung mitunter weiter; ohne dieses Gedächtnis
   // holte die Geräteübernahme sie beim nächsten Mal wieder herein.
   let ignoredDevices = new Set();
+  let configuredSwitches = new WeakMap();
+  const switchReads = new WeakMap();
   // Belegungsmarke: Wer ist der zuständige Kindprozess dieser Instanz?
   let ownLock = null;
   let unwatchLock = null;
@@ -252,6 +255,51 @@ function createRuntime(host, dependencies = {}) {
 
   // ── Ereignisse von zigbee-herdsman ────────────────────────────────────────
 
+  function readSwitchState(entry) {
+    const pending = switchReads.get(entry.zh);
+    if (pending) {
+      // Mehrere Tastendrücke während einer Abfrage: eine abschließende Abfrage
+      // statt paralleler Reads oder lokaler Invertierung des alten Zustands.
+      pending.again = true;
+      return pending.promise;
+    }
+    const job = { again: false, promise: null };
+    const activeController = controller;
+    job.promise = (async () => {
+      do {
+        job.again = false;
+        const data = await entry.zh.getEndpoint(1).read('genOnOff', ['onOff']);
+        if (controller !== activeController) return;
+        const values = zbminir2.stateFromRead(data);
+        safeLog('debug', `ZBMINIR2 Relaisabfrage ${entry.ieeeAddress}: ${JSON.stringify(values)}`);
+        publish(registry.applyValues(entry, values));
+      } while (job.again);
+    })().finally(() => switchReads.delete(entry.zh));
+    switchReads.set(entry.zh, job);
+    return job.promise;
+  }
+
+  function configureSwitch(entry, force = false) {
+    if (!controller || !zbminir2.matches(entry.zh, entry.definition)) return Promise.resolve();
+    const previous = configuredSwitches.get(entry.zh);
+    if (previous && (!force || !previous.done)) return previous.promise;
+    const job = { done: false, promise: null };
+    const task = (async () => {
+      const coordinator = Array.from(controller.getDevicesIterator()).find((device) => device.type === 'Coordinator');
+      if (!coordinator) throw new Error('Coordinator-Endpunkt fehlt für das Geräte-Binding.');
+      await entry.definition.configure(entry.zh, coordinator.getEndpoint(1), entry.definition);
+      safeLog('debug', `ZBMINIR2 ${entry.ieeeAddress}: Cluster 0xFC11 registriert, Binding und Relais-Reporting eingerichtet.`);
+    })().catch((error) => {
+      configuredSwitches.delete(entry.zh);
+      safeLog('warn', `ZBMINIR2-Konfiguration ${entry.friendlyName}: ${errorText(error)}. Erneuter Versuch bei Geräteanmeldung.`);
+    }).then(() => readSwitchState(entry).catch((error) => {
+      safeLog('warn', `ZBMINIR2 Relaisabfrage ${entry.friendlyName}: ${errorText(error)}`);
+    })).finally(() => { job.done = true; });
+    job.promise = task;
+    configuredSwitches.set(entry.zh, job);
+    return task;
+  }
+
   async function refreshDevice(zhDevice, { announce = false } = {}) {
     if (!zhDevice || zhDevice.type === 'Coordinator') return null;
     let definition = null;
@@ -261,6 +309,7 @@ function createRuntime(host, dependencies = {}) {
       safeLog('debug', `Converter-Suche für ${zhDevice.ieeeAddr} fehlgeschlagen: ${errorText(error)}`);
     }
     const entry = registry.upsert(zhDevice, definition);
+    await configureSwitch(entry);
     if (zhDevice.lastSeen) entry.lastSeen = Number(zhDevice.lastSeen);
     if (zhDevice.linkquality != null) entry.linkquality = Number(zhDevice.linkquality);
     if (announce) {
@@ -298,6 +347,9 @@ function createRuntime(host, dependencies = {}) {
   async function handleMessage(data) {
     const entry = registry.bySlugOrIeee(data.device && data.device.ieeeAddr);
     if (!entry) return;
+    if (zbminir2.matches(entry.zh, entry.definition)) {
+      safeLog('debug', `Zigbee ZCL empfangen: ${zbminir2.describeMessage(data)}`);
+    }
     entry.lastSeen = nowMs();
     if (data.linkquality != null) entry.linkquality = Number(data.linkquality);
 
@@ -331,6 +383,10 @@ function createRuntime(host, dependencies = {}) {
     // Ein Gerät, das gerade gesendet hat, ist erreichbar. Die Geräteliste wird
     // nur bei tatsächlicher Änderung geschrieben.
     publishDeviceRows();
+    if (zbminir2.matches(entry.zh, entry.definition)
+        && (zbminir2.isSwitchCommand(zbminir2.normalizeMessage(data)) || payload.action != null)) {
+      await readSwitchState(entry);
+    }
   }
 
   function wireEvents() {
@@ -389,6 +445,9 @@ function createRuntime(host, dependencies = {}) {
       if (!entry) return;
       entry.lastSeen = nowMs();
       publish(registry.diagnosticValues(entry));
+      if (zbminir2.matches(entry.zh, entry.definition)) {
+        configureSwitch(entry, true).catch((error) => safeLog('warn', `ZBMINIR2: ${errorText(error)}`));
+      }
     });
 
     controller.on('deviceNetworkAddressChanged', (data) => {
@@ -558,6 +617,7 @@ function createRuntime(host, dependencies = {}) {
   }
 
   async function teardownController(options = {}) {
+    configuredSwitches = new WeakMap();
     const budget = Number(options.timeoutMs) || STOP_TIMEOUT_MS;
     // Ein geplanter Scan ohne Coordinator ergibt keinen Sinn.
     if (topologyTimer) {
@@ -1036,6 +1096,14 @@ function createRuntime(host, dependencies = {}) {
       publish: (values) => publish(registry.applyValues(entry, values)),
     });
 
+    if (feature.key === 'state' && zbminir2.matches(entry.zh, entry.definition)) {
+      // Der Schaltbefehl bestätigt nicht den tatsächlichen Relaiszustand.
+      // Gerade toggle / detach_relay_mode dürfen keinen geratenen State liefern.
+      await readSwitchState(entry);
+      entry.lastSeen = nowMs();
+      return;
+    }
+
     // Der Converter meldet den erreichten Zustand; sonst gilt der gesendete
     // Wert als bestätigt.
     const confirmed = outcome.result && outcome.result.state
@@ -1065,6 +1133,10 @@ function createRuntime(host, dependencies = {}) {
       return;
     }
     try {
+      if (feature.key === 'state' && zbminir2.matches(entry.zh, entry.definition)) {
+        await readSwitchState(entry);
+        return;
+      }
       await convertersLib.convertGet({
         definition: entry.definition,
         device: entry.zh,

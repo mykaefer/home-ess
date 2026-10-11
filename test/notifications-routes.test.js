@@ -61,6 +61,7 @@ test.before(async () => {
     runWithAccess(req.access, () => next());
   });
   app.use(notificationRoutes(db));
+  app.use(require('../src/routes/speech')(db));
   server = await listen(app);
   baseUrl = `http://127.0.0.1:${server.address().port}`;
 });
@@ -78,7 +79,7 @@ test('Die Migration legt notification_rules ohne Empfänger- oder Instanzfelder 
   const names = columns.map((column) => column.name);
   for (const expected of ['id', 'name', 'enabled', 'state_id', 'trigger_type', 'trigger_value',
     'title', 'body', 'event_type', 'severity', 'cooldown_seconds',
-    'created_at', 'updated_at', 'last_triggered_at']) {
+    'created_at', 'updated_at', 'last_triggered_at', 'delivery', 'audio_target']) {
     assert.ok(names.includes(expected), `Spalte ${expected} fehlt`);
   }
   for (const forbidden of ['instance_id', 'device_id', 'fcm_token', 'recipients']) {
@@ -212,4 +213,47 @@ test('Grenzwerte werden auch auf einem booleschen Systemwert abgewiesen', async 
   }));
   assert.equal(response.status, 400);
   assert.match(await response.text(), /nur für numerische States/);
+});
+
+test('Sprachausgabe-Oberfläche speichert Endpunktnamen und gemeinsame Raumzuordnung', async () => {
+  const modules = require('../src/modules');
+  const speech = require('../src/speech/runtime');
+  const audio = require('../src/audio-bus');
+  await modules.setEnabled(db, 'speech', true);
+  await speech.init(db);
+  const { session } = audio.bus.openSession({ sendControl() {}, sendBinary() {}, isOpen: () => true }, {
+    codec: 'pcm_s16le', sampleRate: 16000, channels: 1, deviceId: 'test-speaker', source: 'test',
+  });
+  try {
+    await new Promise((resolve) => setImmediate(resolve));
+    await speech.list();
+    const response = await fetch(`${baseUrl}/speech`);
+    assert.equal(response.status, 200);
+    assert.match(await response.text(), /test-speaker/);
+    const config = require('../src/speech/config');
+    const settings = { volumePercent: '55', leadMs: '1750', tailMs: '800', chunkMs: '20' };
+    const settingsSaved = await fetch(`${baseUrl}/speech/settings`, form(settings));
+    assert.equal(settingsSaved.status, 200);
+    assert.match(await settingsSaved.text(), /Wiedergabeeinstellungen gespeichert/);
+    assert.deepEqual(await config.get(db), { volumePercent: 55, leadMs: 1750, tailMs: 800, chunkMs: 20 });
+    const invalid = await fetch(`${baseUrl}/speech/settings`, form({ ...settings, leadMs: '5001' }));
+    assert.equal(invalid.status, 400);
+    assert.match(await invalid.text(), /gültige Wiedergabeeinstellungen/);
+    assert.equal((await config.get(db)).leadMs, 1750);
+    const settingsPage = await (await fetch(`${baseUrl}/speech`)).text();
+    assert.match(settingsPage, /name="leadMs"[^>]*value="1750"/);
+    const saved = await fetch(`${baseUrl}/speech/endpoints`, form({ deviceId: 'test-speaker', name: 'Küchenlautsprecher', roomId: '' }));
+    assert.equal(saved.status, 302);
+    assert.equal((await speech.list())[0].name, 'Küchenlautsprecher');
+    const rule = await repository.createRule(db, ruleForm({ name: 'Audio-Test', delivery: 'both', audioTarget: 'endpoint:test-speaker' }));
+    assert.equal(rule.audioTarget, 'endpoint:test-speaker');
+    const html = await (await fetch(`${baseUrl}/notifications`)).text();
+    assert.match(html, /Küchenlautsprecher/);
+    assert.match(html, /value="both"/);
+    await repository.deleteRule(db, rule.id);
+  } finally {
+    speech.stop();
+    audio.bus.endSession(session.sessionId, 'client_end');
+    await modules.setEnabled(db, 'speech', false);
+  }
 });

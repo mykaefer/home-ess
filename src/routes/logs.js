@@ -37,7 +37,7 @@ function throttled(sessionId, now = Date.now()) {
 // JSON-Auth: bei fehlender Sitzung 401 statt Weiterleitung (die Weiterleitung
 // käme im Browser als HTML-Antwort auf einen JSON-Abruf an).
 function requireJsonAuth(req, res, next) {
-  if (!req.session) return res.status(401).json({ error: 'Nicht angemeldet.' });
+  if (!req.session && !req.pageShare) return res.status(401).json({ error: 'Nicht angemeldet.' });
   return next();
 }
 
@@ -66,7 +66,7 @@ function logsRoutes() {
   // statt der vollen Liste.
   router.get('/logs/daten', requireJsonAuth, (req, res, next) => {
     try {
-      const wait = throttled(req.session.id);
+      const wait = throttled(req.session ? req.session.id : `share:${req.pageShare.path}`);
       if (wait > 0) {
         res.setHeader('Retry-After', String(Math.ceil(wait / 1000)));
         return res.status(429).json({ error: 'Zu viele Abrufe.', retryAfterMs: wait });

@@ -39,8 +39,8 @@ function heizungRoutes(db) {
         sensorCount: sensors.filter((sensor) => sensor.roomId === room.id).length,
         contactCount: contacts.filter((contact) => contact.roomId === room.id).length,
         actionCount: actionsRepo.PHASE_KEYS.reduce((sum, phase) => sum + actionsRepo.countActions(tree[phase]), 0),
-        hasHeatDevice: actionsRepo.hasDevice(tree, 'heat'),
-        hasCoolDevice: actionsRepo.hasDevice(tree, 'cool'),
+        hasHeatDevice: rooms.isTemperatureConfigured(room) && actionsRepo.hasDevice(tree, 'heat'),
+        hasCoolDevice: rooms.isTemperatureConfigured(room) && actionsRepo.hasDevice(tree, 'cool'),
         temperatureTopic: rooms.stateTopic(room.name, 'temperatur'),
       });
     }
@@ -78,19 +78,19 @@ function heizungRoutes(db) {
       actions,
       state: runtime.snapshot().get(room.id) || {},
       stateTopics: [
-        ...rooms.ROOM_STATES.map((entry) => ({
+        ...(rooms.isTemperatureConfigured(room) ? rooms.ROOM_STATES : []).map((entry) => ({
           label: entry.label,
           topic: rooms.stateTopic(room.name, entry.suffix),
           writable: entry.writable,
         })),
         // Die Klima-States gibt es nur, solange der Raum ein Kühlgerät hat.
-        ...(actionsRepo.hasDevice(tree, 'cool') ? climate.CLIMATE_STATES.map((entry) => ({
+        ...(rooms.isTemperatureConfigured(room) && actionsRepo.hasDevice(tree, 'cool') ? climate.CLIMATE_STATES.map((entry) => ({
           label: `Klimaanlage ${entry.label}`,
           topic: climate.stateTopic(rooms.addressFor(room.name), entry.suffix),
           writable: entry.writable,
         })) : []),
       ],
-      hasCoolDevice: actionsRepo.hasDevice(tree, 'cool'),
+      hasCoolDevice: rooms.isTemperatureConfigured(room) && actionsRepo.hasDevice(tree, 'cool'),
       ...options,
     }));
   }

@@ -82,7 +82,7 @@ function report(state, text, extra = {}) {
   atomicJson(STATUS_FILE, status);
 }
 
-// Version aus einer VERSION.json lesen: { "version": "1.7.2" }.
+// Version aus einer VERSION.json lesen: { "version": "1.7.3" }.
 function parseVersionFile(text) {
   try {
     const document = JSON.parse(String(text || ''));

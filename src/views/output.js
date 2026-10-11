@@ -169,7 +169,7 @@ function renderOutput({
     window.addEventListener('homeess:mqtt', queueOutputRefresh);
     setInterval(refreshOutputValues, 60000);`;
 
-  return renderLayout({ title: 'Output', activePath: '/output', body, script });
+  return renderLayout({ periodicRefresh: true, title: 'Output', activePath: '/output', body, script });
 }
 
 function renderOutputList(outputs) {

@@ -18,6 +18,7 @@ function close(db) { return new Promise((resolve) => db.close(resolve)); }
 async function freshDb() {
   const db = new sqlite3.Database(':memory:');
   await run(db, `CREATE TABLE heizung_rooms (
+    temperature_configured INTEGER NOT NULL DEFAULT 1,
     id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL COLLATE NOCASE UNIQUE,
     position INTEGER NOT NULL DEFAULT 0, target_temp REAL NOT NULL DEFAULT 21,
     heat_offset REAL NOT NULL DEFAULT 0, cool_offset REAL NOT NULL DEFAULT 5,

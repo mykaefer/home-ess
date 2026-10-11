@@ -64,12 +64,13 @@ ${rows}
           </div>`;
 }
 
-function roomDialog() {
+function roomDialog(sharedRooms = []) {
   return `<dialog id="heimkinoRoomDialog" class="value-dialog"><form id="heimkinoRoomForm" method="POST" class="dialog-form">
     <div class="dialog-hero"><div><h3 id="heimkinoRoomTitle">Raum hinzufügen</h3><p class="muted">Jeder Raum bekommt unter „System / Heimkino" einen beschreibbaren Kinomodus-State mit seinem Namen.</p></div></div>
     <p id="heimkinoRoomError" class="error-text" hidden></p>
     <div class="dialog-section"><div class="dialog-grid dialog-grid--two">
       <label class="field-block"><span>Name</span><input id="heimkinoRoomName" name="name" required maxlength="100" data-no-state-picker></label>
+      <label class="field-block"><span>Zugeordneter Raum (Rollläden)</span><select id="heimkinoAssignedRoom" name="assignedRoomId"><option value="">Keine Zuordnung</option>${sharedRooms.map(room => `<option value="${room.id}">${escapeHtml(room.name)}</option>`).join('')}</select></label>
       <label class="field-block condition-topic-field"><span>Sync-Topic (optional)</span><span class="field-hint">Wird bidirektional mit dem Kinomodus synchron gehalten</span><input id="heimkinoRoomRemote" name="remoteTopic" data-state-picker data-state-picker-writable autocomplete="off" placeholder="State auswählen…"></label>
     </div></div>
     <div class="button-row"><button type="submit">Speichern</button><button type="button" class="secondary-button" onclick="document.getElementById('heimkinoRoomDialog').close()">Abbrechen</button></div>
@@ -84,7 +85,7 @@ function deleteDialog() {
   </form></dialog>`;
 }
 
-function renderHeimkino({ rooms = [], error = '', message = '', initialDialog = null } = {}) {
+function renderHeimkino({ rooms = [], sharedRooms = [], error = '', message = '', initialDialog = null } = {}) {
   const safeRooms = JSON.stringify(rooms).replace(/</g, '\\u003c');
   const safeInitial = JSON.stringify(initialDialog).replace(/</g, '\\u003c');
   const body = `        <div class="panel-head"><div><h1>Heimkino</h1></div><div class="dashboard-toolbar"><button type="button" class="secondary-button" onclick="openHeimkinoRoomDialog('add')">Raum hinzufügen</button></div></div>
@@ -92,7 +93,7 @@ function renderHeimkino({ rooms = [], error = '', message = '', initialDialog = 
         <div class="adapter-list hk-rooms" id="heimkinoRooms">
 ${roomBlock(rooms)}
         </div>
-        ${roomDialog()}${deleteDialog()}`;
+        ${roomDialog(sharedRooms)}${deleteDialog()}`;
 
   const script = `
     var heimkinoRooms = ${safeRooms};
@@ -104,6 +105,7 @@ ${roomBlock(rooms)}
       document.getElementById('heimkinoRoomTitle').textContent = room ? 'Raum bearbeiten' : 'Raum hinzufügen';
       document.getElementById('heimkinoRoomName').value = room ? room.name : '';
       document.getElementById('heimkinoRoomRemote').value = room ? (room.remoteTopic || '') : '';
+      document.getElementById('heimkinoAssignedRoom').value = room ? (room.assignedRoomId || '') : '';
       var error = document.getElementById('heimkinoRoomError');
       error.textContent = ''; error.hidden = true;
       document.getElementById('heimkinoRoomDialog').showModal();
@@ -123,6 +125,7 @@ ${roomBlock(rooms)}
       var values = heimkinoInitialDialog.values || {};
       document.getElementById('heimkinoRoomName').value = values.name == null ? '' : values.name;
       document.getElementById('heimkinoRoomRemote').value = values.remoteTopic == null ? '' : values.remoteTopic;
+      document.getElementById('heimkinoAssignedRoom').value = values.assignedRoomId || '';
       var err = document.getElementById('heimkinoRoomError');
       err.textContent = heimkinoInitialDialog.error || '';
       err.hidden = !err.textContent;

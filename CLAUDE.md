@@ -36,19 +36,24 @@ Skripte — nicht erfinden und keine Prüfungen abschalten, um Fehler zu umgehen
 
 ## Versionierung
 
-Versionsnummer **nicht** nach Semver raten. Die bestehende Konvention zählt die
-**Patch-Stelle** hoch (…, 1.2.6 → 1.2.7). Maßgeblich ist [VERSION.json](VERSION.json)
-im Stammverzeichnis (`{ "version": "1.2.7" }`): Fußzeile der Weboberfläche und
-Updateprüfung lesen von dort.
-`package.json` `version` wird auf denselben Wert gesetzt — **beide Dateien immer
-gemeinsam ändern**. Jeder Zweig (`main`, `development`) führt seine eigene
-Nummer; ein Merge darf die fremde Nummer nicht übernehmen.
+Änderungen werden zunächst ausschließlich unter `## [Unreleased]` in
+[CHANGELOG.md](CHANGELOG.md) eingetragen. Solange sie dort stehen, bleibt die
+Versionsnummer unverändert. **Keine automatische Versionserhöhung:** Erst auf
+**ausdrückliche Anweisung des Betreibers zum Hochzählen** wird die Patch-Stelle
+um eins erhöht (…, 1.2.6 → 1.2.7; kein Semver-Raten).
 
-Wer die Nummer erhöht, legt sie im selben Zug als eigenen Abschnitt in
-[CHANGELOG.md](CHANGELOG.md) an (`## [1.2.7] — JJJJ-MM-TT`) und trägt die
-Änderungen dort ein. Unter `## [Unreleased]` steht ausschließlich, was **noch
-keine** Nummer trägt — sonst lässt sich später nicht mehr zuordnen, welche
-Änderung zu welcher Version gehört.
+Mit dieser Versionserhöhung wird zeitgleich der gesamte Unreleased-Block in
+einen neuen Versionsabschnitt mit Datum übernommen
+(`## [1.2.7] — JJJJ-MM-TT`). `## [Unreleased]` bleibt anschließend als leerer
+Abschnitt für kommende Änderungen bestehen. Versionserhöhung und Versionierung
+des Unreleased-Blocks erfolgen immer gemeinsam.
+
+Maßgeblich ist [VERSION.json](VERSION.json) im Stammverzeichnis: Fußzeile der
+Weboberfläche und Updateprüfung lesen von dort. Bei der ausdrücklich
+angeforderten Versionserhöhung werden `VERSION.json`, `package.json` und die
+Versionsangaben des Hauptpakets in `package-lock.json` gemeinsam auf denselben
+Wert gesetzt. Jeder Zweig (`main`, `development`) führt seine eigene Nummer;
+ein Merge darf die fremde Nummer nicht übernehmen.
 
 ## Commit/Push
 

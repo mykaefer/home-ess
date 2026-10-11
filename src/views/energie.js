@@ -256,6 +256,7 @@ ${sections.length ? sections.join('\n') : '        <div class="info-card"><p cla
     setInterval(refreshEnergie, 60000);`;
 
   return renderLayout({
+    periodicRefresh: true,
     title: 'Energie',
     activePath: '/energie',
     body,

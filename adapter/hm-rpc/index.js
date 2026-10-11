@@ -72,10 +72,47 @@ function normalizeValue(value, description = {}) {
   return value;
 }
 
+// Die CCU beschreibt Bruchteile von 0 bis 1 mit UNIT "100%". Im homeESS-
+// Katalog steht dafür "%": Werte und Schreibbefehle müssen dieselbe Skala
+// benutzen. Einige HmIP-LEVEL-Datenpunkte erlauben laut CCU MAX=1.01.
+// Ganzzahlige Prozentwerte und Parameter mit tatsächlichem 0–100-Bereich
+// bleiben roh.
+function fractionPercent(description = {}) {
+  return description.UNIT === '100%' && description.TYPE === 'FLOAT'
+    && (description.MAX == null || Number(description.MAX) <= 1.01);
+}
+
+function displayValue(value, description = {}) {
+  const normalized = normalizeValue(value, description);
+  return fractionPercent(description) && Number.isFinite(normalized) ? normalized * 100 : normalized;
+}
+
+function rpcWriteValue(value, description = {}) {
+  const normalized = normalizeValue(value, description);
+  return fractionPercent(description) && Number.isFinite(normalized) ? normalized / 100 : normalized;
+}
+
 function unitOf(description) {
   const unit = description && description.UNIT;
   if (!unit) return '';
   return unit === '100%' ? '%' : String(unit);
+}
+
+function controlOf(parameter, description = {}) {
+  if ((Number(description.OPERATIONS) & OPERATIONS_WRITE) === 0) return null;
+  if (description.TYPE === 'ACTION') {
+    return { type: 'action', value: 'true', label: parameter === 'STOP' ? 'Stoppen' : 'Auslösen' };
+  }
+  if (description.TYPE === 'FLOAT' || description.TYPE === 'INTEGER') {
+    const scale = fractionPercent(description) ? 100 : 1;
+    const control = { type: 'number', step: description.TYPE === 'INTEGER' ? '1' : 'any' };
+    if (Number.isFinite(Number(description.MIN))) control.min = Number(description.MIN) * scale;
+    if (Number.isFinite(Number(description.MAX))) control.max = fractionPercent(description)
+      ? Math.min(100, Number(description.MAX) * scale) : Number(description.MAX);
+    return control;
+  }
+  if (description.TYPE === 'BOOL') return { type: 'switch', on: 'true', off: 'false' };
+  return null;
 }
 
 module.exports = function createHmRpcAdapter(host) {
@@ -221,18 +258,21 @@ module.exports = function createHmRpcAdapter(host) {
     const category = `${deviceDisplayName(channel, channelAddress)} / ${channelDisplayName(channelAddress)}`;
     const unit = unitOf(description);
     const writable = (Number(description.OPERATIONS) & OPERATIONS_WRITE) !== 0;
+    const control = controlOf(parameter, description);
     if (existing) {
       if (existing.unit !== unit || existing.writable !== writable
-        || existing.name !== name || existing.category !== category) {
+        || existing.name !== name || existing.category !== category
+        || JSON.stringify(existing.control || null) !== JSON.stringify(control)) {
         existing.unit = unit;
         existing.writable = writable;
         existing.name = name;
         existing.category = category;
+        existing.control = control;
         scheduleCatalog(); // korrigierte Metadaten in den persistierten Katalog übernehmen
       }
       return address;
     }
-    states.set(address, { address, name, category, unit, writable });
+    states.set(address, { address, name, category, unit, writable, control });
     return address;
   }
 
@@ -364,7 +404,7 @@ module.exports = function createHmRpcAdapter(host) {
     const description = descriptions.get(key) || {};
     const isNew = !states.has(stateAddress(channelAddress, parameter));
     const address = rememberState(channelAddress, parameter, description);
-    const result = [{ address, value: normalizeValue(value, description) }];
+    const result = [{ address, value: displayValue(value, description) }];
     if (DUTY_KEYS.has(String(parameter).toUpperCase())) {
       const number = Number(value);
       if (Number.isFinite(number)) {
@@ -912,6 +952,7 @@ module.exports = function createHmRpcAdapter(host) {
       return;
     }
     const normalized = normalizeValue(value, description);
+    const rpcValue = rpcWriteValue(value, description);
     const action = description.TYPE === 'ACTION';
     try {
       await queue.run(async () => {
@@ -962,7 +1003,7 @@ module.exports = function createHmRpcAdapter(host) {
         pendingWrites += 1;
         const before = lastValues.get(address);
         try {
-          await performRpc('setValue', [channelAddress, parameter, normalized], WRITE_TIMEOUT_MS);
+          await performRpc('setValue', [channelAddress, parameter, rpcValue], WRITE_TIMEOUT_MS);
           // Ein während setValue empfangenes Event ist neuer und darf nicht
           // nachträglich zu einem unbestätigten optimistischen Wert werden.
           if (lastValues.get(address) === before) lastValues.set(address, { value: normalized, confirmed: false, at: Date.now() });
@@ -1002,7 +1043,10 @@ module.exports = function createHmRpcAdapter(host) {
       for (const entry of cfg.rpcMetadata?.channels || []) if (entry?.ADDRESS) channels.set(entry.ADDRESS, entry);
       for (const [address, schema] of cfg.rpcMetadata?.schemas || []) {
         channelSchemas.set(address, schema);
-        for (const [parameter, detail] of Object.entries(schema.description || {})) descriptions.set(`${address}\0${parameter}`, detail);
+        for (const [parameter, detail] of Object.entries(schema.description || {})) {
+          descriptions.set(`${address}\0${parameter}`, detail);
+          rememberState(address, parameter, detail);
+        }
       }
       if (!cfg.host) throw new Error('CCU-Adresse fehlt');
       rpcOptions = { host: String(cfg.host).replace(/^https?:\/\//, '').replace(/\/$/, ''), port: Number(cfg.port) || 2010,

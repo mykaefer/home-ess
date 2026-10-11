@@ -88,7 +88,7 @@ function destroySession(db, req, res, callback) {
 
 // Schutz-Middleware für authentifizierte Routen.
 function requireAuth(req, res, next) {
-  if (!req.session) return res.redirect('/');
+  if (!req.session && !req.pageShare) return res.redirect('/');
   next();
 }
 
@@ -157,6 +157,7 @@ function authorize(options = {}) {
 
   return (req, res, next) => {
     const pathname = req.path;
+    if (req.pageShare) return next();
     if (isOpen(pathname)) return next();
 
     if (!req.session || !req.access) {

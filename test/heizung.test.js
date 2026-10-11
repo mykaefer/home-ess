@@ -24,7 +24,9 @@ function close(db) { return new Promise((resolve) => db.close(resolve)); }
 
 async function freshDb() {
   const db = new sqlite3.Database(':memory:');
+  await run(db, 'CREATE TABLE mess_schalt_actors (id INTEGER PRIMARY KEY, room_id INTEGER)');
   await run(db, `CREATE TABLE heizung_rooms (
+    temperature_configured INTEGER NOT NULL DEFAULT 1,
     id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL COLLATE NOCASE UNIQUE,
     position INTEGER NOT NULL DEFAULT 0, target_temp REAL NOT NULL DEFAULT 21,
     heat_offset REAL NOT NULL DEFAULT 0, cool_offset REAL NOT NULL DEFAULT 5,
@@ -452,13 +454,14 @@ test('Zentralheizung läuft bei Wärmeanforderung und protokolliert die Laufzeit
     assert.equal(runtime.centralSnapshot().burnerOn, true);
     assert.match(runtime.centralSnapshot().note, /Brenner läuft noch/);
 
-    // Der Vorlauf sinkt über mehrere Messwerte: der Brenner gilt als aus …
-    feed(central.flowCacheKey('flow'), 45.5);
-    await runtime.tick(start + 150000);
-    feed(central.flowCacheKey('flow'), 45);
-    await runtime.tick(start + 180000);
-    assert.equal(runtime.centralSnapshot().burnerOn, true);
-    feed(central.flowCacheKey('flow'), 44.5);
+    // Kleine Abfälle unter 0,3 K zählen ohne Wärmebedarf zusammen.
+    for (let step = 1; step <= 5; step += 1) {
+      feed(central.flowCacheKey('flow'), 46 - step * 0.2);
+      await runtime.tick(start + 120000 + step * 15000);
+      assert.equal(runtime.centralSnapshot().burnerOn, true);
+      assert.equal(runtime.centralSnapshot().boilerOn, true);
+    }
+    feed(central.flowCacheKey('flow'), 44.9);
     await runtime.tick(start + 210000);
     assert.equal(runtime.centralSnapshot().burnerOn, false);
 
@@ -1162,6 +1165,104 @@ test('Die Kostenzeit folgt der Rückmeldung des Brenners, sonst dem Vorlauf', as
 });
 
 
+test('Ohne Wärmebedarf beendet ein kumulierter Vorlaufabfall über 1 °C die Brennphase', () => {
+  // Großes Rauschband, um den zusätzlichen Abschaltpfad isoliert zu prüfen.
+  const config = { flowDropDelta: 2 };
+  function firing() {
+    runtime.stop();
+    for (const flow of [35, 39, 43, 45]) runtime.detectFiring(config, flow);
+    assert.equal(runtime.detectFiring(config, 45), true);
+  }
+  try {
+    firing();
+    // Kleine Schritte zählen zusammen; ein Plateau erhält die Abkühlstrecke.
+    assert.equal(runtime.detectFiring(config, 45, false), true);
+    for (const flow of [44.8, 44.6, 44.6, 44.4, 44.2, 44]) {
+      assert.equal(runtime.detectFiring(config, flow, false), true);
+    }
+    assert.equal(runtime.detectFiring(config, 43.9, false), false);
+
+    firing();
+    // Bei bestehender Anforderung greift die neue Erkennung nicht.
+    for (const flow of [45, 44.8, 44.6, 44.4, 44.2, 44, 43.8]) {
+      assert.equal(runtime.detectFiring(config, flow, true), true);
+    }
+
+    firing();
+    for (const flow of [45, 44.8, 44.6, 44.4, 44.2, 44.3, 44.1, 43.9, 43.7, 43.5]) {
+      assert.equal(runtime.detectFiring(config, flow, false), true);
+    }
+    // Der Anstieg auf 44,3 °C hat die Strecke zurückgesetzt.
+    assert.equal(runtime.detectFiring(config, 43.2, false), false);
+
+    firing();
+    for (const flow of [45, 44.8, 44.6, 44.4]) runtime.detectFiring(config, flow, false);
+    runtime.detectFiring(config, 44.4, true);
+    for (const flow of [44.2, 44, 43.8, 43.6, 43.4]) {
+      assert.equal(runtime.detectFiring(config, flow, false), true);
+    }
+    assert.equal(runtime.detectFiring(config, 43.3, false), false);
+
+    firing();
+    const feedback = { ...config, burnerFeedbackTopic: 'custom://Flamme' };
+    feed(central.flowCacheKey('feedback'), 1);
+    assert.equal(runtime.detectFiring(feedback, 43, false), true);
+  } finally {
+    runtime.stop();
+  }
+});
+
+
+test('Langsame Vorlaufzyklen trennen Brennerlaufzeiten trotz dauernder Wärmeanforderung', async () => {
+  const db = await freshDb();
+  await central.saveCentralConfig(db, {
+    enabled: '1', mode: 'relais', switchTopic: 'custom://Brenner', outdoorTopic: 'custom://Aussen',
+    flowTopic: 'custom://Vorlauf', returnTopic: 'custom://Ruecklauf', flowDropDelta: '0.3',
+  });
+  const room = await rooms.createRoom(db, { ...baseRoom, centralAllowed: '1', centralTemp: '5' });
+  const sensor = await rooms.addSensor(db, room.id, { topic: 'hdp://sensor/1' });
+  const capture = captureWrites();
+  try {
+    await runtime.init(db);
+    const start = Date.now();
+    feed(rooms.sensorCacheKey(sensor), 17);
+    feed(central.flowCacheKey('outdoor'), 2);
+    feed(central.flowCacheKey('return'), 30);
+    let step = 0;
+    async function sample(flow, expected) {
+      feed(central.flowCacheKey('flow'), flow);
+      await runtime.tick(start + step * 30000);
+      step += 1;
+      assert.equal(runtime.centralSnapshot().demandCount, 1);
+      assert.equal(runtime.centralSnapshot().boilerOn, true);
+      assert.equal(runtime.centralSnapshot().burnerOn, expected, `Vorlauf ${flow}`);
+      // Wiederholte Auswertung desselben Cachewerts darf keinen Trend erfinden.
+      await runtime.tick(start + (step - 1) * 30000 + 5000);
+      assert.equal(runtime.centralSnapshot().burnerOn, expected);
+    }
+    await sample(40, false);
+    for (const flow of [40.2, 40.4, 40.6, 40.8, 41]) await sample(flow, false);
+    await sample(41.2, true);
+    // Plateau und leichtes Rauschen erhalten die Brennphase.
+    for (const flow of [41.2, 41.3, 41.1, 41.2]) await sample(flow, true);
+    for (const flow of [41, 40.8, 40.6, 40.8, 40.6, 40.4, 40.2]) await sample(flow, true);
+    await sample(40, false);
+    for (const flow of [40.2, 40.4, 40.6, 40.8, 41]) await sample(flow, false);
+    await sample(41.2, true);
+    const runs = await central.listRuns(db, 5);
+    assert.equal(runs.length, 2);
+    const first = runs.find(run => run.started_at === start + 6 * 30000);
+    assert.ok(first);
+    assert.equal(first.duration_ms, (18 - 6) * 30000);
+    assert.equal(capture.writes.filter(write => write.topic === 'custom://Brenner').length, 1);
+  } finally {
+    runtime.stop();
+    capture.restore();
+    await close(db);
+  }
+});
+
+
 test('Ohne Feuern des Brenners läuft keine Kostenzeit', async () => {
   const db = await freshDb();
   await central.saveCentralConfig(db, {
@@ -1541,6 +1642,119 @@ test('Zur eingestellten Uhrzeit fällt die Handschaltung auf Automatik zurück',
     assert.equal(stored.climateMode, climate.MODE_AUTO);
     assert.equal(stored.climateModeSince, null);
   } finally {
+    runtime.stop();
+    capture.restore();
+    await close(db);
+  }
+});
+
+test('Allgemeine Räume bleiben ohne Sollwert außerhalb von Regelung, Diagramm und Heizungs-States', async () => {
+  const db = await freshDb();
+  const capture = captureWrites();
+  try {
+    const ordinary = await rooms.createRoom(db, { name: 'Abstellraum', thermostatTopic: 'test/thermostat', boostTopic: 'test/boost' });
+    const configured = await rooms.createRoom(db, { ...baseRoom, name: 'Zimmer' });
+    assert.equal(ordinary.targetTemp, null);
+    assert.deepEqual((await rooms.listRooms(db)).map((room) => room.id), [configured.id, ordinary.id]);
+    assert.deepEqual(rooms.roomEntries(ordinary), []);
+    const sensor = await rooms.addSensor(db, ordinary.id, { topic: 'test/temp' });
+    await addSwitchSequences(db, ordinary.id, 'heat', 'test/heater');
+    await addSwitchSequences(db, ordinary.id, 'cool', 'test/cooler');
+    await runtime.init(db);
+    feed(rooms.sensorCacheKey(sensor), 18);
+    feed(rooms.thermostatCacheKey(ordinary.id), 25);
+    feed(rooms.boostCacheKey(ordinary.id), 1);
+    await runtime.tick();
+    assert.equal(runtime.snapshot().has(ordinary.id), false);
+    assert.equal(capture.writes.some((entry) => entry.topic.startsWith('test/')), false);
+    await assert.rejects(rooms.setBoost(db, ordinary.id, true), /Soll-Temperatur/);
+    await assert.rejects(rooms.setClimateMode(db, ordinary.id, 1), /Soll-Temperatur/);
+    const { chartCard } = require('../src/views/heizung-chart');
+    assert.equal(chartCard([ordinary]), '');
+    const chart = chartCard([ordinary, configured]);
+    assert.doesNotMatch(chart, /Abstellraum/);
+    assert.match(chart, /Zimmer/);
+
+    // Erst die bewusste Konfiguration aktiviert den Raum; Fremd-Topics können
+    // ihn davor weder einschalten noch mit einem Sollwert aktivieren.
+    await rooms.updateRoom(db, ordinary.id, { ...ordinary, targetTemp: 21, thermostatTopic: '', boostTopic: '' });
+    await runtime.reload();
+    feed(rooms.sensorCacheKey(sensor), 18);
+    await runtime.tick();
+    assert.equal(runtime.snapshot().get(ordinary.id).heating, true);
+    assert.equal(lastWrite(capture.writes, 'test/heater'), 1);
+    assert.ok(bus.getCache().has(rooms.stateTopic(ordinary.name, 'soll')));
+
+    const active = await rooms.getRoom(db, ordinary.id);
+    await rooms.setBoost(db, active.id, true);
+    await rooms.setClimateMode(db, active.id, 1);
+    await rooms.updateRoom(db, active.id, { ...active, targetTemp: '' });
+    await runtime.reload();
+    await runtime.tick();
+    assert.equal(lastWrite(capture.writes, 'test/heater'), 0);
+    assert.equal(runtime.snapshot().has(ordinary.id), false);
+    assert.equal(bus.getCache().has(rooms.stateTopic(ordinary.name, 'soll')), false);
+    const cleared = await rooms.getRoom(db, ordinary.id);
+    assert.equal(cleared.targetTemp, null);
+    assert.equal(cleared.boostActive, false);
+    assert.equal(cleared.climateMode, 2);
+    assert.deepEqual(rooms.roomEntries(cleared), []);
+    await rooms.setTargetTemp(db, ordinary.id, 22);
+    assert.equal((await rooms.getRoom(db, ordinary.id)).targetTemp, 22);
+    await rooms.setTargetTemp(db, ordinary.id, '');
+    assert.equal((await rooms.getRoom(db, ordinary.id)).targetTemp, null);
+  } finally {
+    runtime.stop();
+    capture.restore();
+    await close(db);
+  }
+});
+
+test('Eine deaktivierte zyklische Raumfolge führt nach ihrer Pause keine weiteren Schaltungen aus', async () => {
+  const { createActionRunner } = require('../src/automation/action-runner');
+  const runner = createActionRunner('room-disable-test');
+  const capture = captureWrites();
+  try {
+    const promise = runner.runLoopOnce({ id: 99, config: { repeats: 2 }, children: [
+      { type: 'pause', config: { seconds: 0.02 } },
+      { type: 'write', config: { topic: 'test/disabled-room', value: '1' } },
+    ] });
+    runner.cancelLoop(99);
+    // Der Runner nutzt unref-Timer; der Test hält den Event-Loop bis zur
+    // Prüfung der abgebrochenen Pause offen.
+    const [result] = await Promise.all([promise, new Promise((resolve) => setTimeout(resolve, 40))]);
+    assert.equal(result.status, 'cancelled');
+    assert.equal(capture.writes.length, 0);
+  } finally {
+    runner.reset();
+    capture.restore();
+  }
+});
+
+test('Entfernte Temperaturkonfiguration unterbricht eine verzögerte Aus-Folge nicht dauerhaft', async () => {
+  const db = await freshDb();
+  const capture = captureWrites();
+  const keepAlive = setInterval(() => {}, 50);
+  try {
+    const room = await rooms.createRoom(db, baseRoom);
+    const sensor = await rooms.addSensor(db, room.id, { topic: 'test/delayed-temperature' });
+    await actionsRepo.addAction(db, room.id, { phase: 'heat_on', type: 'write', topic: 'test/delayed-heater', value: '1' });
+    await actionsRepo.addAction(db, room.id, { phase: 'heat_off', type: 'pause', seconds: '1' });
+    await actionsRepo.addAction(db, room.id, { phase: 'heat_off', type: 'write', topic: 'test/delayed-heater', value: '0' });
+    await runtime.init(db);
+    feed(rooms.sensorCacheKey(sensor), 18);
+    await runtime.tick();
+    assert.equal(lastWrite(capture.writes, 'test/delayed-heater'), 1);
+    feed(rooms.sensorCacheKey(sensor), 25);
+    await runtime.tick();
+    assert.equal(runtime.snapshot().get(room.id).heating, false);
+    // Aus ist bereits angefordert, die Hardware aber noch an (Pause).
+    assert.equal(lastWrite(capture.writes, 'test/delayed-heater'), 1);
+    await rooms.setTargetTemp(db, room.id, '');
+    await runtime.reload();
+    assert.equal(lastWrite(capture.writes, 'test/delayed-heater'), 0);
+  } finally {
+    clearInterval(keepAlive);
     runtime.stop();
     capture.restore();
     await close(db);

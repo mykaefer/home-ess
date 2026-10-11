@@ -216,7 +216,7 @@ function renderGridControl({ config, batteryConfig, state, brokerValues = {}, lo
     window.addEventListener('homeess:mqtt', gcLogLiveTick);
     setInterval(gcLogLiveTick, 5000);`;
 
-  return renderLayout({ title: 'Grid-Control', activePath: '/grid-control', body, script });
+  return renderLayout({ periodicRefresh: true, title: 'Grid-Control', activePath: '/grid-control', body, script });
 }
 
 module.exports = renderGridControl;

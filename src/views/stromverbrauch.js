@@ -213,6 +213,7 @@ function renderStromverbrauch({
     setInterval(refreshConsumptionMetrics, 60000);`;
 
   return renderLayout({
+    periodicRefresh: true,
     title: 'Stromverbrauch',
     activePath: '/stromverbrauch',
     body,

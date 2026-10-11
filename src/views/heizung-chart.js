@@ -18,7 +18,7 @@
 
 const i18n = require('../i18n');
 const { escapeHtml } = require('./components');
-const { MIN_TEMP, MAX_TEMP, formatTemp } = require('../heizung/rooms');
+const { isTemperatureConfigured, MIN_TEMP, MAX_TEMP, formatTemp } = require('../heizung/rooms');
 
 // Abstand der Skalenstriche und kleinster dargestellter Bereich, beide in °C.
 const STEP = 5;
@@ -27,6 +27,7 @@ const MIN_SPAN = 15;
 const FALLBACK = { min: 15, max: 30 };
 
 function number(value) {
+  if (value == null || value === '') return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 }
@@ -104,15 +105,15 @@ function barColumn(room, domain) {
 // Reihenfolge des Diagramms: die gespeicherte Position, bei Gleichstand die
 // Reihenfolge der Liste (alphabetisch).
 function inOrder(rooms) {
-  return rooms.map((room, index) => ({ room, index }))
+  return rooms.filter(isTemperatureConfigured).map((room, index) => ({ room, index }))
     .sort((left, right) => (Number(left.room.position || 0) - Number(right.room.position || 0))
       || (left.index - right.index))
     .map((entry) => entry.room);
 }
 
 function chartCard(rooms = []) {
-  if (!rooms.length) return '';
   const ordered = inOrder(rooms);
+  if (!ordered.length) return '';
   const domain = domainFor(ordered);
   const steps = Math.max(1, Math.round((domain.max - domain.min) / STEP));
   return `        <div class="hz-chart" id="heizungChart">

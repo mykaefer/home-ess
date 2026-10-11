@@ -386,7 +386,7 @@ function renderLogs({ initial = null, minIntervalMs = 2000 } = {}) {
     logMarkUpdated();
     logSchedule(logIntervalMs);`;
 
-  return renderLayout({ title: 'Logs', activePath: '/logs', body, script });
+  return renderLayout({ periodicRefresh: true, title: 'Logs', activePath: '/logs', body, script });
 }
 
 module.exports = renderLogs;

@@ -23,6 +23,7 @@ async function freshDb() {
     meter_group INTEGER NOT NULL DEFAULT 0,
     color TEXT NOT NULL DEFAULT '')`);
   await dbRun(db, `CREATE TABLE mess_schalt_actors (
+    room_id INTEGER,
     id INTEGER PRIMARY KEY AUTOINCREMENT, group_id INTEGER)`);
   return db;
 }

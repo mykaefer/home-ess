@@ -7,6 +7,8 @@
 //
 // IPC (Parent -> Child):  init{mainPath,name,config}, stop, write{address,value}, read{address}
 // IPC (Child -> Parent):  ready, states{list}, value{address,value}, log{level,message}, error{message}
+// Audio Bus (nur Manifest "audioBus": true): Parent -> Child audio-event, audio-call-result;
+// Child -> Parent audio-subscribe, audio-call, audio-ack (siehe audio-bus/adapter-bridge.js).
 
 let adapter = null;
 let currentConfig = {};
@@ -17,6 +19,15 @@ let hostCallSequence = 0;
 let subscriptionSequence = 0;
 const hostCalls = new Map();
 const subscriptions = new Map();
+// Audio Bus (nur bei Manifest "audioBus": true, siehe audio-bus/adapter-bridge.js)
+let audioBusEnabled = false;
+let statePermissions = { read: false, write: false };
+let audioCallSequence = 0;
+const audioCalls = new Map();
+const audioHandlers = { started: new Set(), input: new Set(), ended: new Set() };
+// Ereignisse strikt nacheinander abarbeiten; der Parent sendet erst nach
+// audio-ack weiter, die Queue hier bleibt damit klein.
+let audioChain = Promise.resolve();
 
 function send(message) {
   if (process.send) {
@@ -51,6 +62,82 @@ function localizeCategory(value) {
     .join(' / ');
 }
 
+function audioBusError(message, code) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+function audioCall(method, data = {}) {
+  if (!audioBusEnabled) {
+    return Promise.reject(audioBusError('Dieser Adapter hat keinen Zugriff auf den Audio Bus (Manifest: "audioBus": true).', 'audio_not_permitted'));
+  }
+  const requestId = `${process.pid}-${Date.now()}-${++audioCallSequence}`;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      audioCalls.delete(requestId);
+      reject(audioBusError('Audio-Bus-Aufruf hat nicht rechtzeitig geantwortet.', 'timeout'));
+    }, 10000);
+    audioCalls.set(requestId, { resolve, reject, timer });
+    send({ type: 'audio-call', requestId, method, ...data });
+  });
+}
+
+function audioSubscribe(kind, handler) {
+  if (!audioBusEnabled) throw audioBusError('Dieser Adapter hat keinen Zugriff auf den Audio Bus (Manifest: "audioBus": true).', 'audio_not_permitted');
+  if (typeof handler !== 'function') throw new TypeError('Callback muss eine Funktion sein.');
+  const before = audioHandlers[kind].size;
+  audioHandlers[kind].add(handler);
+  if (!before) sendAudioSubscriptions();
+  return () => {
+    if (audioHandlers[kind].delete(handler) && !audioHandlers[kind].size) sendAudioSubscriptions();
+  };
+}
+
+function sendAudioSubscriptions() {
+  send({ type: 'audio-subscribe', kinds: Object.keys(audioHandlers).filter((kind) => audioHandlers[kind].size) });
+}
+
+function handleAudioEvent(msg) {
+  audioChain = audioChain.then(async () => {
+    const handlers = Array.from(audioHandlers[msg.kind] || []);
+    let args = [msg.session];
+    if (msg.kind === 'input') args = [msg.session, Buffer.isBuffer(msg.chunk) ? msg.chunk : Buffer.from(msg.chunk || []), msg.info || {}];
+    else if (msg.kind === 'ended') args = [msg.session, msg.reason];
+    for (const handler of handlers) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await handler(...args);
+      } catch (err) {
+        send({ type: 'log', level: 'error', message: `Audio-Callback fehlgeschlagen: ${err && err.message}` });
+      }
+    }
+  }).finally(() => send({ type: 'audio-ack', eventId: msg.eventId }));
+}
+
+// Plugin-API des Audio Bus für Adapter. Sessions sind eingefrorene Objekte:
+//   { sessionId, status, client, deviceId, source, room, codec, sampleRate,
+//     channels, metadata, createdAt, lastInputAt, endedAt, endReason, output }
+function buildAudio() {
+  return {
+    get available() {
+      return audioBusEnabled;
+    },
+    // handler(session)
+    onSessionStarted: (handler) => audioSubscribe('started', handler),
+    // handler(session, chunk: Buffer, { seq, receivedAt, droppedBefore })
+    onInput: (handler) => audioSubscribe('input', handler),
+    // handler(session, reason)
+    onSessionEnded: (handler) => audioSubscribe('ended', handler),
+    // format: { codec, sampleRate, channels }
+    startOutput: (sessionId, format) => audioCall('startOutput', { sessionId: String(sessionId || ''), format: format || {} }),
+    sendAudio: (sessionId, chunk) => audioCall('sendAudio', { sessionId: String(sessionId || ''), chunk }),
+    endOutput: (sessionId) => audioCall('endOutput', { sessionId: String(sessionId || '') }),
+    getSession: (sessionId) => audioCall('getSession', { sessionId: String(sessionId || '') }),
+    listSessions: () => audioCall('listSessions'),
+  };
+}
+
 function buildHost() {
   function hostCall(method, data = {}) {
     const requestId = `${process.pid}-${Date.now()}-${++hostCallSequence}`;
@@ -63,9 +150,36 @@ function buildHost() {
       send({ type: 'host-call', requestId, method, ...data });
     });
   }
+  const audio = buildAudio();
+  function subscribeState(topic, listener) {
+    if (!String(topic || '').trim() || typeof listener !== 'function') {
+      throw new Error('subscribeState benötigt Topic und Listener.');
+    }
+    const subscriptionId = String(++subscriptionSequence);
+    subscriptions.set(subscriptionId, listener);
+    send({ type: 'subscribe', subscriptionId, topic: String(topic).trim() });
+    return () => {
+      if (!subscriptions.delete(subscriptionId)) return;
+      send({ type: 'unsubscribe', subscriptionId });
+    };
+  }
   return {
     get name() {
       return instanceName;
+    },
+    // Audio Bus (nur mit Manifest "audioBus": true; sonst werfen die Aufrufe
+    // audio_not_permitted).
+    audio,
+    rooms: { list: () => hostCall('rooms.list', {}) },
+    states: {
+      get: (topic) => hostCall('states.get', { topic: String(topic || '') }),
+      query: (term, limit, offset) => hostCall('states.query', { term: String(term || ''), limit, offset }),
+      set: (topic, value) => hostCall('states.set', { topic: String(topic || ''), value }),
+      subscribe: (topic, listener) => {
+        if (!statePermissions.read) throw new Error('state_not_permitted');
+        return subscribeState(topic, listener);
+      },
+      get permissions() { return { ...statePermissions }; },
     },
     getConfig() {
       return currentConfig;
@@ -125,18 +239,7 @@ function buildHost() {
     },
     // Beliebige homeESS-Datenquelle (MQTT oder prefix://-Adapter-State)
     // ereignisgetrieben abonnieren. Liefert eine idempotente Abmeldefunktion.
-    subscribeState(topic, listener) {
-      if (!String(topic || '').trim() || typeof listener !== 'function') {
-        throw new Error('subscribeState benötigt Topic und Listener.');
-      }
-      const subscriptionId = String(++subscriptionSequence);
-      subscriptions.set(subscriptionId, listener);
-      send({ type: 'subscribe', subscriptionId, topic: String(topic).trim() });
-      return () => {
-        if (!subscriptions.delete(subscriptionId)) return;
-        send({ type: 'unsubscribe', subscriptionId });
-      };
-    },
+    subscribeState,
     // Den gesamten homeESS-State-Katalog lesen (System, Custom, alle Adapter-
     // Instanzen) als flache Liste aus Metadaten:
     //   { topic, name, category, unit, value, writable, sourceType }
@@ -221,8 +324,10 @@ function buildHost() {
   };
 }
 
-async function start(mainPath, name, cfg, selectedLanguage, selectedTranslations) {
+async function start(mainPath, name, cfg, selectedLanguage, selectedTranslations, withAudioBus, states) {
   instanceName = name;
+  audioBusEnabled = withAudioBus === true;
+  statePermissions = { read: states && states.read === true, write: states && states.write === true };
   currentConfig = cfg || {};
   language = selectedLanguage || language;
   translations = selectedTranslations || {};
@@ -252,7 +357,7 @@ async function stop() {
 process.on('message', (msg) => {
   if (!msg || typeof msg !== 'object') return;
   if (msg.type === 'init') {
-    start(msg.mainPath, msg.name, msg.config, msg.language, msg.translations).catch((err) => {
+    start(msg.mainPath, msg.name, msg.config, msg.language, msg.translations, msg.audioBus, msg.states).catch((err) => {
       send({ type: 'error', message: err && err.message ? err.message : String(err) });
       process.exit(1);
     });
@@ -285,6 +390,15 @@ process.on('message', (msg) => {
     Promise.resolve()
       .then(() => (adapter && typeof adapter.stateOptionsChanged === 'function' ? adapter.stateOptionsChanged() : null))
       .catch((err) => send({ type: 'log', level: 'error', message: `stateOptionsChanged fehlgeschlagen: ${err.message}` }));
+  } else if (msg.type === 'audio-event') {
+    handleAudioEvent(msg);
+  } else if (msg.type === 'audio-call-result') {
+    const pending = audioCalls.get(String(msg.requestId));
+    if (!pending) return;
+    audioCalls.delete(String(msg.requestId));
+    clearTimeout(pending.timer);
+    if (msg.error) pending.reject(audioBusError(String(msg.error), msg.code || 'error'));
+    else pending.resolve(msg.result);
   } else if (msg.type === 'host-call-result') {
     const pending = hostCalls.get(String(msg.requestId));
     if (!pending) return;

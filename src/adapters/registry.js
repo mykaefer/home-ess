@@ -257,6 +257,12 @@ function readManifest(dir, folderName, options = {}) {
     managementPage: normalizeManagementPage(parsed.managementPage, path.join(dir, folderName)),
     systemDatabase: normalizeSystemDatabase(parsed.systemDatabase),
     publicFiles: normalizePublicFiles(parsed.publicFiles),
+    // Zugriff auf den Audio Bus (host.audio.*) nur bei ausdrücklicher Erklärung.
+    audioBus: parsed.audioBus === true,
+    states: {
+      read: parsed.states && parsed.states.read === true,
+      write: parsed.states && parsed.states.write === true,
+    },
     presetsDir: path.join(dir, folderName, 'presets'),
   };
 }

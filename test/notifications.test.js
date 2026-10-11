@@ -42,6 +42,8 @@ async function freshDb() {
     position INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
+    delivery TEXT NOT NULL DEFAULT 'relay',
+    audio_target TEXT NOT NULL DEFAULT 'all',
     last_triggered_at INTEGER)`);
   return db;
 }
@@ -332,7 +334,7 @@ test('Die Engine abonniert die States ihrer Regeln und löst über den State-Bus
   fixture.feed(1, 'true');
   assert.equal(fixture.sent.length, 1);
   assert.deepEqual(fixture.sent[0], {
-    title: 'Türklingel', body: 'Es klingelt an der Tür.', type: 'doorbell', severity: 'normal',
+    title: 'Türklingel', body: 'Es klingelt an der Tür.', type: 'doorbell', severity: 'normal', delivery: 'relay', audioTarget: 'all',
   });
   // true → true wird vom Bus gar nicht erst gemeldet und löst nicht aus.
   fixture.feed(1, 'true');
@@ -554,4 +556,18 @@ test('Der Nachrichtendienst weist ungültige Nachrichten unabhängig von Regeln 
     service.normalize({ title: ' T ', body: ' B ', type: 'doorbell' }),
     { title: 'T', body: 'B', type: 'doorbell', severity: 'normal' }
   );
+});
+
+
+test('Versandart und Audio-Ziel bleiben beim Anlegen und Bearbeiten gespeichert', async () => {
+  const db = await freshDb();
+  try {
+    const rule = await repository.createRule(db, ruleInput({ delivery: 'both', audioTarget: 'room:12' }));
+    assert.equal(rule.delivery, 'both');
+    assert.equal(rule.audioTarget, 'room:12');
+    const updated = await repository.updateRule(db, rule.id, ruleInput({ delivery: 'speech', audioTarget: 'endpoint:kueche' }));
+    assert.equal(updated.delivery, 'speech');
+    assert.equal((await repository.listActiveRules(db))[0].audioTarget, 'endpoint:kueche');
+    await assert.rejects(repository.createRule(db, ruleInput({ delivery: 'unknown' })), /Versandart/);
+  } finally { await new Promise((resolve) => db.close(resolve)); }
 });
