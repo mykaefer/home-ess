@@ -379,7 +379,7 @@ ${blocks}
     setInterval(statesRefresh, 15000);
   `;
 
-  return renderLayout({ title: 'States', activePath: '/states', body, script });
+  return renderLayout({ periodicRefresh: true, title: 'States', activePath: '/states', body, script });
 }
 
 function renderInstanceBlock(inst) {

@@ -6,6 +6,13 @@
 // Einmal je Kalendertag wird der Mindest-Ladezustand so gesetzt, dass der Akku
 // am Folgetag laut Prognose planmäßig wieder 100 % erreicht. Je weniger morgen
 // nachgeladen werden kann, desto höher muss die Reserve heute Nacht bleiben.
+// Ein automatisch gelerntes Variabilitätsmodell berücksichtigt mögliches
+// zusätzliches Ladepotenzial bei vergleichbaren Wetterlagen. Es lernt aus
+// ursprünglichen Vortagsprognosen und gemessenen PV-Erträgen. Klarhimmel-Referenz,
+// gleichzeitiger Verbrauch und Ladeverluste bestimmen den möglichen Ladegewinn.
+// Ohne ausreichend Lerndaten bleibt die ursprüngliche Berechnung erhalten.
+// Möglicher Mehrertrag ist keine gesicherte Versorgung; es gibt keinen
+// pauschalen Prozentabzug vom aktuellen SoC.
 // Dafür zählt die PV-Kurve gegen den Hausverbrauch einschließlich Funktionen
 // und Pool, aber vollständig OHNE Wallbox. Fahrzeugladungen werden separat
 // geplant und dürfen weder Ladepotenzial noch Auslösezeitpunkt bestimmen.
@@ -114,14 +121,15 @@ function evaluatePeakPassed(today, decimalHour) {
 // Zielwert aus dem Ladepotenzial des Folgetags. Gibt immer einen Befund zurück,
 // auch wenn nichts gesetzt werden kann. `reason` ist ein maschinenlesbarer
 // Schlüssel für Journal und Tagesprotokoll – kein Anzeigetext.
-function computeTargetMinSoc({ chargePotentialKwh, capacityKwh, currentSoc }) {
+function computeTargetMinSoc({ chargePotentialKwh, additionalChargePotentialKwh = 0, capacityKwh, currentSoc }) {
   if (!Number.isFinite(capacityKwh) || capacityKwh <= 0) {
     return { minSoc: null, reason: 'keine-kapazitaet' };
   }
   if (currentSoc == null) {
     return { minSoc: null, reason: 'soc-unbekannt' };
   }
-  const chargeablePercent = Math.max(0, (num(chargePotentialKwh) || 0) / capacityKwh * 100);
+  const additionalChargeKwh = Math.max(0, num(additionalChargePotentialKwh) || 0);
+  const chargeablePercent = (Math.max(0, num(chargePotentialKwh) || 0) + additionalChargeKwh) / capacityKwh * 100;
   const desired = Math.ceil(Math.min(100, Math.max(0, 100 - chargeablePercent)));
   const upper = Math.min(CEILING_SOC, Math.floor(currentSoc - SOC_HEADROOM));
   if (upper < FLOOR_SOC) {
@@ -130,7 +138,7 @@ function computeTargetMinSoc({ chargePotentialKwh, capacityKwh, currentSoc }) {
     return { minSoc: null, chargeablePercent, desired, reason: 'kein-spielraum' };
   }
   const minSoc = Math.min(Math.max(desired, FLOOR_SOC), upper);
-  return { minSoc, chargeablePercent, desired, reason: 'gesetzt' };
+  return { minSoc, chargeablePercent, additionalChargeKwh, desired, reason: 'gesetzt' };
 }
 
 async function evaluate(db, { prognosis, config, local }) {
@@ -162,6 +170,7 @@ async function evaluate(db, { prognosis, config, local }) {
   const currentSoc = num(prognosis.battery && prognosis.battery.soc);
   const target = computeTargetMinSoc({
     chargePotentialKwh: days[1].chargePotentialKwh,
+    additionalChargePotentialKwh: days[1].cloudBreakChargePotentialKwh,
     capacityKwh: num(simulation.capacityKwh),
     currentSoc,
   });
@@ -200,6 +209,7 @@ async function runNow(db) {
     from: config.minSoc, to: result.minSoc,
     currentSoc: result.currentSoc,
     chargeablePercent: result.chargeablePercent == null ? null : Number(result.chargeablePercent.toFixed(1)),
+    additionalChargeKwh: result.additionalChargeKwh,
     tomorrow: result.tomorrow,
   }));
   await minSocSync.setLocalMinSoc(db, result.minSoc, {

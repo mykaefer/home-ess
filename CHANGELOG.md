@@ -5,6 +5,59 @@ Alle nennenswerten Änderungen an homeESS. Format angelehnt an
 
 ## [Unreleased]
 
+## [1.8.0] — 2026-10-11
+
+### Hinzugefügt
+
+- Seitenfreigaben (außer Einstellungen): Symbol am Seitentitel und Dialog für
+  nicht freigegeben (grau), Lesezugriff (blau) und Schreibzugriff (rot), inklusive
+  Freigabe-URL und Kopierfunktion. Zufällige Links öffnen ausschließlich die
+  freigegebene Seite ohne Anmeldung, Menü oder Titelleiste. Lesezugriff sperrt
+  Änderungen serverseitig; Unterseiten haben eigene Freigaben. Ein Widerruf
+  macht den alten Link ungültig, auch nach erneuter Freigabe.
+
+### Geändert
+
+- Alle Seiten ohne eigene periodische Inhaltsaktualisierung erhalten eine
+  gedrosselte Änderungsprüfung: Ereignisse werden wie beim Dashboard gebündelt,
+  vollständige Seiten höchstens einmal pro Minute geprüft und nur bei Änderungen
+  neu geladen. Hintergrund-Tabs, offene Dialoge, Drag-and-drop und ungespeicherte
+  Formulare verhindern das Neuladen. Bereits vorhandene Live-Abfragen bleiben
+  erhalten; die Ergänzung gilt auch für öffentliche Freigaben und Adapterseiten.
+
+- Der Freigabedialog zeigt für jede Seite getrennte URLs für das helle und
+  dunkle Theme, jeweils mit Kopierbutton. Beide Links verwenden dieselben
+  Zugriffsrechte und behalten ihr Theme bei Bedienhandlungen und Weiterleitungen.
+
+- Seitentitel verwenden einheitliche Schriftgrößen, Zeilenhöhen und obere
+  Abstände auf Desktop und Smartphone. Freigabesymbole verschieben die Titel
+  nicht mehr; auch Einstellungen, öffentliche Seiten und Adapterverwaltungen
+  folgen derselben Ausrichtung.
+
+- Dynamischer Mindest-SoC berücksichtigt automatisch gelernte PV-Variabilität:
+  Ursprüngliche Vortagsprognosen werden je Wetterklasse mit gemessenen
+  Stunden verglichen. Möglicher Mehrertrag wird anhand der Klarhimmel-Referenz,
+  des gleichzeitigen Hausverbrauchs und der Ladeverluste als zusätzliches
+  Ladepotenzial bewertet. Es gibt keine manuelle Wolkenlücken-Dauer und keinen
+  pauschalen SoC-Abzug. Bis ausreichend Messungen aus mehreren Tagen vorliegen,
+  bleibt die normale Prognose maßgeblich; die Prognoseseite zeigt die Lernphase
+  bzw. das gelernte Zusatzpotenzial. Abgeregelte, unvollständige und veraltete
+  Messungen werden nicht gelernt. Versorgungssicherheit und Betriebslevel
+  verwenden weiterhin die normale Prognose.
+
+### Behoben
+
+- Releasecheck: transitive Abhängigkeiten `ip-address`, `proxy-addr`, `qs`,
+  `tar` und `undici` in der Lockdatei auf korrigierte Versionen innerhalb der
+  bestehenden Versionsbereiche aktualisiert. Die anschließende npm-Prüfung
+  meldet keine bekannten Schwachstellen.
+
+- Betriebslevel 5 setzt neben Überschuss und vollem Akku eine gesicherte
+  Versorgung voraus. Im Netzparallelbetrieb haben rote und gelbe Prognosen
+  Vorrang; im Autarkbetrieb muss zunächst die Mehrtagesreserve ausreichend
+  sein. Ein voller Akku bei hohem Mindest-SoC und wenig erwartetem PV-Ertrag
+  gibt deshalb nicht allein wegen kurzzeitigem Überschuss alle Verbraucher frei.
+
 ## [1.7.9] — 2026-10-09
 
 ### Geändert

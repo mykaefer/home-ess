@@ -587,6 +587,32 @@ function forecastPvForHour(forecast, dayKeyValue, hour) {
     .reduce((sum, slot) => sum + (num(slot.kwh) || 0), 0);
 }
 
+// Gelernter möglicher Mehrertrag aus vergleichbaren Vortagsprognosen.
+// Die gelernte Abweichung wird als äquivalente kurze Klarhimmel-Phase ausgewertet,
+// damit Leistungsspitzen auch bei negativem Stundenmittel laden können.
+// Weder fehlende Lerndaten noch die Basisprognose werden optimistisch aufgefüllt.
+function cloudBreakPotentialForHour({ forecast, dayKeyValue, hour, pvKwh, loadKwh, durationHours = 1, chargeEfficiency = 1 }) {
+  if (!(durationHours > 0) || !forecast || !Array.isArray(forecast.hours)) {
+    return { extraPvKwh: 0, extraChargePotentialKwh: 0 };
+  }
+  const slots = forecast.hours.filter(slot => slot.dateKey === dayKeyValue && Number(slot.hour) === hour);
+  let clearSkyKwh = 0;
+  let weightedFraction = 0;
+  for (const slot of slots) {
+    const clear = num(slot.clearSkyKwh);
+    const fraction = num(slot.cloudBreakFraction);
+    if (clear == null || fraction == null || !slot.cloudBreakLearned || clear <= 0) continue;
+    clearSkyKwh += clear * durationHours;
+    weightedFraction += clear * durationHours * clamp(fraction, 0, 1);
+  }
+  if (clearSkyKwh <= pvKwh || clearSkyKwh <= 0) return { extraPvKwh: 0, extraChargePotentialKwh: 0 };
+  const fraction = weightedFraction / clearSkyKwh;
+  return {
+    extraPvKwh: (clearSkyKwh - pvKwh) * fraction,
+    extraChargePotentialKwh: Math.max(0, Math.max(0, clearSkyKwh - loadKwh) - Math.max(0, pvKwh - loadKwh)) * fraction * chargeEfficiency,
+  };
+}
+
 function buildWallboxPlanningSlots({
   forecast, local, remainingByHour, profilesByWeekday,
   dailyTargetsByWeekday, profile, dailyTarget, functionModels, poolModel,
@@ -683,6 +709,8 @@ function simulateDays({ forecast, model, config, batteryConfig, batteryData, inc
     // hängt der Wert nicht vom aktuellen Ladestand ab und beantwortet damit die
     // Frage „wie viel ließe sich an diesem Tag nachladen?".
     let chargePotentialKwh = 0;
+    let cloudBreakExtraPvKwh = 0;
+    let cloudBreakChargePotentialKwh = 0;
     // Erwartete Stundenlast des Tages (Haus + Funktionen + Wallbox + Pool) für
     // das 24-h-Balkendiagramm; bereits verstrichene Stunden von heute sind null.
     const hourlyLoadKwh = Array(24).fill(null);
@@ -746,6 +774,12 @@ function simulateDays({ forecast, model, config, batteryConfig, batteryData, inc
       hourlyLoadKwh[hour] = load;
       hourlyPvKwh[hour] = pv;
       pvKwh += pv;
+      const cloudBreak = includeWallbox ? { extraPvKwh: 0, extraChargePotentialKwh: 0 } : cloudBreakPotentialForHour({
+        forecast, dayKeyValue: pvDay.dateKey, hour, pvKwh: pv, loadKwh: load,
+        durationHours, chargeEfficiency,
+      });
+      cloudBreakExtraPvKwh += cloudBreak.extraPvKwh;
+      cloudBreakChargePotentialKwh += cloudBreak.extraChargePotentialKwh;
       const direct = Math.min(load, pv);
       const shortfall = load - direct;
       const excess = pv - direct;
@@ -801,6 +835,9 @@ function simulateDays({ forecast, model, config, batteryConfig, batteryData, inc
         if (!nextChargeStart) gridBeforeNextChargeKwh += grid;
       }
     }
+    const variableSlots = forecast && Array.isArray(forecast.hours)
+      ? forecast.hours.filter(slot => slot.dateKey === pvDay.dateKey && slot.weatherClass !== 'clear' && slot.clearSkyKwh > slot.kwh + 0.01)
+      : [];
     return {
       dateKey: pvDay.dateKey,
       label: pvDay.label,
@@ -823,6 +860,10 @@ function simulateDays({ forecast, model, config, batteryConfig, batteryData, inc
       hourlyPvKwh,
       climateByHour,
       chargePotentialKwh,
+      cloudBreakExtraPvKwh,
+      cloudBreakChargePotentialKwh,
+      cloudBreakLearned: variableSlots.every(slot => slot.cloudBreakLearned),
+      cloudBreakWeatherHours: variableSlots.length,
       pvPeakHour,
     };
   });
@@ -893,5 +934,5 @@ module.exports = {
   invalidateConsumptionModel, materializeConsumptionModel,
   normalizedProfile, adjustedConsumptionDelta, simulateDays,
   selectUnlearnedDailyTarget, MAX_NEGATIVE_SAMPLE_DELTA_KWH,
-  hoursUntilNextSunrise, projectedConsumptionForHours, buildWallboxPlanningSlots,
+  hoursUntilNextSunrise, projectedConsumptionForHours, buildWallboxPlanningSlots, cloudBreakPotentialForHour,
 };

@@ -377,7 +377,7 @@ function renderWallbox({
     if (initialDialogMode === 'add') { openBoxDialog('add'); setBoxFormValues(initialDialogValues); }
     else if (initialDialogMode === 'edit' && initialEditingBoxId != null) { openBoxDialog('edit', initialEditingBoxId); setBoxFormValues(initialDialogValues); }`;
 
-  return renderLayout({ title: 'Wallbox', activePath: '/wallbox', body, script });
+  return renderLayout({ periodicRefresh: true, title: 'Wallbox', activePath: '/wallbox', body, script });
 }
 
 function toJsStringLiteral(value) {

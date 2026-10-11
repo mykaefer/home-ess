@@ -917,6 +917,7 @@ module.exports = {
   buildSolarContext,
   getSolarElevationDeg,
   transposePlaneIrradiance,
+  calculatePlaneIrradiance,
   idealPowerFromIrradiance,
   formatEnergy,
   isSunReference,

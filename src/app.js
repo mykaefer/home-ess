@@ -12,6 +12,7 @@ const { recordCalibration } = require('./photovoltaik/calibration');
 const { buildStromverbrauchSnapshot } = require('./stromverbrauch/aggregation');
 const { recordSample } = require('./photovoltaik/sun-intensity');
 const { refreshWeather } = require('./photovoltaik/forecast');
+const pvUncertainty = require('./photovoltaik/uncertainty');
 const { loadAllStateDefinitions } = require('./mqtt/state-definitions');
 const outputEngine = require('./output/engine');
 const systemStatesRuntime = require('./states/system-runtime');
@@ -113,6 +114,7 @@ function createApp() {
     next();
   });
   app.use(sessionMiddleware(db));
+  app.use(require('./page-sharing/middleware').sharingMiddleware(db));
 
   // Globale Autorisierung nach dem Rechtemodell (read/operate/write + sichtbare
   // Seiten). openPaths sind ohne Anmeldung erreichbar (Login/Logout und die
@@ -132,6 +134,7 @@ function createApp() {
 
   // Routen-Module. Jede Funktionsgruppe liegt in eigener Datei.
   app.use(authRoutes(db));
+  app.use(require('./routes/page-sharing')(db));
   app.use(dashboardRoutes(db));
   app.use(energieRoutes(db));
   app.use(stromverbrauchRoutes(db));
@@ -392,8 +395,9 @@ function createApp() {
 
   // Wetterprognose (Open-Meteo) für die PV-Prognose vorhalten: beim Start einmal
   // füllen und alle 30 Minuten aktualisieren. Fehler still — die Seite bleibt nutzbar.
-  jobs.runExclusive('weather', () => refreshWeather(db)).catch(() => {});
-  jobs.schedule('weather', 30 * 60 * 1000, () => refreshWeather(db));
+  const updatePvWeather = () => refreshWeather(db).then(() => pvUncertainty.captureForecast(db, mqttClient.getCache()));
+  jobs.runExclusive('weather', updatePvWeather).catch(() => {});
+  jobs.schedule('weather', 30 * 60 * 1000, updatePvWeather);
 
   // Allgemeine Wetterprognose (Seite „Wetterprognose" und States der Gruppe
   // „Wetter"). Eigener Abruf mit eigenen Variablen, gleicher Takt.
@@ -404,7 +408,10 @@ function createApp() {
   // Kalibrierfaktor je Anlage sanft nachziehen (Gates inkl. Wetter/SoC im Modul).
   jobs.schedule('pvCalibration', 60000, () =>
     listPvPlants(db)
-      .then((plants) => recordCalibration(db, mqttClient.getCache(), plants))
+      .then(async (plants) => {
+        await recordCalibration(db, mqttClient.getCache(), plants);
+        await pvUncertainty.recordObservation(db, mqttClient.getCache(), plants);
+      })
   );
 
   return { app, db };

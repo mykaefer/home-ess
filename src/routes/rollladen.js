@@ -10,7 +10,7 @@ const { displayStatus, displayBrightness } = require('../rollladen/status');
 module.exports = function (db) {
   const router = express.Router();
   router.get('/rollladen/status', (req, res) => {
-    if (!req.session) return res.status(401).json({ error: 'Nicht angemeldet.' });
+    if (!req.session && !req.pageShare) return res.status(401).json({ error: 'Nicht angemeldet.' });
     if (!isEnabled('rollladen')) return res.status(403).json({ error: 'Modul nicht aktiviert.' });
     // Ausschließlich den Laufzeit-Cache lesen: kein Steuertakt und keine DB-Abfragen.
     res.set('Cache-Control', 'no-store');

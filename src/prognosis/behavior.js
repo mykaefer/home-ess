@@ -46,9 +46,6 @@ function gridParallelLevel(metrics, context) {
   if (currentSoc < minSoc) {
     return { level: 1, reason: 'Mindest-SoC unterschritten' };
   }
-  if (hasExcess && (currentSoc >= fullThreshold || number(today.batterySocEnd) >= fullThreshold)) {
-    return { level: 5, reason: `Überschuss bei vollem Akku (Schwelle ${fullThreshold} %)` };
-  }
   // Netzparallel verwendet exakt dieselbe Bewertung wie die sichtbare Ampel.
   // Fehlt der Status nur in einem älteren/externen Snapshot, wird er mit
   // denselben Kriterien rekonstruiert.
@@ -63,6 +60,11 @@ function gridParallelLevel(metrics, context) {
   if (status === 1) {
     return { level: 3, reason: 'Reserve bis zum nächsten Ladebeginn knapp kalkuliert' };
   }
+  // Ein voller Akku mit Überschuss genügt erst nach der Reserveprüfung.
+  // Eine rote/gelbe Prognose bleibt begrenzt, auch bei kurzzeitig viel PV.
+  if (hasExcess && (currentSoc >= fullThreshold || number(today.batterySocEnd) >= fullThreshold)) {
+    return { level: 5, reason: `Versorgung bis zum nächsten Ladebeginn gesichert und Überschuss bei vollem Akku (Schwelle ${fullThreshold} %)` };
+  }
   return { level: 4, reason: 'Bedarf bis zum nächsten Ladebeginn sicher gedeckt' };
 }
 
@@ -70,11 +72,6 @@ function offGridLevel(metrics) {
   const { minSoc, currentSoc, minProjectedSoc, today } = metrics;
   const hasExcess = number(today.balanceKwh, number(today.pvKwh) - number(today.loadKwh)) > 0.5 ||
     number(today.surplusKwh) >= 0.5;
-  // Im Autarkbetrieb gilt der Akku erst oberhalb 98 % als voll. Dann müssen
-  // verfügbare Überschüsse sofort Level 5 freigeben, um Abregelung zu vermeiden.
-  if (currentSoc > 98 && hasExcess) {
-    return { level: 5, reason: 'Akku über 98 % und Überschuss – Abregelung vermeiden' };
-  }
   // Autarkbetrieb reagiert deutlich früher: Das Minimum aller sichtbaren Tage
   // ist wichtiger als nur der heutige Endstand.
   if (currentSoc <= minSoc || metrics.minimumBeforeCharge || metrics.gridKwh > 0.05) {
@@ -85,6 +82,11 @@ function offGridLevel(metrics) {
   }
   if (minProjectedSoc <= minSoc + 45 || metrics.totalBalanceKwh < 0) {
     return { level: 3, reason: 'Mehrtagessaldo erfordert vorsichtigen Betrieb' };
+  }
+  // Überschuss ist keine Autarkie: Erst wenn die Mehrtagesreserve ausreichend
+  // ist, darf der volle Akku die Freigabe sämtlicher Verbraucher begründen.
+  if (currentSoc > 98 && hasExcess) {
+    return { level: 5, reason: 'Mehrtagesreserve gesichert, Akku über 98 % und Überschuss' };
   }
   return { level: 4, reason: 'Autarker Regelbetrieb mit guter Reserve' };
 }

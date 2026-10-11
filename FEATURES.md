@@ -39,8 +39,10 @@ desktop and mobile layouts.
   efficiencies, capacity and configurable minimum state of charge.
 - Dynamic minimum SoC: once a day, at the forecast battery peak, sets the
   minimum state of charge in 1 % steps so the battery is scheduled to reach
-  100 % again the next day (never below 10 %, never above the current SoC
-  minus 1 %).
+  100 % again the next day (at least 10 %, at most 95 %, never above the current
+  SoC minus 1 %). Weather-dependent PV variability is learned automatically
+  from original day-ahead forecasts and measured yields. Possible additional
+  charging energy leaves the normal supply forecast unchanged.
 - Bidirectional synchronization of selected settings and live header indicators
   for battery, power, temperature, time and operating state.
 

@@ -479,7 +479,7 @@ ${deleteDialog()}`;
     refreshNotificationData();
     setInterval(refreshNotificationData, 30000);`;
 
-  return renderLayout({ title: 'Nachrichten', activePath: '/notifications', body, script });
+  return renderLayout({ periodicRefresh: true, title: 'Nachrichten', activePath: '/notifications', body, script });
 }
 
 module.exports = renderNotifications;

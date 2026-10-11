@@ -154,5 +154,5 @@ module.exports = function render({ shutters = [], rooms = [], policies = new Map
     pollShutterStatus();
     setInterval(pollShutterStatus, 5000);
     document.addEventListener('visibilitychange', function() { if (!document.hidden) pollShutterStatus(); });`;
-  return renderLayout({ title: 'Rollladensteuerung', activePath: '/rollladen', body, script });
+  return renderLayout({ periodicRefresh: true, title: 'Rollladensteuerung', activePath: '/rollladen', body, script });
 };

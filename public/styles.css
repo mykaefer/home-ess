@@ -589,6 +589,15 @@ h2 .cmd-confirm { font-size: 13px; vertical-align: middle; }
     flex: 1;
 }
 
+/* Gleiche Titelgröße und oberer Startpunkt für Fach-, Einstellungs- und
+   öffentliche Seiten, unabhängig vom jeweiligen Seitenkopf. */
+.page-dashboard .main-content h1 {
+    margin: 0 0 16px;
+    font-size: 2rem;
+    font-weight: 700;
+    line-height: 1.25;
+}
+
 .button-row {
     display: flex;
     gap: 12px;
@@ -1687,6 +1696,7 @@ h2 .cmd-confirm { font-size: 13px; vertical-align: middle; }
 }
 
 @media (max-width: 768px) {
+    .page-shared .main-content { padding-bottom: calc(14px + env(safe-area-inset-bottom)); }
     /* Ohne Hover: die Schaltfläche bleibt dauerhaft sichtbar. */
     .state-edit-button { opacity: 1; }
 }
@@ -5973,7 +5983,7 @@ body,
     }
 
     /* ── 3. Framework: wiederkehrende Bausteine ───────────────────────── */
-    h1 { font-size: 1.45em; }
+    .page-dashboard .main-content h1 { font-size: 1.45rem; }
 
     /* KPI-Kacheln: festes 2er-Raster statt gequetschter Flex-Umbrüche. */
     .kpi-row {
@@ -8886,7 +8896,7 @@ body.dash-editing .widget-card--weather .weather-head { padding-right: 76px; }
 }
 
 /* Nachrichten und Sprachausgabe: gemeinsame, responsive Verwaltungsansichten. */
-.comms-page { max-width: 1440px; margin-inline: auto; }
+.comms-page { width: 100%; margin: 0; }
 .comms-page-head, .comms-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
 .comms-page-head { margin-bottom: 20px; }
 .comms-page-head h1 { margin: 0 0 8px; }
@@ -8993,3 +9003,45 @@ body.dash-editing .widget-card--weather .weather-head { padding-right: 76px; }
 .shutter-shade-range { gap: 10px; }
 .shutter-shade-range input[type="range"] { min-width: 0; cursor: pointer; }
 .shutter-shade-range input[type="range"]:disabled { cursor: default; }
+
+/* Seitenfreigaben: Status direkt am Titel, Dialog außerhalb der Read-Only-Fläche. */
+.page-title-sharing .page-share-button {
+    display: inline-flex;
+    align-items: center;
+    vertical-align: middle;
+    margin-left: 10px;
+    width: 28px;
+    height: 28px;
+    padding: 3px;
+    border: 0;
+    background: transparent;
+    color: #737b87;
+    cursor: pointer;
+}
+.page-title-sharing .page-share-button[data-share-mode="read"] { color: #2563eb; }
+.page-title-sharing .page-share-button[data-share-mode="write"] { color: #dc2626; }
+.page-title-sharing .page-share-button:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
+.page-share-dialog {
+    width: min(460px, calc(100vw - 32px));
+    box-sizing: border-box;
+    padding: 24px;
+    border: 0;
+    border-radius: 12px;
+    box-shadow: 0 10px 50px #0004;
+}
+.page-share-dialog::backdrop { background: #0007; }
+.page-share-dialog label { display: block; margin: 12px 0 6px; }
+.page-share-dialog select { width: 100%; padding: 8px; }
+.page-share-url-row { display: flex; gap: 8px; }
+.page-share-url-row input { flex: 1; min-width: 0; padding: 8px; }
+.page-share-dialog button { cursor: pointer; padding: 8px 12px; }
+.page-share-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.page-shared .main-content { margin: 0; width: 100%; min-width: 0; box-sizing: border-box; }
+body.page-shared { padding-bottom: 0; }
+
+.page-title-sharing { display: flex; align-items: center; gap: 0; margin: 0 0 16px; }
+.page-dashboard .main-content .page-title-sharing h1 { margin: 0; }
+.panel-head .page-title-sharing { margin: 0; }
+.page-title-sharing .page-share-button { flex-shrink: 0; }
+
+.main-content > .panel-head--row { align-items: flex-start; }

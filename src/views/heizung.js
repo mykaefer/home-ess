@@ -381,7 +381,7 @@ ${roomBlock(rooms)}
     setInterval(heizungPoll, 5000);
 ${chartScript(rooms)}
   `;
-  return renderLayout({ title: 'Heizung & Klima', activePath: '/heizung', body, script });
+  return renderLayout({ periodicRefresh: true, title: 'Heizung & Klima', activePath: '/heizung', body, script });
 }
 
 module.exports = renderHeizung;

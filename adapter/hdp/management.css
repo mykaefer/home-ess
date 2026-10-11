@@ -377,7 +377,7 @@
 .hdp-device-page[data-hdp-ir-page] {
     max-width: 1180px;
     margin-right: auto;
-    margin-left: auto;
+    margin-left: 0;
 }
 
 .hdp-ir-record-panel .settings-card-head {

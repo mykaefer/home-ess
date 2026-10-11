@@ -191,3 +191,45 @@ test('Wechsel des Notstrombetriebs wird gemeldet', async () => {
     await new Promise((resolve) => db.close(resolve));
   }
 });
+
+
+test('Überschuss überstimmt weder rote noch gelbe Netzparallel-Prognosen', () => {
+  for (const status of [0, 1]) {
+    const data = prognosis('grid_parallel', { soc: 100, endSoc: 100, surplus: 2 });
+    data.simulation.status = status;
+    assert.equal(evaluateBehaviorLevel(data).level, status === 0 ? 2 : 3);
+  }
+});
+
+test('95 % Mindest-SoC mit vollem Akku und wenig Ertrag ergeben keine freie Versorgung', () => {
+  for (const model of ['grid_parallel', 'off_grid']) {
+    const data = prognosis(model, { soc: 100, endSoc: 95, futureEnd: 95, surplus: 0.6 });
+    data.simulation.minSoc = 95;
+    data.simulation.days[0].pvKwh = 1;
+    data.simulation.days[0].loadKwh = 8;
+    const recommendation = evaluateBehaviorLevel(data, { emergencyMode: false });
+    assert.equal(recommendation.level, model === 'grid_parallel' ? 3 : 2);
+    data.simulation.minimumBeforeCharge = true;
+    data.simulation.days[1].gridKwh = 3;
+    assert.equal(evaluateBehaviorLevel(data, { emergencyMode: false }).level, 2);
+  }
+});
+
+test('Autarkbetrieb prüft Mehrtagesrisiken vor der Überschussfreigabe', () => {
+  const cases = [
+    { futureEnd: 20, minimum: { dayOffset: 1, hour: 5, soc: 20 }, expected: 2 },
+    { futureEnd: 40, expected: 2 },
+    { futureEnd: 60, expected: 3 },
+    { futureEnd: 80, expected: 5 },
+  ];
+  for (const { expected, ...options } of cases) {
+    const data = prognosis('off_grid', { soc: 99, surplus: 2, ...options });
+    assert.equal(evaluateBehaviorLevel(data, { emergencyMode: false }).level, expected);
+  }
+  const data = prognosis('off_grid', { soc: 99, surplus: 2 });
+  data.simulation.days[1].gridKwh = 1;
+  assert.equal(evaluateBehaviorLevel(data, { emergencyMode: false }).level, 2);
+  data.simulation.days[1].gridKwh = 0;
+  data.simulation.days[1].loadKwh = 20;
+  assert.equal(evaluateBehaviorLevel(data, { emergencyMode: false }).level, 3);
+});

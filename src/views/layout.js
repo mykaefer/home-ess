@@ -7,6 +7,7 @@ const { statePickerModal, statePickerScript, statePickerAutoAttach } = require('
 const { currentAccess, canSeePage, pageForPath, themeBodyClass } = require('../auth/access');
 const i18n = require('../i18n');
 const systemWarning = require('../system-warning');
+const { createHash } = require('crypto');
 
 // Sichtbare Version der Installation. Maßgeblich ist VERSION.json im
 // Stammverzeichnis – dieselbe Quelle, aus der die Updateprüfung liest; ohne sie
@@ -610,7 +611,7 @@ function renderWarningBanner(access) {
 
 // renderLayout({ title, activePath, body, script, stylesheets })
 function renderLayout({
-  title, activePath = '', body = '', script = '', stylesheets = [],
+  title, activePath = '', body = '', script = '', stylesheets = [], periodicRefresh = false,
 } = {}) {
   // Zugriffsrechte des aktuellen Nutzers (request-gebunden über AsyncLocalStorage).
   // Außerhalb eines Requests (Tests/Direktrender) liefert currentAccess() vollen
@@ -633,6 +634,40 @@ function renderLayout({
     .map((href) => `  <link rel="stylesheet" href="${escapeHtml(href)}">`)
     .join('\n');
   const language = i18n.current();
+  const sharing = require('./page-sharing');
+  const sharePath = require('../page-sharing/policy').isPage(access.pagePath) ? access.pagePath : activePath;
+  // Seiten mit eigenem Daten-Polling behalten ihre Fachlogik. Alle übrigen
+  // erhalten eine Änderungsprüfung ihrer Seite (ohne Header-/Session-Daten).
+  const refreshVersion = periodicRefresh ? '' : createHash('sha256').update(JSON.stringify([language.code, body, script])).digest('hex');
+  const refreshHead = periodicRefresh ? '' : `<meta name="homeess-page-version" content="${refreshVersion}">
+  <script src="/page-refresh.js" defer></script>`;
+  if (access.publicShare) {
+    const share = access.publicShare;
+    const publicHtml = `<!DOCTYPE html>
+<html lang="${escapeHtml(language.code)}" dir="${escapeHtml(language.direction)}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex,nofollow">
+  <title>${escapeHtml(title || 'homeESS')}</title>
+  <link rel="stylesheet" href="/styles.css">
+${extraStylesheets}
+${refreshHead}
+${sharing.publicRuntime(share)}
+</head>
+<body class="page-dashboard page-shared ${accessClass}${themeClass ? ` ${themeClass}` : ''}" data-access="${share.mode}" data-admin="false" data-theme="${share.theme}">
+  <main class="main-content">
+${body}
+  </main>
+${access.canWrite ? statePickerModal() : ''}
+${access.canWrite ? `<script>${statePickerScript()}\n${statePickerAutoAttach()}</script>` : ''}
+${script ? `<script>${script}</script>` : ''}
+</body>
+</html>`;
+    return i18n.localizeText(sharing.publicMarkup(publicHtml, share));
+  }
+  const shareUi = sharing.sharingUi(body, sharePath, access.canWrite);
+  body = shareUi.body;
   const html = `<!DOCTYPE html>
 <html lang="${escapeHtml(language.code)}" dir="${escapeHtml(language.direction)}">
 <head>
@@ -643,6 +678,7 @@ function renderLayout({
   <link rel="apple-touch-icon" href="/homeess-icon.svg">
   <link rel="stylesheet" href="/styles.css">
 ${extraStylesheets}
+${refreshHead}
 </head>
 <body class="page-dashboard ${accessClass}${themeClass ? ` ${themeClass}` : ''}" data-theme="${escapeHtml(access.theme || 'hell')}" data-access="${access.canWrite ? 'write' : access.canOperate ? 'operate' : 'read'}" data-admin="${access.isAdmin ? 'true' : 'false'}">
   <div class="app-shell">
@@ -720,6 +756,7 @@ ${body}
     </div>
 ${renderMobileNav(activePath, access)}
 ${statePickerModal()}
+${shareUi.extra}
   </div>
 ${renderLiveScript()}
 ${renderUpdateScript()}

@@ -400,7 +400,7 @@ ${groupBlocks}
       document.querySelector('#sgGroupDialogError .error-text').textContent = initialGroupDialogError;
     }`;
 
-  return renderLayout({ title: 'Schaltgruppen', activePath: '/messen-schalten/schaltgruppen', body, script });
+  return renderLayout({ periodicRefresh: true, title: 'Schaltgruppen', activePath: '/messen-schalten/schaltgruppen', body, script });
 }
 
 function toJsStringLiteral(value) {

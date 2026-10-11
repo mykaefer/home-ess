@@ -273,6 +273,13 @@ function renderPrognosis({ prognosis, message = '', error = '' } = {}) {
     autark: true, autarkDaysCount: 0, autarkDaysYear: '', autarkDaysTopic: '',
     autarkDaysPreviousYearCount: 0, autarkDaysPreviousYear: '', autarkDaysPreviousYearTopic: '',
   };
+  const cloudBreakSimulation = prognosis.dynamicMinSocSimulation;
+  const cloudBreakTomorrow = cloudBreakSimulation && cloudBreakSimulation.available && cloudBreakSimulation.days[1];
+  const cloudBreakNote = cloudBreakTomorrow && cloudBreakTomorrow.cloudBreakWeatherHours > 0
+    ? `<p class="muted">${cloudBreakTomorrow.cloudBreakChargePotentialKwh > 0 || cloudBreakTomorrow.cloudBreakLearned
+      ? i18n.t('forecast.cloud_break_scenario', { energy: formatEnergy(cloudBreakTomorrow.cloudBreakChargePotentialKwh) }) : ''}
+      ${cloudBreakTomorrow.cloudBreakLearned ? '' : i18n.t('forecast.cloud_break_learning')}</p>`
+    : '';
   const today = simulation.today;
   const status = prognosisStatusInfo(simulation.status);
   const chargeStart = simulation.nextChargeStart;
@@ -340,6 +347,7 @@ function renderPrognosis({ prognosis, message = '', error = '' } = {}) {
         <section class="panel-card">
           <div class="panel-head"><div><h2>Energiebilanz</h2><p class="muted">PV-Ertrag, dynamischer Verbrauch und Batterieverlauf für heute plus drei Tage.</p></div></div>
           <div class="forecast-days">${renderDays(simulation.days, model)}</div>
+          ${cloudBreakNote}
         </section>
 
         ${renderDataBasisChart(model)}
@@ -456,13 +464,6 @@ function renderPrognosis({ prognosis, message = '', error = '' } = {}) {
       });
     })();
 
-    // Prognosewerte ändern sich langsamer als Live-Leistungen. Ein Minuten-Takt
-    // hält die Seite aktuell, ohne jede MQTT-Nachricht neu durchzurechnen.
-    window.setTimeout(function () {
-      window.setInterval(function () {
-        if (!document.hidden) window.location.reload();
-      }, 60000);
-    }, 60000 - (Date.now() % 60000));
   `;
   return renderLayout({ title: 'Prognose', activePath: '/prognose', body, script });
 }

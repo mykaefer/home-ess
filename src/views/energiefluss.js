@@ -204,7 +204,7 @@ function renderEnergiefluss({ data = {}, exports = [], formMessage = '', formErr
     window.addEventListener('homeess:mqtt', queueRefresh);
     setInterval(refresh, 5000);`;
 
-  return renderLayout({ title: 'Energiefluss', activePath: '/messen-schalten/energiefluss', body, script });
+  return renderLayout({ periodicRefresh: true, title: 'Energiefluss', activePath: '/messen-schalten/energiefluss', body, script });
 }
 
 module.exports = renderEnergiefluss;

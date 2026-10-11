@@ -25,6 +25,7 @@ function openDatabase() {
   }
 
   db.serialize(() => {
+    db.run(require('./page-sharing/store').SCHEMA);
     db.run(
       `CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -110,6 +111,8 @@ function openDatabase() {
         sun_cutoff_evening REAL NOT NULL DEFAULT 10
       )`
     );
+    // Vortagsprognosen und gemessene Stunden für die lernende PV-Variabilität.
+    db.exec(require('./photovoltaik/uncertainty').SCHEMA);
     // Selbstkalibrierung: je Anlage und 15-Minuten-Bucket des Tages (0..95) ein
     // langsam nachgeführter Kalibrierfaktor (Default 1.0). Das abgeschlossene
     // 15-min-Fenster wird gegen die Open-Meteo-Strahlung desselben Fensters

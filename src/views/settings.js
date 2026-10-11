@@ -787,7 +787,7 @@ ${remote.body}
 ${remote.script}
 ${statesApiScript}`;
 
-  return renderLayout({ title: 'Einstellungen', activePath: '/settings', body, script });
+  return renderLayout({ periodicRefresh: true, title: 'Einstellungen', activePath: '/settings', body, script });
 }
 
 // Bearbeiten-/Hinzufügen-Dialog für Benutzer. Name, Passwort (beim Bearbeiten

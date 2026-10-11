@@ -246,7 +246,7 @@ ${orphanBlocks}
     setInterval(adapterStatusTick, 5000);
   `;
 
-  return renderLayout({ title: 'Adapter', activePath: '/adapter', body, script });
+  return renderLayout({ periodicRefresh: true, title: 'Adapter', activePath: '/adapter', body, script });
 }
 
 function badge(role, cls, text, title) {

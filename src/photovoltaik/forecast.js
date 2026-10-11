@@ -11,11 +11,13 @@ const i18n = require('../i18n');
 const {
   solarGeometryAt,
   transposePlaneIrradiance,
+  calculatePlaneIrradiance,
   idealPowerFromIrradiance,
   formatEnergy,
 } = require('./aggregation');
 const { bucketForParts, effectiveFactor, loadFactors, localDateTime } = require('./calibration');
 const metrics = require('../runtime-metrics');
+const uncertainty = require('./uncertainty');
 
 const FORECAST_CACHE_MS = 30000;
 let forecastCache = null;
@@ -69,7 +71,7 @@ function eligiblePlants(plants) {
 
 // Wandelt die normalisierte Wetterprognose + Anlagen in Tageserträge um.
 // Rückgabe: { days: [{ dateKey, label, totalKwh, totalFormatted, perPlant }] } oder null.
-function buildForecast(weather, plants, config, factorsMap = null, nowLocal = null) {
+function buildForecast(weather, plants, config, factorsMap = null, nowLocal = null, uncertaintyModel = new Map()) {
   if (!weather || !Array.isArray(weather.hours) || !weather.hours.length) return null;
   const eligible = eligiblePlants(plants);
   if (!eligible.length) return null;
@@ -111,6 +113,7 @@ function buildForecast(weather, plants, config, factorsMap = null, nowLocal = nu
       hour.hour === currentHourIndex;
     let currentHourTotal = 0;
     let hourTotal = 0;
+    let clearSkyTotal = 0;
 
     const geometry = solarGeometryAt(
       config,
@@ -130,10 +133,15 @@ function buildForecast(weather, plants, config, factorsMap = null, nowLocal = nu
         ghi: hour.ghi,
       });
       const wattBase = idealPowerFromIrradiance(plant, planeIrradiance, hour.temp);
-      if (wattBase == null || wattBase <= 0) continue;
+      if (wattBase == null) continue;
       // Gelernten Kalibrierfaktor des passenden Tageszeit-Buckets anwenden
       // (z. B. Verschattung) — wirkt nur bei aktivierter Auto-Kalibrierung + genug Samples.
       const factor = effectiveFactor(factorsMap, plant, bucketForParts(hour.hour, hour.minute));
+      const clearSkyIrradiance = calculatePlaneIrradiance(
+        geometry.dayOfYear, geometry.decimalHours, geometry.latitude, azimuth, tilt
+      );
+      clearSkyTotal += (idealPowerFromIrradiance(plant, clearSkyIrradiance, hour.temp) || 0) * factor;
+      if (wattBase <= 0) continue;
       const watt = wattBase * factor;
       // Stündliche Strahlung ist ein Stundenmittel → Leistung (W) × 1 h = Wh.
       bucket.total += watt;
@@ -144,9 +152,22 @@ function buildForecast(weather, plants, config, factorsMap = null, nowLocal = nu
     }
 
     const hourKey = `${key}:${hour.hour}`;
-    const previousHour = hourlyTotals.get(hourKey) || { wh: 0, temperature: null };
+    const cloudCover = hour.ghi == null || hour.dni == null || hour.dhi == null ? null : parseNumber(hour.cloud);
+    const diffuseFraction = hour.ghi > 0 ? clamp(hour.dhi / hour.ghi, 0, 1) : (cloudCover > 0 ? 1 : 0);
+    const neighborClouds = weather.hours.filter(slot => slot.year === hour.year && slot.month === hour.month && slot.day === hour.day && Math.abs(slot.hour - hour.hour) === 1)
+      .map(slot => parseNumber(slot.cloud)).filter(value => value != null);
+    const cloudChange = cloudCover == null ? 0 : Math.max(0, ...neighborClouds.map(value => Math.abs(value - cloudCover)));
+    const category = uncertainty.weatherClass({ cloudCover, diffuseFraction, cloudChange });
+    const learned = category === 'clear' || category === 'unknown' ? null : uncertaintyModel.get(category);
+    const previousHour = hourlyTotals.get(hourKey) || { wh: 0, clearSkyWh: 0, temperature: null };
     hourlyTotals.set(hourKey, {
       wh: previousHour.wh + hourTotal,
+      clearSkyWh: previousHour.clearSkyWh + clearSkyTotal,
+      cloudCover,
+      diffuseFraction,
+      weatherClass: category,
+      cloudBreakFraction: learned && learned.ready ? learned.fraction : 0,
+      cloudBreakLearned: !!(learned && learned.ready),
       temperature: hour.temp == null ? previousHour.temperature : hour.temp,
     });
 
@@ -178,6 +199,7 @@ function buildForecast(weather, plants, config, factorsMap = null, nowLocal = nu
 
   return {
     fetchedAt: weather.fetchedAt,
+    signature: uncertainty.modelSignature(plants, config),
     days,
     // Standort für geometrische Clear-Sky-Berechnungen (z. B. Pool-Solarpumpen-
     // Laufzeit je Prognosestunde). Kommt aus der von Open-Meteo gemeldeten Zelle.
@@ -197,6 +219,14 @@ function buildForecast(weather, plants, config, factorsMap = null, nowLocal = nu
         dateKey: key.slice(0, splitAt),
         hour: Number(key.slice(splitAt + 1)),
         kwh: values.wh / 1000,
+        // Klarhimmel-Referenz und Bewölkung für ein zusätzliches Szenario.
+        // Die erwarteten Stunden-/Tageserträge werden dadurch nicht angehoben.
+        clearSkyKwh: values.clearSkyWh / 1000,
+        cloudCover: values.cloudCover,
+        diffuseFraction: values.diffuseFraction,
+        weatherClass: values.weatherClass,
+        cloudBreakFraction: values.cloudBreakFraction,
+        cloudBreakLearned: values.cloudBreakLearned,
         temperature: values.temperature,
       };
     }),
@@ -254,8 +284,12 @@ async function computePvForecast(db, plants, { allowFetch = false, cache = null 
     ? await wetter.fetchForecast(latitude, longitude)
     : wetter.getCachedForecast(latitude, longitude);
 
-  const factorsMap = await loadFactors(db);
-    return buildForecast(weather, plants, config, factorsMap, localNowParts(cache));
+  const nowLocal = localNowParts(cache);
+  const local = { dateKey: dateKeyFromParts(nowLocal.date), hours: nowLocal.time.hours, minutes: nowLocal.time.minutes };
+  const [factorsMap, uncertaintyModel] = await Promise.all([
+    loadFactors(db), uncertainty.loadModel(db, uncertainty.modelSignature(plants, config), local),
+  ]);
+    return buildForecast(weather, plants, config, factorsMap, nowLocal, uncertaintyModel);
   });
   if (!allowFetch) forecastInFlight = { db, signature, promise };
   try {

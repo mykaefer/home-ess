@@ -1331,7 +1331,7 @@ ${tabs.map((tab) => renderTabPanel(tab, ctx, tab.id === initialTabId)).join('\n'
     // und hält die Last auf der Datenbank klein.
     setInterval(loadAllCharts, 60000);`;
 
-  return renderLayout({ title: 'Dashboard', activePath: '/dashboard', body, script });
+  return renderLayout({ periodicRefresh: true, title: 'Dashboard', activePath: '/dashboard', body, script });
 }
 
 // --- Tab-Leiste und Panels ---------------------------------------------------

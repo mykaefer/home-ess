@@ -363,7 +363,7 @@ function messenSchaltenRoutes(db) {
 
   // Allgemeine Räume anlegen, auch bei deaktiviertem Heizungsmodul.
   router.post('/messen-schalten/rooms', async (req, res, next) => {
-    if (!req.session) return res.status(401).json({ error: 'Nicht angemeldet.' });
+    if (!req.session && !req.pageShare) return res.status(401).json({ error: 'Nicht angemeldet.' });
     try {
       const room = await createRoom(db, { name: req.body && req.body.name });
       return res.status(201).json({ room: { id: room.id, name: room.name } });

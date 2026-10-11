@@ -853,7 +853,7 @@ ${renderUngrouped(ungrouped)}
       document.querySelector('#actorDialogError .error-text').textContent = initialDialogError;
     }`;
 
-  return renderLayout({ title: 'Messen + Schalten', activePath: '/messen-schalten', body, script });
+  return renderLayout({ periodicRefresh: true, title: 'Messen + Schalten', activePath: '/messen-schalten', body, script });
 }
 
 function toJsStringLiteral(value) {

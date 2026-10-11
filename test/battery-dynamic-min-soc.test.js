@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const sqlite3 = require('sqlite3').verbose();
 
 const dynamicMinSoc = require('../src/batterie/dynamic-min-soc');
-const { simulateDays } = require('../src/prognosis/forecast');
+const { simulateDays, cloudBreakPotentialForHour } = require('../src/prognosis/forecast');
 
 function dbRun(db, sql, params = []) {
   return new Promise((resolve, reject) => db.run(sql, params, (err) => (err ? reject(err) : resolve())));
@@ -340,6 +340,110 @@ test('ohne separate Hausakku-Prognose wird keine Wallbox-belastete Ersatzberechn
       local: { dateKey: '2026-09-25', hours: 18, minutes: 0 },
     });
     assert.equal(result.reason, 'prognose-fehlt');
+  } finally {
+    await new Promise((resolve) => db.close(resolve));
+  }
+});
+
+
+test('Wolkenlücken berücksichtigen kurze Leistungsspitzen trotz negativem Stundenmittel', () => {
+  // 6 kW für 10 Minuten liefern 1 kWh. Die Grundlast läuft zeitgleich weiter.
+  // Die Basisprognose von 0,2 kWh liegt unter 0,5 kWh Stundenlast und lädt nicht.
+  const forecast = { hours: [{ dateKey: '2026-10-11', hour: 12, clearSkyKwh: 6, cloudCover: 100, cloudBreakFraction: 1 / 6, cloudBreakLearned: true }] };
+  const result = cloudBreakPotentialForHour({
+    forecast, dayKeyValue: '2026-10-11', hour: 12, pvKwh: 0.2, loadKwh: 0.5,
+    chargeEfficiency: 0.95,
+  });
+  assert.ok(Math.abs(result.extraPvKwh - 5.8 / 6) < 1e-9);
+  assert.ok(Math.abs(result.extraChargePotentialKwh - 5.5 / 6 * 0.95) < 1e-9);
+});
+
+test('klare Stunden, fehlende Daten und fehlender Sonnenstand bekommen keinen Mehrertrag', () => {
+  for (const slot of [
+    { clearSkyKwh: 6, cloudBreakFraction: 0, cloudBreakLearned: true },
+    { clearSkyKwh: 0, cloudCover: 100 },
+    { clearSkyKwh: 6 },
+    { cloudCover: 100 },
+    { clearSkyKwh: 0.2, cloudCover: 100 },
+  ]) {
+    const result = cloudBreakPotentialForHour({
+      forecast: { hours: [{ dateKey: '2026-10-11', hour: 12, ...slot }] },
+      dayKeyValue: '2026-10-11', hour: 12, pvKwh: 0.2, loadKwh: 0.5,
+    });
+    assert.deepEqual(result, { extraPvKwh: 0, extraChargePotentialKwh: 0 });
+  }
+  const result = cloudBreakPotentialForHour({
+    forecast: { hours: [{ dateKey: '2026-10-11', hour: 12, clearSkyKwh: 6, cloudCover: 100, cloudBreakFraction: 1 / 6, cloudBreakLearned: true }] },
+    dayKeyValue: '2026-10-11', hour: 12, pvKwh: 0.2, loadKwh: 7,
+  });
+  assert.equal(result.extraChargePotentialKwh, 0, 'Last oberhalb der Klarhimmel-Leistung lässt keine Ladung zu');
+});
+
+test('gelernte Variabilität und gleichzeitige Last bestimmen die zusätzliche Ladeenergie', () => {
+  function scenario({ fraction = 1 / 6, learned = true, durationHours = 1 } = {}) {
+    return cloudBreakPotentialForHour({
+      forecast: { hours: [{ dateKey: '2026-10-11', hour: 12, clearSkyKwh: 6, cloudBreakFraction: fraction, cloudBreakLearned: learned }] },
+      dayKeyValue: '2026-10-11', hour: 12,
+      pvKwh: 2 * durationHours, loadKwh: 1 * durationHours, durationHours,
+    });
+  }
+  assert.deepEqual(scenario({ learned: false }), { extraPvKwh: 0, extraChargePotentialKwh: 0 });
+  const full = scenario();
+  assert.ok(Math.abs(full.extraChargePotentialKwh - 4 / 6) < 1e-9, 'Basisladung wird nicht nochmals addiert');
+  for (const result of [scenario({ fraction: 1 / 12 }), scenario({ durationHours: 0.5 })]) {
+    assert.ok(Math.abs(result.extraChargePotentialKwh - full.extraChargePotentialKwh / 2) < 1e-9);
+  }
+});
+
+test('zusätzliches Ladepotenzial verändert die Spanne zu 100 %, nicht den Abstand zum aktuellen SoC', () => {
+  const base = { chargePotentialKwh: 0, capacityKwh: 10, currentSoc: 62 };
+  assert.equal(dynamicMinSoc.computeTargetMinSoc(base).minSoc, 61);
+  assert.equal(dynamicMinSoc.computeTargetMinSoc({ ...base, additionalChargePotentialKwh: 1 }).minSoc, 61);
+  assert.equal(dynamicMinSoc.computeTargetMinSoc({ ...base, additionalChargePotentialKwh: 5 }).minSoc, 50);
+  assert.equal(dynamicMinSoc.computeTargetMinSoc({ ...base, currentSoc: 100, additionalChargePotentialKwh: 1 }).minSoc, 90);
+});
+
+test('bewölkter Folgetag mit 2 kWh Prognose erhält getrenntes gelerntes Mehrertrags-Potenzial', async () => {
+  const db = await freshDb();
+  try {
+    const inputs = wallboxScenario(0);
+    inputs.batteryConfig.chargeEfficiency = 100;
+    inputs.forecast.days[1].totalKwh = 2;
+    for (const hour of inputs.forecast.hours) {
+      if (hour.dateKey === '2026-09-26') {
+        hour.kwh = 0.25;
+        hour.clearSkyKwh = 6;
+        hour.cloudCover = 100;
+        hour.cloudBreakFraction = 1 / 6;
+        hour.cloudBreakLearned = true;
+      }
+    }
+    const simulation = simulateDays({ ...inputs, includeWallbox: false });
+    const tomorrow = simulation.days[1];
+    assert.equal(tomorrow.chargePotentialKwh, 0);
+    assert.equal(tomorrow.pvKwh, 2);
+    assert.ok(Math.abs(tomorrow.cloudBreakChargePotentialKwh - 8 * 5.5 / 6) < 1e-9);
+    const result = await dynamicMinSoc.evaluate(db, {
+      prognosis: { battery: inputs.batteryData, dynamicMinSocSimulation: simulation },
+      config: { dynamicMinSoc: true }, local: { dateKey: '2026-09-25', hours: 18, minutes: 0 },
+    });
+    const expected = Math.ceil(100 - tomorrow.cloudBreakChargePotentialKwh / simulation.capacityKwh * 100);
+    assert.equal(result.minSoc, expected);
+    assert.ok(result.minSoc < 95);
+
+    // Die Versorgungssimulation darf nicht optimistischer werden.
+    const normal = simulateDays(inputs);
+    assert.equal(normal.days[1].cloudBreakChargePotentialKwh, 0);
+    for (const slot of inputs.forecast.hours) slot.cloudBreakLearned = false;
+    const disabled = simulateDays({ ...inputs, includeWallbox: false });
+    assert.equal(disabled.days[1].cloudBreakChargePotentialKwh, 0);
+    assert.deepEqual(normal.days.map(d => d.gridKwh), disabled.days.map(d => d.gridKwh));
+    assert.equal(normal.status, disabled.status);
+    const withoutScenario = await dynamicMinSoc.evaluate(db, {
+      prognosis: { battery: inputs.batteryData, dynamicMinSocSimulation: disabled },
+      config: { dynamicMinSoc: true }, local: { dateKey: '2026-09-25', hours: 18, minutes: 0 },
+    });
+    assert.equal(withoutScenario.minSoc, 95);
   } finally {
     await new Promise((resolve) => db.close(resolve));
   }
